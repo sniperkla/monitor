@@ -6,7 +6,9 @@ import {
   Clock, Package, Database, Box, RefreshCw, AlertCircle, CheckCircle2, 
   Zap, TrendingUp, TrendingDown, Minus, Pause, Play, RotateCw, Radio,
   Copy, Check, Terminal, Shield, Sparkles, ExternalLink, Laptop, AlertTriangle,
-  ChevronDown, ListFilter, Search, XOctagon, Skull, ArrowUpDown, Trash2, X
+  ChevronDown, ListFilter, Search, XOctagon, Skull, ArrowUpDown, Trash2, X,
+  ZoomIn, ZoomOut, Maximize2, Minimize2, GripHorizontal, MoveHorizontal, ChevronLeft, ChevronRight, Sliders, ChevronsRight, ChevronsLeft, Eye, History, Navigation,
+  Flame, FileSpreadsheet, ScrollText
 } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 import { useTranslation } from 'react-i18next';
@@ -94,6 +96,1100 @@ function CustomSelect({ value, onChange, options = [], placeholder = 'Select...'
   );
 }
 
+// Module-level utility formatters
+const formatBytes = (bytes) => {
+  if (!bytes || isNaN(bytes) || bytes <= 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), sizes.length - 1);
+  if (i < 0) return '0 B';
+  return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 📈 Interactive Scrollable Chart Card with Horizontal Drag/Wheel & Past Scroller
+// ─────────────────────────────────────────────────────────────────────────────
+function ScrollableChartCard({
+  title,
+  icon: Icon,
+  currentValue,
+  valueSuffix = '%',
+  statusColor = '',
+  trendIcon,
+  headerExtra,
+  subHeader,
+  chartData,
+  chartOptions,
+  heightClass = 'h-40',
+  zoomLevel = '1x',
+  footer,
+  emptyMessage = 'No data yet',
+  emptyState,
+  isLive = true,
+  syncScrollRatio = null,
+  syncEnabled = false,
+  onUserScroll = null,
+  spikeData = null, // { history: [{value}], threshold: 80 } for per-card spike badge
+  align = 'left', // 'left' | 'right' based on column position in the grid
+  jumpToIndividualPeakSignal = 0, // increment this to trigger a jump-to-own-peak
+}) {
+  const scrollRef = useRef(null);
+  const [localZoom, setLocalZoom] = useState(null);
+  
+  // When in Synced mode, all cards follow the global zoomLevel. In Individual mode, localZoom takes priority.
+  const activeZoom = syncEnabled ? zoomLevel : (localZoom || zoomLevel);
+
+  const [isDragging, setIsDragging] = useState(false);
+  const [startX, setStartX] = useState(0);
+  const [scrollStartLeft, setScrollStartLeft] = useState(0);
+  const [isAtEnd, setIsAtEnd] = useState(true);
+  const [visibleTime, setVisibleTime] = useState(null);
+
+  const totalPoints = chartData?.labels?.length || 0;
+
+  // Reset localZoom whenever syncEnabled is turned ON
+  useEffect(() => {
+    if (syncEnabled) {
+      setLocalZoom(null);
+    }
+  }, [syncEnabled]);
+
+  // Calculate dynamic width based on active zoom level (individual or global)
+  const chartWidth = useMemo(() => {
+    if (activeZoom === 'fit' || totalPoints === 0) return '100%';
+    const pxPerPoint = activeZoom === '4x' ? 44 : activeZoom === '2x' ? 22 : 12;
+    const minWidth = Math.max(300, totalPoints * pxPerPoint);
+    return `${minWidth}px`;
+  }, [activeZoom, totalPoints]);
+
+  // Keep scrolled to latest when new data arrives and user is at the right edge
+  useEffect(() => {
+    if (isLive && isAtEnd && scrollRef.current && activeZoom !== 'fit') {
+      scrollRef.current.scrollLeft = scrollRef.current.scrollWidth;
+    }
+  }, [chartData, isLive, isAtEnd, activeZoom]);
+
+  // Handle external synchronized scroll (when sync is enabled or when syncScrollRatio changes)
+  useEffect(() => {
+    if (syncEnabled && syncScrollRatio !== null && syncScrollRatio !== undefined && scrollRef.current) {
+      // If currently fit, auto-switch to 1x so scrolling reveals the timestamp
+      if (activeZoom === 'fit') {
+        setLocalZoom('1x');
+      }
+      const container = scrollRef.current;
+      const maxScroll = container.scrollWidth - container.clientWidth;
+      if (maxScroll > 0) {
+        container.scrollTo({
+          left: syncScrollRatio * maxScroll,
+          behavior: 'smooth'
+        });
+      }
+      if (totalPoints > 0) {
+        const idx = Math.min(Math.max(0, Math.floor(syncScrollRatio * (totalPoints - 1))), totalPoints - 1);
+        if (chartData?.labels?.[idx]) {
+          setVisibleTime(chartData.labels[idx]);
+        }
+        if (syncScrollRatio < 0.98) {
+          setActiveHighlightIdx(idx);
+          setIsAtEnd(false);
+        } else {
+          setActiveHighlightIdx(null);
+          setIsAtEnd(true);
+        }
+      }
+    }
+  }, [syncScrollRatio, syncEnabled, activeZoom, totalPoints, chartData]);
+
+  // On scroll (individual card)
+  const handleScroll = useCallback(() => {
+    if (!scrollRef.current) return;
+    const { scrollLeft, scrollWidth, clientWidth } = scrollRef.current;
+    const maxScroll = scrollWidth - clientWidth;
+    const atEnd = maxScroll <= 0 || (maxScroll - scrollLeft < 15);
+    setIsAtEnd(atEnd);
+
+    if (totalPoints > 0 && chartData?.labels) {
+      const ratio = maxScroll > 0 ? (scrollLeft + clientWidth / 2) / scrollWidth : 1;
+      const idx = Math.min(Math.max(0, Math.floor(ratio * totalPoints)), totalPoints - 1);
+      setVisibleTime(chartData.labels[idx]);
+      if (syncEnabled && onUserScroll && maxScroll > 0) {
+        onUserScroll(scrollLeft / maxScroll);
+      }
+    }
+  }, [totalPoints, chartData, syncEnabled, onUserScroll]);
+
+  const rafRef = useRef(null);
+
+  // Mouse Drag to Pan with requestAnimationFrame & Sync support
+  const handleMouseDown = (e) => {
+    if (activeZoom === 'fit' || !scrollRef.current) return;
+    if (e.target.closest('button') || e.target.closest('input')) return;
+    setIsDragging(true);
+    setStartX(e.pageX - scrollRef.current.offsetLeft);
+    setScrollStartLeft(scrollRef.current.scrollLeft);
+  };
+
+  const handleMouseMove = (e) => {
+    if (!isDragging || !scrollRef.current) return;
+    e.preventDefault();
+    const pageX = e.pageX;
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    rafRef.current = requestAnimationFrame(() => {
+      if (!scrollRef.current) return;
+      const x = pageX - scrollRef.current.offsetLeft;
+      const walk = (x - startX) * 1.5;
+      const nextLeft = scrollStartLeft - walk;
+      scrollRef.current.scrollLeft = nextLeft;
+      if (syncEnabled && onUserScroll) {
+        const maxScroll = scrollRef.current.scrollWidth - scrollRef.current.clientWidth;
+        if (maxScroll > 0) {
+          onUserScroll(Math.min(Math.max(0, nextLeft / maxScroll), 1));
+        }
+      }
+    });
+  };
+
+  const handleMouseUp = () => {
+    setIsDragging(false);
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+  };
+  const handleMouseLeave = () => {
+    setIsDragging(false);
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+  };
+
+  // Wheel Horizontal Scroll with requestAnimationFrame & Sync support
+  const handleWheel = (e) => {
+    if (activeZoom === 'fit' || !scrollRef.current) return;
+    if (Math.abs(e.deltaX) > 0) return;
+    if (e.deltaY) {
+      const delta = e.deltaY;
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      rafRef.current = requestAnimationFrame(() => {
+        if (!scrollRef.current) return;
+        scrollRef.current.scrollLeft += delta;
+        if (syncEnabled && onUserScroll) {
+          const maxScroll = scrollRef.current.scrollWidth - scrollRef.current.clientWidth;
+          if (maxScroll > 0) {
+            onUserScroll(Math.min(Math.max(0, scrollRef.current.scrollLeft / maxScroll), 1));
+          }
+        }
+      });
+    }
+  };
+
+  const [peakHighlight, setPeakHighlight] = useState(null);
+  const [activeHighlightIdx, setActiveHighlightIdx] = useState(null);
+
+  // Compute peak and spike points for this specific card
+  const { cardPeakIdx, cardPeakVal, cardSpikeIndices } = useMemo(() => {
+    const hist = spikeData?.history ?? [];
+    const threshold = spikeData?.threshold ?? 80;
+    let maxVal = -1;
+    let maxIdx = -1;
+    const spikes = [];
+
+    hist.forEach((d, i) => {
+      const val = typeof d === 'number' ? d : d?.value ?? 0;
+      if (val > maxVal) {
+        maxVal = val;
+        maxIdx = i;
+      }
+      if (val >= threshold) {
+        spikes.push(i);
+      }
+    });
+
+    return {
+      cardPeakIdx: maxIdx >= 0 ? maxIdx : (totalPoints > 0 ? totalPoints - 1 : 0),
+      cardPeakVal: maxVal >= 0 ? maxVal : 0,
+      cardSpikeIndices: spikes
+    };
+  }, [spikeData, totalPoints]);
+
+  const formattedPeak = useMemo(() => {
+    if (spikeData?.formatValue) return spikeData.formatValue(cardPeakVal);
+    if (spikeData?.isBytes) return `${formatBytes(cardPeakVal)}/s`;
+    return `${cardPeakVal.toFixed(0)}%`;
+  }, [spikeData, cardPeakVal]);
+
+  // Jump to specific index on this card and show peak highlight & dicut line
+  const jumpToIndex = (targetIdx, label) => {
+    if (targetIdx == null || targetIdx < 0 || totalPoints === 0 || !scrollRef.current) return;
+    
+    // Toggle off if already highlighted on this index
+    if (activeHighlightIdx === targetIdx) {
+      setActiveHighlightIdx(null);
+      setPeakHighlight(null);
+      return;
+    }
+
+    setActiveHighlightIdx(targetIdx);
+
+    // Auto-switch from 'fit' to '1x' so scrolling is possible and readable
+    if (activeZoom === 'fit') {
+      setLocalZoom('1x');
+    }
+
+    setTimeout(() => {
+      if (!scrollRef.current) return;
+      const maxScroll = scrollRef.current.scrollWidth - scrollRef.current.clientWidth;
+      const ratio = totalPoints > 1 ? targetIdx / (totalPoints - 1) : 1;
+      if (maxScroll > 0) {
+        scrollRef.current.scrollTo({
+          left: ratio * maxScroll,
+          behavior: 'smooth'
+        });
+      }
+      setIsAtEnd(targetIdx >= totalPoints - 2);
+      const time = chartData?.labels?.[targetIdx] || 'past';
+      setVisibleTime(time);
+      setPeakHighlight(label || `Peak: ${formattedPeak} at ${time}`);
+    }, 60);
+  };
+
+  // React to global "Jump to Individual Peak" broadcast — each card jumps to its OWN peak
+  useEffect(() => {
+    if (jumpToIndividualPeakSignal > 0 && cardPeakIdx >= 0 && totalPoints > 0) {
+      jumpToIndex(cardPeakIdx, `Peak: ${formattedPeak}`);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jumpToIndividualPeakSignal]);
+
+  const jumpToNextCardSpike = (direction = 'next') => {
+    if (cardSpikeIndices.length === 0) {
+      jumpToIndex(cardPeakIdx, `Peak: ${formattedPeak}`);
+      return;
+    }
+    const currentIdx = Math.floor((scrollRef.current?.scrollLeft / Math.max(1, (scrollRef.current?.scrollWidth - scrollRef.current?.clientWidth || 1))) * (totalPoints - 1));
+    let targetIdx;
+    if (direction === 'next') {
+      targetIdx = cardSpikeIndices.find(idx => idx > currentIdx) ?? cardSpikeIndices[0];
+    } else {
+      const reversed = [...cardSpikeIndices].reverse();
+      targetIdx = reversed.find(idx => idx < currentIdx) ?? cardSpikeIndices[cardSpikeIndices.length - 1];
+    }
+    const time = chartData?.labels?.[targetIdx] || 'past';
+    jumpToIndex(targetIdx, `Spike: ${time}`);
+  };
+
+  const snapToNow = () => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTo({
+        left: scrollRef.current.scrollWidth,
+        behavior: 'smooth'
+      });
+      setIsAtEnd(true);
+      setPeakHighlight(null);
+      setActiveHighlightIdx(null);
+    }
+  };
+
+
+
+  const cardRef = useRef(null);
+  const [customHeight, setCustomHeight] = useState(null);
+  const [isExpanded, setIsExpanded] = useState(false);
+  const [isResizing, setIsResizing] = useState(false);
+  const resizeStartX = useRef(0);
+  const resizeStartY = useRef(0);
+  const resizeStartH = useRef(0);
+
+  const handleResizeStart = (e, direction = 'vertical') => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsResizing(true);
+    resizeStartX.current = e.clientX;
+    resizeStartY.current = e.clientY;
+    const currentH = scrollRef.current ? scrollRef.current.clientHeight : 200;
+    resizeStartH.current = currentH;
+
+    const onMouseMove = (moveEv) => {
+      const deltaX = moveEv.clientX - resizeStartX.current;
+      const deltaY = moveEv.clientY - resizeStartY.current;
+
+      if (direction === 'vertical' || direction === 'both') {
+        const newH = Math.max(140, Math.min(800, resizeStartH.current + deltaY));
+        setCustomHeight(newH);
+      }
+
+      if (direction === 'horizontal' || direction === 'both') {
+        if (align === 'right') {
+          // Right-column card: dragging left (negative deltaX) expands full width to the left!
+          if (deltaX < -50) {
+            setIsExpanded(true);
+          } else if (deltaX > 50) {
+            setIsExpanded(false);
+          }
+        } else {
+          // Left-column card: dragging right (positive deltaX) expands full width to the right!
+          if (deltaX > 50) {
+            setIsExpanded(true);
+          } else if (deltaX < -50) {
+            setIsExpanded(false);
+          }
+        }
+      }
+    };
+
+    const onMouseUp = () => {
+      setIsResizing(false);
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+  };
+
+  return (
+    <div 
+      ref={cardRef}
+      className={`bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl p-4 shadow-sm flex flex-col relative group transition-all duration-200 ${
+        isExpanded ? 'col-span-1 lg:col-span-2 shadow-xl ring-1 ring-indigo-500/40' : ''
+      }`}
+    >
+      {/* Card Header */}
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2">
+          {Icon && <Icon className="text-indigo-400 shrink-0" size={18} />}
+          <h3 className="font-semibold text-sm leading-tight flex items-center gap-1.5">
+            {title}
+            {activeZoom !== 'fit' && (
+              <span className="text-[10px] font-mono font-normal px-1.5 py-0.5 rounded bg-[var(--bg-tertiary)] text-[var(--text-muted)] border border-[var(--border-color)]/50">
+                {activeZoom}
+              </span>
+            )}
+          </h3>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {/* Per-card interactive spike & peak badge */}
+          {spikeData && totalPoints > 0 && (
+            cardSpikeIndices.length > 0 ? (
+              <div className="flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-rose-500/15 border border-rose-500/30 text-rose-400 text-[10px] font-medium shadow-xs">
+                <button
+                  type="button"
+                  onClick={() => jumpToNextCardSpike('next')}
+                  className="flex items-center gap-1 hover:underline cursor-pointer"
+                  title="Click to jump to spike"
+                >
+                  <Flame size={11} className="animate-pulse text-rose-400" />
+                  <span>{cardSpikeIndices.length} {cardSpikeIndices.length === 1 ? 'spike' : 'spikes'}</span>
+                </button>
+                <div className="flex items-center ml-1 border-l border-rose-500/30 pl-1 gap-0.5">
+                  <button
+                    type="button"
+                    onClick={() => jumpToNextCardSpike('prev')}
+                    className="px-0.5 hover:bg-rose-500/20 rounded cursor-pointer transition-colors"
+                    title="Previous spike"
+                  >
+                    ◀
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => jumpToNextCardSpike('next')}
+                    className="px-0.5 hover:bg-rose-500/20 rounded cursor-pointer transition-colors"
+                    title="Next spike"
+                  >
+                    ▶
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => jumpToIndex(cardPeakIdx, `Peak: ${formattedPeak} at ${chartData?.labels?.[cardPeakIdx] || 'past'}`)}
+                className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 hover:bg-emerald-500/20 hover:border-emerald-500/40 text-emerald-400 text-[10px] font-medium transition-all cursor-pointer shadow-xs"
+                title={`Click to scroll directly to highest peak: ${formattedPeak}`}
+              >
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                <span>Peak {formattedPeak}</span>
+                <span className="text-[9px] opacity-75 ml-0.5">⚡</span>
+              </button>
+            )
+          )}
+
+          {/* Individual Zoom Selector per Card (Only affects THIS card) */}
+          <div className="hidden sm:flex items-center gap-1 p-0.5 bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-lg text-[10px]">
+            {['fit', '1x', '2x', '4x'].map((z) => (
+              <button
+                key={z}
+                type="button"
+                onClick={() => setLocalZoom(z)}
+                className={`px-1.5 py-0.5 rounded font-medium transition-all cursor-pointer ${
+                  activeZoom === z
+                    ? 'bg-indigo-600 text-white shadow-xs'
+                    : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+                }`}
+                title={`Zoom ${title}: ${z === 'fit' ? 'Fit all' : z}`}
+              >
+                {z === 'fit' ? 'Fit' : z}
+              </button>
+            ))}
+          </div>
+
+          {/* Full-width / Expand toggle button */}
+          <button
+            type="button"
+            onClick={() => setIsExpanded(!isExpanded)}
+            className={`p-1 rounded transition-colors cursor-pointer ${
+              isExpanded 
+                ? 'bg-indigo-600/30 text-indigo-300 border border-indigo-500/40' 
+                : 'hover:bg-[var(--bg-tertiary)] text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+            }`}
+            title={isExpanded ? 'Collapse to 1 column' : 'Expand full 2 columns'}
+          >
+            {isExpanded ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+          </button>
+
+          {/* Custom header extra (e.g. network rates) */}
+          {headerExtra}
+
+          {/* Current Value + Trend */}
+          <div className="flex items-center gap-1.5 ml-1">
+            {trendIcon}
+            {currentValue !== undefined && currentValue !== null && (
+              <span className={`text-lg font-bold font-mono ${statusColor}`}>
+                {typeof currentValue === 'number' ? currentValue.toFixed(1) : currentValue}{valueSuffix}
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {subHeader}
+
+      {/* Floating Past Time / Peak Highlight Badge */}
+      {(!isAtEnd && activeZoom !== 'fit' && totalPoints > 0) || peakHighlight ? (
+        <div className="absolute top-12 right-4 z-10 flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-900/95 border border-indigo-500/40 text-[11px] shadow-xl backdrop-blur-md animate-fade-in">
+          <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+          {peakHighlight ? (
+            <span className="font-mono font-semibold text-emerald-300">{peakHighlight}</span>
+          ) : (
+            <>
+              <span className="text-[var(--text-muted)]">Past:</span>
+              <span className="font-mono font-semibold text-amber-300">{visibleTime || 'past'}</span>
+            </>
+          )}
+          <button
+            type="button"
+            onClick={snapToNow}
+            className="ml-1 px-2 py-0.5 rounded-md bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-semibold flex items-center gap-1 cursor-pointer transition-colors shadow-xs"
+            title="Snap back to current live time"
+          >
+            <Zap size={10} className="fill-white" />
+            Snap to Now
+          </button>
+        </div>
+      ) : null}
+
+      {/* Chart Canvas Area with Horizontal Scroll & Pan + Dynamic Resizing */}
+      <div 
+        ref={scrollRef}
+        onScroll={handleScroll}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={handleMouseLeave}
+        onWheel={handleWheel}
+        className={`${!customHeight ? (isExpanded ? 'h-96' : heightClass) : ''} mb-2 transition-all duration-150 ${
+          activeZoom === 'fit' ? 'overflow-hidden' : 'overflow-x-auto overflow-y-hidden custom-scrollbar'
+        } ${isDragging ? 'cursor-grabbing select-none' : activeZoom !== 'fit' ? 'cursor-grab' : 'cursor-default'}`}
+        style={{ 
+          height: customHeight ? `${customHeight}px` : undefined,
+          WebkitOverflowScrolling: 'touch' 
+        }}
+      >
+        {totalPoints > 0 ? (
+          <div style={{ width: chartWidth, height: '100%', minWidth: '100%' }} className="relative">
+            <Line data={chartData} options={chartOptions} />
+
+            {/* DOM-rendered high-visibility Dicut Guideline on clicked Peak / Spike */}
+            {activeHighlightIdx != null && totalPoints > 0 && (
+              <div
+                className="absolute top-0 bottom-6 pointer-events-none z-30 transition-opacity duration-200"
+                style={{
+                  left: `${(activeHighlightIdx / Math.max(1, totalPoints - 1)) * 100}%`,
+                }}
+              >
+                {/* Vertical Glowing Dashed Dicut Line */}
+                <div className="h-full w-[2px] -ml-[1px] border-l-2 border-dashed border-rose-500 shadow-[0_0_12px_rgba(244,63,94,0.95)]" />
+                
+                {/* Glowing Center Beacon Dot */}
+                <div className="absolute top-1/2 -translate-y-1/2 -left-[5px] w-3 h-3 rounded-full bg-rose-500 border-2 border-white shadow-[0_0_10px_rgba(244,63,94,1)]" />
+
+                {/* Floating Dicut Badge at the top */}
+                <div className="absolute -top-1 -translate-x-1/2 px-2 py-0.5 rounded-md bg-slate-950/95 border border-rose-500/80 text-rose-300 text-[10px] font-mono font-bold whitespace-nowrap shadow-xl flex items-center gap-1.5 backdrop-blur-md">
+                  <span className="w-1.5 h-1.5 rounded-full bg-rose-400 animate-pulse" />
+                  <span>⚡ Peak: {formattedPeak}</span>
+                </div>
+              </div>
+            )}
+          </div>
+        ) : (
+          emptyState || (
+            <div className="flex flex-col items-center justify-center h-full text-xs text-[var(--text-muted)] gap-1">
+              <span>{emptyMessage}</span>
+            </div>
+          )
+        )}
+      </div>
+
+      {/* Scroll indicator hints for user if zoomed */}
+      {activeZoom !== 'fit' && totalPoints > 0 && (
+        <div className="flex items-center justify-between text-[10px] text-[var(--text-muted)] pt-0.5 px-0.5">
+          <span className="flex items-center gap-1 opacity-70">
+            <MoveHorizontal size={11} /> Drag chart or scroll sideways for past time
+          </span>
+          <span className="font-mono opacity-80">
+            {chartData?.labels?.[0] || 'Start'} → {chartData?.labels?.[totalPoints - 1] || 'Now'}
+          </span>
+        </div>
+      )}
+
+      {footer}
+
+      {/* Interactive Bottom Drag-to-Resize Handle (Vertical Height) */}
+      <div
+        onMouseDown={(e) => handleResizeStart(e, 'vertical')}
+        className={`w-full py-1 -mb-2 mt-1 flex items-center justify-center cursor-row-resize select-none transition-opacity ${
+          isResizing ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+        }`}
+        title="Drag up or down to resize height"
+      >
+        <div className="w-14 h-1 rounded-full bg-[var(--border-color)] hover:bg-indigo-400 group-hover:bg-indigo-500/60 transition-colors flex items-center justify-center">
+          <GripHorizontal size={10} className="text-white/40 opacity-0 group-hover:opacity-100" />
+        </div>
+      </div>
+
+      {/* Interactive Horizontal Edge Drag Handle (Expand/Collapse) */}
+      <div
+        onMouseDown={(e) => handleResizeStart(e, 'horizontal')}
+        className={`absolute top-12 bottom-6 ${align === 'right' ? 'left-0' : 'right-0'} w-2.5 cursor-col-resize opacity-0 hover:opacity-100 group-hover:opacity-40 transition-opacity flex items-center justify-center select-none z-10`}
+        title={align === 'right' ? 'Drag left to expand width, drag right to collapse' : 'Drag right to expand width, drag left to collapse'}
+      >
+        <div className="w-1 h-12 rounded-full bg-indigo-500/50 hover:bg-indigo-400" />
+      </div>
+
+      {/* Interactive 2D Corner Resize Handle (Bottom-Right for left cards, Bottom-Left for right cards) */}
+      <div
+        onMouseDown={(e) => handleResizeStart(e, 'both')}
+        className={`absolute bottom-1 ${align === 'right' ? 'left-1 cursor-sw-resize' : 'right-1 cursor-se-resize'} w-5 h-5 flex items-end ${align === 'right' ? 'justify-start' : 'justify-end'} p-0.5 opacity-30 hover:opacity-100 group-hover:opacity-75 transition-opacity z-20 select-none`}
+        title={align === 'right' ? 'Drag corner left & down to resize width and height' : 'Drag corner right & down to resize width and height'}
+      >
+        <svg viewBox="0 0 6 6" className="w-3 h-3 fill-[var(--text-muted)] hover:fill-indigo-400">
+          <circle cx="5" cy="5" r="0.75" />
+          <circle cx="5" cy="3" r="0.75" />
+          <circle cx="3" cy="5" r="0.75" />
+          <circle cx="5" cy="1" r="0.75" />
+          <circle cx="3" cy="3" r="0.75" />
+          <circle cx="1" cy="5" r="0.75" />
+        </svg>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 🧭 Synchronized Timeline Navigator & Range Toolbar
+// ─────────────────────────────────────────────────────────────────────────────
+function TimelineNavigator({
+  historyRange,
+  setHistoryRange,
+  historyLoading,
+  historyData,
+  liveCount,
+  fetchHistory,
+  selectedConnection,
+  zoomLevel,
+  setZoomLevel,
+  syncEnabled = false,
+  setSyncEnabled,
+  timelineLabels = [],
+  scrubberRatio,
+  onScrubberChange,
+  onSnapToLive,
+  cpuHistory = [],
+  ramHistory = [],
+  onJumpToIndividualPeak,
+}) {
+  const totalPoints = timelineLabels.length;
+  const oldestTime = timelineLabels[0] || '—';
+  const latestTime = timelineLabels[totalPoints - 1] || 'Now';
+
+  const [scrubPreview, setScrubPreview] = useState(null);
+  const [showLogModal, setShowLogModal] = useState(false);
+  const [copiedLogCmd, setCopiedLogCmd] = useState(null);
+  const [spikeThreshold, setSpikeThreshold] = useState(50); // default 50% threshold for sensitive spike detection
+
+  // Find all high-load spikes above spikeThreshold and locate the absolute peak point
+  const { spikeIndices, peakIdx, peakValue, peakMetric } = useMemo(() => {
+    const indices = [];
+    let maxVal = -1;
+    let maxIdx = -1;
+    let maxMetric = 'CPU';
+
+    if (historyData?.data && historyData.data.length > 0) {
+      historyData.data.forEach((d, i) => {
+        const cpu = d.cpu ?? 0;
+        const ram = d.ram ?? 0;
+        const higher = Math.max(cpu, ram);
+        if (higher > maxVal) {
+          maxVal = higher;
+          maxIdx = i;
+          maxMetric = cpu >= ram ? 'CPU' : 'RAM';
+        }
+        if (cpu >= spikeThreshold || ram >= spikeThreshold) {
+          indices.push(i);
+        }
+      });
+    } else if (cpuHistory.length > 0) {
+      cpuHistory.forEach((d, i) => {
+        const cpu = d.value || 0;
+        const ram = ramHistory[i]?.value || 0;
+        const higher = Math.max(cpu, ram);
+        if (higher > maxVal) {
+          maxVal = higher;
+          maxIdx = i;
+          maxMetric = cpu >= ram ? 'CPU' : 'RAM';
+        }
+        if (cpu >= spikeThreshold || ram >= spikeThreshold) {
+          indices.push(i);
+        }
+      });
+    }
+    return { spikeIndices: indices, peakIdx: maxIdx, peakValue: maxVal >= 0 ? maxVal : null, peakMetric: maxMetric };
+  }, [historyData, cpuHistory, ramHistory, spikeThreshold]);
+
+  const handleSliderChange = (e) => {
+    const val = parseFloat(e.target.value);
+    onScrubberChange(val);
+    if (totalPoints > 0) {
+      const idx = Math.min(Math.max(0, Math.floor(val * (totalPoints - 1))), totalPoints - 1);
+      setScrubPreview(timelineLabels[idx]);
+    }
+  };
+
+  const handleStep = (stepDelta) => {
+    if (totalPoints === 0) return;
+    const currentIdx = Math.floor((scrubberRatio ?? 1) * (totalPoints - 1));
+    const nextIdx = Math.min(Math.max(0, currentIdx + stepDelta), totalPoints - 1);
+    const nextRatio = totalPoints > 1 ? nextIdx / (totalPoints - 1) : 1;
+    onScrubberChange(nextRatio);
+    setScrubPreview(timelineLabels[nextIdx]);
+  };
+
+  // Jump to absolute highest peak in the active timeline (global: sync all to same point)
+  const jumpToPeak = () => {
+    if (peakIdx == null || peakIdx < 0 || totalPoints === 0) return;
+    const nextRatio = totalPoints > 1 ? peakIdx / (totalPoints - 1) : 1;
+    if (setSyncEnabled) setSyncEnabled(true);
+    onScrubberChange(nextRatio);
+    setScrubPreview(timelineLabels[peakIdx]);
+  };
+
+  // Jump each card to ITS OWN individual peak (not synced to same timestamp)
+  const jumpToIndividualPeak = () => {
+    if (onJumpToIndividualPeak) onJumpToIndividualPeak();
+  };
+
+  // Jump to next or previous spike
+  const jumpToSpike = (direction) => {
+    if (spikeIndices.length === 0 || totalPoints === 0) {
+      jumpToPeak();
+      return;
+    }
+    if (setSyncEnabled) setSyncEnabled(true);
+    const currentIdx = Math.floor((scrubberRatio ?? 1) * (totalPoints - 1));
+    let targetIdx;
+    if (direction === 'next') {
+      targetIdx = spikeIndices.find(idx => idx > currentIdx) ?? spikeIndices[0];
+    } else {
+      const reversed = [...spikeIndices].reverse();
+      targetIdx = reversed.find(idx => idx < currentIdx) ?? spikeIndices[spikeIndices.length - 1];
+    }
+    const nextRatio = totalPoints > 1 ? targetIdx / (totalPoints - 1) : 1;
+    onScrubberChange(nextRatio);
+    setScrubPreview(timelineLabels[targetIdx]);
+  };
+
+  // Export current timeline points to CSV
+  const exportCsv = () => {
+    const points = historyData?.data || cpuHistory.map((d, i) => ({
+      label: d.time,
+      t: Date.now() - (cpuHistory.length - 1 - i) * 10000,
+      cpu: d.value,
+      ram: ramHistory[i]?.value ?? null,
+      rxBytes: null,
+      txBytes: null,
+      disk: null,
+    }));
+
+    if (!points || points.length === 0) return;
+
+    const headers = ['Timestamp', 'TimeLabel', 'CPU_Percent', 'RAM_Percent', 'Network_Rx_Bps', 'Network_Tx_Bps', 'Disk_Percent'];
+    const rows = points.map(p => [
+      p.t || '',
+      `"${p.label || ''}"`,
+      p.cpu != null ? p.cpu.toFixed(2) : '',
+      p.ram != null ? p.ram.toFixed(2) : '',
+      p.rxBytes != null ? p.rxBytes : '',
+      p.txBytes != null ? p.txBytes : '',
+      p.disk != null ? p.disk.toFixed(2) : ''
+    ]);
+
+    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `server-metrics-${historyRange}-${Date.now()}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  return (
+    <div className="bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl p-3 shadow-sm space-y-2.5">
+      {/* Top row: Range selector + Status + Mode + Zoom controls */}
+      <div className="flex flex-wrap items-center justify-between gap-2.5">
+        {/* History Range Tabs */}
+        <div className="flex items-center gap-1.5 p-1 bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-xl text-xs">
+          {[
+            { id: 'live', label: 'Live' },
+            { id: '1h',   label: '1 Hour' },
+            { id: '6h',   label: '6 Hours' },
+            { id: '24h',  label: '24 Hours' },
+          ].map(r => (
+            <button
+              key={r.id}
+              type="button"
+              onClick={() => setHistoryRange(r.id)}
+              className={`px-3 py-1 rounded-lg font-medium transition-all cursor-pointer ${
+                historyRange === r.id
+                  ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-500/30'
+                  : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+              }`}
+            >
+              {r.id === 'live' && (
+                <span className={`inline-block w-1.5 h-1.5 rounded-full mr-1.5 align-middle ${historyRange === 'live' ? 'bg-emerald-400 animate-pulse' : 'bg-[var(--text-muted)]'}`} />
+              )}
+              {r.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Status / Count indicator & Spikes Detector */}
+        <div className="flex items-center gap-2 text-xs text-[var(--text-muted)]">
+          {historyRange !== 'live' ? (
+            historyLoading ? (
+              <span className="flex items-center gap-1 text-indigo-400"><RefreshCw size={11} className="animate-spin" /> Loading history…</span>
+            ) : historyData ? (
+              <span>{historyData.count} data points · auto-refresh 30s</span>
+            ) : null
+          ) : (
+            <span className="flex items-center gap-1.5">
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              {liveCount} live points
+            </span>
+          )}
+
+          {/* High load spike detector & peak badge (always visible when data is present) */}
+          {totalPoints > 0 && (
+            spikeIndices.length > 0 ? (
+              <div className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-500/15 border border-rose-500/30 text-rose-400 text-[10px] font-medium animate-fade-in" title={`Points where CPU or RAM exceeded ${spikeThreshold}%`}>
+                <Flame size={11} className="animate-pulse text-rose-400" />
+                <button
+                  type="button"
+                  onClick={() => setSpikeThreshold(prev => prev === 30 ? 50 : prev === 50 ? 70 : prev === 70 ? 80 : 30)}
+                  className="hover:underline font-semibold cursor-pointer"
+                  title="Click to toggle threshold: >30%, >50%, >70%, >80%"
+                >
+                  {spikeIndices.length} {spikeIndices.length === 1 ? 'spike' : 'spikes'} (&gt;{spikeThreshold}%)
+                </button>
+                <div className="flex items-center ml-1 border-l border-rose-500/30 pl-1 gap-0.5">
+                  <button
+                    type="button"
+                    onClick={() => jumpToSpike('prev')}
+                    className="px-1 hover:bg-rose-500/20 rounded cursor-pointer transition-colors"
+                    title="Jump to previous spike"
+                  >
+                    ◀
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => jumpToSpike('next')}
+                    className="px-1 hover:bg-rose-500/20 rounded cursor-pointer transition-colors"
+                    title="Jump to next spike"
+                  >
+                    ▶
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 text-[10px] font-medium" title="Peak load detected in current timeline">
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                <span>Peak: {peakValue != null ? `${peakValue.toFixed(1)}%` : 'Clean'}</span>
+                {peakIdx != null && peakIdx >= 0 && (
+                  <button
+                    type="button"
+                    onClick={jumpToIndividualPeak}
+                    className="ml-0.5 px-1.5 py-0.2 bg-indigo-600/30 hover:bg-indigo-600/50 rounded text-indigo-200 cursor-pointer transition-colors"
+                    title="Jump each card to its own individual peak"
+                  >
+                    Jump ⚡
+                  </button>
+                )}
+              </div>
+            )
+          )}
+
+          {historyRange !== 'live' && (
+            <button
+              type="button"
+              onClick={() => fetchHistory(historyRange, selectedConnection)}
+              disabled={historyLoading}
+              className="p-1 hover:text-[var(--text-primary)] transition-colors disabled:opacity-40 cursor-pointer"
+              title="Refresh historical data"
+            >
+              <RefreshCw size={12} className={historyLoading ? 'animate-spin' : ''} />
+            </button>
+          )}
+
+          {/* Export CSV button */}
+          {totalPoints > 0 && (
+            <button
+              type="button"
+              onClick={exportCsv}
+              className="p-1 hover:text-[var(--text-primary)] text-[var(--text-muted)] transition-colors cursor-pointer"
+              title="Export timeline data to CSV"
+            >
+              <FileSpreadsheet size={13} />
+            </button>
+          )}
+        </div>
+
+        {/* Sync Mode & Global Zoom Controls */}
+        <div className="flex items-center gap-3">
+          {/* Synced vs Independent Toggle */}
+          {setSyncEnabled && (
+            <button
+              type="button"
+              onClick={() => setSyncEnabled(!syncEnabled)}
+              className={`px-2.5 py-1 rounded-lg text-xs font-medium border flex items-center gap-1.5 transition-all cursor-pointer ${
+                syncEnabled
+                  ? 'bg-indigo-600/20 text-indigo-300 border-indigo-500/40'
+                  : 'bg-[var(--bg-tertiary)] text-[var(--text-muted)] border-[var(--border-color)] hover:text-[var(--text-primary)]'
+              }`}
+              title={syncEnabled ? 'All charts scroll together (Synced)' : 'Each chart scrolls independently (Individual)'}
+            >
+              <Sliders size={12} className={syncEnabled ? 'text-indigo-400' : 'text-[var(--text-muted)]'} />
+              <span>{syncEnabled ? '🔗 Synced' : '🔓 Individual'}</span>
+            </button>
+          )}
+
+          {/* Global Timeline Zoom Buttons */}
+          <div className="flex items-center gap-1.5 text-xs text-[var(--text-muted)]">
+            <span className="text-[11px] font-medium hidden sm:inline">Zoom:</span>
+            <div className="flex items-center gap-1 p-0.5 bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-lg text-xs">
+              {[
+                { id: 'fit', label: 'Fit' },
+                { id: '1x', label: '1x' },
+                { id: '2x', label: '2x' },
+                { id: '4x', label: '4x' },
+              ].map(z => (
+                <button
+                  key={z.id}
+                  type="button"
+                  onClick={() => setZoomLevel(z.id)}
+                  className={`px-2 py-0.5 rounded font-medium transition-all text-xs cursor-pointer ${
+                    zoomLevel === z.id
+                      ? 'bg-indigo-600 text-white shadow-xs font-semibold'
+                      : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+                  }`}
+                  title={z.id === 'fit' ? 'Fit all points into card width' : `Zoom density: ${z.label}`}
+                >
+                  {z.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Bottom row: Timeline Scrubber Slider Bar */}
+      {totalPoints > 1 && (
+        <div className="pt-2 border-t border-[var(--border-color)]/60">
+          <div className="flex items-center justify-between text-[11px] font-mono text-[var(--text-muted)] mb-1">
+            <span className="flex items-center gap-1" title="Oldest recorded point">
+              <Clock size={11} className="text-indigo-400 shrink-0" />
+              {oldestTime}
+            </span>
+
+            {/* Scrub Preview / Past Inspector */}
+            <div className="flex items-center gap-2">
+              {scrubberRatio !== null && scrubberRatio < 0.98 ? (
+                <div className="flex items-center gap-1.5">
+                  <span className="px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-400 text-[10px] font-medium flex items-center gap-1">
+                    <Eye size={10} /> Past: {scrubPreview || 'selected'}
+                  </span>
+                  {/* View Server Logs Button */}
+                  <button
+                    type="button"
+                    onClick={() => setShowLogModal(true)}
+                    className="px-2 py-0.5 rounded-md bg-[var(--bg-tertiary)] hover:bg-[var(--bg-primary)] border border-[var(--border-color)] text-indigo-300 text-[10px] font-medium flex items-center gap-1 transition-colors cursor-pointer"
+                    title="View server log command for this timestamp"
+                  >
+                    <ScrollText size={10} className="text-indigo-400" />
+                    Inspect Logs
+                  </button>
+                </div>
+              ) : (
+                <span className="text-[10px] text-emerald-400 flex items-center gap-1 font-sans">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  Live / Latest
+                </span>
+              )}
+
+              {/* Quick Jump Buttons */}
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => handleStep(-10)}
+                  className="px-1.5 py-0.5 rounded bg-[var(--bg-tertiary)] hover:bg-[var(--bg-primary)] text-[10px] text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors cursor-pointer"
+                  title="Step 10 points into past"
+                >
+                  ◀ -10
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleStep(10)}
+                  className="px-1.5 py-0.5 rounded bg-[var(--bg-tertiary)] hover:bg-[var(--bg-primary)] text-[10px] text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors cursor-pointer"
+                  title="Step 10 points forward"
+                >
+                  +10 ▶
+                </button>
+                <button
+                  type="button"
+                  onClick={onSnapToLive}
+                  className="px-2 py-0.5 rounded bg-indigo-600/80 hover:bg-indigo-600 text-white text-[10px] font-medium flex items-center gap-1 transition-colors cursor-pointer"
+                  title="Jump to latest timestamp"
+                >
+                  <Zap size={10} className="fill-white" /> Now
+                </button>
+              </div>
+            </div>
+
+            <span className="flex items-center gap-1" title="Latest recorded point">
+              {latestTime}
+            </span>
+          </div>
+
+          {/* Interactive Range Slider Scrubber */}
+          <div className="relative flex items-center">
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.001"
+              value={scrubberRatio ?? 1}
+              onChange={handleSliderChange}
+              className="w-full h-1.5 bg-[var(--bg-tertiary)] rounded-lg appearance-none cursor-pointer accent-indigo-500 hover:accent-indigo-400 transition-all"
+              title="Drag slider to scroll sideways through time"
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Log Inspection Dialog Modal */}
+      {showLogModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-[9999]">
+          <div className="bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-2xl w-full max-w-md shadow-2xl p-5 space-y-4 animate-scale-in">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="p-2 rounded-xl bg-indigo-500/10 text-indigo-400">
+                  <ScrollText size={18} />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-sm">Inspect Logs at Past Time</h3>
+                  <p className="text-[11px] text-[var(--text-muted)] font-mono">Timestamp: {scrubPreview || 'selected time'}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowLogModal(false)}
+                className="p-1 rounded-lg hover:bg-[var(--bg-tertiary)] text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <p className="text-xs text-[var(--text-muted)]">
+              Run these commands on your server or in the Terminal App to inspect what happened around this timestamp:
+            </p>
+
+            <div className="space-y-2 text-xs">
+              {/* Journalctl / Systemd */}
+              <div className="p-2.5 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] space-y-1">
+                <div className="flex items-center justify-between text-[11px] font-medium text-indigo-400">
+                  <span>Systemd / Journalctl</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(`journalctl --since "${scrubPreview || '10 minutes ago'}" -n 100 --no-pager`);
+                      setCopiedLogCmd('journalctl');
+                      setTimeout(() => setCopiedLogCmd(null), 2000);
+                    }}
+                    className="text-[10px] text-[var(--text-muted)] hover:text-white flex items-center gap-1 cursor-pointer"
+                  >
+                    {copiedLogCmd === 'journalctl' ? <Check size={11} className="text-emerald-400" /> : <Copy size={11} />}
+                    {copiedLogCmd === 'journalctl' ? 'Copied' : 'Copy'}
+                  </button>
+                </div>
+                <code className="block font-mono text-[10px] text-[var(--text-primary)] bg-[var(--bg-primary)] p-1.5 rounded select-all break-all">
+                  journalctl --since &quot;{scrubPreview || '10 minutes ago'}&quot; -n 100 --no-pager
+                </code>
+              </div>
+
+              {/* Docker Logs */}
+              <div className="p-2.5 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] space-y-1">
+                <div className="flex items-center justify-between text-[11px] font-medium text-emerald-400">
+                  <span>Docker Containers</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(`docker ps -q | xargs -L 1 docker logs --tail 50`);
+                      setCopiedLogCmd('docker');
+                      setTimeout(() => setCopiedLogCmd(null), 2000);
+                    }}
+                    className="text-[10px] text-[var(--text-muted)] hover:text-white flex items-center gap-1 cursor-pointer"
+                  >
+                    {copiedLogCmd === 'docker' ? <Check size={11} className="text-emerald-400" /> : <Copy size={11} />}
+                    {copiedLogCmd === 'docker' ? 'Copied' : 'Copy'}
+                  </button>
+                </div>
+                <code className="block font-mono text-[10px] text-[var(--text-primary)] bg-[var(--bg-primary)] p-1.5 rounded select-all break-all">
+                  docker ps -q | xargs -L 1 docker logs --tail 50
+                </code>
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-2">
+              <button
+                type="button"
+                onClick={() => setShowLogModal(false)}
+                className="px-4 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold cursor-pointer shadow-sm transition-colors"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ServerMonitorApp() {
   const { t } = useTranslation();
   const { state: appState, apiFetch, relayInfo } = useApp();
@@ -131,11 +1227,17 @@ export default function ServerMonitorApp() {
   const intervalRef = useRef(null);
   const relayPollRef = useRef(null);
 
-  // Historical data for charts (last 120 points — live ring buffer)
+  // Historical data for charts (last 360 points — live ring buffer)
   const [cpuHistory, setCpuHistory] = useState([]);
   const [ramHistory, setRamHistory] = useState([]);
   const [networkHistory, setNetworkHistory] = useState([]);
   const [diskHistory, setDiskHistory] = useState([]);
+
+  // Timeline zoom & horizontal scroller state
+  const [timelineZoom, setTimelineZoom] = useState('1x'); // 'fit' | '1x' | '2x' | '4x'
+  const [syncScrollRatio, setSyncScrollRatio] = useState(1); // 0 to 1
+  const [syncEnabled, setSyncEnabled] = useState(false); // whether scrolling one card or master scrubber syncs all charts
+  const [jumpToIndividualPeakSignal, setJumpToIndividualPeakSignal] = useState(0); // increment to broadcast jump-to-own-peak
 
   // Persistent history (fetched from DB for 1h / 6h / 24h views)
   const [historyRange, setHistoryRange] = useState('live'); // 'live' | '1h' | '6h' | '24h'
@@ -354,15 +1456,15 @@ export default function ServerMonitorApp() {
 
         // Update charts on client machine
         const timestamp = new Date(processed.timestampMs || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        setCpuHistory(prev => [...prev.slice(-119), { time: timestamp, value: processed.cpu?.usage || 0 }]);
-        setRamHistory(prev => [...prev.slice(-119), { time: timestamp, value: processed.memory?.usedPercent || 0 }]);
-        setNetworkHistory(prev => [...prev.slice(-119), { 
+        setCpuHistory(prev => [...prev.slice(-359), { time: timestamp, value: processed.cpu?.usage || 0 }]);
+        setRamHistory(prev => [...prev.slice(-359), { time: timestamp, value: processed.memory?.usedPercent || 0 }]);
+        setNetworkHistory(prev => [...prev.slice(-359), { 
           time: timestamp, 
           rx: processed.network?.rxRate || 0, 
           tx: processed.network?.txRate || 0 
         }]);
         const primaryDisk = processed.disk?.filesystems?.[0];
-        setDiskHistory(prev => [...prev.slice(-119), { time: timestamp, value: primaryDisk?.usedPercent || 0 }]);
+        setDiskHistory(prev => [...prev.slice(-359), { time: timestamp, value: primaryDisk?.usedPercent || 0 }]);
       } else {
         const errData = await response.json();
         setError(errData.error || 'Failed to fetch metrics');
@@ -468,15 +1570,15 @@ export default function ServerMonitorApp() {
     setError(null);
 
     const timestamp = new Date(processed.timestampMs || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    setCpuHistory(prev => [...prev.slice(-119), { time: timestamp, value: processed.cpu?.usage || 0 }]);
-    setRamHistory(prev => [...prev.slice(-119), { time: timestamp, value: processed.memory?.usedPercent || 0 }]);
-    setNetworkHistory(prev => [...prev.slice(-119), { 
+    setCpuHistory(prev => [...prev.slice(-359), { time: timestamp, value: processed.cpu?.usage || 0 }]);
+    setRamHistory(prev => [...prev.slice(-359), { time: timestamp, value: processed.memory?.usedPercent || 0 }]);
+    setNetworkHistory(prev => [...prev.slice(-359), { 
       time: timestamp, 
       rx: processed.network?.rxRate || 0, 
       tx: processed.network?.txRate || 0 
     }]);
     const primaryDisk = processed.disk?.filesystems?.[0];
-    setDiskHistory(prev => [...prev.slice(-119), { time: timestamp, value: primaryDisk?.usedPercent || 0 }]);
+    setDiskHistory(prev => [...prev.slice(-359), { time: timestamp, value: primaryDisk?.usedPercent || 0 }]);
 
     // Throttled DB snapshot — at most once every 30 seconds
     const now = Date.now();
@@ -828,14 +1930,7 @@ export default function ServerMonitorApp() {
   const availableApps = useMemo(() => (currentApps || []).filter(a => a.installed), [currentApps]);
 
 
-  const formatBytes = (bytes) => {
-    if (!bytes || isNaN(bytes)) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), sizes.length - 1);
-    if (i < 0) return '0 B';
-    return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
-  };
+
 
   const formatUptime = (seconds) => {
     if (!seconds) return '0s';
@@ -867,18 +1962,43 @@ export default function ServerMonitorApp() {
     return <Minus size={12} className="text-[var(--text-muted)]" />;
   };
 
-  // Lightweight Chart configuration
+  // Active timeline labels for scrubber
+  const activeTimelineLabels = useMemo(() => {
+    if (historyData?.data && historyData.data.length > 0) {
+      return historyData.data.map(d => d.label);
+    }
+    return cpuHistory.map(d => d.time);
+  }, [historyData, cpuHistory]);
+
+  // Lightweight Chart configuration (optimized for 60fps scrolling & dense points)
   const chartOptions = {
     responsive: true,
     maintainAspectRatio: false,
-    animation: {
-      duration: 200,
+    animation: false,
+    normalized: true,
+    spanGaps: true,
+    elements: {
+      point: {
+        radius: 0,
+        hoverRadius: 4,
+        hitRadius: 8,
+      },
+      line: {
+        borderWidth: 2,
+      }
     },
     plugins: {
       legend: { display: false },
       tooltip: {
         mode: 'index',
         intersect: false,
+        backgroundColor: 'rgba(15, 23, 42, 0.95)',
+        borderColor: 'rgba(255, 255, 255, 0.1)',
+        borderWidth: 1,
+        padding: 8,
+        titleFont: { size: 11, weight: 'bold' },
+        bodyFont: { size: 11 },
+        displayColors: true,
       }
     },
     scales: {
@@ -899,7 +2019,7 @@ export default function ServerMonitorApp() {
           color: 'rgba(255, 255, 255, 0.5)',
           maxRotation: 0,
           autoSkip: true,
-          maxTicksLimit: 6
+          maxTicksLimit: 8
         }
       }
     },
@@ -1244,72 +2364,28 @@ export default function ServerMonitorApp() {
                   </div>
                 </div>
 
-                {/* Performance Metrics Grid */}
-                {/* ── History Range Picker ── */}
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-1.5 p-1 bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-xl text-xs">
-                    {[
-                      { id: 'live', label: 'Live' },
-                      { id: '1h',   label: '1 Hour' },
-                      { id: '6h',   label: '6 Hours' },
-                      { id: '24h',  label: '24 Hours' },
-                    ].map(r => (
-                      <button
-                        key={r.id}
-                        onClick={() => setHistoryRange(r.id)}
-                        className={`px-3 py-1 rounded-lg font-medium transition-all cursor-pointer ${
-                          historyRange === r.id
-                            ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-500/30'
-                            : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
-                        }`}
-                      >
-                        {r.id === 'live' && (
-                          <span className={`inline-block w-1.5 h-1.5 rounded-full mr-1.5 align-middle ${historyRange === 'live' ? 'bg-emerald-400 animate-pulse' : 'bg-[var(--text-muted)]'}`} />
-                        )}
-                        {r.label}
-                      </button>
-                    ))}
-                  </div>
-                  {historyRange !== 'live' && (
-                    <div className="flex items-center gap-2 text-xs text-[var(--text-muted)]">
-                      {historyLoading ? (
-                        <span className="flex items-center gap-1"><RefreshCw size={11} className="animate-spin" /> Loading…</span>
-                      ) : historyData ? (
-                        <span>{historyData.count} data points · auto-refresh every 30s</span>
-                      ) : null}
-                      <button
-                        onClick={() => fetchHistory(historyRange, selectedConnection)}
-                        disabled={historyLoading}
-                        className="p-1 hover:text-[var(--text-primary)] transition-colors disabled:opacity-40"
-                        title="Refresh history"
-                      >
-                        <RefreshCw size={12} className={historyLoading ? 'animate-spin' : ''} />
-                      </button>
-                    </div>
-                  )}
-                </div>
-
+                {/* Overview: Simple live charts — no advanced controls */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* CPU Card */}
-                  <div className="bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl p-4 shadow-sm">
-                    <div className="flex items-center justify-between mb-3">
+                  {/* CPU Card — static live chart */}
+                  <div className="bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl p-4 shadow-sm flex flex-col">
+                    <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center gap-2">
-                        <Cpu className="text-indigo-400" size={18} />
-                        <h3 className="font-semibold text-sm">CPU Usage (Client Delta)</h3>
+                        <Cpu className="text-indigo-400 shrink-0" size={18} />
+                        <h3 className="font-semibold text-sm">CPU Usage</h3>
                       </div>
                       <div className="flex items-center gap-1.5">
                         {getTrendIcon(metrics.cpu?.usage, cpuHistory[cpuHistory.length - 2]?.value)}
-                        <span className={`text-xl font-bold font-mono ${getStatusColor(metrics.cpu?.usage)}`}>
-                          {metrics.cpu?.usage?.toFixed(1)}%
+                        <span className={`text-lg font-bold font-mono ${getStatusColor(metrics.cpu?.usage)}`}>
+                          {metrics.cpu?.usage?.toFixed(1) ?? '—'}%
                         </span>
                       </div>
                     </div>
-                    
-                    <div className={`${historyRange !== 'live' ? 'h-48' : 'h-32'} mb-3 transition-all duration-300`}>
-                      {(cpuHistory.length > 0 || historyData) && <Line data={getCpuChartData()} options={chartOptions} />}
+                    <div className="h-36">
+                      {getCpuChartData()?.labels?.length > 0
+                        ? <Line data={getCpuChartData()} options={chartOptions} />
+                        : <div className="flex items-center justify-center h-full text-xs text-[var(--text-muted)]">No data yet</div>}
                     </div>
-                    
-                    <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="grid grid-cols-2 gap-2 text-xs mt-2">
                       <div className="bg-[var(--bg-tertiary)] rounded-lg p-2">
                         <span className="text-[var(--text-muted)]">Cores:</span>
                         <span className="ml-1 font-medium">{metrics.cpu?.cores || 'N/A'}</span>
@@ -1323,26 +2399,26 @@ export default function ServerMonitorApp() {
                     </div>
                   </div>
 
-                  {/* RAM Card */}
-                  <div className="bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl p-4 shadow-sm">
-                    <div className="flex items-center justify-between mb-3">
+                  {/* RAM Card — static live chart */}
+                  <div className="bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl p-4 shadow-sm flex flex-col">
+                    <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center gap-2">
-                        <MemoryStick className="text-emerald-400" size={18} />
+                        <MemoryStick className="text-emerald-400 shrink-0" size={18} />
                         <h3 className="font-semibold text-sm">Memory Usage</h3>
                       </div>
                       <div className="flex items-center gap-1.5">
                         {getTrendIcon(metrics.memory?.usedPercent, ramHistory[ramHistory.length - 2]?.value)}
-                        <span className={`text-xl font-bold font-mono ${getStatusColor(metrics.memory?.usedPercent)}`}>
-                          {metrics.memory?.usedPercent?.toFixed(1)}%
+                        <span className={`text-lg font-bold font-mono ${getStatusColor(metrics.memory?.usedPercent)}`}>
+                          {metrics.memory?.usedPercent?.toFixed(1) ?? '—'}%
                         </span>
                       </div>
                     </div>
-                    
-                    <div className={`${historyRange !== 'live' ? 'h-48' : 'h-32'} mb-3 transition-all duration-300`}>
-                      {(ramHistory.length > 0 || historyData) && <Line data={getRamChartData()} options={chartOptions} />}
+                    <div className="h-36">
+                      {getRamChartData()?.labels?.length > 0
+                        ? <Line data={getRamChartData()} options={chartOptions} />
+                        : <div className="flex items-center justify-center h-full text-xs text-[var(--text-muted)]">No data yet</div>}
                     </div>
-                    
-                    <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="grid grid-cols-2 gap-2 text-xs mt-2">
                       <div className="bg-[var(--bg-tertiary)] rounded-lg p-2">
                         <span className="text-[var(--text-muted)]">Used:</span>
                         <span className="ml-1 font-medium">{formatBytes(metrics.memory?.used)}</span>
@@ -1363,23 +2439,15 @@ export default function ServerMonitorApp() {
                       <HardDrive className="text-purple-400" size={18} />
                       <h3 className="font-semibold text-sm">Disk Storage</h3>
                     </div>
-                    
                     <div className="space-y-2.5">
                       {metrics.disk?.filesystems?.slice(0, 4).map((fs, idx) => (
                         <div key={idx} className="bg-[var(--bg-tertiary)] rounded-lg p-2.5">
                           <div className="flex items-center justify-between mb-1.5">
-                            <span className="text-xs font-medium truncate max-w-[200px]" title={fs.mount}>
-                              {fs.mount}
-                            </span>
-                            <span className={`text-xs font-bold font-mono ${getStatusColor(fs.usedPercent)}`}>
-                              {fs.usedPercent?.toFixed(1)}%
-                            </span>
+                            <span className="text-xs font-medium truncate max-w-[200px]" title={fs.mount}>{fs.mount}</span>
+                            <span className={`text-xs font-bold font-mono ${getStatusColor(fs.usedPercent)}`}>{fs.usedPercent?.toFixed(1)}%</span>
                           </div>
                           <div className="w-full bg-[var(--bg-primary)] rounded-full h-1.5 overflow-hidden">
-                            <div 
-                              className={`h-full transition-all duration-300 ${getStatusBg(fs.usedPercent)}`}
-                              style={{ width: `${Math.min(100, fs.usedPercent)}%` }}
-                            />
+                            <div className={`h-full transition-all duration-300 ${getStatusBg(fs.usedPercent)}`} style={{ width: `${Math.min(100, fs.usedPercent)}%` }} />
                           </div>
                           <div className="flex items-center justify-between mt-1 text-[10px] text-[var(--text-muted)]">
                             <span>{formatBytes(fs.used)} used</span>
@@ -1393,33 +2461,23 @@ export default function ServerMonitorApp() {
                     </div>
                   </div>
 
-                  {/* Network Card */}
-                  <div className="bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl p-4 shadow-sm">
-                    <div className="flex items-center justify-between mb-3">
+                  {/* Network Card — static live chart */}
+                  <div className="bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl p-4 shadow-sm flex flex-col">
+                    <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center gap-2">
-                        <Wifi className="text-blue-400" size={18} />
-                        <h3 className="font-semibold text-sm">Network Activity (Client Rate)</h3>
+                        <Wifi className="text-blue-400 shrink-0" size={18} />
+                        <h3 className="font-semibold text-sm">Network Activity</h3>
                       </div>
+                      <span className="text-lg font-bold font-mono text-blue-300">
+                        {formatBytes((metrics.network?.rxRate || 0) + (metrics.network?.txRate || 0))}/s
+                      </span>
                     </div>
-                    
-                    <div className={`${historyRange !== 'live' ? 'h-48' : 'h-32'} mb-3 transition-all duration-300`}>
-                      {(networkHistory.length > 0 || historyData) && <Line data={getNetworkChartData()} options={{
-                        ...chartOptions,
-                        scales: {
-                          ...chartOptions.scales,
-                          y: {
-                            ...chartOptions.scales.y,
-                            max: undefined,
-                            ticks: {
-                              color: 'rgba(255, 255, 255, 0.5)',
-                              callback: (value) => formatBytes(value) + '/s'
-                            }
-                          }
-                        }
-                      }} />}
+                    <div className="h-36">
+                      {getNetworkChartData()?.labels?.length > 0
+                        ? <Line data={getNetworkChartData()} options={{ ...chartOptions, scales: { ...chartOptions.scales, y: { ...chartOptions.scales.y, max: undefined, ticks: { color: 'rgba(255,255,255,0.5)', callback: (v) => formatBytes(v) + '/s' } } } }} />
+                        : <div className="flex items-center justify-center h-full text-xs text-[var(--text-muted)]">No data yet</div>}
                     </div>
-                    
-                    <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="grid grid-cols-2 gap-2 text-xs mt-2">
                       <div className="bg-[var(--bg-tertiary)] rounded-lg p-2 flex items-center gap-2">
                         <Download size={14} className="text-blue-400 shrink-0" />
                         <div className="min-w-0">
@@ -1444,208 +2502,35 @@ export default function ServerMonitorApp() {
 
         {selectedConnection && activeTab === 'history' && (
           <div className="space-y-4">
-            {/* History Range Picker */}
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-1.5 p-1 bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-xl text-xs">
-                {[
-                  { id: 'live', label: 'Live' },
-                  { id: '1h',   label: '1 Hour' },
-                  { id: '6h',   label: '6 Hours' },
-                  { id: '24h',  label: '24 Hours' },
-                ].map(r => (
-                  <button
-                    key={r.id}
-                    onClick={() => setHistoryRange(r.id)}
-                    className={`px-3 py-1 rounded-lg font-medium transition-all cursor-pointer ${
-                      historyRange === r.id
-                        ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-500/30'
-                        : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
-                    }`}
-                  >
-                    {r.id === 'live' && (
-                      <span className={`inline-block w-1.5 h-1.5 rounded-full mr-1.5 align-middle ${historyRange === 'live' ? 'bg-emerald-400 animate-pulse' : 'bg-[var(--text-muted)]'}`} />
-                    )}
-                    {r.label}
-                  </button>
-                ))}
-              </div>
-              <div className="flex items-center gap-2 text-xs text-[var(--text-muted)]">
-                {historyRange !== 'live' && (
-                  historyLoading ? (
-                    <span className="flex items-center gap-1"><RefreshCw size={11} className="animate-spin" /> Loading…</span>
-                  ) : historyData ? (
-                    <span>{historyData.count} data points · auto-refresh every 30s</span>
-                  ) : null
-                )}
-                {historyRange === 'live' && (
-                  <span className="flex items-center gap-1.5">
-                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                    Showing last {Math.max(cpuHistory.length, 0)} live samples
-                  </span>
-                )}
-                {historyRange !== 'live' && (
-                  <button
-                    onClick={() => fetchHistory(historyRange, selectedConnection)}
-                    disabled={historyLoading}
-                    className="p-1 hover:text-[var(--text-primary)] transition-colors disabled:opacity-40"
-                    title="Refresh history"
-                  >
-                    <RefreshCw size={12} className={historyLoading ? 'animate-spin' : ''} />
-                  </button>
-                )}
-              </div>
-            </div>
+            {/* Timeline Navigator with zoom, scrubber, and range picker */}
+            <TimelineNavigator
+              historyRange={historyRange}
+              setHistoryRange={setHistoryRange}
+              historyLoading={historyLoading}
+              historyData={historyData}
+              liveCount={cpuHistory.length}
+              fetchHistory={fetchHistory}
+              selectedConnection={selectedConnection}
+              zoomLevel={timelineZoom}
+              setZoomLevel={setTimelineZoom}
+              syncEnabled={syncEnabled}
+              setSyncEnabled={setSyncEnabled}
+              timelineLabels={activeTimelineLabels}
+              scrubberRatio={syncScrollRatio}
+              onScrubberChange={(ratio) => {
+                setSyncEnabled(true);
+                setSyncScrollRatio(ratio);
+              }}
+              onSnapToLive={() => {
+                setSyncEnabled(true);
+                setSyncScrollRatio(1);
+              }}
+              cpuHistory={cpuHistory}
+              ramHistory={ramHistory}
+              onJumpToIndividualPeak={() => setJumpToIndividualPeakSignal(s => s + 1)}
+            />
 
-            {/* Full-width chart grid */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              {/* CPU History Chart */}
-              <div className="bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl p-4 shadow-sm">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="flex items-center gap-2">
-                    <Cpu className="text-indigo-400" size={16} />
-                    <span className="text-sm font-semibold">CPU Usage</span>
-                  </div>
-                  {metrics?.cpu?.usage != null && (
-                    <span className={`text-lg font-bold font-mono ${getStatusColor(metrics.cpu.usage)}`}>
-                      {metrics.cpu.usage.toFixed(1)}%
-                    </span>
-                  )}
-                </div>
-                <div className="h-52">
-                  {(cpuHistory.length > 0 || historyData) ? (
-                    <Line data={getCpuChartData()} options={{
-                      ...chartOptions,
-                      plugins: {
-                        ...chartOptions.plugins,
-                        legend: { display: false },
-                        tooltip: {
-                          mode: 'index',
-                          intersect: false,
-                          callbacks: { label: (ctx) => ` ${ctx.parsed.y?.toFixed(1) ?? '—'}%` }
-                        }
-                      }
-                    }} />
-                  ) : (
-                    <div className="flex items-center justify-center h-full text-xs text-[var(--text-muted)]">No data yet</div>
-                  )}
-                </div>
-              </div>
-
-              {/* RAM History Chart */}
-              <div className="bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl p-4 shadow-sm">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="flex items-center gap-2">
-                    <MemoryStick className="text-emerald-400" size={16} />
-                    <span className="text-sm font-semibold">Memory Usage</span>
-                  </div>
-                  {metrics?.memory?.usedPercent != null && (
-                    <span className={`text-lg font-bold font-mono ${getStatusColor(metrics.memory.usedPercent)}`}>
-                      {metrics.memory.usedPercent.toFixed(1)}%
-                    </span>
-                  )}
-                </div>
-                <div className="h-52">
-                  {(ramHistory.length > 0 || historyData) ? (
-                    <Line data={getRamChartData()} options={{
-                      ...chartOptions,
-                      plugins: {
-                        ...chartOptions.plugins,
-                        legend: { display: false },
-                        tooltip: {
-                          mode: 'index',
-                          intersect: false,
-                          callbacks: { label: (ctx) => ` ${ctx.parsed.y?.toFixed(1) ?? '—'}%` }
-                        }
-                      }
-                    }} />
-                  ) : (
-                    <div className="flex items-center justify-center h-full text-xs text-[var(--text-muted)]">No data yet</div>
-                  )}
-                </div>
-              </div>
-
-              {/* Network History Chart */}
-              <div className="bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl p-4 shadow-sm">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="flex items-center gap-2">
-                    <Wifi className="text-blue-400" size={16} />
-                    <span className="text-sm font-semibold">Network I/O</span>
-                  </div>
-                  <div className="flex items-center gap-3 text-xs font-mono">
-                    <span className="flex items-center gap-1 text-blue-400">
-                      <Download size={12} /> {formatBytes(metrics?.network?.rxRate || 0)}/s
-                    </span>
-                    <span className="flex items-center gap-1 text-amber-400">
-                      <Upload size={12} /> {formatBytes(metrics?.network?.txRate || 0)}/s
-                    </span>
-                  </div>
-                </div>
-                <div className="h-52">
-                  {(networkHistory.length > 0 || historyData) ? (
-                    <Line data={getNetworkChartData()} options={{
-                      ...chartOptions,
-                      plugins: {
-                        ...chartOptions.plugins,
-                        legend: { display: true, labels: { color: 'rgba(255,255,255,0.6)', boxWidth: 10, font: { size: 11 } } },
-                        tooltip: {
-                          mode: 'index',
-                          intersect: false,
-                          callbacks: { label: (ctx) => ` ${ctx.dataset.label}: ${formatBytes(ctx.parsed.y ?? 0)}/s` }
-                        }
-                      },
-                      scales: {
-                        ...chartOptions.scales,
-                        y: {
-                          ...chartOptions.scales.y,
-                          max: undefined,
-                          ticks: { color: 'rgba(255,255,255,0.5)', callback: (v) => formatBytes(v) + '/s' }
-                        }
-                      }
-                    }} />
-                  ) : (
-                    <div className="flex items-center justify-center h-full text-xs text-[var(--text-muted)]">No data yet</div>
-                  )}
-                </div>
-              </div>
-
-              {/* Disk History Chart */}
-              <div className="bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl p-4 shadow-sm">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="flex items-center gap-2">
-                    <HardDrive className="text-purple-400" size={16} />
-                    <span className="text-sm font-semibold">Disk Usage <span className="text-[11px] font-normal text-[var(--text-muted)]">(primary mount)</span></span>
-                  </div>
-                  {metrics?.disk?.filesystems?.[0]?.usedPercent != null && (
-                    <span className={`text-lg font-bold font-mono ${getStatusColor(metrics.disk.filesystems[0].usedPercent)}`}>
-                      {metrics.disk.filesystems[0].usedPercent.toFixed(1)}%
-                    </span>
-                  )}
-                </div>
-                <div className="h-52">
-                  {(diskHistory.length > 0 || (historyData?.data?.some(d => d.disk != null))) ? (
-                    <Line data={getDiskChartData()} options={{
-                      ...chartOptions,
-                      plugins: {
-                        ...chartOptions.plugins,
-                        legend: { display: false },
-                        tooltip: {
-                          mode: 'index',
-                          intersect: false,
-                          callbacks: { label: (ctx) => ` ${ctx.parsed.y?.toFixed(1) ?? '—'}%` }
-                        }
-                      }
-                    }} />
-                  ) : (
-                    <div className="flex flex-col items-center justify-center h-full text-xs text-[var(--text-muted)] gap-1">
-                      <HardDrive size={24} className="opacity-30" />
-                      <span>No disk history yet — collecting on next snapshot</span>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* Summary stats row */}
+            {/* Summary stats row — at the top for quick reference */}
             {metrics && (
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 {[
@@ -1664,6 +2549,159 @@ export default function ServerMonitorApp() {
                 ))}
               </div>
             )}
+
+            {/* Scrollable chart grid */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <ScrollableChartCard
+                title="CPU Usage"
+                icon={Cpu}
+                currentValue={metrics?.cpu?.usage}
+                statusColor={getStatusColor(metrics?.cpu?.usage)}
+                trendIcon={getTrendIcon(metrics?.cpu?.usage, cpuHistory[cpuHistory.length - 2]?.value)}
+                chartData={getCpuChartData()}
+                chartOptions={{
+                  ...chartOptions,
+                  plugins: {
+                    ...chartOptions.plugins,
+                    legend: { display: false },
+                    tooltip: {
+                      mode: 'index',
+                      intersect: false,
+                      callbacks: { label: (ctx) => ` ${ctx.parsed.y?.toFixed(1) ?? '—'}%` }
+                    }
+                  }
+                }}
+                heightClass="h-52"
+                zoomLevel={timelineZoom}
+                syncScrollRatio={syncScrollRatio}
+                syncEnabled={syncEnabled}
+                onUserScroll={setSyncScrollRatio}
+                isLive={historyRange === 'live'}
+                spikeData={{ history: cpuHistory, threshold: 80 }}
+                align="left"
+                jumpToIndividualPeakSignal={jumpToIndividualPeakSignal}
+              />
+
+              <ScrollableChartCard
+                title="Memory Usage"
+                icon={MemoryStick}
+                currentValue={metrics?.memory?.usedPercent}
+                statusColor={getStatusColor(metrics?.memory?.usedPercent)}
+                trendIcon={getTrendIcon(metrics?.memory?.usedPercent, ramHistory[ramHistory.length - 2]?.value)}
+                chartData={getRamChartData()}
+                chartOptions={{
+                  ...chartOptions,
+                  plugins: {
+                    ...chartOptions.plugins,
+                    legend: { display: false },
+                    tooltip: {
+                      mode: 'index',
+                      intersect: false,
+                      callbacks: { label: (ctx) => ` ${ctx.parsed.y?.toFixed(1) ?? '—'}%` }
+                    }
+                  }
+                }}
+                heightClass="h-52"
+                zoomLevel={timelineZoom}
+                syncScrollRatio={syncScrollRatio}
+                syncEnabled={syncEnabled}
+                onUserScroll={setSyncScrollRatio}
+                isLive={historyRange === 'live'}
+                spikeData={{ history: ramHistory, threshold: 80 }}
+                align="right"
+                jumpToIndividualPeakSignal={jumpToIndividualPeakSignal}
+              />
+
+              <ScrollableChartCard
+                title="Network I/O"
+                icon={Wifi}
+                currentValue={null}
+                headerExtra={
+                  <div className="flex items-center gap-3 text-xs font-mono">
+                    <span className="flex items-center gap-1 text-blue-400">
+                      <Download size={12} /> {formatBytes(metrics?.network?.rxRate || 0)}/s
+                    </span>
+                    <span className="flex items-center gap-1 text-amber-400">
+                      <Upload size={12} /> {formatBytes(metrics?.network?.txRate || 0)}/s
+                    </span>
+                  </div>
+                }
+                chartData={getNetworkChartData()}
+                chartOptions={{
+                  ...chartOptions,
+                  plugins: {
+                    ...chartOptions.plugins,
+                    legend: { display: true, labels: { color: 'rgba(255,255,255,0.6)', boxWidth: 10, font: { size: 11 } } },
+                    tooltip: {
+                      mode: 'index',
+                      intersect: false,
+                      callbacks: { label: (ctx) => ` ${ctx.dataset.label}: ${formatBytes(ctx.parsed.y ?? 0)}/s` }
+                    }
+                  },
+                  scales: {
+                    ...chartOptions.scales,
+                    y: {
+                      ...chartOptions.scales.y,
+                      max: undefined,
+                      ticks: { color: 'rgba(255,255,255,0.5)', callback: (v) => formatBytes(v) + '/s' }
+                    }
+                  }
+                }}
+                heightClass="h-52"
+                zoomLevel={timelineZoom}
+                syncScrollRatio={syncScrollRatio}
+                syncEnabled={syncEnabled}
+                onUserScroll={setSyncScrollRatio}
+                isLive={historyRange === 'live'}
+                spikeData={{
+                  history: historyData?.data
+                    ? historyData.data.map(d => (d?.rxBytes || 0) + (d?.txBytes || 0))
+                    : networkHistory.map(d => (d?.rx || 0) + (d?.tx || 0)),
+                  isBytes: true,
+                  threshold: 1 * 1024 * 1024
+                }}
+                align="left"
+                jumpToIndividualPeakSignal={jumpToIndividualPeakSignal}
+              />
+
+              <ScrollableChartCard
+                title={<>Disk Usage <span className="text-[11px] font-normal text-[var(--text-muted)]">(primary)</span></>}
+                icon={HardDrive}
+                currentValue={metrics?.disk?.filesystems?.[0]?.usedPercent}
+                statusColor={getStatusColor(metrics?.disk?.filesystems?.[0]?.usedPercent)}
+                chartData={getDiskChartData()}
+                chartOptions={{
+                  ...chartOptions,
+                  plugins: {
+                    ...chartOptions.plugins,
+                    legend: { display: false },
+                    tooltip: {
+                      mode: 'index',
+                      intersect: false,
+                      callbacks: { label: (ctx) => ` ${ctx.parsed.y?.toFixed(1) ?? '—'}%` }
+                    }
+                  }
+                }}
+                heightClass="h-52"
+                zoomLevel={timelineZoom}
+                syncScrollRatio={syncScrollRatio}
+                syncEnabled={syncEnabled}
+                onUserScroll={setSyncScrollRatio}
+                isLive={historyRange === 'live'}
+                spikeData={{
+                  history: diskHistory.map(d => d?.value ?? 0),
+                  threshold: 85
+                }}
+                align="right"
+                jumpToIndividualPeakSignal={jumpToIndividualPeakSignal}
+                emptyState={
+                  <div className="flex flex-col items-center justify-center h-full text-xs text-[var(--text-muted)] gap-1">
+                    <HardDrive size={24} className="opacity-30" />
+                    <span>No disk history yet — collecting on next snapshot</span>
+                  </div>
+                }
+              />
+            </div>
           </div>
         )}
 

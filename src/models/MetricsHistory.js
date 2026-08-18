@@ -29,7 +29,8 @@ const MetricsHistorySchema = new mongoose.Schema({
   versionKey: false,
 });
 
-// Compound index for fast range queries per server
+// Compound indexes for fast range queries per server (both ascending and descending scans)
+MetricsHistorySchema.index({ connectionId: 1, recordedAt: 1 });
 MetricsHistorySchema.index({ connectionId: 1, recordedAt: -1 });
 
 // TTL: auto-delete after 24 hours
