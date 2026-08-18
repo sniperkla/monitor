@@ -233,10 +233,21 @@ function reducer(state, action) {
   }
 }
 
+import { initProxyKey, clearProxyKey, isProxyReady, proxyEncrypt, proxyDecrypt } from '@/utils/proxyClient';
+
 export function AppProvider({ children }) {
   const [state, dispatch] = useReducer(reducer, initialState);
   const { data: session } = useSession();
   const { vaultStatus, decryptedUri, decryptedTunnel } = useVault();
+
+  // Initialise the proxy encryption key whenever the session changes
+  useEffect(() => {
+    if (session?.user?.email) {
+      initProxyKey(session.user.email);
+    } else {
+      clearProxyKey();
+    }
+  }, [session?.user?.email]);
 
   const apiFetch = useCallback(async (url, options = {}) => {
     const headers = { ...options.headers };
@@ -256,6 +267,68 @@ export function AppProvider({ children }) {
         headers['x-ssh-mode'] = sshMode;
       }
     }
+
+    // ── Encrypted proxy path ─────────────────────────────────────────────────
+    // Route all API calls through POST /api/p when the proxy key is ready.
+    // Bypass: /api/p itself, /api/auth/*, /api/p/key (bootstrap), SSE streams.
+    const isExempt =
+      url.startsWith('/api/p') ||
+      url.startsWith('/api/auth/') ||
+      options._bypassProxy;
+
+    if (!isExempt && isProxyReady()) {
+      try {
+        const body = options.body ?? null;
+        const encrypted = await proxyEncrypt({
+          url,
+          method: options.method || 'GET',
+          headers,
+          body: body ?? null,
+        });
+
+        const proxyRes = await fetch('/api/p', {
+          method: 'POST',
+          body: encrypted,
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/octet-stream' },
+          signal: options.signal,
+        });
+
+        if (proxyRes.status === 401) {
+          throw new Error('SESSION_EXPIRED');
+        }
+        if (!proxyRes.ok) {
+          // 429 rate limit or other error — try to decrypt if it's our format
+          const errText = await proxyRes.text();
+          try {
+            const errData = JSON.parse(errText);
+            if (errData.rateLimited) {
+              // Synthesise a Response so callers can handle it uniformly
+              return new Response(JSON.stringify(errData), {
+                status: 429,
+                headers: { 'Content-Type': 'application/json' },
+              });
+            }
+          } catch { /* not JSON */ }
+          throw new Error('SERVER_ERROR');
+        }
+
+        const encryptedResponse = await proxyRes.text();
+        const decrypted = await proxyDecrypt(encryptedResponse);
+
+        // Reconstruct a Response-like object so all existing callers work unchanged
+        return new Response(decrypted.body, {
+          status: decrypted.status,
+          headers: decrypted.headers || { 'Content-Type': 'application/json' },
+        });
+      } catch (err) {
+        if (err.message === 'SESSION_EXPIRED' || err.message === 'SERVER_ERROR') throw err;
+        // Proxy failed (e.g. key expired) — fall through to direct fetch
+        console.warn('[apiFetch] proxy error, falling back to direct:', err.message);
+      }
+    }
+
+    // ── Direct fetch (fallback / exempt routes) ──────────────────────────────
     const res = await fetch(url, { ...options, headers, credentials: 'include' });
     
     // Check for explicit 401 Unauthorized
@@ -269,11 +342,9 @@ export function AppProvider({ children }) {
     if (contentType.includes('text/html')) {
       const resUrl = res.url || '';
       console.warn('[apiFetch] HTML response received:', { url, status: res.status, responseUrl: resUrl });
-      // If redirected to auth pages, it's a session issue
       if (resUrl.includes('/api/auth/signin') || resUrl.includes('/api/auth/callback') || res.status === 401) {
         throw new Error('SESSION_EXPIRED');
       }
-      // Otherwise it's a server error
       throw new Error('SERVER_ERROR');
     }
     

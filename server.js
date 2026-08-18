@@ -42,6 +42,23 @@ const handle = app.getRequestHandler();
 
 const shellQuote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
 
+// JWT parse cache — avoids decoding the same cookie token on every parallel request in a burst.
+// Keyed by the raw cookie string value; entries expire after 5 seconds.
+const jwtCache = new Map();
+const JWT_CACHE_TTL_MS = 5000;
+function getCachedJwt(cookieHeader) { return jwtCache.get(cookieHeader); }
+function setCachedJwt(cookieHeader, payload) {
+  jwtCache.set(cookieHeader, { payload, ts: Date.now() });
+  // Auto-expire
+  setTimeout(() => jwtCache.delete(cookieHeader), JWT_CACHE_TTL_MS);
+}
+function getJwtCachePayload(cookieHeader) {
+  const hit = getCachedJwt(cookieHeader);
+  if (!hit) return undefined; // undefined = miss
+  if (Date.now() - hit.ts > JWT_CACHE_TTL_MS) { jwtCache.delete(cookieHeader); return undefined; }
+  return hit.payload; // null = decoded but unauthenticated
+}
+
 // MongoDB connection — use MONGODB_URI from .env only
 let MONGODB_URI = null;
 if (process.env.MONGODB_URI) {
@@ -543,6 +560,59 @@ app.prepare().then(async () => {
         res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
         res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
         res.setHeader('Strict-Transport-Security', 'max-age=63072000; includeSubDomains; preload');
+      }
+
+      // ── Global daily rate limit ───────────────────────────────────────
+      // Runs in plain Node.js — no Edge runtime constraints.
+      // Exempt: /api/auth/*, /api/health, /api/user/rate-limit-status, non-API routes
+      if (
+        req.url.startsWith('/api/') &&
+        !req.url.startsWith('/api/auth/') &&
+        !req.url.startsWith('/api/health') &&
+        !req.url.startsWith('/api/user/rate-limit-status') &&
+        !req.url.startsWith('/api/p')   // proxy endpoint — rate limited via internal routing
+      ) {
+        try {
+          const { checkGlobalDailyLimit } = await import('./src/lib/globalRateLimit.js');
+          const { parseJwtPayload } = await import('./src/lib/serverJwt.js');
+
+          // Use cached JWT result to avoid re-parsing on every parallel burst request
+          const cookieHeader = req.headers['cookie'] || '';
+          let jwtPayload = getJwtCachePayload(cookieHeader);
+          if (jwtPayload === undefined) {
+            jwtPayload = await parseJwtPayload(req);
+            setCachedJwt(cookieHeader, jwtPayload);
+          }
+
+          const email = jwtPayload?.email || null;
+          const role  = jwtPayload?.role  || null;
+
+          if (email && role !== 'admin') {
+            const rl = checkGlobalDailyLimit(email, true);
+            res.setHeader('X-RateLimit-Limit',     String(rl.limit));
+            res.setHeader('X-RateLimit-Used',      String(rl.used));
+            res.setHeader('X-RateLimit-Remaining', String(rl.remaining));
+            res.setHeader('X-RateLimit-Reset',     String(Math.floor(Date.now() / 1000) + rl.resetsInSeconds));
+            if (!rl.allowed) {
+              res.statusCode = 429;
+              res.setHeader('Content-Type', 'application/json');
+              res.setHeader('Retry-After', String(rl.resetsInSeconds));
+              res.end(JSON.stringify({
+                error: `Daily request limit reached (${rl.used}/${rl.limit}). Resets at midnight UTC+7.`,
+                rateLimited: true,
+                used: rl.used,
+                limit: rl.limit,
+                remaining: 0,
+                resetsInSeconds: rl.resetsInSeconds,
+                percentage: 100,
+              }));
+              return;
+            }
+          }
+        } catch (rlErr) {
+          // Rate limit check failed — pass through rather than block the request
+          console.warn('[rate-limit] check error, passing through:', rlErr.message);
+        }
       }
 
       await handle(req, res);

@@ -25,6 +25,7 @@ import FilesApp from '@/apps/FilesApp';
 import AppIcon from '@/components/common/AppIcon';
 import PreviewWindow from './PreviewWindow';
 import AiUsageBar from '@/components/AiUsageBar';
+import AppRateLimitBanner from '@/components/AppRateLimitBanner';
 import { useAIUsagePolling } from '@/hooks/useAIUsage';
 import { useIsMobile } from '@/hooks/useIsMobile';
 
@@ -646,6 +647,7 @@ export default function Taskbar() {
           )}
 
           {isHorizontal && <div className="hidden md:block"><AiUsageBar compact={true} /></div>}
+          {isHorizontal && <div className="hidden md:block"><AppRateLimitBanner compact={true} /></div>}
 
           <div className="hidden sm:block"><LanguageSwitcher vertical={isVertical} taskbarPosition={taskbarPosition} /></div>
           <div className={`hidden sm:flex items-center gap-2 ${isVertical ? 'flex-col py-2.5 px-2' : 'px-3 py-1'} bg-[var(--bg-tertiary)] rounded-full border border-[var(--border-color)]`}>
