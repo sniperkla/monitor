@@ -144,6 +144,7 @@ function ScrollableChartCard({
   const [scrollStartLeft, setScrollStartLeft] = useState(0);
   const [isAtEnd, setIsAtEnd] = useState(true);
   const [visibleTime, setVisibleTime] = useState(null);
+  const isSyncingRef = useRef(false);
 
   const totalPoints = chartData?.labels?.length || 0;
 
@@ -154,12 +155,14 @@ function ScrollableChartCard({
     }
   }, [syncEnabled]);
 
-  // Calculate dynamic width based on active zoom level (individual or global)
+  // Calculate dynamic width based on active zoom level:
+  // 1x/2x/4x are GUARANTEED to be wider than container width so scrolling and timeline sliding always roll smoothly!
   const chartWidth = useMemo(() => {
     if (activeZoom === 'fit' || totalPoints === 0) return '100%';
-    const pxPerPoint = activeZoom === '4x' ? 44 : activeZoom === '2x' ? 22 : 12;
-    const minWidth = Math.max(300, totalPoints * pxPerPoint);
-    return `${minWidth}px`;
+    const minPointPx = activeZoom === '4x' ? 36 : activeZoom === '2x' ? 20 : 12;
+    const percentWidth = activeZoom === '4x' ? 400 : activeZoom === '2x' ? 250 : 160;
+    const calcPx = totalPoints * minPointPx;
+    return `max(${percentWidth}%, ${calcPx}px)`;
   }, [activeZoom, totalPoints]);
 
   // Keep scrolled to latest when new data arrives and user is at the right edge
@@ -179,23 +182,19 @@ function ScrollableChartCard({
       const container = scrollRef.current;
       const maxScroll = container.scrollWidth - container.clientWidth;
       if (maxScroll > 0) {
-        container.scrollTo({
-          left: syncScrollRatio * maxScroll,
-          behavior: 'smooth'
-        });
+        isSyncingRef.current = true;
+        // Direct synchronous scroll for zero-lag realtime tracking during scrubber drag
+        container.scrollLeft = syncScrollRatio * maxScroll;
+        setTimeout(() => {
+          isSyncingRef.current = false;
+        }, 60);
       }
       if (totalPoints > 0) {
         const idx = Math.min(Math.max(0, Math.floor(syncScrollRatio * (totalPoints - 1))), totalPoints - 1);
         if (chartData?.labels?.[idx]) {
           setVisibleTime(chartData.labels[idx]);
         }
-        if (syncScrollRatio < 0.98) {
-          setActiveHighlightIdx(idx);
-          setIsAtEnd(false);
-        } else {
-          setActiveHighlightIdx(null);
-          setIsAtEnd(true);
-        }
+        setIsAtEnd(syncScrollRatio >= 0.98);
       }
     }
   }, [syncScrollRatio, syncEnabled, activeZoom, totalPoints, chartData]);
@@ -209,11 +208,12 @@ function ScrollableChartCard({
     setIsAtEnd(atEnd);
 
     if (totalPoints > 0 && chartData?.labels) {
-      const ratio = maxScroll > 0 ? (scrollLeft + clientWidth / 2) / scrollWidth : 1;
-      const idx = Math.min(Math.max(0, Math.floor(ratio * totalPoints)), totalPoints - 1);
+      const ratio = maxScroll > 0 ? scrollLeft / maxScroll : 1;
+      const idx = Math.min(Math.max(0, Math.floor(ratio * (totalPoints - 1))), totalPoints - 1);
       setVisibleTime(chartData.labels[idx]);
-      if (syncEnabled && onUserScroll && maxScroll > 0) {
-        onUserScroll(scrollLeft / maxScroll);
+      // Only emit sync if the scroll was user-initiated, not from external sync
+      if (syncEnabled && onUserScroll && maxScroll > 0 && !isSyncingRef.current) {
+        onUserScroll(ratio);
       }
     }
   }, [totalPoints, chartData, syncEnabled, onUserScroll]);
@@ -314,11 +314,11 @@ function ScrollableChartCard({
   }, [spikeData, cardPeakVal]);
 
   // Jump to specific index on this card and show peak highlight & dicut line
-  const jumpToIndex = (targetIdx, label) => {
+  const jumpToIndex = (targetIdx, label, force = false) => {
     if (targetIdx == null || targetIdx < 0 || totalPoints === 0 || !scrollRef.current) return;
     
-    // Toggle off if already highlighted on this index
-    if (activeHighlightIdx === targetIdx) {
+    // Toggle off only on manual click if already highlighted, but not during broadcast jump
+    if (!force && activeHighlightIdx === targetIdx) {
       setActiveHighlightIdx(null);
       setPeakHighlight(null);
       return;
@@ -345,13 +345,13 @@ function ScrollableChartCard({
       const time = chartData?.labels?.[targetIdx] || 'past';
       setVisibleTime(time);
       setPeakHighlight(label || `Peak: ${formattedPeak} at ${time}`);
-    }, 60);
+    }, 80);
   };
 
   // React to global "Jump to Individual Peak" broadcast — each card jumps to its OWN peak
   useEffect(() => {
     if (jumpToIndividualPeakSignal > 0 && cardPeakIdx >= 0 && totalPoints > 0) {
-      jumpToIndex(cardPeakIdx, `Peak: ${formattedPeak}`);
+      jumpToIndex(cardPeakIdx, `Peak: ${formattedPeak}`, true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jumpToIndividualPeakSignal]);
@@ -602,15 +602,16 @@ function ScrollableChartCard({
         }}
       >
         {totalPoints > 0 ? (
-          <div style={{ width: chartWidth, height: '100%', minWidth: '100%' }} className="relative">
+          <div style={{ width: chartWidth, height: '100%', minWidth: '100%' }} className="relative overflow-hidden">
             <Line data={chartData} options={chartOptions} />
 
             {/* DOM-rendered high-visibility Dicut Guideline on clicked Peak / Spike */}
             {activeHighlightIdx != null && totalPoints > 0 && (
               <div
-                className="absolute top-0 bottom-6 pointer-events-none z-30 transition-opacity duration-200"
+                className="absolute top-0 bottom-6 pointer-events-none z-30 transition-all duration-75"
                 style={{
-                  left: `${(activeHighlightIdx / Math.max(1, totalPoints - 1)) * 100}%`,
+                  // Calibrated to align with Chart.js grid area (offset for left Y-axis ticks and right padding)
+                  left: `calc(40px + (100% - 54px) * ${Math.min(1, Math.max(0, activeHighlightIdx / Math.max(1, totalPoints - 1)))})`,
                 }}
               >
                 {/* Vertical Glowing Dashed Dicut Line */}
@@ -619,8 +620,12 @@ function ScrollableChartCard({
                 {/* Glowing Center Beacon Dot */}
                 <div className="absolute top-1/2 -translate-y-1/2 -left-[5px] w-3 h-3 rounded-full bg-rose-500 border-2 border-white shadow-[0_0_10px_rgba(244,63,94,1)]" />
 
-                {/* Floating Dicut Badge at the top */}
-                <div className="absolute -top-1 -translate-x-1/2 px-2 py-0.5 rounded-md bg-slate-950/95 border border-rose-500/80 text-rose-300 text-[10px] font-mono font-bold whitespace-nowrap shadow-xl flex items-center gap-1.5 backdrop-blur-md">
+                {/* Floating Dicut Badge at the top — aligned so it never overflows */}
+                <div 
+                  className={`absolute top-1 px-2 py-0.5 rounded-md bg-slate-950/95 border border-rose-500/80 text-rose-300 text-[10px] font-mono font-bold whitespace-nowrap shadow-xl flex items-center gap-1.5 backdrop-blur-md ${
+                    activeHighlightIdx < 3 ? 'left-0' : activeHighlightIdx > totalPoints - 4 ? 'right-0' : '-translate-x-1/2'
+                  }`}
+                >
                   <span className="w-1.5 h-1.5 rounded-full bg-rose-400 animate-pulse" />
                   <span>⚡ Peak: {formattedPeak}</span>
                 </div>
@@ -712,6 +717,8 @@ function TimelineNavigator({
   onSnapToLive,
   cpuHistory = [],
   ramHistory = [],
+  networkHistory = [],
+  diskHistory = [],
   onJumpToIndividualPeak,
 }) {
   const totalPoints = timelineLabels.length;
@@ -723,47 +730,70 @@ function TimelineNavigator({
   const [copiedLogCmd, setCopiedLogCmd] = useState(null);
   const [spikeThreshold, setSpikeThreshold] = useState(50); // default 50% threshold for sensitive spike detection
 
-  // Find all high-load spikes above spikeThreshold and locate the absolute peak point
-  const { spikeIndices, peakIdx, peakValue, peakMetric } = useMemo(() => {
+  // Compute peaks for ALL 4 metrics (CPU, RAM, Network, Disk) + high load spike indices
+  const { spikeIndices, cpuPeak, ramPeak, netPeak, diskPeak } = useMemo(() => {
     const indices = [];
-    let maxVal = -1;
-    let maxIdx = -1;
-    let maxMetric = 'CPU';
+    let maxCpu = { val: -1, idx: -1, time: '' };
+    let maxRam = { val: -1, idx: -1, time: '' };
+    let maxNet = { val: -1, idx: -1, time: '' };
+    let maxDisk = { val: -1, idx: -1, time: '' };
 
     if (historyData?.data && historyData.data.length > 0) {
       historyData.data.forEach((d, i) => {
+        const time = d.label || '';
         const cpu = d.cpu ?? 0;
+        if (cpu > maxCpu.val) maxCpu = { val: cpu, idx: i, time };
+
         const ram = d.ram ?? 0;
-        const higher = Math.max(cpu, ram);
-        if (higher > maxVal) {
-          maxVal = higher;
-          maxIdx = i;
-          maxMetric = cpu >= ram ? 'CPU' : 'RAM';
-        }
+        if (ram > maxRam.val) maxRam = { val: ram, idx: i, time };
+
+        const net = (d.rxBytes || 0) + (d.txBytes || 0);
+        if (net > maxNet.val) maxNet = { val: net, idx: i, time };
+
+        const disk = d.disk ?? 0;
+        if (disk > maxDisk.val) maxDisk = { val: disk, idx: i, time };
+
         if (cpu >= spikeThreshold || ram >= spikeThreshold) {
           indices.push(i);
         }
       });
-    } else if (cpuHistory.length > 0) {
-      cpuHistory.forEach((d, i) => {
-        const cpu = d.value || 0;
-        const ram = ramHistory[i]?.value || 0;
-        const higher = Math.max(cpu, ram);
-        if (higher > maxVal) {
-          maxVal = higher;
-          maxIdx = i;
-          maxMetric = cpu >= ram ? 'CPU' : 'RAM';
-        }
+    } else {
+      const len = Math.max(cpuHistory.length, ramHistory.length, networkHistory.length, diskHistory.length);
+      for (let i = 0; i < len; i++) {
+        const time = cpuHistory[i]?.time || ramHistory[i]?.time || timelineLabels[i] || '';
+        const cpu = cpuHistory[i]?.value ?? 0;
+        if (cpu > maxCpu.val) maxCpu = { val: cpu, idx: i, time };
+
+        const ram = ramHistory[i]?.value ?? 0;
+        if (ram > maxRam.val) maxRam = { val: ram, idx: i, time };
+
+        const net = (networkHistory[i]?.rx || 0) + (networkHistory[i]?.tx || 0);
+        if (net > maxNet.val) maxNet = { val: net, idx: i, time };
+
+        const disk = diskHistory[i]?.value ?? 0;
+        if (disk > maxDisk.val) maxDisk = { val: disk, idx: i, time };
+
         if (cpu >= spikeThreshold || ram >= spikeThreshold) {
           indices.push(i);
         }
-      });
+      }
     }
-    return { spikeIndices: indices, peakIdx: maxIdx, peakValue: maxVal >= 0 ? maxVal : null, peakMetric: maxMetric };
-  }, [historyData, cpuHistory, ramHistory, spikeThreshold]);
+
+    return {
+      spikeIndices: indices,
+      cpuPeak: maxCpu.val >= 0 ? maxCpu : null,
+      ramPeak: maxRam.val >= 0 ? maxRam : null,
+      netPeak: maxNet.val >= 0 ? maxNet : null,
+      diskPeak: maxDisk.val >= 0 ? maxDisk : null,
+    };
+  }, [historyData, cpuHistory, ramHistory, networkHistory, diskHistory, timelineLabels, spikeThreshold]);
 
   const handleSliderChange = (e) => {
     const val = parseFloat(e.target.value);
+    if (zoomLevel === 'fit' && setZoomLevel) {
+      setZoomLevel('1x');
+    }
+    if (setSyncEnabled) setSyncEnabled(true);
     onScrubberChange(val);
     if (totalPoints > 0) {
       const idx = Math.min(Math.max(0, Math.floor(val * (totalPoints - 1))), totalPoints - 1);
@@ -894,54 +924,136 @@ function TimelineNavigator({
             </span>
           )}
 
-          {/* High load spike detector & peak badge (always visible when data is present) */}
+          {/* High load spike detector & Peaks strip for ALL 4 metrics */}
           {totalPoints > 0 && (
-            spikeIndices.length > 0 ? (
-              <div className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-500/15 border border-rose-500/30 text-rose-400 text-[10px] font-medium animate-fade-in" title={`Points where CPU or RAM exceeded ${spikeThreshold}%`}>
-                <Flame size={11} className="animate-pulse text-rose-400" />
-                <button
-                  type="button"
-                  onClick={() => setSpikeThreshold(prev => prev === 30 ? 50 : prev === 50 ? 70 : prev === 70 ? 80 : 30)}
-                  className="hover:underline font-semibold cursor-pointer"
-                  title="Click to toggle threshold: >30%, >50%, >70%, >80%"
-                >
-                  {spikeIndices.length} {spikeIndices.length === 1 ? 'spike' : 'spikes'} (&gt;{spikeThreshold}%)
-                </button>
-                <div className="flex items-center ml-1 border-l border-rose-500/30 pl-1 gap-0.5">
+            <div className="flex flex-wrap items-center gap-1.5">
+              {/* Spikes Pill (if any spikes above threshold) */}
+              {spikeIndices.length > 0 && (
+                <div className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-500/15 border border-rose-500/30 text-rose-400 text-[10px] font-medium" title={`Points where CPU or RAM exceeded ${spikeThreshold}%`}>
+                  <Flame size={11} className="animate-pulse text-rose-400" />
                   <button
                     type="button"
-                    onClick={() => jumpToSpike('prev')}
-                    className="px-1 hover:bg-rose-500/20 rounded cursor-pointer transition-colors"
-                    title="Jump to previous spike"
+                    onClick={() => setSpikeThreshold(prev => prev === 30 ? 50 : prev === 50 ? 70 : prev === 70 ? 80 : 30)}
+                    className="hover:underline font-semibold cursor-pointer"
+                    title="Click to toggle threshold: >30%, >50%, >70%, >80%"
                   >
-                    ◀
+                    {spikeIndices.length} {spikeIndices.length === 1 ? 'spike' : 'spikes'} (&gt;{spikeThreshold}%)
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => jumpToSpike('next')}
-                    className="px-1 hover:bg-rose-500/20 rounded cursor-pointer transition-colors"
-                    title="Jump to next spike"
-                  >
-                    ▶
-                  </button>
+                  <div className="flex items-center ml-1 border-l border-rose-500/30 pl-1 gap-0.5">
+                    <button
+                      type="button"
+                      onClick={() => jumpToSpike('prev')}
+                      className="px-1 hover:bg-rose-500/20 rounded cursor-pointer transition-colors"
+                      title="Jump to previous spike"
+                    >
+                      ◀
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => jumpToSpike('next')}
+                      className="px-1 hover:bg-rose-500/20 rounded cursor-pointer transition-colors"
+                      title="Jump to next spike"
+                    >
+                      ▶
+                    </button>
+                  </div>
                 </div>
-              </div>
-            ) : (
-              <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 text-[10px] font-medium" title="Peak load detected in current timeline">
-                <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                <span>Peak: {peakValue != null ? `${peakValue.toFixed(1)}%` : 'Clean'}</span>
-                {peakIdx != null && peakIdx >= 0 && (
+              )}
+
+              {/* All 4 Peak Metric Pills */}
+              <div className="flex items-center gap-1 text-[10px] font-mono bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-lg p-0.5">
+                {/* CPU Peak */}
+                {cpuPeak && (
                   <button
                     type="button"
-                    onClick={jumpToIndividualPeak}
-                    className="ml-0.5 px-1.5 py-0.2 bg-indigo-600/30 hover:bg-indigo-600/50 rounded text-indigo-200 cursor-pointer transition-colors"
-                    title="Jump each card to its own individual peak"
+                    onClick={() => {
+                      if (cpuPeak.idx >= 0) {
+                        const ratio = totalPoints > 1 ? cpuPeak.idx / (totalPoints - 1) : 1;
+                        if (setSyncEnabled) setSyncEnabled(true);
+                        onScrubberChange(ratio);
+                        setScrubPreview(timelineLabels[cpuPeak.idx]);
+                      }
+                    }}
+                    className="flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-indigo-500/20 text-indigo-300 transition-colors cursor-pointer"
+                    title={`Highest CPU: ${cpuPeak.val.toFixed(1)}% at ${cpuPeak.time || 'past'}`}
                   >
-                    Jump ⚡
+                    <span className="w-1.5 h-1.5 rounded-full bg-indigo-400" />
+                    <span>CPU <strong>{cpuPeak.val.toFixed(0)}%</strong></span>
                   </button>
                 )}
+
+                {/* RAM Peak */}
+                {ramPeak && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (ramPeak.idx >= 0) {
+                        const ratio = totalPoints > 1 ? ramPeak.idx / (totalPoints - 1) : 1;
+                        if (setSyncEnabled) setSyncEnabled(true);
+                        onScrubberChange(ratio);
+                        setScrubPreview(timelineLabels[ramPeak.idx]);
+                      }
+                    }}
+                    className="flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-emerald-500/20 text-emerald-300 transition-colors cursor-pointer border-l border-[var(--border-color)]/60"
+                    title={`Highest RAM: ${ramPeak.val.toFixed(1)}% at ${ramPeak.time || 'past'}`}
+                  >
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                    <span>RAM <strong>{ramPeak.val.toFixed(0)}%</strong></span>
+                  </button>
+                )}
+
+                {/* Network Peak */}
+                {netPeak && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (netPeak.idx >= 0) {
+                        const ratio = totalPoints > 1 ? netPeak.idx / (totalPoints - 1) : 1;
+                        if (setSyncEnabled) setSyncEnabled(true);
+                        onScrubberChange(ratio);
+                        setScrubPreview(timelineLabels[netPeak.idx]);
+                      }
+                    }}
+                    className="flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-blue-500/20 text-blue-300 transition-colors cursor-pointer border-l border-[var(--border-color)]/60"
+                    title={`Highest Network: ${formatBytes(netPeak.val)}/s at ${netPeak.time || 'past'}`}
+                  >
+                    <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
+                    <span>Net <strong>{formatBytes(netPeak.val)}/s</strong></span>
+                  </button>
+                )}
+
+                {/* Disk Peak */}
+                {diskPeak && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (diskPeak.idx >= 0) {
+                        const ratio = totalPoints > 1 ? diskPeak.idx / (totalPoints - 1) : 1;
+                        if (setSyncEnabled) setSyncEnabled(true);
+                        onScrubberChange(ratio);
+                        setScrubPreview(timelineLabels[diskPeak.idx]);
+                      }
+                    }}
+                    className="flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-purple-500/20 text-purple-300 transition-colors cursor-pointer border-l border-[var(--border-color)]/60"
+                    title={`Highest Disk: ${diskPeak.val.toFixed(1)}% at ${diskPeak.time || 'past'}`}
+                  >
+                    <span className="w-1.5 h-1.5 rounded-full bg-purple-400" />
+                    <span>Disk <strong>{diskPeak.val.toFixed(0)}%</strong></span>
+                  </button>
+                )}
+
+                {/* Jump All Button */}
+                <button
+                  type="button"
+                  onClick={jumpToIndividualPeak}
+                  className="ml-1 px-2 py-0.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded font-sans font-semibold cursor-pointer transition-colors flex items-center gap-1 shadow-xs"
+                  title="Jump every card to its own individual peak simultaneously"
+                >
+                  <Zap size={10} className="fill-white" />
+                  Jump All ⚡
+                </button>
               </div>
-            )
+            </div>
           )}
 
           {historyRange !== 'live' && (
@@ -1093,9 +1205,10 @@ function TimelineNavigator({
               max="1"
               step="0.001"
               value={scrubberRatio ?? 1}
+              onInput={handleSliderChange}
               onChange={handleSliderChange}
               className="w-full h-1.5 bg-[var(--bg-tertiary)] rounded-lg appearance-none cursor-pointer accent-indigo-500 hover:accent-indigo-400 transition-all"
-              title="Drag slider to scroll sideways through time"
+              title="Drag slider to scroll sideways through time in realtime"
             />
           </div>
         </div>
@@ -2527,6 +2640,8 @@ export default function ServerMonitorApp() {
               }}
               cpuHistory={cpuHistory}
               ramHistory={ramHistory}
+              networkHistory={networkHistory}
+              diskHistory={diskHistory}
               onJumpToIndividualPeak={() => setJumpToIndividualPeakSignal(s => s + 1)}
             />
 
