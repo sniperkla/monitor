@@ -55,10 +55,9 @@ function buildMongoUri(conn) {
   } else {
     uri = `${protocol}://${conn.host}${portPart}/${conn.database || ''}`;
   }
-  // Default to authSource=admin when credentials are present but authSource is missing
-  // Most MongoDB deployments authenticate against the admin database by default
-  const authSource = conn.authSource || (conn.username && password ? 'admin' : null);
-  if (authSource) uri += `?authSource=${authSource}`;
+  // Only append authSource if the user explicitly configured it.
+  // Forcing admin here breaks users created in the target database.
+  if (conn.authSource) uri += `?authSource=${conn.authSource}`;
   return uri;
 }
 

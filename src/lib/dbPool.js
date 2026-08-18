@@ -218,9 +218,10 @@ export function buildMongoUri(conn, password) {
   }
 
   const params = new URLSearchParams();
-  // Default to authSource=admin when credentials are present but authSource is missing
-  const authSource = conn.authSource || (conn.username && password ? 'admin' : null);
-  if (authSource) params.set('authSource', authSource);
+  // Only append authSource if the user explicitly configured it.
+  // Do NOT default to 'admin' — the retry fallback in getPooledConnection handles that case.
+  // Forcing admin here breaks users created in the target database (e.g. expense-db).
+  if (conn.authSource) params.set('authSource', conn.authSource);
   if (conn.dbOptions && typeof conn.dbOptions === 'object') {
     for (const [key, value] of Object.entries(conn.dbOptions)) {
       if (value != null && value !== '') params.set(key, String(value));
