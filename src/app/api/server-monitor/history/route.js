@@ -59,7 +59,7 @@ export async function POST(req) {
 // Query historical snapshots for a connection within a time range.
 // Query params:
 //   connectionId  — required
-//   range         — '1h' | '6h' | '24h'  (default '1h')
+//   range         — 'live' | '1h' | '6h' | '24h' | '7d' | '30d' (default '1h')
 //   limit         — max points returned   (default 720, max 2000)
 export async function GET(req) {
   try {
@@ -69,22 +69,46 @@ export async function GET(req) {
     const { searchParams } = new URL(req.url);
     const connectionId = searchParams.get('connectionId');
     const range        = searchParams.get('range') || '1h';
+    const fromParam    = searchParams.get('from');   // ISO date string for custom range start
+    const toParam      = searchParams.get('to');     // ISO date string for custom range end
     const limit        = Math.min(parseInt(searchParams.get('limit') || '720', 10), 2000);
 
     if (!connectionId) {
       return NextResponse.json({ error: 'connectionId required' }, { status: 400 });
     }
 
-    // Determine time window
-    const rangeMs = { '1h': 3_600_000, '6h': 21_600_000, '24h': 86_400_000 };
-    const windowMs = rangeMs[range] ?? rangeMs['1h'];
-    const since = new Date(Date.now() - windowMs);
+    let since, until, windowMs;
+
+    if (fromParam && toParam) {
+      // Custom date range — use explicit from/to timestamps
+      since   = new Date(fromParam);
+      until   = new Date(toParam);
+      windowMs = until.getTime() - since.getTime();
+      if (isNaN(since.getTime()) || isNaN(until.getTime())) {
+        return NextResponse.json({ error: 'Invalid from/to date format' }, { status: 400 });
+      }
+    } else {
+      // Preset range
+      const rangeMs = {
+        '1h':  3_600_000,
+        '6h':  21_600_000,
+        '24h': 86_400_000,
+        '7d':  7 * 86_400_000,
+        '30d': 30 * 86_400_000,
+      };
+      windowMs = rangeMs[range] ?? rangeMs['1h'];
+      since    = new Date(Date.now() - windowMs);
+      until    = null; // no upper bound — up to now
+    }
 
     await connectMongo();
 
     // Fetch raw points sorted oldest-first using index
+    const timeFilter = until
+      ? { $gte: since, $lte: until }
+      : { $gte: since };
     const raw = await MetricsHistory.find(
-      { connectionId, recordedAt: { $gte: since } },
+      { connectionId, recordedAt: timeFilter },
       { recordedAt: 1, cpu: 1, ram: 1, rxBytes: 1, txBytes: 1, disk: 1, _id: 0 }
     )
       .sort({ recordedAt: 1 })
@@ -131,11 +155,14 @@ function formatTime(date, windowMs) {
   const h  = date.getHours().toString().padStart(2, '0');
   const m  = date.getMinutes().toString().padStart(2, '0');
   const s  = date.getSeconds().toString().padStart(2, '0');
-  // For 24h range include the date prefix
-  if (windowMs >= 86_400_000) {
-    const mo = (date.getMonth() + 1).toString().padStart(2, '0');
-    const d  = date.getDate().toString().padStart(2, '0');
-    return `${mo}/${d} ${h}:${m}`;
-  }
+  const mo = (date.getMonth() + 1).toString().padStart(2, '0');
+  const d  = date.getDate().toString().padStart(2, '0');
+  // 30d: show date only
+  if (windowMs >= 30 * 86_400_000) return `${mo}/${d}`;
+  // 7d: show day + hour
+  if (windowMs >= 7 * 86_400_000) return `${mo}/${d} ${h}:00`;
+  // 24h: show date + HH:mm
+  if (windowMs >= 86_400_000) return `${mo}/${d} ${h}:${m}`;
+  // 1h / 6h: show HH:mm:ss
   return `${h}:${m}:${s}`;
 }

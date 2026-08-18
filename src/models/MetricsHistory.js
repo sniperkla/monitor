@@ -33,8 +33,8 @@ const MetricsHistorySchema = new mongoose.Schema({
 MetricsHistorySchema.index({ connectionId: 1, recordedAt: 1 });
 MetricsHistorySchema.index({ connectionId: 1, recordedAt: -1 });
 
-// TTL: auto-delete after 24 hours
-MetricsHistorySchema.index({ recordedAt: 1 }, { expireAfterSeconds: 86400 });
+// TTL: auto-delete after 30 days (2,592,000 seconds)
+MetricsHistorySchema.index({ recordedAt: 1 }, { expireAfterSeconds: 2592000 });
 
 export default mongoose.models.MetricsHistory
   || mongoose.model('MetricsHistory', MetricsHistorySchema);

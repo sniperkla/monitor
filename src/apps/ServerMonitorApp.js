@@ -884,18 +884,20 @@ function TimelineNavigator({
       {/* Top row: Range selector + Status + Mode + Zoom controls */}
       <div className="flex flex-wrap items-center justify-between gap-2.5">
         {/* History Range Tabs */}
-        <div className="flex items-center gap-1.5 p-1 bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-xl text-xs">
+        <div className="flex items-center gap-1 p-1 bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-xl text-xs">
           {[
             { id: 'live', label: 'Live' },
-            { id: '1h',   label: '1 Hour' },
-            { id: '6h',   label: '6 Hours' },
-            { id: '24h',  label: '24 Hours' },
+            { id: '1h',   label: '1h' },
+            { id: '6h',   label: '6h' },
+            { id: '24h',  label: '24h' },
+            { id: '7d',   label: '7d' },
+            { id: '30d',  label: '30d' },
           ].map(r => (
             <button
               key={r.id}
               type="button"
               onClick={() => setHistoryRange(r.id)}
-              className={`px-3 py-1 rounded-lg font-medium transition-all cursor-pointer ${
+              className={`px-2.5 py-1 rounded-lg font-medium transition-all cursor-pointer ${
                 historyRange === r.id
                   ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-500/30'
                   : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
@@ -1353,7 +1355,7 @@ export default function ServerMonitorApp() {
   const [jumpToIndividualPeakSignal, setJumpToIndividualPeakSignal] = useState(0); // increment to broadcast jump-to-own-peak
 
   // Persistent history (fetched from DB for 1h / 6h / 24h views)
-  const [historyRange, setHistoryRange] = useState('live'); // 'live' | '1h' | '6h' | '24h'
+  const [historyRange, setHistoryRange] = useState('live'); // 'live' | '1h' | '6h' | '24h' | '7d' | '30d'
   const [historyData, setHistoryData] = useState(null);    // { data: [...], range, count } | null
   const [historyLoading, setHistoryLoading] = useState(false);
   const lastSnapshotRef = useRef(0); // timestamp of last DB snapshot write (throttle to 1/30s)
@@ -1741,12 +1743,16 @@ export default function ServerMonitorApp() {
     }
   }, [historyRange, selectedConnection, fetchHistory]);
 
-  // Auto-refresh history every 30s while viewing a historical range
+  // Auto-refresh history (throttled by range length — longer ranges refresh less frequently)
   useEffect(() => {
     if (historyRange === 'live') return;
+    // Longer ranges refresh less frequently: 1h/6h → 30s, 24h → 60s, 7d/30d → 5min
+    const intervalMs = (historyRange === '7d' || historyRange === '30d') ? 300_000
+      : historyRange === '24h' ? 60_000
+      : 30_000;
     const id = setInterval(() => {
       fetchHistory(historyRange, selectedConnection);
-    }, 30_000);
+    }, intervalMs);
     return () => clearInterval(id);
   }, [historyRange, selectedConnection, fetchHistory]);
 
@@ -2692,9 +2698,13 @@ export default function ServerMonitorApp() {
                 syncEnabled={syncEnabled}
                 onUserScroll={setSyncScrollRatio}
                 isLive={historyRange === 'live'}
-                spikeData={{ history: cpuHistory, threshold: 80 }}
+                spikeData={{
+                  history: historyData?.data ? historyData.data.map(d => d.cpu ?? 0) : cpuHistory,
+                  threshold: 80
+                }}
                 align="left"
                 jumpToIndividualPeakSignal={jumpToIndividualPeakSignal}
+                emptyMessage={historyRange !== 'live' ? `No historical snapshots in last ${historyRange}` : 'No live data yet'}
               />
 
               <ScrollableChartCard
@@ -2722,9 +2732,13 @@ export default function ServerMonitorApp() {
                 syncEnabled={syncEnabled}
                 onUserScroll={setSyncScrollRatio}
                 isLive={historyRange === 'live'}
-                spikeData={{ history: ramHistory, threshold: 80 }}
+                spikeData={{
+                  history: historyData?.data ? historyData.data.map(d => d.ram ?? 0) : ramHistory,
+                  threshold: 80
+                }}
                 align="right"
                 jumpToIndividualPeakSignal={jumpToIndividualPeakSignal}
+                emptyMessage={historyRange !== 'live' ? `No historical snapshots in last ${historyRange}` : 'No live data yet'}
               />
 
               <ScrollableChartCard
@@ -2777,6 +2791,7 @@ export default function ServerMonitorApp() {
                 }}
                 align="left"
                 jumpToIndividualPeakSignal={jumpToIndividualPeakSignal}
+                emptyMessage={historyRange !== 'live' ? `No historical snapshots in last ${historyRange}` : 'No live data yet'}
               />
 
               <ScrollableChartCard
@@ -2804,15 +2819,16 @@ export default function ServerMonitorApp() {
                 onUserScroll={setSyncScrollRatio}
                 isLive={historyRange === 'live'}
                 spikeData={{
-                  history: diskHistory.map(d => d?.value ?? 0),
+                  history: historyData?.data ? historyData.data.map(d => d.disk ?? 0) : diskHistory.map(d => d?.value ?? 0),
                   threshold: 85
                 }}
                 align="right"
                 jumpToIndividualPeakSignal={jumpToIndividualPeakSignal}
+                emptyMessage={historyRange !== 'live' ? `No historical snapshots in last ${historyRange}` : 'No live data yet'}
                 emptyState={
                   <div className="flex flex-col items-center justify-center h-full text-xs text-[var(--text-muted)] gap-1">
                     <HardDrive size={24} className="opacity-30" />
-                    <span>No disk history yet — collecting on next snapshot</span>
+                    <span>{historyRange !== 'live' ? `No disk history recorded in last ${historyRange}` : 'No disk history yet — collecting on next snapshot'}</span>
                   </div>
                 }
               />
