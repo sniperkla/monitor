@@ -5,7 +5,6 @@ import connectDB from '@/lib/mongodb';
 import SystemSetting from '@/models/SystemSetting';
 import AiHistory from '@/models/AiHistory';
 import { checkRateLimit } from '@/lib/serverGuard';
-import { checkAndTrackAiUsage } from '@/utils/aiLimiter';
 
 const stripAiQueryEnvelope = (text = '') => {
   const raw = String(text || '');
@@ -179,13 +178,6 @@ export async function POST(request, { params }) {
       return NextResponse.json({ success: false, error: 'Prompt is required' }, { status: 400 });
     }
 
-    // Check AI token limit (include schema context for accurate estimate)
-    try {
-      const contextStr = `${schemaName || ''} ${JSON.stringify(sampleData || {}).slice(0, 500)}`;
-      await checkAndTrackAiUsage(session.user.email, prompt, '', contextStr);
-    } catch (limitErr) {
-      return NextResponse.json({ success: false, error: limitErr.message }, { status: 429 });
-    }
 
     const limitsSetting = await SystemSetting.findOne({ key: 'ai_limits' });
     const limitsValue = limitsSetting?.value && typeof limitsSetting.value === 'object' ? limitsSetting.value : {};
@@ -417,7 +409,6 @@ RULES:
 
         let usageInfo = null;
         if (session) {
-          usageInfo = await checkAndTrackAiUsage(session.user.email, prompt, finalAnswer);
 
           // PERSIST HISTORY
           try {

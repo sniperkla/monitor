@@ -5,7 +5,6 @@ import connectDB from '@/lib/mongodb';
 import User from '@/models/User';
 import SystemSetting from '@/models/SystemSetting';
 import AiHistory from '@/models/AiHistory';
-import { checkAndTrackAiUsage } from '@/utils/aiLimiter';
 import { checkRateLimit } from '@/lib/serverGuard';
 
 export async function POST(req) {
@@ -31,14 +30,6 @@ export async function POST(req) {
         { success: false, error: `AI rate limit exceeded. Please wait ${Math.ceil(rateCheck.resetIn / 1000)}s.` },
         { status: 429 }
       );
-    }
-
-    // Check & track AI token limit for this user
-    try {
-      const guideContextStr = guideContext ? `${guideContext.title || ''} ${(guideContext.commands || []).map(c => c.code).join(' ')}` : '';
-      await checkAndTrackAiUsage(session.user.email, message, '', guideContextStr);
-    } catch (limitErr) {
-      return NextResponse.json({ success: false, error: limitErr.message }, { status: 429 });
     }
 
     if (!message) {
@@ -234,7 +225,6 @@ ${guideContext?.commands?.map(c => `- ${c.code} (${c.label})`).join('\n') || 'No
         }
         let usageInfo = null;
         if (session) {
-          usageInfo = await checkAndTrackAiUsage(session.user.email, message, aiMessage);
 
           // PERSIST HISTORY (Centralized)
           try {

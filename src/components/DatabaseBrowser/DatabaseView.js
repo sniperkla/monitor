@@ -92,7 +92,7 @@ export default function DatabaseView({ connection, onClose }) {
       if (socket.connected) {
         socket.emit('heartbeat:ping', Date.now());
       }
-    }, 3000);
+    }, 10000); // Increased from 3s to 10s to reduce WebSocket traffic
 
     return () => {
       clearInterval(interval);

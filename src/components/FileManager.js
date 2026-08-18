@@ -125,6 +125,7 @@ export default function FileManager({
   connection, 
   connectionName,
   isSplit = false,
+  isActive = true,
   initialPath = '.',
   onClosePane,
   onSplit,
@@ -1160,7 +1161,7 @@ export default function FileManager({
 
   // --- Auto-Refresh Logic ---
   
-  // 1. Background Polling (Every 20 seconds if ready and NOT transferring)
+  // 1. Background Polling (Every 60 seconds if ready and NOT transferring)
   useEffect(() => {
     if (status !== 'ready' || !socket) return;
     
@@ -1170,7 +1171,7 @@ export default function FileManager({
         return;
       }
       refreshFiles(currentPathRef.current);
-    }, 20000);
+    }, 60000); // Increased from 20s to 60s to reduce API calls
     
     return () => clearInterval(interval);
   }, [status, socket]);
@@ -1183,7 +1184,7 @@ export default function FileManager({
         if (socketRef.current.connected) {
            socketRef.current.emit('heartbeat:ping', Date.now());
         }
-      }, 3000);
+      }, 10000); // Increased from 3s to 10s to reduce WebSocket traffic
     }
     return () => {
       if (interval) clearInterval(interval);
@@ -2401,7 +2402,11 @@ export default function FileManager({
 
   const handleDragLeave = (e) => {
     e.preventDefault();
-    setIsDragging(false);
+    e.stopPropagation();
+    // Only clear isDragging if leaving the actual drop zone element (not entering a child)
+    if (e.currentTarget && !e.currentTarget.contains(e.relatedTarget)) {
+      setIsDragging(false);
+    }
   };
 
   const handleDrop = async (e) => {
@@ -2542,6 +2547,9 @@ export default function FileManager({
   // System Copy-Paste Support
   useEffect(() => {
     const handleSystemPaste = async (e) => {
+      // In split-pane mode, only the active pane should handle paste
+      if (isSplit && !isActive) return;
+
       // Only handle paste if something else isn't focused (inputs/textareas)
       if (document.activeElement.tagName === 'INPUT' || 
           (document.activeElement.tagName === 'TEXTAREA' && !document.activeElement.closest('.FileManager'))) {
@@ -2604,7 +2612,7 @@ export default function FileManager({
 
     window.addEventListener('paste', handleSystemPaste);
     return () => window.removeEventListener('paste', handleSystemPaste);
-  }, [currentPath, socket, clipboard, handlePaste]);
+  }, [currentPath, socket, clipboard, handlePaste, isActive, isSplit]);
 
    const handleCreate = () => {
     if (!createModal.name || !socket) return;

@@ -24,9 +24,6 @@ import TerminalApp from '@/apps/TerminalApp';
 import FilesApp from '@/apps/FilesApp';
 import AppIcon from '@/components/common/AppIcon';
 import PreviewWindow from './PreviewWindow';
-import AiUsageBar from '@/components/AiUsageBar';
-import AppRateLimitBanner from '@/components/AppRateLimitBanner';
-import { useAIUsagePolling } from '@/hooks/useAIUsage';
 import { useIsMobile } from '@/hooks/useIsMobile';
 
 export default function Taskbar() {
@@ -46,15 +43,6 @@ export default function Taskbar() {
   const startMenuRef = useRef(null);
   const contextMenuRef = useRef(null);
   const taskbarContextMenuRef = useRef(null);
-
-  // Use centralized AI usage polling with notification callback for thresholds
-  useAIUsagePolling(60000, ({ percent, used, limit, type }) => {
-    addNotification({
-      title: 'AI usage',
-      message: `${percent}% used (${used.toLocaleString()} / ${limit.toLocaleString()} tokens)`,
-      type,
-    });
-  });
 
   useEffect(() => {
     setMounted(true);
@@ -645,9 +633,6 @@ export default function Taskbar() {
               </button>
             </div>
           )}
-
-          {isHorizontal && <div className="hidden md:block"><AiUsageBar compact={true} /></div>}
-          {isHorizontal && <div className="hidden md:block"><AppRateLimitBanner compact={true} /></div>}
 
           <div className="hidden sm:block"><LanguageSwitcher vertical={isVertical} taskbarPosition={taskbarPosition} /></div>
           <div className={`hidden sm:flex items-center gap-2 ${isVertical ? 'flex-col py-2.5 px-2' : 'px-3 py-1'} bg-[var(--bg-tertiary)] rounded-full border border-[var(--border-color)]`}>

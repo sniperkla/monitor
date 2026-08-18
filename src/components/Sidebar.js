@@ -88,15 +88,48 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
     setIsSyncing(true);
     try {
       const encrypted = [];
+      
+      // Batch fetch all DB connections first to reduce API calls
+      const dbConnectionIds = connections
+        .filter(conn => conn.storage === 'db' && conn._id)
+        .map(conn => conn._id);
+      
+      let dbConnectionsMap = {};
+      if (dbConnectionIds.length > 0) {
+        try {
+          // Try to fetch all DB connections in one batch if endpoint supports it
+          // Otherwise fall back to individual requests
+          const res = await apiFetch('/api/connections/batch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids: dbConnectionIds }),
+          });
+          const data = await res.json();
+          if (data.success && data.data) {
+            dbConnectionsMap = data.data.reduce((acc, conn) => {
+              acc[conn._id] = conn;
+              return acc;
+            }, {});
+          }
+        } catch (_) {
+          // Fallback to individual requests if batch endpoint fails
+          for (const connId of dbConnectionIds) {
+            try {
+              const res = await apiFetch(`/api/connections/${connId}`);
+              const data = await res.json();
+              if (data.success && data.data) {
+                dbConnectionsMap[connId] = data.data;
+              }
+            } catch (_) { /* continue */ }
+          }
+        }
+      }
+      
       for (const conn of connections) {
-        // For db connections, fetch full data (with encrypted password) from server
+        // Use pre-fetched data for DB connections
         let fullConn = conn;
-        if (conn.storage === 'db' && conn._id) {
-          try {
-            const res = await apiFetch(`/api/connections/${conn._id}`);
-            const data = await res.json();
-            if (data.success && data.data) fullConn = data.data;
-          } catch (_) { /* use sanitized data as fallback */ }
+        if (conn.storage === 'db' && conn._id && dbConnectionsMap[conn._id]) {
+          fullConn = dbConnectionsMap[conn._id];
         }
 
         const payload = JSON.stringify({

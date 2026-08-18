@@ -336,6 +336,7 @@ function LayoutRenderer({
               connectionName={layout.fmData.connectionName}
               connection={layout.fmData.connection}
               isSplit={true}
+              isActive={isActive}
               initialPath={layout.fmData.initialPath}
               onClosePane={() => onClosePane(layout.id)}
               onSplit={(dir) => onSplitPane(layout.id, dir)}

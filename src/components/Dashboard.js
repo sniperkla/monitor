@@ -3,12 +3,13 @@
 import { useApp } from '@/context/AppContext';
 import { useOS } from '@/context/OSContext';
 import { getLocalConnections, saveLocalConnections } from '@/utils/localConnections';
+import { debounce } from '@/utils/debounce';
 import {
   Server, Terminal, Activity, Clock, Globe, Shield, Cpu, HardDrive, Database,
   BarChart3, TrendingUp, Zap, Plus, RefreshCw, ChevronRight, AlertCircle,
   CheckCircle2, AlertTriangle, Star, Download, Upload, Eye, EyeOff
 } from 'lucide-react';
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -24,6 +25,24 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
   const autoPingRef = useRef(null);
   const connectionsRef = useRef(connections);
   useEffect(() => { connectionsRef.current = connections; }, [connections]);
+  const lastPingTimeRef = useRef({});
+  const activeDatabaseBrowsersRef = useRef(state.activeDatabaseBrowsers);
+  const activeTerminalsRef = useRef(state.activeTerminals);
+  useEffect(() => { 
+    activeDatabaseBrowsersRef.current = state.activeDatabaseBrowsers;
+    activeTerminalsRef.current = state.activeTerminals;
+  }, [state.activeDatabaseBrowsers, state.activeTerminals]);
+  
+  // Debounced connection status update to reduce API calls
+  const debouncedStatusUpdate = useCallback(
+    debounce((connectionId, status, lastConnected) => {
+      dispatch({ 
+        type: 'UPDATE_CONNECTION', 
+        payload: { _id: connectionId, status, lastConnected } 
+      });
+    }, 1000),
+    [dispatch]
+  );
 
   // Export / Import state
   const [showExportPanel, setShowExportPanel] = useState(false);
@@ -36,7 +55,15 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
   const importFileRef = useRef(null);
 
   const pingConnection = async (conn) => {
+    // Skip if we recently pinged this connection (within 30 seconds)
+    const lastPing = lastPingTimeRef.current[conn._id] || 0;
+    if (Date.now() - lastPing < 30000) {
+      return; // Skip duplicate pings
+    }
+
     const startTime = Date.now();
+    lastPingTimeRef.current[conn._id] = startTime;
+
     try {
       // If a terminal is already open for this connection, use its SSH session
       const existingSocket = window.__terminalSockets?.[conn._id];
@@ -50,7 +77,7 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
               const history = prev[conn._id] ? [...prev[conn._id], entry].slice(-20) : [entry];
               return { ...prev, [conn._id]: history };
             });
-            dispatch({ type: 'UPDATE_CONNECTION', payload: { _id: conn._id, status: 'online', lastConnected: new Date().toISOString() } });
+            debouncedStatusUpdate(conn._id, 'online', new Date().toISOString());
             resolve();
           };
           existingSocket.once('heartbeat:pong', handler);
@@ -74,14 +101,11 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
         return { ...prev, [conn._id]: history };
       });
 
-      dispatch({
-        type: 'UPDATE_CONNECTION',
-        payload: {
-          _id: conn._id,
-          status: data.success ? 'online' : 'offline',
-          lastConnected: data.success ? new Date().toISOString() : conn.lastConnected,
-        },
-      });
+      debouncedStatusUpdate(
+        conn._id, 
+        data.success ? 'online' : 'offline',
+        data.success ? new Date().toISOString() : conn.lastConnected
+      );
     } catch {
       const latency = Date.now() - startTime;
       setHealthHistory(prev => {
@@ -89,7 +113,7 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
         const history = prev[conn._id] ? [...prev[conn._id], entry].slice(-20) : [entry];
         return { ...prev, [conn._id]: history };
       });
-      dispatch({ type: 'UPDATE_CONNECTION', payload: { _id: conn._id, status: 'offline' } });
+      debouncedStatusUpdate(conn._id, 'offline', conn.lastConnected);
     }
   };
 
@@ -114,8 +138,8 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
     // Initial ping
     pingAllConnections();
 
-    // Ping every 60 seconds
-    autoPingRef.current = setInterval(pingAllConnections, 60000);
+    // Ping every 120 seconds (reduced from 60s for fewer API calls)
+    autoPingRef.current = setInterval(pingAllConnections, 120000);
     return () => {
       if (autoPingRef.current) clearInterval(autoPingRef.current);
     };
@@ -259,28 +283,34 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
 
   const handleRefreshAll = async () => {
     setRefreshing(true);
-    // Use parallel testing for speed but sequential state update if needed, 
-    // actually let's just do them and then fetch.
-    const promises = connections.map(conn => 
-      fetch(`/api/connections/${conn._id}/test`, { 
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ connection: conn })
-      }).catch(() => null)
-    );
-    await Promise.all(promises);
+    // Use sequential testing with rate limiting to reduce server load
+    const results = [];
+    for (const conn of connections) {
+      try {
+        const res = await fetch(`/api/connections/${conn._id}/test`, { 
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ connection: conn })
+        });
+        results.push(await res.json());
+        // Add small delay between requests to rate limit
+        await new Promise(resolve => setTimeout(resolve, 200));
+      } catch (err) {
+        results.push(null);
+      }
+    }
     await fetchConnections();
     setRefreshing(false);
   };
 
-  const handleQuickConnect = (conn) => {
+  const handleQuickConnect = useCallback((conn) => {
     if (conn.storage === 'manual') {
       onEditConnection(conn);
       return;
     }
 
     if (conn.type === 'database') {
-      const existing = state.activeDatabaseBrowsers.find(b => b.connectionId === conn._id);
+      const existing = activeDatabaseBrowsersRef.current.find(b => b.connectionId === conn._id);
       if (existing) {
         dispatch({ type: 'SET_VIEW', payload: 'database' });
         return;
@@ -299,7 +329,7 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
     }
 
     // SSH Duplicate Check
-    const existing = state.activeTerminals.find(t => t.connectionId === conn._id);
+    const existing = activeTerminalsRef.current.find(t => t.connectionId === conn._id);
     if (existing) {
       dispatch({ type: 'SET_VIEW', payload: 'terminal' });
       return;
@@ -317,7 +347,7 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
         connection: conn,
       },
     });
-  };
+  }, [dispatch, onEditConnection]); // Now only depends on dispatch and onEditConnection
 
   const timeAgo = (dateStr) => {
     if (!dateStr) return t('common.time.never');

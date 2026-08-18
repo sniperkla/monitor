@@ -6712,7 +6712,7 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
         if (socketRef.current.connected) {
           socketRef.current.emit('heartbeat:ping', Date.now());
         }
-      }, 3000);
+      }, 10000); // Increased from 3s to 10s to reduce WebSocket traffic
     }
     return () => {
       if (interval) clearInterval(interval);

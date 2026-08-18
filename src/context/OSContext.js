@@ -999,13 +999,26 @@ export function OSProvider({ children }) {
     }
   }, [session?.user?.email, authStatus]);
 
-  // 3. Persist to LocalStorage
+  // 3. Persist to LocalStorage (debounced to reduce I/O operations)
   useEffect(() => {
-    const payload = serializeStateForSync(state);
-    localStorage.setItem('webtop_os_state', JSON.stringify({
-      ...JSON.parse(payload),
-      timestamp: state.timestamp || Date.now()
-    }));
+    let timeoutId;
+    const saveState = () => {
+      try {
+        const payload = serializeStateForSync(state);
+        const parsedPayload = JSON.parse(payload);
+        localStorage.setItem('webtop_os_state', JSON.stringify({
+          ...parsedPayload,
+          timestamp: state.timestamp || Date.now()
+        }));
+      } catch (e) {
+        console.error('Failed to save OS state to localStorage:', e);
+      }
+    };
+    
+    // Debounce localStorage writes to reduce I/O operations
+    timeoutId = setTimeout(saveState, 500);
+    
+    return () => clearTimeout(timeoutId);
   }, [
     state.wallpaper, 
     state.glassmorphism, 
@@ -1029,6 +1042,7 @@ export function OSProvider({ children }) {
     state.iconGroups,
     state.pinnedApps
   ]);
+
   useEffect(() => {
     if (state.language && i18n.language !== state.language) {
       i18n.changeLanguage(state.language);

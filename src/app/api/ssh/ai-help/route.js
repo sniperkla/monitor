@@ -6,7 +6,6 @@ import connectDB from '@/lib/mongodb';
 import { SystemSettingRepository } from '@/lib/repositories/SystemSettingRepository';
 import { AiHistoryRepository } from '@/lib/repositories/AiHistoryRepository';
 import { SshMemoryRepository } from '@/lib/repositories/SshMemoryRepository';
-import { checkAndTrackAiUsage } from '@/utils/aiLimiter';
 import { readdir, readFile } from 'fs/promises';
 import { join } from 'path';
 
@@ -343,13 +342,6 @@ export async function POST(req) {
 
     if (!prompt || !String(prompt).trim()) {
       return NextResponse.json({ success: false, error: 'Prompt is required' }, { status: 400 });
-    }
-
-    // Check AI token limit (include context for accurate estimate)
-    try {
-      await checkAndTrackAiUsage(session.user.email, prompt, '', context || '');
-    } catch (limitErr) {
-      return NextResponse.json({ success: false, error: limitErr.message }, { status: 429 });
     }
 
     const centralDb = await connectDB();
@@ -863,7 +855,6 @@ Now output the <diff> needed to complete the request.`;
 
               // Finalize: track usage, persist history, trigger memory extraction, then send final payload
               let usageInfo = null;
-              usageInfo = await checkAndTrackAiUsage(session.user.email, prompt, full);
 
               try {
                 const streamHistoryRepo = new AiHistoryRepository(centralDb);
@@ -1057,7 +1048,6 @@ Now output the <diff> needed to complete the request.`;
         
         let usageInfo = null;
         if (session) {
-          usageInfo = await checkAndTrackAiUsage(session.user.email, prompt, answer);
           
           // PERSIST HISTORY
           try {

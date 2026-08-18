@@ -42,8 +42,10 @@ function reducer(state, action) {
     case 'SET_CONNECTIONS':
       return { ...state, connections: action.payload };
     case 'ADD_CONNECTION':
+      clearCache('/api/connections'); // Invalidate connections cache
       return { ...state, connections: [action.payload, ...state.connections] };
     case 'UPDATE_CONNECTION':
+      clearCache('/api/connections'); // Invalidate connections cache
       return {
         ...state,
         connections: state.connections.map(c =>
@@ -51,6 +53,7 @@ function reducer(state, action) {
         ),
       };
     case 'REMOVE_CONNECTION':
+      clearCache('/api/connections'); // Invalidate connections cache
       return {
         ...state,
         connections: state.connections.filter(c => c._id !== action.payload),
@@ -234,6 +237,7 @@ function reducer(state, action) {
 }
 
 import { initProxyKey, clearProxyKey, isProxyReady, proxyEncrypt, proxyDecrypt } from '@/utils/proxyClient';
+import { cachedFetch, clearCache } from '@/utils/apiCache';
 
 export function AppProvider({ children }) {
   const [state, dispatch] = useReducer(reducer, initialState);
@@ -310,7 +314,9 @@ export function AppProvider({ children }) {
               });
             }
           } catch { /* not JSON */ }
-          throw new Error('SERVER_ERROR');
+          // Proxy itself returned an error — fall through to direct fetch
+          console.warn('[apiFetch] proxy returned non-ok status, falling back to direct fetch:', proxyRes.status);
+          throw new Error('PROXY_ERROR');
         }
 
         const encryptedResponse = await proxyRes.text();
@@ -322,40 +328,73 @@ export function AppProvider({ children }) {
           headers: decrypted.headers || { 'Content-Type': 'application/json' },
         });
       } catch (err) {
-        if (err.message === 'SESSION_EXPIRED' || err.message === 'SERVER_ERROR') throw err;
-        // Proxy failed (e.g. key expired) — fall through to direct fetch
+        if (err.message === 'SESSION_EXPIRED') throw err;
+        // Proxy failed (e.g. key expired, non-ok status) — fall through to direct fetch
         console.warn('[apiFetch] proxy error, falling back to direct:', err.message);
       }
     }
 
     // ── Direct fetch (fallback / exempt routes) ──────────────────────────────
-    const res = await fetch(url, { ...options, headers, credentials: 'include' });
+    // Use cached fetch for GET requests to reduce duplicate calls
+    const useCache = !options.method || options.method === 'GET';
+    const cacheOptions = useCache ? { ttl: 30000 } : { skipCache: true };
     
-    // Check for explicit 401 Unauthorized
-    if (res.status === 401) {
-      console.warn('[apiFetch] 401 Unauthorized for:', url);
-      throw new Error('SESSION_EXPIRED');
-    }
-    
-    // Check if response is HTML (likely a redirect to sign-in page or error page)
-    const contentType = res.headers.get('content-type') || '';
-    if (contentType.includes('text/html')) {
-      const resUrl = res.url || '';
-      console.warn('[apiFetch] HTML response received:', { url, status: res.status, responseUrl: resUrl });
-      if (resUrl.includes('/api/auth/signin') || resUrl.includes('/api/auth/callback') || res.status === 401) {
+    try {
+      const res = await cachedFetch(url, { ...options, headers, credentials: 'include' }, cacheOptions);
+      
+      // Check for explicit 401 Unauthorized
+      if (res.status === 401) {
+        console.warn('[apiFetch] 401 Unauthorized for:', url);
         throw new Error('SESSION_EXPIRED');
       }
-      throw new Error('SERVER_ERROR');
+      
+      // Check if response is HTML (likely a redirect to sign-in page or error page)
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('text/html')) {
+        const resUrl = res.url || '';
+        console.warn('[apiFetch] HTML response received:', { url, status: res.status, responseUrl: resUrl });
+        if (resUrl.includes('/api/auth/signin') || resUrl.includes('/api/auth/callback') || res.status === 401) {
+          throw new Error('SESSION_EXPIRED');
+        }
+        throw new Error('SERVER_ERROR');
+      }
+      
+      return res;
+    } catch (err) {
+      // Handle REQUEST_CANCELLED from cache
+      if (err.message === 'REQUEST_CANCELLED') {
+        console.warn('[apiFetch] Request was cancelled, retrying without cache');
+        // Retry without cache on cancellation
+        const res = await fetch(url, { ...options, headers, credentials: 'include' });
+        
+        if (res.status === 401) {
+          throw new Error('SESSION_EXPIRED');
+        }
+        
+        const contentType = res.headers.get('content-type') || '';
+        if (contentType.includes('text/html')) {
+          const resUrl = res.url || '';
+          if (resUrl.includes('/api/auth/signin') || resUrl.includes('/api/auth/callback') || res.status === 401) {
+            throw new Error('SESSION_EXPIRED');
+          }
+          throw new Error('SERVER_ERROR');
+        }
+        
+        return res;
+      }
+      throw err;
     }
-    
-    return res;
   }, [state.dbConfig]);
 
   const latestRequestIdRef = useRef(0);
 
-  const fetchConnections = useCallback(async () => {
+  const fetchConnections = useCallback(async (options = {}) => {
+    const { backgroundRefresh = false } = options;
     const requestId = ++latestRequestIdRef.current;
-    dispatch({ type: 'SET_LOADING', payload: true });
+    
+    if (!backgroundRefresh) {
+      dispatch({ type: 'SET_LOADING', payload: true });
+    }
     
     let dbConnections = [];
     let localConnections = [];
@@ -372,9 +411,11 @@ export function AppProvider({ children }) {
        }
     }
 
-    // 2. Fetch from DB
+    // 2. Fetch from DB with stale-while-revalidate pattern
     try {
-      const res = await apiFetch('/api/connections');
+      // For background refresh, use longer cache time to reduce API calls
+      const cacheOptions = backgroundRefresh ? { ttl: 60000, forceRefresh: false } : { ttl: 30000 };
+      const res = await apiFetch('/api/connections', {}, cacheOptions);
       const data = await res.json();
       
       // If a newer request has started, ignore this response
@@ -394,24 +435,16 @@ export function AppProvider({ children }) {
       // Relay agent required — store warning so UI can prompt the user
       if (data.relayRequired) {
         dispatch({ type: 'SET_RELAY_WARNING', payload: data.relayMessage || 'Local Relay Agent is required to access localhost databases.' });
-
-        // Auto-switch to server mode if not already there
-        if (typeof window !== 'undefined') {
-          const currentMode = localStorage.getItem('ssh_monitor_ssh_mode');
-          if (currentMode !== 'server') {
-            console.warn('[AppContext] Relay required but not available — auto-switching to server mode');
-            localStorage.setItem('ssh_monitor_ssh_mode', 'server');
-            dispatch({ type: 'SET_HEALTH_STATUS', payload: { relayDown: true, autoSwitchedToServer: true } });
-            window.dispatchEvent(new Event('ssh-mode-changed'));
-          }
-        }
+        // Do not auto-switch — respect the user's manual mode selection.
+        // The relay warning banner will inform the user.
+        dispatch({ type: 'SET_HEALTH_STATUS', payload: { relayDown: true } });
       }
     } catch (err) {
       console.error('Failed to fetch DB connections:', err);
       // If a newer request has started, ignore this error
       if (requestId !== latestRequestIdRef.current) return;
 
-      // Network/DB error — mark mongo as down and auto-switch to server mode
+      // Network/DB error — mark mongo as down but respect the user's mode choice
       const isDbError = err.message && (
         err.message.includes('ECONNREFUSED') ||
         err.message.includes('MongoNetworkError') ||
@@ -419,25 +452,19 @@ export function AppProvider({ children }) {
         err.message.includes('buffering timed out') ||
         err.message.includes('SERVER_ERROR')
       );
-      if (isDbError && typeof window !== 'undefined') {
-        const currentMode = localStorage.getItem('ssh_monitor_ssh_mode');
-        if (currentMode !== 'server') {
-          console.warn('[AppContext] DB unreachable — auto-switching to server mode');
-          localStorage.setItem('ssh_monitor_ssh_mode', 'server');
-          dispatch({ type: 'SET_HEALTH_STATUS', payload: { mongoDown: true, autoSwitchedToServer: true } });
-          window.dispatchEvent(new Event('ssh-mode-changed'));
-        } else {
-          dispatch({ type: 'SET_HEALTH_STATUS', payload: { mongoDown: true } });
-        }
+      if (isDbError) {
+        dispatch({ type: 'SET_HEALTH_STATUS', payload: { mongoDown: true } });
       }
     }
 
     // 3. Update State
-    console.log(`✅ [AppContext] Connections updated: ${dbConnections.length} (DB) + ${localConnections.length} (Local)`);
+    console.log(`✅ [AppContext] Connections updated: ${dbConnections.length} (DB) + ${localConnections.length} (Local)${backgroundRefresh ? ' (background refresh)' : ''}`);
     dispatch({ type: 'SET_CONNECTIONS', payload: [...dbConnections, ...localConnections] });
     dispatch({ type: 'SET_CONNECTIONS_READY', payload: true }); // signal all apps that connections are loaded
-    dispatch({ type: 'SET_LOADING', payload: false });
-  }, [apiFetch]);
+    if (!backgroundRefresh) {
+      dispatch({ type: 'SET_LOADING', payload: false });
+    }
+  }, [apiFetch, state.autoSwitchedToServer]);
 
   // 1. Initialize storage mode from localStorage on mount
   useEffect(() => {
@@ -497,14 +524,26 @@ export function AppProvider({ children }) {
     return () => window.removeEventListener('ssh-mode-changed', handleModeChange);
   }, [fetchConnections]);
 
-  // 5. Auto-refresh connections when DB Config changes or on Mount
+  // 4.5. Periodic background refresh of connections (every 5 minutes) to keep data fresh
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    
+    const interval = setInterval(() => {
+      console.log('🔄 [AppContext] Periodic background refresh of connections');
+      fetchConnections({ backgroundRefresh: true });
+    }, 300000); // 5 minutes
+    
+    return () => clearInterval(interval);
+  }, [fetchConnections]);
+
+  // 6. Auto-refresh connections when DB Config changes or on Mount
   useEffect(() => {
     console.log(`📡 [AppContext] Fetching connections (URI: ${state.dbConfig?.uri ? 'PRIVATE' : 'CENTER'})`);
     fetchConnections();
   }, [state.dbConfig?.uri, fetchConnections]);
 
 
-  // 4. Persistence: Load active workspace state from localStorage on mount
+  // 7. Persistence: Load active workspace state from localStorage on mount
   useEffect(() => {
     if (typeof window === 'undefined') return;
     try {
@@ -559,7 +598,7 @@ export function AppProvider({ children }) {
     }
   }, []);
 
-  // 5. Fetch relay status once on mount & prioritize local relay if connected
+  // 8. Fetch relay status once on mount & prioritize local relay if connected
   useEffect(() => {
     fetch('/api/relay/token')
       .then(r => r.json())
@@ -582,12 +621,12 @@ export function AppProvider({ children }) {
       });
   }, []);
 
-  // 6. Health polling — every 20 seconds, detect MongoDB dead + relay dead, auto-switch
+  // 9. Health polling — every 60 seconds, detect MongoDB dead + relay dead, auto-switch
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
     let consecutiveFailures = 0;
-    const MAX_FAILURES_BEFORE_SWITCH = 2; // switch after 2 consecutive failures (~40s)
+    const MAX_FAILURES_BEFORE_SWITCH = 2; // switch after 2 consecutive failures (~120s)
 
     const pollHealth = async () => {
       try {
@@ -621,28 +660,37 @@ export function AppProvider({ children }) {
       }
     };
 
-    // Poll immediately then every 20 seconds
+    // Poll immediately then every 60 seconds (reduced from 20s)
     pollHealth();
-    const interval = setInterval(pollHealth, 20000);
+    const interval = setInterval(pollHealth, 60000);
     return () => clearInterval(interval);
   }, []);
 
-  // 6. Persistence: Save active workspace state to localStorage when it changes
+  // 10. Persistence: Save active workspace state to localStorage when it changes (debounced)
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    try {
-      localStorage.setItem('ssh_monitor_active_terminals', JSON.stringify(state.activeTerminals));
-      localStorage.setItem('ssh_monitor_active_file_managers', JSON.stringify(state.activeFileManagers));
-      localStorage.setItem('ssh_monitor_active_database_browsers', JSON.stringify(state.activeDatabaseBrowsers));
-      localStorage.setItem('ssh_monitor_standalone_terminals', JSON.stringify(state.standaloneTerminals));
-      localStorage.setItem('ssh_monitor_standalone_database_browsers', JSON.stringify(state.standaloneDatabaseBrowsers));
-      localStorage.setItem('ssh_monitor_active_terminal_id', state.activeTerminalId || '');
-      localStorage.setItem('ssh_monitor_active_database_browser_id', state.activeDatabaseBrowserId || '');
-      localStorage.setItem('ssh_monitor_active_file_manager_id', state.activeFileManagerId || '');
-      localStorage.setItem('ssh_monitor_active_view', state.view);
-    } catch (e) {
-      console.error('Failed to save workspace state:', e);
-    }
+    
+    let timeoutId;
+    const saveState = () => {
+      try {
+        localStorage.setItem('ssh_monitor_active_terminals', JSON.stringify(state.activeTerminals));
+        localStorage.setItem('ssh_monitor_active_file_managers', JSON.stringify(state.activeFileManagers));
+        localStorage.setItem('ssh_monitor_active_database_browsers', JSON.stringify(state.activeDatabaseBrowsers));
+        localStorage.setItem('ssh_monitor_standalone_terminals', JSON.stringify(state.standaloneTerminals));
+        localStorage.setItem('ssh_monitor_standalone_database_browsers', JSON.stringify(state.standaloneDatabaseBrowsers));
+        localStorage.setItem('ssh_monitor_active_terminal_id', state.activeTerminalId || '');
+        localStorage.setItem('ssh_monitor_active_database_browser_id', state.activeDatabaseBrowserId || '');
+        localStorage.setItem('ssh_monitor_active_file_manager_id', state.activeFileManagerId || '');
+        localStorage.setItem('ssh_monitor_active_view', state.view);
+      } catch (e) {
+        console.error('Failed to save workspace state:', e);
+      }
+    };
+    
+    // Debounce localStorage writes to reduce I/O operations
+    timeoutId = setTimeout(saveState, 500);
+    
+    return () => clearTimeout(timeoutId);
   }, [state.activeTerminals, state.activeFileManagers, state.activeDatabaseBrowsers, state.standaloneTerminals, state.standaloneDatabaseBrowsers, state.activeTerminalId, state.activeDatabaseBrowserId, state.activeFileManagerId, state.view]);
 
   return (
