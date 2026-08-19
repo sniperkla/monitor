@@ -229,6 +229,7 @@ CRITICAL INSTRUCTIONS:
    - If an existing deployment script is provided, keep all original "cd", "git pull", custom environment setup, echo/log statements.
    - Put \`#!/bin/bash\` ONLY ONCE at the top. Do NOT add \`set -e\` — Swarm rollback commands exit non-zero by design and set -e would abort the script mid-rollback.
    - Do NOT include any docker service/swarm commands in "deployCommand" — the system handles zero-downtime Swarm injection.
+   - When generating docker-compose up commands, ALWAYS include \`--force-recreate\` flag to ensure containers are recreated with fresh state on each deployment.
 
 You MUST respond with a valid JSON object ONLY:
 {
