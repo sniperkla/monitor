@@ -267,9 +267,24 @@ class WsTcpRelay {
               getSftp((err, s) => {
                 if (err) return fallbackFileListing(sshClient, listPath);
                 const targetPath = listPath === '.' ? './' : listPath;
+                
+                // Add timeout to prevent hanging on slow/large directories (fixes initial scan issue)
+                const listTimeout = setTimeout(() => {
+                  console.warn(`[relay] sftp:list timeout for ${targetPath} - falling back to ls`);
+                  fallbackFileListing(sshClient, listPath);
+                }, 10000); // 10 second timeout
+                
                 s.readdir(targetPath, (readdirErr, list) => {
+                  clearTimeout(listTimeout);
                   if (readdirErr) return fallbackFileListing(sshClient, listPath);
-                  socket.emit('sftp:list', { path: listPath, files: list });
+                  
+                  // Limit to first 10,000 files to prevent memory issues on huge directories
+                  const limitedList = list.slice(0, 10000);
+                  if (list.length > 10000) {
+                    console.warn(`[relay] Directory ${targetPath} has ${list.length} items, limiting to 10,000`);
+                  }
+                  
+                  socket.emit('sftp:list', { path: listPath, files: limitedList });
                 });
               });
             });
@@ -669,6 +684,10 @@ class WsTcpRelay {
                 };
 
                 const doneHandler = () => {
+                  console.log(`📤 [wsRelay] Upload done for ${filename}: received ${bytesReceived} bytes, expected ${size} bytes (offset: ${offset})`);
+                  if (bytesReceived + offset !== size) {
+                    console.warn(`⚠️  [wsRelay] SIZE MISMATCH: received ${bytesReceived + offset} bytes, expected ${size} bytes`);
+                  }
                   if (!settled && wStream.writable) wStream.end();
                 };
 
@@ -679,17 +698,9 @@ class WsTcpRelay {
                   });
                 };
 
-                socket.removeAllListeners(`sftp:upload_chunk:${filename}`);
-                socket.removeAllListeners(`sftp:upload_done:${filename}`);
-                socket.removeAllListeners(`sftp:upload_abort:${filename}`);
-                socket.on(`sftp:upload_chunk:${filename}`, chunkHandler);
-                socket.once(`sftp:upload_done:${filename}`, doneHandler);
-                socket.once(`sftp:upload_abort:${filename}`, abortHandler);
-                socket.emit('sftp:can_upload', { filename, offset });
-                armInactivityTimer();
-
                 let completionSent = false;
                 let completionTimer = null;
+                
                 const sendCompletion = () => {
                   if (completionSent) return;
                   completionSent = true;

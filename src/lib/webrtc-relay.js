@@ -175,26 +175,51 @@ function buildPeer(pc, channels, relayConnId) {
       if (dc.readyState === 'open') dc.send(data);
     },
 
-    /** Send binary file chunk (ArrayBuffer or Uint8Array) */
+    /** Send binary file chunk (ArrayBuffer or Uint8Array).
+     *  Returns false if the channel is closed or the send queue is full. */
     sendFile(data) {
       const dc = channels[DC.FILE];
-      if (dc.readyState !== 'open') return;
-      dc.send(data instanceof Uint8Array ? data.buffer : data);
+      if (dc.readyState !== 'open') return false;
+      try {
+        // Pass ArrayBufferView (Uint8Array subarray) directly — dc.send() respects
+        // byteOffset + byteLength so only the intended slice is transmitted.
+        // Do NOT unwrap to .buffer — that would send the entire backing ArrayBuffer.
+        dc.send(data);
+        return true;
+      } catch (e) {
+        // RTCDataChannel throws if send queue is full or channel is closing
+        console.warn('[WebRTC] sendFile failed:', e?.message);
+        return false;
+      }
     },
 
-    /** True if file channel can accept more data without exceeding 16 MB buffer */
+    /** True if the file channel buffer is low enough to send another chunk safely.
+     *  Allow up to 4 MB in the buffer — enough to keep the pipeline full
+     *  while staying well below the browser's 16 MB hard limit. */
     canSendFile() {
       const dc = channels[DC.FILE];
-      return dc.readyState === 'open' && dc.bufferedAmount < 16 * 1024 * 1024;
+      return dc.readyState === 'open' && dc.bufferedAmount < 4 * 1024 * 1024;
     },
 
-    /** Wait until file channel buffer drains below 4 MB */
+    /** Wait until the file channel buffer drains below 512 KB.
+     *  This keeps multiple chunks in flight (pipelined) for maximum throughput. */
     waitForFileDrain() {
       const dc = channels[DC.FILE];
       if (this.canSendFile()) return Promise.resolve();
+      if (dc.readyState !== 'open') return Promise.resolve();
       return new Promise(resolve => {
-        dc.bufferedAmountLowThreshold = 4 * 1024 * 1024;
-        dc.onbufferedamountlow = () => { dc.onbufferedamountlow = null; resolve(); };
+        const DRAIN_TARGET = 512 * 1024;
+        dc.bufferedAmountLowThreshold = DRAIN_TARGET;
+        const onLow = () => { dc.onbufferedamountlow = null; clearInterval(poll); resolve(); };
+        dc.onbufferedamountlow = onLow;
+        // Fallback poll in case bufferedAmountLow never fires (some implementations)
+        const poll = setInterval(() => {
+          if (dc.readyState !== 'open' || dc.bufferedAmount <= DRAIN_TARGET) {
+            clearInterval(poll);
+            dc.onbufferedamountlow = null;
+            resolve();
+          }
+        }, 10);
       });
     },
 
@@ -220,14 +245,19 @@ function buildPeer(pc, channels, relayConnId) {
  * @param {string}   destPath    — destination path on remote
  * @param {Object}   [opts]
  * @param {number}   [opts.startOffset=0]      — resume from byte offset
- * @param {number}   [opts.chunkSize=524288]   — initial chunk size (512 KB)
+ * @param {number}   [opts.chunkSize=262144]   — chunk size (default 256 KB, max per RTCDataChannel spec)
  * @param {Function} [opts.onProgress]         — (bytesUploaded, totalBytes) => void
  * @param {AbortSignal} [opts.signal]          — cancellation
  * @returns {Promise<{sha256: string}>}
  */
+// RTCDataChannel max-message-size: Chromium allows up to 256 KB per message.
+// We use 64 KB chunks for maximum compatibility across all browsers.
+// Some browsers have DataChannel message size limits around 64-256 KB.
+const WEBRTC_MAX_CHUNK = 64 * 1024;
+
 export async function streamUpload(peer, connId, file, destPath, {
   startOffset = 0,
-  chunkSize = 512 * 1024,
+  chunkSize = 64 * 1024,  // 64 KB — safe across all browsers
   onProgress,
   signal,
 } = {}) {
@@ -243,7 +273,16 @@ export async function streamUpload(peer, connId, file, destPath, {
     offset: startOffset,
   });
 
-  // Wait for relay ready / error
+  // Overlap: start reading the file into memory NOW while we wait for relay:
+  // The relay:ready RTT (control channel) is ~1-5ms on LAN.
+  // file.arrayBuffer() on 80MB takes ~50-200ms. Running both in parallel hides the read cost.
+  // For files >1GB, use streaming mode to avoid OOM (out of memory).
+  const USE_STREAMING_THRESHOLD = 1024 * 1024 * 1024;  // 1GB threshold
+  const fileReadPromise = file.size <= USE_STREAMING_THRESHOLD
+    ? file.arrayBuffer().then(ab => new Uint8Array(ab))
+    : Promise.resolve(null);
+
+  // Wait for relay ready / error (runs concurrently with file read above)
   await new Promise((resolve, reject) => {
     const unsub = peer.onControl((msg) => {
       if (msg.connId !== connId) return;
@@ -253,66 +292,120 @@ export async function streamUpload(peer, connId, file, destPath, {
     signal?.addEventListener('abort', () => { unsub(); reject(new DOMException('Upload cancelled', 'AbortError')); });
   });
 
-  // Stream file using ReadableStream
-  const stream = file.slice(startOffset).stream ? file.slice(startOffset).stream() : null;
-  const reader = stream?.getReader();
+  // Register progress + completion listeners BEFORE sending any data.
+  // Progress strategy:
+  //   - Client send offset gives real-time feedback as chunks leave the browser (fast, responsive)
+  //   - Relay file:upload:progress can correct the value upward as SFTP writes confirm
+  //   - file:upload:complete is the only event that triggers 100%
+  //   - Neither source alone is sufficient: client is too fast (hits 100% before relay writes),
+  //     relay is too slow (messages arrive in batches after the send loop finishes)
+  let unsubProgress;
+  let relayHighWater = startOffset; // highest byte count confirmed by relay
+  const progressPromise = new Promise((resolve, reject) => {
+    unsubProgress = peer.onControl((msg) => {
+      if (msg.connId !== connId) return;
+      if (msg.type === 'file:upload:progress') {
+        relayHighWater = Math.max(relayHighWater, msg.received ?? 0);
+        // Show relay progress if it's ahead of what we last reported, capped at 99%
+        const capped = Math.min(relayHighWater, file.size - 1);
+        onProgress?.(capped, file.size);
+        return;
+      }
+      if (msg.type === 'file:upload:complete') {
+        onProgress?.(file.size, file.size); // 100% only on confirmed complete
+        unsubProgress();
+        resolve({ sha256: msg.sha256 });
+      }
+      if (msg.type === 'file:upload:error') { unsubProgress(); reject(new Error(msg.error)); }
+    });
+    signal?.addEventListener('abort', () => { unsubProgress?.(); reject(new DOMException('Upload cancelled', 'AbortError')); });
+  });
+
+  // Pre-read entire file into a Uint8Array once — eliminates per-chunk async yields
+  // and allows zero-copy slicing via subarray() instead of ArrayBuffer.slice() copies.
+  // For files >1GB fall back to streaming to avoid OOM.
+  // fileReadPromise was already started above (overlapped with relay ready wait)
+  let fileView = null; // Uint8Array over the full file buffer
+
+  // Await file read — may already be done if relay RTT > file read time
+  fileView = await fileReadPromise;
+
+  console.log(`[WebRTC Upload] File: ${file.name}, Size: ${file.size} bytes, fileView: ${fileView ? fileView.length : 'null'} bytes, mode: ${fileView ? 'preloaded' : 'streaming'}`);
 
   let offset = startOffset;
-  let carry = new Uint8Array(0);
-  let t0 = performance.now();
+  let lastProgressMs = 0;
+  const fileDc = peer.channel(DC.FILE);
 
-  const readNext = async () => {
-    if (!reader) return null;
-    const { done, value } = await reader.read();
-    return done ? null : value;
-  };
+  try {
+    let chunkCount = 0;
+    while (offset < file.size) {
+      if (signal?.aborted) throw new DOMException('Upload cancelled', 'AbortError');
 
-  let chunk = await readNext();
-  while (chunk !== null || carry.length > 0) {
-    if (signal?.aborted) throw new DOMException('Upload cancelled', 'AbortError');
+      if (!fileDc || fileDc.readyState !== 'open') {
+        console.error(`[WebRTC Upload] DataChannel closed at offset ${offset}/${file.size}`);
+        throw new Error('RTCDataChannel closed during upload');
+      }
 
-    // Merge carry + new chunk
-    if (chunk) {
-      const merged = new Uint8Array(carry.length + chunk.length);
-      merged.set(carry);
-      merged.set(chunk, carry.length);
-      carry = merged;
+      // Block only when the send buffer is actually full
+      if (!peer.canSendFile()) {
+        await peer.waitForFileDrain();
+        if (signal?.aborted) throw new DOMException('Upload cancelled', 'AbortError');
+      }
+
+      const end = Math.min(offset + chunkSize, file.size);
+      chunkCount++;
+
+      // Zero-copy subarray view (no memory allocation) vs slice() which copies
+      // Zero-copy: Uint8Array.subarray() is a view into the same memory, no allocation
+      // RTCDataChannel.send() accepts ArrayBufferView directly
+      const buf = fileView
+        ? fileView.subarray(offset, end)
+        : await file.slice(offset, end).arrayBuffer();
+
+      console.log(`[WebRTC Upload] Chunk ${chunkCount}: offset=${offset}, end=${end}, bufSize=${buf.byteLength || buf.length}, fileSize=${file.size}`);
+
+      if (!peer.sendFile(buf)) {
+        await peer.waitForFileDrain();
+        if (signal?.aborted) throw new DOMException('Upload cancelled', 'AbortError');
+        if (!peer.sendFile(buf)) {
+          throw new Error('RTCDataChannel send failed — queue full or channel closed');
+        }
+      }
+
+      offset = end;
+
+      console.log(`[WebRTC Upload] Progress: ${offset}/${file.size} (${(offset/file.size*100).toFixed(1)}%)`);
+
+      // Add small pacing for ALL files to prevent overwhelming the receiver
+      // This ensures reliable delivery even for small files
+      await new Promise(resolve => setTimeout(resolve, 5));
+
+      // Client-side progress: 10fps, capped at 95%
+      const now = performance.now();
+      if (now - lastProgressMs >= 100) {
+        lastProgressMs = now;
+        const clientCapped = Math.min(offset, Math.floor(file.size * 0.95));
+        if (clientCapped > relayHighWater) onProgress?.(clientCapped, file.size);
+      }
     }
-
-    // Send full chunks from carry
-    while (carry.length >= chunkSize || (chunk === null && carry.length > 0)) {
-      const toSend = carry.slice(0, chunkSize);
-      carry = carry.slice(chunkSize);
-
-      if (!peer.canSendFile()) await peer.waitForFileDrain();
-
-      peer.sendFile(toSend.buffer);
-      offset += toSend.length;
-      onProgress?.(offset, file.size);
-
-      // Adaptive chunk sizing
-      const elapsed = performance.now() - t0;
-      if (elapsed < 100 && chunkSize < 1024 * 1024) chunkSize = Math.min(chunkSize * 2, 1024 * 1024);
-      else if (elapsed > 500 && chunkSize > 64 * 1024) chunkSize = Math.max(chunkSize / 2, 64 * 1024);
-      t0 = performance.now();
+    console.log(`[WebRTC Upload] Complete: ${file.name}, ${chunkCount} chunks, ${offset} bytes`);
+    
+    // Verify upload completeness
+    if (offset !== file.size) {
+      console.error(`❌ [WebRTC Upload] SIZE MISMATCH: sent ${offset} bytes but file is ${file.size} bytes!`);
+      throw new Error(`Upload incomplete: sent ${offset}/${file.size} bytes`);
     }
-
-    if (chunk === null) break;
-    chunk = await readNext();
+  } catch (err) {
+    console.error(`[WebRTC Upload] Error at offset ${offset}/${file.size}:`, err);
+    unsubProgress?.();
+    throw err;
   }
 
-  // Signal upload complete to relay
+  // All chunks sent — tell relay to flush and close the SFTP write stream
   peer.sendControl({ type: 'file:upload:done', connId, filename: file.name, destPath });
 
-  // Wait for relay to confirm + sha256
-  return new Promise((resolve, reject) => {
-    const unsub = peer.onControl((msg) => {
-      if (msg.connId !== connId) return;
-      if (msg.type === 'file:upload:complete') { unsub(); resolve({ sha256: msg.sha256 }); }
-      if (msg.type === 'file:upload:error')    { unsub(); reject(new Error(msg.error)); }
-    });
-    signal?.addEventListener('abort', () => { unsub(); reject(new DOMException('Upload cancelled', 'AbortError')); });
-  });
+  // Wait for relay to confirm — progress messages continue to update UI during SFTP flush
+  return progressPromise;
 }
 
 /**

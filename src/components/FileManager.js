@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import io from 'socket.io-client';
 import * as fflate from 'fflate';
+import { createRelayPeer, DC, streamUpload, streamDownload } from '@/lib/webrtc-relay';
 import { useOS } from '@/context/OSContext';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
@@ -76,6 +77,8 @@ function createTar(files) {
   // Final 1024-byte null padding (End of Archive)
   chunks.push(new Uint8Array(1024));
   
+  // For large folders, this allocation can fail with "ArrayBuffer allocation failed"
+  // But since we now limit folder size to 500MB, this should work for most cases
   const totalLength = chunks.reduce((acc, c) => acc + c.length, 0);
   const result = new Uint8Array(totalLength);
   let offset = 0;
@@ -167,6 +170,9 @@ export default function FileManager({
   const MAX_RECONNECT_ATTEMPTS = 10;
   const [reconnectAlert, setReconnectAlert] = useState(null);
   const socketRef = useRef(null);
+  const rtcPeerRef = useRef(null);      // WebRTC RelayPeer — set when local relay + P2P ICE succeeds
+  const relayConnIdRef = useRef(null);  // relayConnId from relay:rtc:ready signal
+  const [rtcActive, setRtcActive] = useState(false); // true when WebRTC P2P DataChannels are open
   const lastHealthOkRef = useRef(false);
   const lastHealthCheckAtRef = useRef(0);
   const healthCheckPromiseRef = useRef(null);
@@ -531,6 +537,7 @@ export default function FileManager({
       currentPathRef.current = initialPath;
       setLoading(true);
       setStatus('connecting');
+      setRtcActive(false); // reset WebRTC badge on every new connection
 
       const currentDbUri = dbUriRef.current;
       newSocket = io({
@@ -640,6 +647,12 @@ export default function FileManager({
     });
 
     newSocket.on('ssh:closed', () => {
+      // Tear down WebRTC peer when SSH session closes
+      if (rtcPeerRef.current) {
+        try { rtcPeerRef.current.close(); } catch (_) {}
+        rtcPeerRef.current = null;
+        setRtcActive(false);
+      }
       // If the user intentionally cancelled an upload, the SFTP write stream
       // destruction can trigger ssh:closed — do NOT reconnect in that case.
       if (userCancelledUploadRef.current) {
@@ -667,6 +680,12 @@ export default function FileManager({
 
     newSocket.on('disconnect', (reason) => {
       if (reason === 'io client disconnect') return;
+      // Tear down WebRTC peer on socket disconnect
+      if (rtcPeerRef.current) {
+        try { rtcPeerRef.current.close(); } catch (_) {}
+        rtcPeerRef.current = null;
+        setRtcActive(false);
+      }
       // If the user intentionally cancelled an upload, the resulting socket noise
       // should not be treated as an unexpected disconnect requiring reconnect.
       if (userCancelledUploadRef.current) {
@@ -852,8 +871,13 @@ export default function FileManager({
     });
 
     newSocket.on('sftp:progress', (data) => {
+      console.log(`[FileManager] Received progress:`, data);
       setTransfer(prev => {
-        if (!prev) return null; // Don't resurrect late progress messages
+        if (!prev) {
+          console.warn(`[FileManager] Ignoring progress - no active transfer`, data);
+          return null; // Don't resurrect late progress messages
+        }
+        console.log(`[FileManager] Updating transfer:`, { prev, data, result: { ...prev, ...data } });
         return { ...prev, ...data };
       });
     });
@@ -1120,12 +1144,50 @@ export default function FileManager({
       });
     });
 
+    // ── WebRTC P2P: upgrade file transfers from Socket.io to DataChannel when local relay is available ──
+    // Server emits relay:rtc:ready after pre-provisioning SSH credentials to the relay agent.
+    // On ICE success: uploads/downloads flow directly browser → relay (zero server bandwidth).
+    // On ICE timeout: silent fallback — socket-based sftp:upload path remains registered and active.
+    newSocket.on('relay:rtc:ready', async ({ connId: emittedConnId }) => {
+      const sshMode = typeof window !== 'undefined' ? (localStorage.getItem('ssh_monitor_ssh_mode') || 'server') : 'server';
+      if (sshMode !== 'local') return;
+
+      relayConnIdRef.current = emittedConnId;
+      try {
+        const peer = await createRelayPeer({ socket: newSocket, relayConnId: emittedConnId });
+        rtcPeerRef.current = peer;
+        setRtcActive(true);
+        console.log('[FileManager][WebRTC] P2P DataChannels open — file transfers now bypass server');
+
+        // If relay agent closes the peer, tear down so we fall back to socket path
+        peer.onControl((msg) => {
+          if (msg.connId !== emittedConnId) return;
+          if (msg.type === 'ssh:closed' || msg.type === 'ssh:error') {
+            try { peer.close(); } catch (_) {}
+            if (rtcPeerRef.current === peer) { rtcPeerRef.current = null; setRtcActive(false); }
+          }
+        });
+      } catch (err) {
+        // ICE timeout or no node-datachannel on relay — socket upload path stays active
+        console.log('[FileManager][WebRTC] P2P unavailable, using WebSocket relay fallback:', err.message);
+        rtcPeerRef.current = null;
+        setRtcActive(false);
+      }
+    });
+
     socketRef.current = newSocket;
     setSocket(newSocket);
 
     return () => {
       clearTimeout(timeout);
       clearTimeout(reuseInitTimeout);
+
+      // Always close WebRTC peer on unmount / reconnect
+      if (rtcPeerRef.current) {
+        try { rtcPeerRef.current.close(); } catch (_) {}
+        rtcPeerRef.current = null;
+      }
+      relayConnIdRef.current = null;
 
       if (!newSocket) return;
 
@@ -1589,7 +1651,7 @@ export default function FileManager({
     });
   };
 
-  const handleFileUpload = async (e, specificFile = null, resumeOffset = 0, overridePath = null, displayName = null, skipOverwriteCheck = false) => {
+  const handleFileUpload = async (e, specificFile = null, resumeOffset = 0, overridePath = null, displayName = null, skipOverwriteCheck = false, skipCleanup = false) => {
     // Handle multiple files from file input
     if (e?.target?.files && e.target.files.length > 1 && !specificFile) {
       const inputFiles = Array.from(e.target.files);
@@ -1624,6 +1686,13 @@ export default function FileManager({
 
     const file = specificFile || e?.target?.files[0];
     if (!file) return;
+
+    console.log(`📤 [${file.name}] File object details:`, {
+      name: file.name,
+      size: file.size,
+      type: file.type,
+      lastModified: file.lastModified
+    });
 
     let socket = socketRef.current;
     if (!socket) return;
@@ -1680,7 +1749,8 @@ export default function FileManager({
       path, 
       progress: 0, 
       action: 'upload', 
-      waiting: false 
+      waiting: false,
+      channel: (rtcPeerRef.current && relayConnIdRef.current) ? 'webrtc' : 'socket',
     };
     setTransfer(transferObj);
     transferRef.current = transferObj;
@@ -1803,6 +1873,59 @@ export default function FileManager({
     
     activeAckCleanupRef.current = null;
 
+    // ── WebRTC fast path: when local relay + P2P DataChannels are open, stream directly ──
+    // Bypasses the Next.js server entirely — data goes browser → relay agent → SFTP → SSH.
+    if (rtcPeerRef.current && relayConnIdRef.current) {
+      const peer = rtcPeerRef.current;
+      const connId = relayConnIdRef.current;
+      console.log(`📤 [${file.name}] WebRTC path — streaming via DataChannel (connId=${connId})`);
+      const abortController = new AbortController();
+      try {
+        await streamUpload(peer, connId, file, path, {
+          startOffset: resumeOffset,
+          signal: abortController.signal,
+          onProgress: (sent, total) => {
+            if (transferRef.current !== transferObj) { abortController.abort(); return; }
+            const pct = Math.round((sent / total) * 100);
+            setTransfer(prev => prev ? { ...prev, progress: pct, waiting: false } : null);
+            updateNotification(uploadNotifId, { message: `${file.name} — ${pct}%` });
+            setUploadQueue(prev => prev.map(item => item.path === path ? { ...item, offset: sent } : item));
+          },
+        });
+
+        if (transferRef.current === transferObj) {
+          updateNotification(uploadNotifId, {
+            title: t('files.status.upload'),
+            message: `${file.name} — 100%`,
+            type: 'success',
+            duration: 3000,
+          });
+          setUploadQueue(prev => prev.filter(item => item.path !== path));
+          setTransfer(null);
+          transferRef.current = null;
+          if (e) e.target.value = null;
+          // Refresh so the uploaded file appears in the listing
+          getSocket()?.emit('sftp:list', currentPathRef.current || '.');
+          return { path };
+        }
+        return;
+      } catch (rtcErr) {
+        if (rtcErr.name === 'AbortError') {
+          // User cancelled
+          setTransfer(null);
+          transferRef.current = null;
+          setUploadQueue(prev => prev.filter(item => item.path !== path));
+          updateNotification(uploadNotifId, { title: t('files.status.upload'), message: `${file.name} — cancelled`, type: 'warning', duration: 3000 });
+          return;
+        }
+        // DataChannel error — fall through to socket path
+        console.warn(`[FileManager][WebRTC] streamUpload failed (${rtcErr.message}), falling back to socket path`);
+        try { peer.close(); } catch (_) {}
+        rtcPeerRef.current = null;
+        // Fall through to socket-based upload below
+      }
+    }
+
     try {
       // Request start — auto-retry if server is temporarily out of resources (memory / concurrency guard)
       let startData;
@@ -1891,7 +2014,10 @@ export default function FileManager({
 
       while (offset < file.size) {
         // If transfer was closed/cancelled, stop the loop
-        if (transferRef.current !== transferObj) break;
+        if (transferRef.current !== transferObj) {
+          console.log(`📤 [${file.name}] Loop exited: transfer cancelled (offset=${offset}, file.size=${file.size})`);
+          break;
+        }
 
         // If we are rate limited, wait for the countdown
         if (transferCountdownRef.current > 0) {
@@ -1940,58 +2066,122 @@ export default function FileManager({
 
         if (transferRef.current !== transferObj) break;
 
-        const chunk = file.slice(offset, offset + chunkSize);
-        const buffer = await chunk.arrayBuffer();
-        
-        if (transferRef.current !== transferObj) break;
+        // ── Pipelined chunk sending ──────────────────────────────────────────
+        // Send up to PIPELINE_SIZE chunks without waiting for ACK each time.
+        // ACKs are processed as they arrive — window slides forward on each ACK.
+        // This eliminates the 2×RTT stall per chunk that made socket uploads slow.
+        const PIPELINE_SIZE = 8;
+        let inFlight = 0;
+        let pipelineError = null;
+        let rateLimitResult = null;
+        let guardResult = null;
+        const pendingAcks = []; // ordered list of {resolve, reject, chunkOffset, chunkSize}
 
-        // Send chunk and wait for ACK (Ensures server keeps up and allows pausing)
-        const ack = new Promise((resolve, reject) => {
-          const sock = getSocket();
-          if (!sock?.connected) {
-            reject(new Error('Socket disconnected before sending chunk'));
-            return;
+        const sockForPipeline = getSocket();
+        if (!sockForPipeline?.connected) break;
+
+        // Shared error handler — fires on any sftp:error during this pipeline
+        const pipelineErrHandler = (err) => {
+          if (err.resetIn) {
+            rateLimitResult = { rateLimited: true, resetIn: err.resetIn };
+            // Resolve all pending acks so the loop drains cleanly
+            for (const p of pendingAcks) p.resolve(rateLimitResult);
+            pendingAcks.length = 0;
+          } else if (err?.guard) {
+            guardResult = { guardBlocked: err.guard, retryAfter: 5000 };
+            for (const p of pendingAcks) p.resolve(guardResult);
+            pendingAcks.length = 0;
+          } else {
+            pipelineError = err;
+            for (const p of pendingAcks) p.reject(err);
+            pendingAcks.length = 0;
+          }
+        };
+        sockForPipeline.on('sftp:error', pipelineErrHandler);
+
+        // ACK handler — resolves the oldest pending promise in order
+        const ackHandler = (data) => {
+          const pending = pendingAcks.shift();
+          if (pending) pending.resolve(data);
+        };
+        sockForPipeline.on(`sftp:upload_ack:${file.name}`, ackHandler);
+
+        const cleanupPipeline = () => {
+          sockForPipeline.off(`sftp:upload_ack:${file.name}`, ackHandler);
+          sockForPipeline.off('sftp:error', pipelineErrHandler);
+          activeAckCleanupRef.current = null;
+        };
+        activeAckCleanupRef.current = cleanupPipeline;
+
+        // Pre-read entire file slice for this pipeline run
+        const pipelineEnd = Math.min(offset + PIPELINE_SIZE * chunkSize, file.size);
+
+        while (offset < file.size) {
+          if (transferRef.current !== transferObj || pipelineError || rateLimitResult || guardResult) break;
+
+          // If window is full, wait for the oldest ACK before sending more
+          if (inFlight >= PIPELINE_SIZE) {
+            const ackResult = await new Promise((resolve, reject) => {
+              const entry = pendingAcks[0];
+              if (!entry) { resolve({}); return; }
+              const orig = { resolve: entry.resolve, reject: entry.reject };
+              entry.resolve = resolve;
+              entry.reject = reject;
+            }).catch(err => { pipelineError = err; return null; });
+
+            if (!ackResult || pipelineError) break;
+            inFlight--;
+
+            if (ackResult.rateLimited) { rateLimitResult = ackResult; break; }
+            if (ackResult.guardBlocked) { guardResult = ackResult; break; }
+
+            offset = typeof ackResult.totalTransferred === 'number' ? ackResult.totalTransferred : offset;
+            setUploadQueue(prev => prev.map(item => item.path === path ? { ...item, offset } : item));
+            setTransfer(prev => prev ? { ...prev, progress: Math.round((offset / file.size) * 100), waiting: false } : null);
+            updateNotification(uploadNotifId, { message: `${file.name} — ${Math.round((offset / file.size) * 100)}%` });
           }
 
+          const end = Math.min(offset + chunkSize, file.size);
+          const buf = await file.slice(offset, end).arrayBuffer();
+          if (transferRef.current !== transferObj) break;
+
+          const chunkOffset = offset;
+          const chunkLen = end - offset;
+          const ackPromise = new Promise((resolve, reject) => {
+            pendingAcks.push({ resolve, reject, chunkOffset, chunkSize: chunkLen });
+          });
+          // Register timeout per chunk
           const timeoutId = setTimeout(() => {
-            cleanup();
-            reject(new Error('Upload acknowledgment timeout'));
-          }, 15000);
-
-          const handler = (data) => {
-            cleanup();
-            resolve(data);
-          };
-          const errHandler = (err) => {
-            if (err.resetIn) { // Rate limit — keep transfer alive
-              cleanup();
-              resolve({ rateLimited: true, resetIn: err.resetIn });
-            } else if (err?.guard === 'memory' || err?.guard === 'concurrency') {
-              // Guard block mid-transfer — pause and re-open upload session
-              cleanup();
-              resolve({ guardBlocked: err.guard, retryAfter: 5000 });
-            } else {
-              cleanup();
-              reject(err);
+            const idx = pendingAcks.findIndex(p => p.chunkOffset === chunkOffset);
+            if (idx !== -1) {
+              const p = pendingAcks.splice(idx, 1)[0];
+              p.reject(new Error('Upload acknowledgment timeout'));
             }
-          };
-          const cleanup = () => {
-            clearTimeout(timeoutId);
-            sock.off(`sftp:upload_ack:${file.name}`, handler);
-            sock.off('sftp:error', errHandler);
-            activeAckCleanupRef.current = null;
-          };
-          activeAckCleanupRef.current = cleanup;
-          sock.on(`sftp:upload_ack:${file.name}`, handler);
-          sock.on('sftp:error', errHandler);
-        });
+          }, 20000);
+          ackPromise.finally(() => clearTimeout(timeoutId));
 
-        console.log(`📤 [${file.name}] Sending chunk at offset=${offset}, size=${chunk.size}`);
-        getSocket()?.emit(`sftp:upload_chunk:${file.name}`, buffer);
-        
-        const ackResult = await ack;
-        console.log(`📤 [${file.name}] ACK received:`, JSON.stringify(ackResult));
-        if (transferRef.current !== transferObj) break;
+          sockForPipeline.emit(`sftp:upload_chunk:${file.name}`, buf);
+          inFlight++;
+          offset = end;
+        }
+
+        // Drain remaining in-flight ACKs
+        while (pendingAcks.length > 0 && !pipelineError && !rateLimitResult && !guardResult) {
+          const p = pendingAcks[0];
+          const ackResult = await new Promise((res, rej) => { p.resolve = res; p.reject = rej; })
+            .catch(err => { pipelineError = err; return null; });
+          pendingAcks.shift();
+          if (!ackResult || pipelineError) break;
+          if (ackResult.rateLimited) { rateLimitResult = ackResult; break; }
+          if (ackResult.guardBlocked) { guardResult = ackResult; break; }
+          offset = typeof ackResult.totalTransferred === 'number' ? ackResult.totalTransferred : offset;
+        }
+
+        cleanupPipeline();
+
+        if (pipelineError) throw pipelineError;
+
+        const ackResult = rateLimitResult || guardResult || {};
 
         if (ackResult.rateLimited && !ackResult.guardBlocked) {
           const waitMs = ackResult.resetIn || 5000;
@@ -2002,19 +2192,13 @@ export default function FileManager({
           
           await new Promise(r => {
             const check = setInterval(() => {
-              if (transferRef.current !== transferObj) {
-                clearInterval(check);
-                r();
-              } else if (transferCountdownRef.current === 0) {
-                clearInterval(check);
-                r();
-              }
+              if (transferRef.current !== transferObj) { clearInterval(check); r(); }
+              else if (transferCountdownRef.current === 0) { clearInterval(check); r(); }
             }, 500);
           });
           if (transferRef.current !== transferObj) break;
           setTransfer(prev => prev ? { ...prev, waiting: false, countdown: 0 } : null);
           
-          // Re-open upload session from current offset
           socket = getSocket();
           if (!socket?.connected) break;
           socket.emit('sftp:upload', { filename: file.name, path, size: file.size, offset });
@@ -2061,22 +2245,8 @@ export default function FileManager({
 
         offset = typeof ackResult.totalTransferred === 'number'
           ? ackResult.totalTransferred
-          : offset + chunk.size;
-        
-        // Update queue offset for persistence
-        setUploadQueue(prev => prev.map(item => item.path === path ? { ...item, offset } : item));
-
-        setTransfer(prev => ({ 
-          ...prev, 
-          progress: Math.round((offset / file.size) * 100),
-          waiting: false
-        }));
-
-        // Update upload notification with progress
-        const pct = Math.round((offset / file.size) * 100);
-        updateNotification(uploadNotifId, {
-          message: `${file.name} — ${pct}%`,
-        });
+          : offset;
+        // offset and progress are updated inside the pipeline window drain loop above
       }
 
       if (transferRef.current === transferObj) {
@@ -2091,6 +2261,9 @@ export default function FileManager({
         }
         console.log(`📤 [${file.name}] Sending sftp:upload_done`);
         socket.emit(`sftp:upload_done:${file.name}`);
+        console.log(`📤 [${file.name}] Upload complete: sent ${offset} bytes of ${file.size} bytes (${(offset/file.size*100).toFixed(2)}%)`);
+        // Mark transfer as finalizing — all bytes sent, waiting for server confirmation
+        setTransfer(prev => prev ? { ...prev, progress: 100, finalizing: true } : null);
         console.log(`📤 [${file.name}] Waiting for upload completion (60s timeout)...`);
         try {
           await waitForUploadCompletion();
@@ -2109,11 +2282,15 @@ export default function FileManager({
           });
           // Remove from queue on completion
           setUploadQueue(prev => prev.filter(item => item.path !== path));
-          setTransfer(null);
-          transferRef.current = null;
+          if (!skipCleanup) {
+            setTransfer(null);
+            transferRef.current = null;
+          }
           if (e) e.target.value = null; // Reset input if it was from event
           // Auto-refresh file list so newly uploaded file appears instantly
-          getSocket()?.emit('sftp:list', currentPathRef.current || '.');
+          if (!skipCleanup) {
+            getSocket()?.emit('sftp:list', currentPathRef.current || '.');
+          }
           return { path };
         }
       }
@@ -2281,20 +2458,23 @@ export default function FileManager({
       const filesToZip = {};
       let totalSize = 0;
       let processedSize = 0;
-      const allEntries = [];
+      const allEntries = []; // Will store {entry, relativePath}
+      const MAX_ARCHIVE_SIZE = 1024 * 1024 * 1024; // 1GB limit (requires ~3GB+ free RAM)
 
-      // Recursive helper to get all file entries first to calculate total size
-      const collectEntries = async (ent) => {
+      // Recursive helper to get all file entries with paths
+      const collectEntries = async (ent, currentPath = '') => {
         if (ent.isFile) {
-          allEntries.push(ent);
           const f = await new Promise(r => ent.file(r));
+          allEntries.push({ entry: ent, file: f, relativePath: currentPath + ent.name });
           totalSize += f.size;
         } else if (ent.isDirectory) {
           const reader = ent.createReader();
           const read = async () => {
             const results = await new Promise(r => reader.readEntries(r));
             if (results.length > 0) {
-              for (const result of results) await collectEntries(result);
+              for (const result of results) {
+                await collectEntries(result, currentPath + ent.name + '/');
+              }
               await read();
             }
           };
@@ -2304,6 +2484,61 @@ export default function FileManager({
 
       setTransfer({ filename: entry.name, progress: 0, action: 'compress', status: 'Scanning...' });
       await collectEntries(entry);
+      
+      // Check if folder is too large for in-memory TAR/GZIP
+      if (totalSize > MAX_ARCHIVE_SIZE) {
+        // Large folder: Upload files individually instead of creating archive
+        console.log(`📁 Folder "${entry.name}" is ${(totalSize/1024/1024).toFixed(1)}MB, uploading files individually...`);
+        
+        const targetDir = path === '.' ? entry.name : `${path}/${entry.name}`;
+        let uploadedSize = 0;
+        let uploadedCount = 0;
+        
+        setTransfer({ 
+          filename: entry.name, 
+          progress: 0, 
+          action: 'upload', 
+          status: `Preparing ${allEntries.length} files...` 
+        });
+        
+        // Upload each file preserving directory structure
+        for (const { file, relativePath } of allEntries) {
+          const filePath = `${targetDir}/${relativePath}`;
+          const dirPath = filePath.substring(0, filePath.lastIndexOf('/'));
+          
+          uploadedCount++;
+          setTransfer({ 
+            filename: entry.name, 
+            progress: Math.round((uploadedSize / totalSize) * 100), 
+            action: 'upload',
+            status: `${uploadedCount}/${allEntries.length}: ${relativePath}`
+          });
+          
+          try {
+            await handleFileUpload(null, file, 0, dirPath, null, true, true);
+            uploadedSize += file.size;
+          } catch (err) {
+            console.error(`Failed to upload ${relativePath}:`, err);
+            setTransfer(null);
+            addNotification({
+              title: 'Folder Upload Error',
+              message: `Failed uploading ${relativePath}: ${err.message}`,
+              type: 'error'
+            });
+            return;
+          }
+        }
+        
+        setTransfer(null);
+        addNotification({
+          title: 'Folder Uploaded',
+          message: `${entry.name}: ${allEntries.length} files (${(totalSize/1024/1024).toFixed(1)}MB)`,
+          type: 'success',
+          duration: 5000
+        });
+        loadFiles(currentPath);
+        return;
+      }
       
       const zipHelper = async (ent, relPath = '') => {
         if (ent.isFile) {
@@ -3192,108 +3427,150 @@ export default function FileManager({
             className="absolute inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm"
           >
             <motion.div 
-              initial={{ scale: 0.9, y: 20 }}
-              animate={{ scale: 1, y: 0 }}
-              exit={{ scale: 0.9, y: 20 }}
-              className="w-80 bg-[var(--bg-secondary)] rounded-2xl p-6 border border-[var(--border-color)] shadow-2xl"
+              initial={{ scale: 0.92, y: 24, opacity: 0 }}
+              animate={{ scale: 1, y: 0, opacity: 1 }}
+              exit={{ scale: 0.92, y: 24, opacity: 0 }}
+              transition={{ type: 'spring', stiffness: 320, damping: 28 }}
+              className="w-[340px] bg-[var(--bg-secondary)] rounded-2xl border border-[var(--border-color)] shadow-2xl overflow-hidden"
             >
-              <div className="flex items-center gap-4 mb-4">
-                <div className="w-10 h-10 rounded-xl bg-[var(--glow-indigo)] flex items-center justify-center">
-                  {transfer.action === 'upload' ? <Upload className="text-[var(--accent-indigo)]" /> : 
-                   transfer.action === 'download' ? <Download className="text-[var(--accent-indigo)]" /> :
-                   <RefreshCw className="text-[var(--accent-indigo)] animate-spin" />}
+              {/* Top accent line — violet for WebRTC, indigo for socket */}
+              <div className={`h-[3px] w-full ${transfer.channel === 'webrtc' ? 'bg-gradient-to-r from-violet-500 via-fuchsia-400 to-violet-500' : 'bg-gradient-to-r from-blue-500 via-indigo-400 to-blue-500'}`} />
+
+              <div className="p-5">
+                {/* Header row */}
+                <div className="flex items-start gap-3 mb-4">
+                  {/* Icon */}
+                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${transfer.channel === 'webrtc' ? 'bg-violet-500/15' : 'bg-indigo-500/15'}`}>
+                    {transfer.action === 'upload'
+                      ? <Upload size={18} className={transfer.channel === 'webrtc' ? 'text-violet-400' : 'text-indigo-400'} />
+                      : transfer.action === 'download'
+                      ? <Download size={18} className={transfer.channel === 'webrtc' ? 'text-violet-400' : 'text-indigo-400'} />
+                      : <RefreshCw size={18} className="text-indigo-400 animate-spin" />}
+                  </div>
+
+                  {/* Filename + status */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-0.5">
+                      {/* Live pulse dot */}
+                      {!transfer.waiting && !transfer.reconnecting && (
+                        <span className="relative flex h-2 w-2 flex-shrink-0">
+                          <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${transfer.finalizing ? 'bg-emerald-400' : transfer.channel === 'webrtc' ? 'bg-violet-400' : 'bg-blue-400'}`} />
+                          <span className={`relative inline-flex rounded-full h-2 w-2 ${transfer.finalizing ? 'bg-emerald-500' : transfer.channel === 'webrtc' ? 'bg-violet-500' : 'bg-blue-500'}`} />
+                        </span>
+                      )}
+                      <h3 className="text-sm font-semibold text-[var(--text-primary)] truncate">{transfer.filename}</h3>
+                    </div>
+                    <div className="text-[11px] text-[var(--text-muted)]">
+                      {transfer.status ? (
+                        <span className="text-blue-400">{transfer.status}</span>
+                      ) : transfer.reconnecting ? (
+                        <span className="text-amber-400 font-medium">⟳ Reconnecting...</span>
+                      ) : transfer.waiting ? (
+                        <span className="text-amber-400 font-medium">⏸ Paused — rate limited. Retry in {transferCountdown || '...'}s</span>
+                      ) : transfer.finalizing ? (
+                        <span className="text-emerald-400 font-medium">✓ Sent — server writing to disk...</span>
+                      ) : (
+                        <span className="capitalize text-[var(--text-muted)]">
+                          {transfer.action === 'upload' ? 'Uploading' : transfer.action === 'download' ? 'Downloading' : 'Transferring'}
+                          {' · '}
+                          {transfer.channel === 'webrtc'
+                            ? <span className="text-violet-400 font-medium">⚡ WebRTC P2P</span>
+                            : <span className="text-blue-400 font-medium">☁ Socket relay</span>}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Cancel button */}
+                  <button 
+                    onClick={() => {
+                      const filenameToAbort = transfer.realFilename || transfer.filename;
+                      userCancelledUploadRef.current = true;
+                      setTimeout(() => { userCancelledUploadRef.current = false; }, 3000);
+                      if (activeAckCleanupRef.current) { activeAckCleanupRef.current(); activeAckCleanupRef.current = null; }
+                      if (activeHandshakeCleanupRef.current) { activeHandshakeCleanupRef.current(); activeHandshakeCleanupRef.current = null; }
+                      const notifIdToDismiss = transfer?.toastId || toastRef.current;
+                      if (notifIdToDismiss) { removeNotification(notifIdToDismiss); toastRef.current = null; }
+                      setTransfer(null);
+                      transferRef.current = null;
+                      if (socket) socket.emit(`sftp:upload_abort:${filenameToAbort}`);
+                      if (transfer.path) setUploadQueue(prev => prev.filter(item => item.path !== transfer.path));
+                    }}
+                    className="p-1.5 hover:bg-white/5 rounded-lg transition-colors text-[var(--text-muted)] hover:text-rose-400 flex-shrink-0"
+                  >
+                    <X size={15} />
+                  </button>
                 </div>
-                <div className="flex-1 min-w-0">
-                  <h3 className="text-sm font-bold text-[var(--text-primary)] truncate">{transfer.filename}</h3>
-                  <p className="text-xs text-[var(--text-muted)] truncate max-w-[200px]" title={typeof transfer.status === 'string' ? transfer.status : ''}>
-                    {transfer.status ? (
-                        <span className="text-blue-400 font-medium truncate block">{transfer.status}</span>
-                    ) : transfer.reconnecting ? (
-                        <span className="text-[var(--accent-amber)] font-bold">{t('files.status.reconnecting') || 'Reconnecting...'}</span>
-                    ) : transfer.waiting ? (
-                        <span className="text-[var(--accent-amber)] font-bold">{t('files.status.rateLimited')}. {t('files.status.retryIn', { seconds: transferCountdown || '...' })}</span>
-                    ) : (
-                        <span className="capitalize">{getActionLabel()} {t('files.status.inProgress') || 'in progress...'}</span>
-                    )}
-                  </p>
+
+                {/* Progress bar */}
+                <div className="relative h-2 bg-white/5 rounded-full overflow-hidden mb-3">
+                  {transfer.finalizing ? (
+                    /* Shimmer sweep while server finalizes */
+                    <motion.div
+                      className="absolute inset-0 bg-gradient-to-r from-emerald-500/60 via-emerald-400 to-emerald-500/60"
+                      animate={{ x: ['-100%', '100%'] }}
+                      transition={{ duration: 1.2, repeat: Infinity, ease: 'easeInOut' }}
+                    />
+                  ) : transfer.waiting || transfer.reconnecting ? (
+                    /* Amber pulse when paused */
+                    <motion.div
+                      className="h-full bg-amber-500/60 rounded-full"
+                      style={{ width: `${transfer.progress}%` }}
+                      animate={{ opacity: [1, 0.4, 1] }}
+                      transition={{ duration: 1.2, repeat: Infinity, ease: 'easeInOut' }}
+                    />
+                  ) : (
+                    /* Normal progress fill */
+                    <motion.div
+                      className={`h-full rounded-full ${transfer.channel === 'webrtc' ? 'bg-gradient-to-r from-violet-600 to-fuchsia-500' : 'bg-gradient-to-r from-blue-600 to-indigo-400'}`}
+                      initial={{ width: 0 }}
+                      animate={{ width: `${Math.max(transfer.progress, 2)}%` }}
+                      transition={{ duration: 0.25, ease: 'easeOut' }}
+                    >
+                      {/* Shimmer shine on moving bar */}
+                      {transfer.progress > 0 && transfer.progress < 100 && (
+                        <motion.div
+                          className="absolute top-0 bottom-0 w-16 bg-gradient-to-r from-transparent via-white/20 to-transparent"
+                          animate={{ x: ['-64px', '340px'] }}
+                          transition={{ duration: 1.5, repeat: Infinity, ease: 'linear', repeatDelay: 0.5 }}
+                        />
+                      )}
+                    </motion.div>
+                  )}
                 </div>
-                <button 
-                  onClick={() => {
-                    const filenameToAbort = transfer.realFilename || transfer.filename;
-                    // Mark as intentional user cancel BEFORE nulling transferRef
-                    // so ssh:closed / disconnect handlers know not to reconnect.
-                    userCancelledUploadRef.current = true;
-                    // Auto-clear the flag after a short window in case ssh:closed
-                    // never fires (e.g. server handled abort gracefully)
-                    setTimeout(() => { userCancelledUploadRef.current = false; }, 3000);
-                    // Immediately cancel any pending ACK/handshake timeouts —
-                    // no need to wait 15 seconds for the promise to time out.
-                    if (activeAckCleanupRef.current) { activeAckCleanupRef.current(); activeAckCleanupRef.current = null; }
-                    if (activeHandshakeCleanupRef.current) { activeHandshakeCleanupRef.current(); activeHandshakeCleanupRef.current = null; }
-                    const notifIdToDismiss = transfer?.toastId || toastRef.current;
-                    if (notifIdToDismiss) {
-                      removeNotification(notifIdToDismiss);
-                      toastRef.current = null;
-                    }
-                    setTransfer(null);
-                    transferRef.current = null;
-                    if (socket) {
-                      socket.emit(`sftp:upload_abort:${filenameToAbort}`);
-                    }
-                    if (transfer.path) {
-                      setUploadQueue(prev => prev.filter(item => item.path !== transfer.path));
-                    }
-                  }}
-                  className="p-2 hover:bg-[var(--bg-tertiary)] rounded-full transition-colors text-[var(--text-muted)] hover:text-rose-500"
-                >
-                  <X size={18} />
-                </button>
-              </div>
-              
-              <div className="h-2 bg-[var(--border-color)] rounded-full overflow-hidden mb-2">
-                <motion.div 
-                  className={`h-full ${transfer.waiting ? 'bg-[var(--accent-amber)]' : 'bg-[var(--accent-indigo)]'} shadow-[0_0_10px_var(--glow-indigo)]`}
-                  initial={{ width: 0 }}
-                  animate={
-                    transfer.progress < 0
-                      ? { width: ['20%', '75%', '20%'], opacity: [1, 0.55, 1] }
-                      : { width: `${transfer.progress}%`, opacity: 1 }
-                  }
-                  transition={
-                    transfer.progress < 0
-                      ? { duration: 1.6, repeat: Infinity, ease: 'easeInOut' }
-                      : { duration: 0.3 }
-                  }
-                />
-              </div>
-              <div className="flex justify-between items-center text-[10px] font-mono text-[var(--text-muted)]">
-                <span>
-                  {transfer.action === 'extract'
-                    ? (transfer.progress === 100 ? '100%' : 'Extracting...')
-                    : transfer.progress < 0
-                      ? `${((transfer.bytes || 0) / 1024 / 1024).toFixed(1)} MB`
-                      : `${transfer.progress}%`}
-                </span>
-                <div className="flex items-center gap-2">
-                   {transfer.waiting && (
+
+                {/* Bottom row: percent + speed + transport + do-not-close */}
+                <div className="flex items-center justify-between text-[10px] font-mono">
+                  <div className="flex items-center gap-2">
+                    <span className={`font-bold text-[12px] ${transfer.finalizing ? 'text-emerald-400' : 'text-[var(--text-primary)]'}`}>
+                      {transfer.finalizing ? '100%' : transfer.progress < 0 ? `${((transfer.bytes || 0) / 1024 / 1024).toFixed(1)} MB` : `${transfer.progress}%`}
+                    </span>
+                    {/* Transport badge */}
+                    <span className={`px-1.5 py-0.5 rounded text-[9px] font-medium ${transfer.channel === 'webrtc' ? 'bg-violet-500/15 text-violet-400' : 'bg-blue-500/15 text-blue-400'}`}>
+                      {transfer.channel === 'webrtc' ? '⚡ P2P' : '☁ Relay'}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 text-[var(--text-muted)]">
+                    {transfer.waiting ? (
                       <button 
                         onClick={() => {
-                           if (transfer.action === 'download' && lastDownloadRef.current) {
-                             handleDownload(lastDownloadRef.current.file, lastDownloadRef.current.offset || 0);
-                             return;
-                           }
-                           const queueItem = uploadQueue.find(qi => (qi.file?.name || qi.filename) === transfer.filename);
-                           if (queueItem?.file) {
-                             setTransferCountdown(0);
-                             handleFileUpload(null, queueItem.file, queueItem.offset);
-                           }
+                          if (transfer.action === 'download' && lastDownloadRef.current) {
+                            handleDownload(lastDownloadRef.current.file, lastDownloadRef.current.offset || 0);
+                            return;
+                          }
+                          const queueItem = uploadQueue.find(qi => (qi.file?.name || qi.filename) === transfer.filename);
+                          if (queueItem?.file) { setTransferCountdown(0); handleFileUpload(null, queueItem.file, queueItem.offset); }
                         }}
                         className="text-blue-400 hover:underline flex items-center gap-1"
                       >
-                         <RefreshCw size={10} /> Retry Now
+                        <RefreshCw size={9} /> Retry
                       </button>
-                   )}
-                   <span>{transfer.waiting ? 'Paused' : t('files.status.doNotClose')}</span>
+                    ) : transfer.finalizing ? (
+                      <span className="text-emerald-400/70">writing to disk...</span>
+                    ) : (
+                      <span>{t('files.status.doNotClose')}</span>
+                    )}
+                  </div>
                 </div>
               </div>
             </motion.div>
@@ -3725,6 +4002,7 @@ export default function FileManager({
                   onClick={() => { 
                     const isZip = contextMenu.file.filename.endsWith('.zip');
                     const zipPath = currentPath === '.' ? contextMenu.file.filename : `${currentPath}/${contextMenu.file.filename}`;
+                    console.log(`[FileManager] Starting extraction: ${zipPath}, type: ${isZip ? 'zip' : 'tar'}`);
                     setTransfer({ filename: contextMenu.file.filename, progress: 5, action: 'extract', status: 'Initializing extraction...' });
                     socket.emit('sftp:extract', { path: zipPath, type: isZip ? 'zip' : 'tar' });
                     setContextMenu({ ...contextMenu, visible: false });
@@ -4357,6 +4635,11 @@ export default function FileManager({
           <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium ${typeof window !== 'undefined' && localStorage.getItem('ssh_monitor_ssh_mode') === 'local' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-blue-500/15 text-blue-400'}`}>
             {typeof window !== 'undefined' && localStorage.getItem('ssh_monitor_ssh_mode') === 'local' ? '⚡ Local' : '☁ Server'}
           </span>
+          {rtcActive && (
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium bg-violet-500/15 text-violet-400" title="File transfers use direct WebRTC P2P — bypassing the server entirely">
+              ⚡ WebRTC P2P
+            </span>
+          )}
           <span className={status === 'ready' ? 'text-emerald-500' : status === 'error' ? 'text-rose-500' : 'text-amber-500'}>
             {status === 'ready' ? t('files.status.sftpActive') : status === 'error' ? t('files.status.connFailed') : t('files.status.initializing')}
           </span>
