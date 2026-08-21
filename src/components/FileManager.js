@@ -8,7 +8,8 @@ import {
   AlertCircle, Edit, FileText, X, Save, AlertTriangle, Eye,
   Copy, Scissors, Clipboard, Wifi, AtSign, Replace, Columns, Rows,
   Sparkles, Brain, Clock, Settings2, Languages, CornerDownLeft, 
-  MessagesSquare, BrainCircuit, ShieldAlert, Terminal
+  MessagesSquare, BrainCircuit, ShieldAlert, Terminal,
+  Cpu, Zap, Flame, Gauge, Box, Layers, CheckCircle2
 } from 'lucide-react';
 import io from 'socket.io-client';
 import { 
@@ -146,6 +147,12 @@ export default function FileManager({
   const [uploadCpuMode, setUploadCpuMode] = useState(() => (typeof window !== 'undefined' ? localStorage.getItem('ssh_monitor_upload_cpu_mode') || 'balanced' : 'balanced'));
   const [cpuThermalWarning, setCpuThermalWarning] = useState(false);
   const [autoCoolEnabled, setAutoCoolEnabled] = useState(() => (typeof window !== 'undefined' ? localStorage.getItem('ssh_monitor_auto_cool') === 'true' : true));
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.__uploadCpuMode = uploadCpuMode;
+    }
+  }, [uploadCpuMode]);
 
   const changeUploadCpuMode = (mode) => {
     setUploadCpuMode(mode);
@@ -878,14 +885,32 @@ export default function FileManager({
     });
 
     newSocket.on('sftp:progress', (data) => {
-      console.log(`[FileManager] Received progress:`, data);
       setTransfer(prev => {
         if (!prev) {
           console.warn(`[FileManager] Ignoring progress - no active transfer`, data);
           return null; // Don't resurrect late progress messages
         }
-        console.log(`[FileManager] Updating transfer:`, { prev, data, result: { ...prev, ...data } });
-        return { ...prev, ...data };
+        let extractedCount = prev.extractedCount || 0;
+        if (data.action === 'extract' && data.status) {
+          const match = data.status.match(/\((\d+)\s+files\)/);
+          if (match) extractedCount = parseInt(match[1], 10);
+        }
+        let pct = data.progress;
+        if (data.action === 'extract') {
+          if (data.progress === 100) {
+            pct = 100;
+          } else if (prev.totalFiles && extractedCount) {
+            pct = Math.min(99, Math.round((extractedCount / prev.totalFiles) * 100));
+          } else {
+            pct = prev.progress > 0 ? prev.progress : 0;
+          }
+        }
+        return {
+          ...prev,
+          ...data,
+          extractedCount,
+          progress: pct !== -1 && pct !== undefined ? pct : (prev.progress ?? 0),
+        };
       });
     });
 
@@ -2513,16 +2538,41 @@ export default function FileManager({
 
     let lastProgressUi = 0;
     let lastReportedPct = -1;
+    let lastBytes = 0;
+    let lastSpeedCalcTime = Date.now();
+    let currentSpeedText = '';
 
-    const onProgress = (sent, total) => {
+    const onProgress = (sent, total, meta = {}) => {
       if (transferRef.current !== transferObj) return;
       const now = Date.now();
-      const pct = Math.min(99, Math.round((sent / total) * 100));
-      if (pct !== lastReportedPct && (now - lastProgressUi >= 250 || pct === 99)) {
+      const isFinalizing = meta.finalizing || sent >= total;
+      const pct = isFinalizing ? 100 : Math.min(99, Math.round((sent / total) * 100));
+
+      const dt = (now - lastSpeedCalcTime) / 1000;
+      if (dt >= 0.4) {
+        const dBytes = sent - lastBytes;
+        const bps = dBytes / dt;
+        lastBytes = sent;
+        lastSpeedCalcTime = now;
+        currentSpeedText = bps >= 1024 * 1024
+          ? `${(bps / 1024 / 1024).toFixed(1)} MB/s`
+          : `${(bps / 1024).toFixed(0)} KB/s`;
+      }
+
+      if (pct !== lastReportedPct && (now - lastProgressUi >= 250 || pct === 99 || isFinalizing)) {
         lastProgressUi = now;
         lastReportedPct = pct;
-        setTransfer(prev => prev ? { ...prev, progress: pct, waiting: false } : null);
-        updateNotification(uploadNotifId, { message: `${folderName} — ${pct}%` });
+        setTransfer(prev => prev ? {
+          ...prev,
+          progress: pct,
+          waiting: false,
+          speed: currentSpeedText,
+          finalizing: isFinalizing,
+          status: meta.status || (isFinalizing ? '✓ 100% Uploaded — Server finalizing write...' : null),
+        } : null);
+        updateNotification(uploadNotifId, {
+          message: `${folderName} — ${isFinalizing ? 'Finalizing...' : `${pct}%${currentSpeedText ? ` (${currentSpeedText})` : ''}`}`
+        });
       }
     };
 
@@ -2542,9 +2592,12 @@ export default function FileManager({
             filename: folderName,
             realFilename: tempArchiveName,
             path: destArchivePath,
-            progress: -1,
+            progress: 0,
             action: 'extract',
-            status: 'Extracting files on server...',
+            totalFiles: entries.length,
+            totalBytes: totalTarSize,
+            extractedCount: 0,
+            status: `Starting extraction of ${entries.length.toLocaleString()} files...`,
             toastId: uploadNotifId,
           };
           setTransfer(extractTransferObj);
@@ -2552,7 +2605,7 @@ export default function FileManager({
 
           updateNotification(uploadNotifId, {
             title: t('files.status.upload'),
-            message: `${folderName} — Extracting...`,
+            message: `${folderName} — Extracting ${entries.length.toLocaleString()} files...`,
             type: 'loading',
             duration: 0,
           });
@@ -2677,9 +2730,12 @@ export default function FileManager({
           filename: folderName,
           realFilename: tempArchiveName,
           path: destArchivePath,
-          progress: -1,
+          progress: 0,
           action: 'extract',
-          status: 'Extracting files on server...',
+          totalFiles: entries.length,
+          totalBytes: totalTarSize,
+          extractedCount: 0,
+          status: `Starting extraction of ${entries.length.toLocaleString()} files...`,
           toastId: uploadNotifId,
         };
         setTransfer(extractTransferObj);
@@ -2687,7 +2743,7 @@ export default function FileManager({
 
         updateNotification(uploadNotifId, {
           title: t('files.status.upload'),
-          message: `${folderName} — Extracting...`,
+          message: `${folderName} — Extracting ${entries.length.toLocaleString()} files...`,
           type: 'loading',
           duration: 0,
         });
@@ -3577,61 +3633,98 @@ export default function FileManager({
             className="absolute inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm"
           >
             <motion.div 
-              initial={{ scale: 0.92, y: 24, opacity: 0 }}
+              initial={{ scale: 0.94, y: 20, opacity: 0 }}
               animate={{ scale: 1, y: 0, opacity: 1 }}
-              exit={{ scale: 0.92, y: 24, opacity: 0 }}
-              transition={{ type: 'spring', stiffness: 320, damping: 28 }}
-              className="w-[340px] bg-[var(--bg-secondary)] rounded-2xl border border-[var(--border-color)] shadow-2xl overflow-hidden"
+              exit={{ scale: 0.94, y: 20, opacity: 0 }}
+              transition={{ type: 'spring', stiffness: 350, damping: 28 }}
+              className="w-[390px] bg-[#0d1117]/95 backdrop-blur-2xl rounded-2xl border border-white/10 shadow-[0_25px_60px_-15px_rgba(0,0,0,0.85),0_0_35px_rgba(99,102,241,0.12)] overflow-hidden"
             >
-              {/* Top accent line — violet for WebRTC, indigo for socket */}
-              <div className={`h-[3px] w-full ${transfer.channel === 'webrtc' ? 'bg-gradient-to-r from-violet-500 via-fuchsia-400 to-violet-500' : 'bg-gradient-to-r from-blue-500 via-indigo-400 to-blue-500'}`} />
+              {/* Dynamic Top Ambient Accent Line */}
+              <div className={`h-[3px] w-full ${
+                transfer.action === 'extract'
+                  ? 'bg-gradient-to-r from-purple-500 via-fuchsia-400 to-indigo-500'
+                  : transfer.finalizing
+                  ? 'bg-gradient-to-r from-emerald-500 via-teal-400 to-emerald-500'
+                  : transfer.channel === 'webrtc'
+                  ? 'bg-gradient-to-r from-violet-500 via-fuchsia-400 to-cyan-400'
+                  : 'bg-gradient-to-r from-blue-500 via-indigo-400 to-sky-400'
+              }`} />
 
               <div className="p-5">
-                {/* Header row */}
-                <div className="flex items-start gap-3 mb-4">
-                  {/* Icon */}
-                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${transfer.channel === 'webrtc' ? 'bg-violet-500/15' : 'bg-indigo-500/15'}`}>
-                    {transfer.action === 'upload'
-                      ? <Upload size={18} className={transfer.channel === 'webrtc' ? 'text-violet-400' : 'text-indigo-400'} />
-                      : transfer.action === 'download'
-                      ? <Download size={18} className={transfer.channel === 'webrtc' ? 'text-violet-400' : 'text-indigo-400'} />
-                      : <RefreshCw size={18} className="text-indigo-400 animate-spin" />}
+                {/* Header Row */}
+                <div className="flex items-start gap-3.5 mb-3.5">
+                  {/* Dynamic Glow Icon Box */}
+                  <div className={`w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 border relative shadow-inner ${
+                    transfer.action === 'extract'
+                      ? 'bg-purple-500/15 border-purple-500/30 text-purple-400 shadow-purple-500/20'
+                      : transfer.finalizing
+                      ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400 shadow-emerald-500/20'
+                      : transfer.channel === 'webrtc'
+                      ? 'bg-violet-500/15 border-violet-500/30 text-violet-400 shadow-violet-500/20'
+                      : 'bg-blue-500/15 border-blue-500/30 text-blue-400 shadow-blue-500/20'
+                  }`}>
+                    {transfer.action === 'extract' ? (
+                      <RefreshCw size={20} className="animate-spin text-purple-400" />
+                    ) : transfer.finalizing ? (
+                      <CheckCircle2 size={20} className="text-emerald-400 animate-pulse" />
+                    ) : transfer.action === 'upload' ? (
+                      <Upload size={20} className={transfer.channel === 'webrtc' ? 'text-violet-400' : 'text-blue-400'} />
+                    ) : transfer.action === 'download' ? (
+                      <Download size={20} className={transfer.channel === 'webrtc' ? 'text-violet-400' : 'text-blue-400'} />
+                    ) : (
+                      <RefreshCw size={20} className="animate-spin text-indigo-400" />
+                    )}
                   </div>
 
-                  {/* Filename + status */}
+                  {/* Title + Meta Header */}
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-0.5">
-                      {/* Live pulse dot */}
+                    <div className="flex items-center gap-2 mb-1">
+                      {/* Live beacon */}
                       {!transfer.waiting && !transfer.reconnecting && (
                         <span className="relative flex h-2 w-2 flex-shrink-0">
-                          <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${transfer.finalizing ? 'bg-emerald-400' : transfer.channel === 'webrtc' ? 'bg-violet-400' : 'bg-blue-400'}`} />
-                          <span className={`relative inline-flex rounded-full h-2 w-2 ${transfer.finalizing ? 'bg-emerald-500' : transfer.channel === 'webrtc' ? 'bg-violet-500' : 'bg-blue-500'}`} />
+                          <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
+                            transfer.action === 'extract' ? 'bg-purple-400' : transfer.finalizing ? 'bg-emerald-400' : transfer.channel === 'webrtc' ? 'bg-violet-400' : 'bg-blue-400'
+                          }`} />
+                          <span className={`relative inline-flex rounded-full h-2 w-2 ${
+                            transfer.action === 'extract' ? 'bg-purple-500' : transfer.finalizing ? 'bg-emerald-500' : transfer.channel === 'webrtc' ? 'bg-violet-500' : 'bg-blue-500'
+                          }`} />
                         </span>
                       )}
-                      <h3 className="text-sm font-semibold text-[var(--text-primary)] truncate">{transfer.filename}</h3>
+                      {/* Transport Tag */}
+                      <span className={`text-[10px] font-mono font-bold tracking-wider uppercase px-1.5 py-0.5 rounded border ${
+                        transfer.action === 'extract'
+                          ? 'bg-purple-500/10 text-purple-300 border-purple-500/25'
+                          : transfer.channel === 'webrtc'
+                          ? 'bg-violet-500/10 text-violet-300 border-violet-500/25'
+                          : 'bg-blue-500/10 text-blue-300 border-blue-500/25'
+                      }`}>
+                        {transfer.action === 'extract' ? '📦 Archive Extract' : transfer.channel === 'webrtc' ? '⚡ WebRTC Direct P2P' : '☁ SFTP Relay'}
+                      </span>
                     </div>
-                    <div className="text-[11px] text-[var(--text-muted)]">
+
+                    <h3 className="text-sm font-semibold text-white truncate tracking-tight" title={transfer.filename}>
+                      {transfer.filename}
+                    </h3>
+                    <p className="text-[11px] text-[var(--text-muted)] truncate mt-0.5 font-mono">
                       {transfer.status ? (
-                        <span className="text-blue-400">{transfer.status}</span>
+                        <span className={transfer.action === 'extract' ? 'text-purple-300 font-medium' : 'text-blue-300 font-medium'}>
+                          {transfer.status}
+                        </span>
                       ) : transfer.reconnecting ? (
-                        <span className="text-amber-400 font-medium">⟳ Reconnecting...</span>
+                        <span className="text-amber-400 font-medium">⟳ Reconnecting session...</span>
                       ) : transfer.waiting ? (
-                        <span className="text-amber-400 font-medium">⏸ Paused — rate limited. Retry in {transferCountdown || '...'}s</span>
+                        <span className="text-amber-400 font-medium">⏸ Paused (rate limit) · Retry in {transferCountdown || '...'}s</span>
                       ) : transfer.finalizing ? (
-                        <span className="text-emerald-400 font-medium">✓ Sent — server writing to disk...</span>
+                        <span className="text-emerald-300 font-medium">✓ 100% Sent · Flushing write stream to disk...</span>
                       ) : (
-                        <span className="capitalize text-[var(--text-muted)]">
-                          {transfer.action === 'upload' ? 'Uploading' : transfer.action === 'download' ? 'Downloading' : 'Transferring'}
-                          {' · '}
-                          {transfer.channel === 'webrtc'
-                            ? <span className="text-violet-400 font-medium">⚡ WebRTC P2P</span>
-                            : <span className="text-blue-400 font-medium">☁ Socket relay</span>}
+                        <span className="text-white/60">
+                          {transfer.action === 'upload' ? 'Active folder stream' : transfer.action === 'download' ? 'Downloading payload' : 'Processing transfer'}
                         </span>
                       )}
-                    </div>
+                    </p>
                   </div>
 
-                  {/* Cancel button */}
+                  {/* Cancel Button */}
                   <button 
                     onClick={() => {
                       const filenameToAbort = transfer.realFilename || transfer.filename;
@@ -3646,139 +3739,204 @@ export default function FileManager({
                       if (socket) socket.emit(`sftp:upload_abort:${filenameToAbort}`);
                       if (transfer.path) setUploadQueue(prev => prev.filter(item => item.path !== transfer.path));
                     }}
-                    className="p-1.5 hover:bg-white/5 rounded-lg transition-colors text-[var(--text-muted)] hover:text-rose-400 flex-shrink-0"
+                    title="Cancel transfer"
+                    className="p-1.5 hover:bg-rose-500/20 hover:text-rose-400 rounded-lg transition-all text-white/40 border border-transparent hover:border-rose-500/30 flex-shrink-0"
                   >
                     <X size={15} />
                   </button>
                 </div>
 
-                {/* Progress bar */}
-                <div className="relative h-2 bg-white/5 rounded-full overflow-hidden mb-3">
+                {/* Telemetry Dashboard 3-Stat Grid */}
+                <div className="grid grid-cols-3 gap-2 p-2.5 rounded-xl bg-black/40 border border-white/5 mb-3 font-mono">
+                  {/* Stat 1: Progress */}
+                  <div className="bg-white/[0.03] p-2 rounded-lg border border-white/5">
+                    <span className="text-[9px] uppercase tracking-wider text-white/40 block mb-0.5">Progress</span>
+                    <span className={`text-[12px] font-bold block truncate ${
+                      transfer.finalizing
+                        ? 'text-emerald-400'
+                        : transfer.action === 'extract'
+                        ? 'text-purple-300'
+                        : 'text-white'
+                    }`}>
+                      {transfer.finalizing
+                        ? '100%'
+                        : transfer.action === 'extract'
+                        ? `${transfer.progress > 0 ? `${transfer.progress}%` : 'Unpacking'}`
+                        : transfer.progress < 0
+                        ? (transfer.bytes ? `${((transfer.bytes || 0) / 1024 / 1024).toFixed(1)} MB` : '...')
+                        : `${transfer.progress}%`}
+                    </span>
+                  </div>
+
+                  {/* Stat 2: Throughput / Rate */}
+                  <div className="bg-white/[0.03] p-2 rounded-lg border border-white/5">
+                    <span className="text-[9px] uppercase tracking-wider text-white/40 block mb-0.5">Speed</span>
+                    <span className="text-[12px] font-bold text-cyan-300 block truncate">
+                      {transfer.speed && !transfer.finalizing && transfer.action !== 'extract'
+                        ? transfer.speed
+                        : transfer.action === 'extract' && transfer.extractedCount
+                        ? `${transfer.extractedCount.toLocaleString()} f`
+                        : transfer.finalizing
+                        ? 'Flushing'
+                        : 'Streaming'}
+                    </span>
+                  </div>
+
+                  {/* Stat 3: Speed Profile */}
+                  <div className="bg-white/[0.03] p-2 rounded-lg border border-white/5">
+                    <span className="text-[9px] uppercase tracking-wider text-white/40 block mb-0.5">Mode</span>
+                    <span className={`text-[12px] font-bold block truncate ${
+                      uploadCpuMode === 'eco'
+                        ? 'text-cyan-400'
+                        : uploadCpuMode === 'turbo'
+                        ? 'text-amber-400'
+                        : 'text-indigo-300'
+                    }`}>
+                      {uploadCpuMode === 'eco' ? '❄️ Eco' : uploadCpuMode === 'turbo' ? '🚀 Turbo' : '⚖️ Balanced'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* High-Precision Progress Bar */}
+                <div className="relative h-2.5 bg-black/60 rounded-full overflow-hidden mb-3.5 border border-white/10 p-[1px]">
                   {transfer.finalizing ? (
-                    /* Shimmer sweep while server finalizes */
                     <motion.div
-                      className="absolute inset-0 bg-gradient-to-r from-emerald-500/60 via-emerald-400 to-emerald-500/60"
+                      className="h-full rounded-full bg-gradient-to-r from-emerald-500 via-teal-300 to-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.7)]"
                       animate={{ x: ['-100%', '100%'] }}
                       transition={{ duration: 1.2, repeat: Infinity, ease: 'easeInOut' }}
                     />
-                  ) : transfer.waiting || transfer.reconnecting ? (
-                    /* Amber pulse when paused */
+                  ) : transfer.action === 'extract' ? (
                     <motion.div
-                      className="h-full bg-amber-500/60 rounded-full"
+                      className="h-full rounded-full bg-gradient-to-r from-purple-600 via-fuchsia-400 to-indigo-400 relative shadow-[0_0_12px_rgba(168,85,247,0.6)]"
+                      initial={{ width: 0 }}
+                      animate={{ width: `${Math.max(transfer.progress || 0, 5)}%` }}
+                      transition={{ duration: 0.25, ease: 'easeOut' }}
+                    >
+                      <motion.div
+                        className="absolute top-0 bottom-0 w-20 bg-gradient-to-r from-transparent via-white/35 to-transparent"
+                        animate={{ x: ['-80px', '390px'] }}
+                        transition={{ duration: 1.2, repeat: Infinity, ease: 'linear' }}
+                      />
+                    </motion.div>
+                  ) : transfer.waiting || transfer.reconnecting ? (
+                    <motion.div
+                      className="h-full bg-amber-500/70 rounded-full shadow-[0_0_10px_rgba(245,158,11,0.5)]"
                       style={{ width: `${transfer.progress}%` }}
-                      animate={{ opacity: [1, 0.4, 1] }}
-                      transition={{ duration: 1.2, repeat: Infinity, ease: 'easeInOut' }}
+                      animate={{ opacity: [1, 0.35, 1] }}
+                      transition={{ duration: 1.1, repeat: Infinity, ease: 'easeInOut' }}
                     />
                   ) : (
-                    /* Normal progress fill */
                     <motion.div
-                      className={`h-full rounded-full ${transfer.channel === 'webrtc' ? 'bg-gradient-to-r from-violet-600 to-fuchsia-500' : 'bg-gradient-to-r from-blue-600 to-indigo-400'}`}
+                      className={`h-full rounded-full relative ${
+                        transfer.channel === 'webrtc'
+                          ? 'bg-gradient-to-r from-violet-600 via-fuchsia-500 to-cyan-400 shadow-[0_0_12px_rgba(139,92,246,0.6)]'
+                          : 'bg-gradient-to-r from-blue-600 via-indigo-500 to-cyan-400 shadow-[0_0_12px_rgba(59,130,246,0.6)]'
+                      }`}
                       initial={{ width: 0 }}
                       animate={{ width: `${Math.max(transfer.progress, 2)}%` }}
                       transition={{ duration: 0.25, ease: 'easeOut' }}
                     >
-                      {/* Shimmer shine on moving bar */}
                       {transfer.progress > 0 && transfer.progress < 100 && (
                         <motion.div
-                          className="absolute top-0 bottom-0 w-16 bg-gradient-to-r from-transparent via-white/20 to-transparent"
-                          animate={{ x: ['-64px', '340px'] }}
-                          transition={{ duration: 1.5, repeat: Infinity, ease: 'linear', repeatDelay: 0.5 }}
+                          className="absolute top-0 bottom-0 w-20 bg-gradient-to-r from-transparent via-white/30 to-transparent"
+                          animate={{ x: ['-80px', '390px'] }}
+                          transition={{ duration: 1.5, repeat: Infinity, ease: 'linear', repeatDelay: 0.4 }}
                         />
                       )}
                     </motion.div>
                   )}
                 </div>
 
-                {/* Bottom row: percent + speed + transport + do-not-close */}
-                <div className="flex items-center justify-between text-[10px] font-mono">
-                  <div className="flex items-center gap-2">
-                    <span className={`font-bold text-[12px] ${transfer.finalizing ? 'text-emerald-400' : 'text-[var(--text-primary)]'}`}>
-                      {transfer.finalizing ? '100%' : transfer.progress < 0 ? `${((transfer.bytes || 0) / 1024 / 1024).toFixed(1)} MB` : `${transfer.progress}%`}
-                    </span>
-                    {/* Transport badge */}
-                    <span className={`px-1.5 py-0.5 rounded text-[9px] font-medium ${transfer.channel === 'webrtc' ? 'bg-violet-500/15 text-violet-400' : 'bg-blue-500/15 text-blue-400'}`}>
-                      {transfer.channel === 'webrtc' ? '⚡ P2P' : '☁ Relay'}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2 text-[var(--text-muted)]">
-                    {transfer.waiting ? (
-                      <button 
-                        onClick={() => {
-                          if (transfer.action === 'download' && lastDownloadRef.current) {
-                            handleDownload(lastDownloadRef.current.file, lastDownloadRef.current.offset || 0);
-                            return;
-                          }
-                          const queueItem = uploadQueue.find(qi => (qi.file?.name || qi.filename) === transfer.filename);
-                          if (queueItem?.file) { setTransferCountdown(0); handleFileUpload(null, queueItem.file, queueItem.offset); }
-                        }}
-                        className="text-blue-400 hover:underline flex items-center gap-1"
-                      >
-                        <RefreshCw size={9} /> Retry
-                      </button>
-                    ) : transfer.finalizing ? (
-                      <span className="text-emerald-400/70">writing to disk...</span>
-                    ) : (
-                      <span>{t('files.status.doNotClose')}</span>
-                    )}
-                  </div>
-                </div>
-
-                {/* Dynamic CPU Thermal Mode Selector */}
+                {/* Hardware Speed Engine & Dynamic Throttle Controls */}
                 {transfer.action === 'upload' && (
-                  <div className="mt-3 pt-2.5 border-t border-white/5">
+                  <div className="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-2.5">
+                    {/* Control Header */}
                     <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px] text-[var(--text-muted)] flex items-center gap-1 font-mono">
-                          <span>CPU:</span>
-                        </span>
-                        <label className="flex items-center gap-1 text-[10px] text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer select-none">
-                          <input
-                            type="checkbox"
-                            checked={autoCoolEnabled}
-                            onChange={(e) => {
-                              setAutoCoolEnabled(e.target.checked);
-                              if (typeof window !== 'undefined') {
-                                localStorage.setItem('ssh_monitor_auto_cool', e.target.checked ? 'true' : 'false');
-                              }
-                            }}
-                            className="w-3 h-3 rounded accent-blue-500 cursor-pointer"
-                          />
-                          <span title="Automatically switch to Eco mode if high CPU temperature/load is detected">Auto-Cool</span>
-                        </label>
+                      <div className="flex items-center gap-1.5 text-[11px] font-medium text-white/90">
+                        <Gauge size={13} className="text-cyan-400" />
+                        <span className="font-mono text-[10px] tracking-wide text-white/70">SPEED CONTROL</span>
                       </div>
-                      <div className="flex items-center bg-black/40 rounded-lg p-0.5 border border-white/10 gap-0.5">
-                        {[
-                          { id: 'eco', label: '❄️ Eco (Cool)', tip: '5ms pacing · ~40°C · Silent fan · Low CPU' },
-                          { id: 'balanced', label: '⚖️ Balanced', tip: '1ms pacing · ~55°C · Fast & cool' },
-                          { id: 'turbo', label: '🚀 Turbo', tip: '0ms pacing · Max throughput' },
-                        ].map((m) => (
+
+                      {/* Auto-Cool Illuminated Switch Button */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const nextState = !autoCoolEnabled;
+                          setAutoCoolEnabled(nextState);
+                          if (typeof window !== 'undefined') {
+                            localStorage.setItem('ssh_monitor_auto_cool', nextState ? 'true' : 'false');
+                          }
+                        }}
+                        title="Automatically switch to Eco mode if system is under heavy load"
+                        className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono transition-all border ${
+                          autoCoolEnabled
+                            ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300 shadow-[0_0_10px_rgba(16,185,129,0.2)]'
+                            : 'bg-white/5 border-white/10 text-white/40 hover:text-white/70'
+                        }`}
+                      >
+                        <Zap size={10} className={autoCoolEnabled ? 'text-emerald-400 animate-pulse' : 'text-white/30'} />
+                        <span className="font-bold">{autoCoolEnabled ? 'AUTO-COOL ON' : 'AUTO-COOL OFF'}</span>
+                      </button>
+                    </div>
+
+                    {/* Segmented Speed Profile Selector */}
+                    <div className="grid grid-cols-3 gap-1.5 p-1 bg-black/50 rounded-xl border border-white/10">
+                      {[
+                        { 
+                          id: 'eco', 
+                          title: 'Eco', 
+                          badge: '❄️ Slow', 
+                          desc: 'Low CPU & network bandwidth',
+                          activeClass: 'bg-gradient-to-br from-cyan-600/30 to-blue-600/30 text-cyan-300 border-cyan-500/50 shadow-[0_0_15px_rgba(6,182,212,0.25)]' 
+                        },
+                        { 
+                          id: 'balanced', 
+                          title: 'Balanced', 
+                          badge: '⚖️ Fast', 
+                          desc: 'Fast and responsive',
+                          activeClass: 'bg-gradient-to-br from-indigo-600/30 to-violet-600/30 text-indigo-200 border-indigo-500/50 shadow-[0_0_15px_rgba(99,102,241,0.25)]' 
+                        },
+                        { 
+                          id: 'turbo', 
+                          title: 'Turbo', 
+                          badge: '🚀 Max', 
+                          desc: 'Maximum throughput',
+                          activeClass: 'bg-gradient-to-br from-amber-600/30 to-rose-600/30 text-amber-200 border-amber-500/50 shadow-[0_0_15px_rgba(245,158,11,0.25)]' 
+                        },
+                      ].map((m) => {
+                        const isActive = uploadCpuMode === m.id;
+                        return (
                           <button
                             key={m.id}
                             type="button"
-                            title={m.tip}
                             onClick={() => changeUploadCpuMode(m.id)}
-                            className={`px-2 py-0.5 rounded text-[10px] font-medium transition-all ${
-                              uploadCpuMode === m.id
-                                ? 'bg-blue-600/30 text-blue-300 border border-blue-500/50 shadow-sm'
-                                : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-white/5'
+                            title={m.desc}
+                            className={`flex flex-col items-center justify-center py-2 px-1 rounded-lg text-center transition-all border ${
+                              isActive
+                                ? `${m.activeClass} font-semibold scale-[1.02]`
+                                : 'bg-transparent border-transparent text-white/40 hover:text-white/80 hover:bg-white/5'
                             }`}
                           >
-                            {m.label}
+                            <span className="text-[11px] leading-tight font-medium">{m.badge}</span>
+                            <span className="text-[9px] opacity-75 font-mono mt-0.5">{m.title}</span>
                           </button>
-                        ))}
-                      </div>
+                        );
+                      })}
                     </div>
 
-                    {/* High Thermal Pressure Detected Alert Banner */}
+                    {/* High System Load Surge Alert Bar */}
                     {cpuThermalWarning && uploadCpuMode !== 'eco' && (
                       <motion.div
-                        initial={{ opacity: 0, y: -4 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        className="mt-2.5 p-2 rounded-lg bg-amber-500/15 border border-amber-500/30 flex items-center justify-between gap-2"
+                        initial={{ opacity: 0, y: -4, scale: 0.97 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        className="p-2.5 rounded-xl bg-gradient-to-r from-amber-500/20 via-rose-500/15 to-amber-500/20 border border-amber-500/40 flex items-center justify-between gap-2 shadow-[0_0_15px_rgba(245,158,11,0.2)]"
                       >
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          <span className="text-amber-400 text-xs">🔥</span>
-                          <span className="text-[10px] text-amber-200 truncate">High CPU load detected. Cool down?</span>
+                        <div className="flex items-center gap-2 min-w-0">
+                          <Flame size={15} className="text-amber-400 animate-pulse flex-shrink-0" />
+                          <div className="min-w-0">
+                            <span className="text-[11px] font-semibold text-amber-200 block truncate">High System Load</span>
+                            <span className="text-[9px] text-amber-300/75 block truncate">Heavy CPU load. Reduce speed?</span>
+                          </div>
                         </div>
                         <div className="flex items-center gap-1 flex-shrink-0">
                           <button
@@ -3787,14 +3945,14 @@ export default function FileManager({
                               changeUploadCpuMode('eco');
                               setCpuThermalWarning(false);
                             }}
-                            className="px-2 py-0.5 rounded bg-emerald-500/25 hover:bg-emerald-500/40 text-emerald-300 text-[10px] font-semibold transition-colors"
+                            className="px-2.5 py-1 rounded-lg bg-cyan-500/25 hover:bg-cyan-500/40 text-cyan-200 border border-cyan-500/40 text-[10px] font-semibold transition-colors shadow-sm"
                           >
                             ❄️ Switch to Eco
                           </button>
                           <button
                             type="button"
                             onClick={() => setCpuThermalWarning(false)}
-                            className="px-1.5 py-0.5 rounded hover:bg-white/10 text-[var(--text-muted)] text-[10px]"
+                            className="px-1.5 py-1 rounded hover:bg-white/10 text-white/40 text-[10px]"
                           >
                             Ignore
                           </button>
