@@ -2152,7 +2152,6 @@ function setupFileChannel(connId, dc) {
         ? raw
         : Buffer.from(typeof raw === 'string' ? raw : new Uint8Array(raw));
 
-    console.log(`[FILE DC] Received chunk #${(upload.chunkCount || 0) + 1}: ${chunk.length} bytes, total: ${upload.received + chunk.length}/${upload.size}, connId=${connId}`);
     upload.chunkCount = (upload.chunkCount || 0) + 1;
 
     // SFTP stream may still be opening — queue chunks until it's ready
@@ -2160,26 +2159,43 @@ function setupFileChannel(connId, dc) {
       upload.pendingChunks = upload.pendingChunks || [];
       upload.pendingChunks.push(chunk);
       upload.received += chunk.length;
-      console.log(`[FILE DC] Stream not ready, queued chunk (${upload.pendingChunks.length} pending, ${upload.received} bytes total)`);
+      if (upload.chunkCount % 100 === 0)
+        console.log(`[FILE DC] Stream not ready, queued ${upload.pendingChunks.length} chunks (${upload.received} bytes total)`);
       return;
     }
 
     // Guard against writing to a stream that was already ended/destroyed
     if (upload.streamEnded) {
-      console.warn(`[FILE DC] Ignoring chunk #${upload.chunkCount} - stream already ended`);
+      console.warn(`[FILE DC] Ignoring chunk #${upload.chunkCount} — stream already ended`);
       return;
     }
 
-    // Write and hash in parallel — both are synchronous operations on the same buffer
-    const written = upload.stream.write(chunk);
+    // Write, hash, and track byte count
     upload.hash.update(chunk);
     upload.received += chunk.length;
 
-    console.log(`[FILE DC] Written chunk #${upload.chunkCount} to stream: ${chunk.length} bytes, buffer status: ${written ? 'OK' : 'FULL'}, progress: ${upload.received}/${upload.size} (${(upload.received/upload.size*100).toFixed(1)}%)`);
+    // Backpressure: if write returns false, pause the DataChannel until 'drain' fires
+    const canContinue = upload.stream.write(chunk);
+    if (!canContinue && !upload.dcPaused) {
+      upload.dcPaused = true;
+      if (typeof dc.pause === 'function') {
+        try { dc.pause(); } catch (_) {}
+      }
+      upload.stream.once('drain', () => {
+        upload.dcPaused = false;
+        if (typeof dc.resume === 'function') {
+          try { dc.resume(); } catch (_) {}
+        }
+      });
+    }
 
-    // Throttle progress messages to ~10 fps
+    if (upload.chunkCount % 500 === 0 || upload.received >= upload.size) {
+      console.log(`[FILE DC] Progress: ${upload.filename} — ${upload.received}/${upload.size} bytes (${(upload.received / upload.size * 100).toFixed(1)}%)`);
+    }
+
+    // Throttle progress messages to ~4 fps (every 250ms) to avoid control-channel congestion
     const now = Date.now();
-    if (upload.sendControl && (now - (upload.lastProgressAt || 0) >= 100 || upload.received >= upload.size)) {
+    if (upload.sendControl && (now - (upload.lastProgressAt || 0) >= 250 || upload.received >= upload.size)) {
       upload.lastProgressAt = now;
       upload.sendControl({
         type: 'file:upload:progress',
@@ -2197,6 +2213,9 @@ function setupFileChannel(connId, dc) {
     if (upload) { try { upload.stream.destroy(); } catch {} activeUploads.delete(`rtc:${connId}`); }
   });
 }
+
+// Cache of verified directories to avoid redundant sftp.stat/mkdir calls
+const verifiedDirCache = new Set();
 
 async function handleFileUploadStart(connId, msg, sendControl) {
   const { filename, destPath, size, offset = 0 } = msg;
@@ -2229,27 +2248,28 @@ async function handleFileUploadStart(connId, msg, sendControl) {
   const path = require('path');
   const parentDir = path.posix.dirname(destPath);
   
-  // Helper to create directory recursively
+  // Helper to create directory recursively with cache
   const ensureDir = async (dir) => {
-    if (dir === '.' || dir === '/') return;
+    if (dir === '.' || dir === '/' || !dir) return;
+    const cacheKey = `${connId}:${dir}`;
+    if (verifiedDirCache.has(cacheKey)) return;
+
     try {
       await sftp.stat(dir);
-      console.log(`[P2P] Directory exists: ${dir}`);
+      verifiedDirCache.add(cacheKey);
     } catch (statErr) {
-      // Directory doesn't exist, create it
-      console.log(`[P2P] Creating directory: ${dir}`);
+      // Directory doesn't exist, create parent first
       const parentPath = path.posix.dirname(dir);
-      if (parentPath !== '.' && parentPath !== '/') {
-        await ensureDir(parentPath); // Recursive
+      if (parentPath !== '.' && parentPath !== '/' && parentPath !== dir) {
+        await ensureDir(parentPath);
       }
       try {
         await sftp.mkdir(dir);
+        verifiedDirCache.add(cacheKey);
         console.log(`[P2P] Created directory: ${dir}`);
       } catch (mkdirErr) {
-        // Ignore if already exists (race condition)
-        if (mkdirErr.code !== 4) { // 4 = Failure
-          console.warn(`[P2P] Failed to create ${dir}:`, mkdirErr.message);
-        }
+        // Ignore if already exists (code 4 = Failure, e.g. already exists)
+        verifiedDirCache.add(cacheKey);
       }
     }
   };
@@ -2269,13 +2289,8 @@ async function handleFileUploadStart(connId, msg, sendControl) {
   const flags = offset > 0 ? 'r+' : 'w';
   let writeStream;
   try {
-    // highWaterMark controls how many bytes Node buffers before applying backpressure.
-    // ssh2 default is 64 KB — that means only 1-2 SFTP write requests in flight per RTT.
-    // 8 MB lets Node batch many writes into _writev which sends them all in parallel,
-    // saturating the SSH channel regardless of latency.
     writeStream = sftp.createWriteStream(destPath, { flags, start: offset, autoClose: true, highWaterMark: 8 * 1024 * 1024 });
   } catch (_) {
-    // If resume-mode write stream fails (file doesn't exist yet), fall back to fresh write
     try {
       writeStream = sftp.createWriteStream(destPath, { flags: 'w', start: 0, autoClose: true, highWaterMark: 8 * 1024 * 1024 });
     } catch (err2) {
@@ -2425,22 +2440,44 @@ function streamFileToRtcPeer(connId, remotePath, size, rtcPeer, sendControl, sft
     return;
   }
 
+  // Adaptive chunk size: larger for fast local P2P, respects node-datachannel's internal buffer
+  const READ_HWM = 256 * 1024; // 256 KB chunks
+  const DC_BUFFER_HIGH = 4 * 1024 * 1024;  // 4 MB — pause reads when DC buffer exceeds this
+  const DC_BUFFER_LOW  = 1 * 1024 * 1024;  // 1 MB — resume reads when DC buffer drops below
+
   const readStream = sftpSession
-    ? sftpSession.createReadStream(remotePath, { highWaterMark: 512 * 1024 })
-    : require('fs').createReadStream(remotePath, { highWaterMark: 512 * 1024 });
+    ? sftpSession.createReadStream(remotePath, { highWaterMark: READ_HWM })
+    : require('fs').createReadStream(remotePath, { highWaterMark: READ_HWM });
 
   activeDownloads.set(`rtc:${connId}`, { stream: readStream });
 
   readStream.on('data', (chunk) => {
     hash.update(chunk);
     sent += chunk.length;
-    // Backpressure: if buffered amount is high, pause and wait
     try {
       fileDc.sendMessageBinary(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     } catch (err) {
       console.error(`❌ [P2P] file download send error: ${err.message}`);
       readStream.destroy();
+      return;
     }
+    // Backpressure: pause stream if DataChannel buffer is filling up
+    try {
+      const buffered = typeof fileDc.bufferedAmount === 'function'
+        ? fileDc.bufferedAmount()
+        : (fileDc.bufferedAmount ?? 0);
+      if (buffered > DC_BUFFER_HIGH) {
+        readStream.pause();
+        const poll = setInterval(() => {
+          try {
+            const b = typeof fileDc.bufferedAmount === 'function'
+              ? fileDc.bufferedAmount()
+              : (fileDc.bufferedAmount ?? 0);
+            if (b < DC_BUFFER_LOW) { clearInterval(poll); readStream.resume(); }
+          } catch { clearInterval(poll); }
+        }, 20);
+      }
+    } catch (_) {}
   });
 
   readStream.on('end', () => {

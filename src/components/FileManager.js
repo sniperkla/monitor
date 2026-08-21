@@ -11,8 +11,16 @@ import {
   MessagesSquare, BrainCircuit, ShieldAlert, Terminal
 } from 'lucide-react';
 import io from 'socket.io-client';
-import * as fflate from 'fflate';
-import { createRelayPeer, DC, streamUpload, streamDownload } from '@/lib/webrtc-relay';
+import { 
+  createRelayPeer, 
+  DC, 
+  streamUpload, 
+  streamTarUpload, 
+  streamDownload, 
+  getTarHeaderBlocks, 
+  calculateTarTotalSize,
+  getPacingDelayMs,
+} from '@/lib/webrtc-relay';
 import { useOS } from '@/context/OSContext';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
@@ -21,73 +29,6 @@ import MacOSModalWindow from '@/components/MacOSModalWindow';
 
 import { useApp } from '@/context/AppContext';
 import { useVault } from '@/context/VaultContext';
-
-
-/**
- * Minimal TAR packager for browser usage
- * @param {Object} files - { "path/to/file": Uint8Array }
- * @returns {Uint8Array} - The generated TAR archive
- */
-function createTar(files) {
-  const chunks = [];
-  for (const name in files) {
-    const data = files[name];
-    const header = new Uint8Array(512);
-    
-    // Name (up to 100 bytes)
-    for (let i = 0; i < Math.min(name.length, 99); i++) {
-      header[i] = name.charCodeAt(i);
-    }
-    
-    // Mode (0000644)
-    const mode = "0000644\0";
-    for (let i = 0; i < 8; i++) header[100 + i] = mode.charCodeAt(i);
-    
-    // Size (12 bytes, octal)
-    const size = data.length.toString(8).padStart(11, '0') + "\0";
-    for (let i = 0; i < 12; i++) header[124 + i] = size.charCodeAt(i);
-    
-    // Mtime (12 bytes, octal)
-    const mtime = Math.floor(Date.now() / 1000).toString(8).padStart(11, '0') + "\0";
-    for (let i = 0; i < 12; i++) header[136 + i] = mtime.charCodeAt(i);
-    
-    // Checksum placeholder (blanks)
-    for (let i = 0; i < 8; i++) header[148 + i] = 32; 
-    
-    // Magic (ustar)
-    const magic = "ustar\0";
-    for (let i = 0; i < 6; i++) header[257 + i] = magic.charCodeAt(i);
-    const version = "00";
-    for (let i = 0; i < 2; i++) header[263 + i] = version.charCodeAt(i);
-    
-    // Calculate checksum
-    let chk = 0;
-    for (let i = 0; i < 512; i++) chk += header[i];
-    const chkStr = chk.toString(8).padStart(6, '0') + "\0 ";
-    for (let i = 0; i < 8; i++) header[148 + i] = chkStr.charCodeAt(i);
-    
-    chunks.push(header);
-    chunks.push(data);
-    
-    // Padding to 512-byte boundary
-    const paddingLength = (512 - (data.length % 512)) % 512;
-    if (paddingLength > 0) chunks.push(new Uint8Array(paddingLength));
-  }
-  
-  // Final 1024-byte null padding (End of Archive)
-  chunks.push(new Uint8Array(1024));
-  
-  // For large folders, this allocation can fail with "ArrayBuffer allocation failed"
-  // But since we now limit folder size to 500MB, this should work for most cases
-  const totalLength = chunks.reduce((acc, c) => acc + c.length, 0);
-  const result = new Uint8Array(totalLength);
-  let offset = 0;
-  for (const c of chunks) {
-    result.set(c, offset);
-    offset += c.length;
-  }
-  return result;
-}
 
 // Module-level socket pool — survives React remounts (e.g. Split pane restructuring).
 // Keyed by connectionId. On unmount we keep the socket alive for POOL_TTL ms;
@@ -202,6 +143,59 @@ export default function FileManager({
   const [transferCountdown, setTransferCountdown] = useState(0);
   const transferCountdownRef = useRef(0);
   useEffect(() => { transferCountdownRef.current = transferCountdown; }, [transferCountdown]);
+  const [uploadCpuMode, setUploadCpuMode] = useState(() => (typeof window !== 'undefined' ? localStorage.getItem('ssh_monitor_upload_cpu_mode') || 'balanced' : 'balanced'));
+  const [cpuThermalWarning, setCpuThermalWarning] = useState(false);
+  const [autoCoolEnabled, setAutoCoolEnabled] = useState(() => (typeof window !== 'undefined' ? localStorage.getItem('ssh_monitor_auto_cool') === 'true' : true));
+
+  const changeUploadCpuMode = (mode) => {
+    setUploadCpuMode(mode);
+    if (typeof window !== 'undefined') {
+      window.__uploadCpuMode = mode;
+      localStorage.setItem('ssh_monitor_upload_cpu_mode', mode);
+    }
+  };
+
+  // ── Automatic Thermal Pressure / High CPU Monitor ───────────────────────
+  // Monitors event loop lag during active uploads. If high lag is sustained
+  // (signaling CPU throttling or high thermals), triggers alert or auto-eco switch.
+  useEffect(() => {
+    if (transfer?.action !== 'upload' || uploadCpuMode === 'eco') {
+      setCpuThermalWarning(false);
+      return;
+    }
+
+    let consecutiveLagCount = 0;
+    let lastTime = performance.now();
+    const interval = setInterval(() => {
+      const now = performance.now();
+      const delta = now - lastTime;
+      lastTime = now;
+
+      // Expecting ~300ms. If delta > 550ms, the main thread/CPU is experiencing high lag/thermal pressure
+      if (delta > 550) {
+        consecutiveLagCount++;
+        if (consecutiveLagCount >= 3) {
+          if (autoCoolEnabled) {
+            changeUploadCpuMode('eco');
+            addNotification({
+              title: '❄️ Auto-Cool Activated',
+              message: 'High CPU load detected. Switched to Eco mode to keep your computer cool.',
+              type: 'info',
+              duration: 4000,
+            });
+            setCpuThermalWarning(false);
+          } else {
+            setCpuThermalWarning(true);
+          }
+        }
+      } else {
+        consecutiveLagCount = Math.max(0, consecutiveLagCount - 1);
+      }
+    }, 300);
+
+    return () => clearInterval(interval);
+  }, [transfer?.action, uploadCpuMode, autoCoolEnabled, addNotification]);
+
   const lastDownloadRef = useRef(null); // { file, offset }
   const transferRef = useRef(null); // Keep a ref of transfer for loop cancellation
   const userCancelledUploadRef = useRef(false); // true when user explicitly clicks X to cancel upload — suppresses reconnect
@@ -365,6 +359,13 @@ export default function FileManager({
       return Promise.resolve(false);
     }
 
+    // If an upload or download transfer is active, data is actively flowing — connection is healthy
+    if (transferRef.current) {
+      lastHealthOkRef.current = true;
+      lastHealthCheckAtRef.current = Date.now();
+      return Promise.resolve(true);
+    }
+
     if (healthCheckPromiseRef.current) return healthCheckPromiseRef.current;
 
     healthCheckPromiseRef.current = new Promise((resolve) => {
@@ -407,6 +408,12 @@ export default function FileManager({
         preserveTransfer: !!transferRef.current || uploadQueueRef.current.length > 0,
       });
       return false;
+    }
+
+    if (transferRef.current) {
+      lastHealthOkRef.current = true;
+      lastHealthCheckAtRef.current = Date.now();
+      return true;
     }
 
     const cacheFresh = Date.now() - lastHealthCheckAtRef.current < HEALTH_CHECK_TTL_MS;
@@ -605,7 +612,7 @@ export default function FileManager({
 
     if (reusedSocket) {
       const pooledPingTimeout = setTimeout(() => {
-        if (statusRef.current === 'ready' && filesRef.current.length > 0) return;
+        if (statusRef.current === 'ready' && (filesRef.current.length > 0 || transferRef.current)) return;
         console.warn('⚠️ Pooled socket SSH health check timed out. Reconnecting fresh session.');
         try {
           newSocket.emit('ssh:disconnect');
@@ -1880,16 +1887,23 @@ export default function FileManager({
       const connId = relayConnIdRef.current;
       console.log(`📤 [${file.name}] WebRTC path — streaming via DataChannel (connId=${connId})`);
       const abortController = new AbortController();
+      let lastProgressUi = 0;
+      let lastReportedPct = -1;
       try {
         await streamUpload(peer, connId, file, path, {
           startOffset: resumeOffset,
           signal: abortController.signal,
           onProgress: (sent, total) => {
             if (transferRef.current !== transferObj) { abortController.abort(); return; }
-            const pct = Math.round((sent / total) * 100);
-            setTransfer(prev => prev ? { ...prev, progress: pct, waiting: false } : null);
-            updateNotification(uploadNotifId, { message: `${file.name} — ${pct}%` });
-            setUploadQueue(prev => prev.map(item => item.path === path ? { ...item, offset: sent } : item));
+            const now = Date.now();
+            const pct = Math.min(99, Math.round((sent / total) * 100));
+            // Throttle React renders to 4fps (every 250ms) to keep CPU cool and prevent UI thread overload
+            if (pct !== lastReportedPct && (now - lastProgressUi >= 250 || pct === 99)) {
+              lastProgressUi = now;
+              lastReportedPct = pct;
+              setTransfer(prev => prev ? { ...prev, progress: pct, waiting: false } : null);
+              updateNotification(uploadNotifId, { message: `${displayName || file.name} — ${pct}%` });
+            }
           },
         });
 
@@ -2075,6 +2089,8 @@ export default function FileManager({
         let pipelineError = null;
         let rateLimitResult = null;
         let guardResult = null;
+        let lastProgressUi = 0;
+        let lastProgressPct = -1;
         const pendingAcks = []; // ordered list of {resolve, reject, chunkOffset, chunkSize}
 
         const sockForPipeline = getSocket();
@@ -2136,9 +2152,14 @@ export default function FileManager({
             if (ackResult.guardBlocked) { guardResult = ackResult; break; }
 
             offset = typeof ackResult.totalTransferred === 'number' ? ackResult.totalTransferred : offset;
-            setUploadQueue(prev => prev.map(item => item.path === path ? { ...item, offset } : item));
-            setTransfer(prev => prev ? { ...prev, progress: Math.round((offset / file.size) * 100), waiting: false } : null);
-            updateNotification(uploadNotifId, { message: `${file.name} — ${Math.round((offset / file.size) * 100)}%` });
+            const now = Date.now();
+            const pct = Math.min(99, Math.round((offset / file.size) * 100));
+            if (pct !== lastProgressPct && (now - lastProgressUi >= 250 || pct === 99)) {
+              lastProgressUi = now;
+              lastProgressPct = pct;
+              setTransfer(prev => prev ? { ...prev, progress: pct, waiting: false } : null);
+              updateNotification(uploadNotifId, { message: `${displayName || file.name} — ${pct}%` });
+            }
           }
 
           const end = Math.min(offset + chunkSize, file.size);
@@ -2175,6 +2196,14 @@ export default function FileManager({
           if (ackResult.rateLimited) { rateLimitResult = ackResult; break; }
           if (ackResult.guardBlocked) { guardResult = ackResult; break; }
           offset = typeof ackResult.totalTransferred === 'number' ? ackResult.totalTransferred : offset;
+          const now = Date.now();
+          const pct = Math.min(99, Math.round((offset / file.size) * 100));
+          if (pct !== lastProgressPct && (now - lastProgressUi >= 250 || pct === 99)) {
+            lastProgressUi = now;
+            lastProgressPct = pct;
+            setTransfer(prev => prev ? { ...prev, progress: pct, waiting: false } : null);
+            updateNotification(uploadNotifId, { message: `${displayName || file.name} — ${pct}%` });
+          }
         }
 
         cleanupPipeline();
@@ -2450,187 +2479,308 @@ export default function FileManager({
     }
   };
 
+  const handleFolderUpload = async (entries, targetPath, folderName) => {
+    let socket = socketRef.current;
+    if (!socket) return;
+    if (!(await ensureSocketReadyAsync('retry the folder upload'))) return;
+    socket = socketRef.current;
+    if (!socket?.connected) return;
+
+    const totalTarSize = calculateTarTotalSize(entries);
+    const tempArchiveName = `.__ssh_monitor_upload_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.tar`;
+    const destArchivePath = targetPath === '.' ? tempArchiveName : `${targetPath}/${tempArchiveName}`;
+
+    const transferObj = {
+      filename: folderName,
+      realFilename: tempArchiveName,
+      path: destArchivePath,
+      progress: 0,
+      action: 'upload',
+      waiting: false,
+      channel: (rtcPeerRef.current && relayConnIdRef.current) ? 'webrtc' : 'socket',
+    };
+    setTransfer(transferObj);
+    transferRef.current = transferObj;
+
+    const uploadNotifId = addNotification({
+      title: t('files.status.upload'),
+      message: `${folderName} — 0%`,
+      type: 'loading',
+      duration: 0,
+    });
+    toastRef.current = uploadNotifId;
+    transferObj.toastId = uploadNotifId;
+
+    let lastProgressUi = 0;
+    let lastReportedPct = -1;
+
+    const onProgress = (sent, total) => {
+      if (transferRef.current !== transferObj) return;
+      const now = Date.now();
+      const pct = Math.min(99, Math.round((sent / total) * 100));
+      if (pct !== lastReportedPct && (now - lastProgressUi >= 250 || pct === 99)) {
+        lastProgressUi = now;
+        lastReportedPct = pct;
+        setTransfer(prev => prev ? { ...prev, progress: pct, waiting: false } : null);
+        updateNotification(uploadNotifId, { message: `${folderName} — ${pct}%` });
+      }
+    };
+
+    // ── WebRTC Direct TAR Streaming (Zero Composite Blobs, Zero Memory) ──
+    if (rtcPeerRef.current && relayConnIdRef.current) {
+      const peer = rtcPeerRef.current;
+      const connId = relayConnIdRef.current;
+      const abortController = new AbortController();
+      try {
+        await streamTarUpload(peer, connId, entries, destArchivePath, tempArchiveName, {
+          onProgress,
+          signal: abortController.signal,
+        });
+
+        if (transferRef.current === transferObj) {
+          const extractTransferObj = {
+            filename: folderName,
+            realFilename: tempArchiveName,
+            path: destArchivePath,
+            progress: -1,
+            action: 'extract',
+            status: 'Extracting files on server...',
+            toastId: uploadNotifId,
+          };
+          setTransfer(extractTransferObj);
+          transferRef.current = extractTransferObj;
+
+          updateNotification(uploadNotifId, {
+            title: t('files.status.upload'),
+            message: `${folderName} — Extracting...`,
+            type: 'loading',
+            duration: 0,
+          });
+
+          socket.emit('sftp:extract', { path: destArchivePath, type: 'tar', cleanupArchive: true });
+
+          // Wait for extraction to complete
+          await new Promise((resolve) => {
+            const onExtractDone = (data) => {
+              if (data?.action === 'extract') {
+                socket.off('sftp:action_success', onExtractDone);
+                socket.off('sftp:error', onExtractDone);
+                resolve(data);
+              }
+            };
+            socket.on('sftp:action_success', onExtractDone);
+            socket.on('sftp:error', onExtractDone);
+          });
+
+          setTransfer(null);
+          transferRef.current = null;
+
+          addNotification({
+            title: 'Upload Complete',
+            message: `Extracted ${folderName} (${entries.length} files, ${(totalTarSize / 1024 / 1024).toFixed(1)} MB)`,
+            type: 'success',
+            duration: 5000,
+          });
+          socket.emit('sftp:list', currentPathRef.current || '.');
+          return;
+        }
+      } catch (rtcErr) {
+        if (rtcErr.name === 'AbortError') {
+          setTransfer(null);
+          transferRef.current = null;
+          updateNotification(uploadNotifId, { title: t('files.status.upload'), message: `${folderName} — cancelled`, type: 'warning', duration: 3000 });
+          return;
+        }
+        console.warn(`[Folder Upload][WebRTC] streamTarUpload failed (${rtcErr.message}), falling back to socket path`);
+        try { peer.close(); } catch (_) {}
+        rtcPeerRef.current = null;
+      }
+    }
+
+    // ── Socket Mode Direct TAR Streaming ──
+    try {
+      socket = socketRef.current;
+      if (!socket?.connected) throw new Error('Socket disconnected');
+      socket.emit('sftp:upload', { filename: tempArchiveName, path: destArchivePath, size: totalTarSize, offset: 0 });
+
+      // Handshake
+      const startData = await new Promise(resolve => {
+        const h = (d) => { if (d.filename === tempArchiveName) { cleanup(); resolve(d); } };
+        const cleanup = () => { clearTimeout(timer); socket.off('sftp:can_upload', h); };
+        const timer = setTimeout(() => { cleanup(); resolve({ error: 'Handshake timeout' }); }, 20000);
+        socket.on('sftp:can_upload', h);
+      });
+
+      if (startData.error) throw new Error(startData.error);
+
+      const CHUNK_SIZE = 64 * 1024;
+      let sentBytes = 0;
+
+      for (const { entry, file: storedFile, relativePath, size: entrySize, lastModified: entryLastModified } of entries) {
+        if (transferRef.current !== transferObj) break;
+
+        const fileSize = entrySize ?? storedFile?.size ?? 0;
+        const fileLastModified = entryLastModified ?? storedFile?.lastModified ?? Date.now();
+
+        const headerBlocks = getTarHeaderBlocks(relativePath, fileSize, fileLastModified);
+        for (const h of headerBlocks) {
+          socket.emit(`sftp:upload_chunk:${tempArchiveName}`, h);
+          sentBytes += h.length;
+        }
+
+        // Lazily fetch a fresh File handle just before reading to avoid NotReadableError
+        let file = storedFile;
+        if (!file && entry) {
+          file = await new Promise((res, rej) => entry.file(res, rej));
+        }
+
+        let fileOffset = 0;
+        while (fileOffset < fileSize) {
+          if (transferRef.current !== transferObj) break;
+          const sliceEnd = Math.min(fileOffset + CHUNK_SIZE, fileSize);
+          let buf;
+          try {
+            buf = await file.slice(fileOffset, sliceEnd).arrayBuffer();
+          } catch (readErr) {
+            if (entry && readErr.name === 'NotReadableError') {
+              // File handle expired — re-obtain fresh File from the FileSystemEntry
+              file = await new Promise((res, rej) => entry.file(res, rej));
+              buf = await file.slice(fileOffset, sliceEnd).arrayBuffer();
+            } else {
+              throw readErr;
+            }
+          }
+          socket.emit(`sftp:upload_chunk:${tempArchiveName}`, buf);
+          sentBytes += buf.byteLength;
+          fileOffset = sliceEnd;
+          onProgress(sentBytes, totalTarSize);
+          const delay = getPacingDelayMs();
+          if (delay > 0) {
+            await new Promise(r => setTimeout(r, delay));
+          } else {
+            await new Promise(r => setTimeout(r, 0));
+          }
+        }
+
+        const padLen = (512 - (fileSize % 512)) % 512;
+        if (padLen > 0) {
+          socket.emit(`sftp:upload_chunk:${tempArchiveName}`, new Uint8Array(padLen));
+          sentBytes += padLen;
+        }
+      }
+
+      socket.emit(`sftp:upload_chunk:${tempArchiveName}`, new Uint8Array(1024));
+      socket.emit(`sftp:upload_done:${tempArchiveName}`);
+
+      if (transferRef.current === transferObj) {
+        const extractTransferObj = {
+          filename: folderName,
+          realFilename: tempArchiveName,
+          path: destArchivePath,
+          progress: -1,
+          action: 'extract',
+          status: 'Extracting files on server...',
+          toastId: uploadNotifId,
+        };
+        setTransfer(extractTransferObj);
+        transferRef.current = extractTransferObj;
+
+        updateNotification(uploadNotifId, {
+          title: t('files.status.upload'),
+          message: `${folderName} — Extracting...`,
+          type: 'loading',
+          duration: 0,
+        });
+
+        socket.emit('sftp:extract', { path: destArchivePath, type: 'tar', cleanupArchive: true });
+
+        // Wait for extraction to complete
+        await new Promise((resolve) => {
+          const onExtractDone = (data) => {
+            if (data?.action === 'extract') {
+              socket.off('sftp:action_success', onExtractDone);
+              socket.off('sftp:error', onExtractDone);
+              resolve(data);
+            }
+          };
+          socket.on('sftp:action_success', onExtractDone);
+          socket.on('sftp:error', onExtractDone);
+        });
+
+        setTransfer(null);
+        transferRef.current = null;
+
+        addNotification({
+          title: 'Upload Complete',
+          message: `Extracted ${folderName} (${entries.length} files, ${(totalTarSize / 1024 / 1024).toFixed(1)} MB)`,
+          type: 'success',
+          duration: 5000,
+        });
+        socket.emit('sftp:list', currentPathRef.current || '.');
+      }
+    } catch (err) {
+      console.error('❌ Folder upload error:', err);
+      updateNotification(uploadNotifId, { title: 'Upload Error', message: `${folderName}: ${err.message}`, type: 'error', duration: 5000 });
+      setTransfer(null);
+      transferRef.current = null;
+      socket.emit('sftp:delete', destArchivePath);
+    }
+  };
+
   const traverseEntry = async (entry, path) => {
     if (entry.isFile) {
       const file = await new Promise((resolve) => entry.file(resolve));
       await handleFileUpload(null, file, 0, path);
     } else if (entry.isDirectory) {
-      const filesToZip = {};
-      let totalSize = 0;
-      let processedSize = 0;
-      const allEntries = []; // Will store {entry, relativePath}
-      const MAX_ARCHIVE_SIZE = 1024 * 1024 * 1024; // 1GB limit (requires ~3GB+ free RAM)
+      const allEntries = [];
+      let totalFilesSize = 0;
 
-      // Recursive helper to get all file entries with paths
-      const collectEntries = async (ent, currentPath = '') => {
+      const collectEntries = async (ent, currentRelPath = '') => {
         if (ent.isFile) {
-          const f = await new Promise(r => ent.file(r));
-          allEntries.push({ entry: ent, file: f, relativePath: currentPath + ent.name });
-          totalSize += f.size;
+          // Get size/lastModified for TAR metadata, but store the FileSystemFileEntry
+          // for lazy re-read at upload time. Holding a File object long-term causes
+          // NotReadableError in Chrome when the drag-and-drop file handle expires.
+          const f = await new Promise((res, rej) => ent.file(res, rej));
+          if (f) {
+            allEntries.push({
+              entry: ent,                     // FileSystemFileEntry — used for lazy re-read
+              relativePath: currentRelPath + ent.name,
+              size: f.size,
+              lastModified: f.lastModified,
+            });
+            totalFilesSize += f.size;
+            if (allEntries.length % 50 === 0) {
+              await new Promise(r => setTimeout(r, 0));
+            }
+          }
         } else if (ent.isDirectory) {
           const reader = ent.createReader();
-          const read = async () => {
+          const readBatch = async () => {
             const results = await new Promise(r => reader.readEntries(r));
-            if (results.length > 0) {
+            if (results && results.length > 0) {
               for (const result of results) {
-                await collectEntries(result, currentPath + ent.name + '/');
+                await collectEntries(result, currentRelPath + ent.name + '/');
               }
-              await read();
+              await readBatch();
             }
           };
-          await read();
+          await readBatch();
         }
       };
 
-      setTransfer({ filename: entry.name, progress: 0, action: 'compress', status: 'Scanning...' });
+      setTransfer({ filename: entry.name, progress: 0, action: 'scan', status: 'Scanning folder contents...' });
       await collectEntries(entry);
-      
-      // Check if folder is too large for in-memory TAR/GZIP
-      if (totalSize > MAX_ARCHIVE_SIZE) {
-        // Large folder: Upload files individually instead of creating archive
-        console.log(`📁 Folder "${entry.name}" is ${(totalSize/1024/1024).toFixed(1)}MB, uploading files individually...`);
-        
+
+      if (allEntries.length === 0) {
         const targetDir = path === '.' ? entry.name : `${path}/${entry.name}`;
-        let uploadedSize = 0;
-        let uploadedCount = 0;
-        
-        setTransfer({ 
-          filename: entry.name, 
-          progress: 0, 
-          action: 'upload', 
-          status: `Preparing ${allEntries.length} files...` 
-        });
-        
-        // Upload each file preserving directory structure
-        for (const { file, relativePath } of allEntries) {
-          const filePath = `${targetDir}/${relativePath}`;
-          const dirPath = filePath.substring(0, filePath.lastIndexOf('/'));
-          
-          uploadedCount++;
-          setTransfer({ 
-            filename: entry.name, 
-            progress: Math.round((uploadedSize / totalSize) * 100), 
-            action: 'upload',
-            status: `${uploadedCount}/${allEntries.length}: ${relativePath}`
-          });
-          
-          try {
-            await handleFileUpload(null, file, 0, dirPath, null, true, true);
-            uploadedSize += file.size;
-          } catch (err) {
-            console.error(`Failed to upload ${relativePath}:`, err);
-            setTransfer(null);
-            addNotification({
-              title: 'Folder Upload Error',
-              message: `Failed uploading ${relativePath}: ${err.message}`,
-              type: 'error'
-            });
-            return;
-          }
-        }
-        
+        socketRef.current?.emit('sftp:mkdir', targetDir);
         setTransfer(null);
-        addNotification({
-          title: 'Folder Uploaded',
-          message: `${entry.name}: ${allEntries.length} files (${(totalSize/1024/1024).toFixed(1)}MB)`,
-          type: 'success',
-          duration: 5000
-        });
+        addNotification({ title: 'Folder Created', message: `${entry.name} (empty folder)`, type: 'success' });
         loadFiles(currentPath);
         return;
       }
-      
-      const zipHelper = async (ent, relPath = '') => {
-        if (ent.isFile) {
-          const file = await new Promise((resolve) => ent.file(resolve));
-          const buf = await file.arrayBuffer();
-          filesToZip[relPath + ent.name] = new Uint8Array(buf);
-          processedSize += file.size;
-          
-          if (totalSize > 0) {
-            setTransfer({ 
-               filename: entry.name, 
-               progress: Math.min(99, Math.round((processedSize / totalSize) * 100)), 
-               action: 'compress',
-               status: `Reading: ${relPath}${ent.name}`
-            });
-          }
-        } else if (ent.isDirectory) {
-          const reader = ent.createReader();
-          const read = async () => {
-            const results = await new Promise((resolve) => reader.readEntries(resolve));
-            if (results.length > 0) {
-              for (const child of results) await zipHelper(child, relPath + ent.name + '/');
-              await read();
-            }
-          };
-          await read();
-        }
-      };
 
-      await zipHelper(entry);
-      
-      setTransfer({ filename: entry.name, progress: 99, action: 'compress', status: 'Zipping...' });
-      
-      try {
-        // Use zipSync with level 1 (fastest) to avoid massive CPU/Memory spikes on large folders
-        // We wrap in a small timeout to allow the 99% UI state to render first
-        const gzData = await new Promise((resolve, reject) => {
-          setTimeout(() => {
-            try {
-              // Create TAR first, then GZIP it
-              const tar = createTar(filesToZip);
-              const compressed = fflate.gzipSync(tar, { level: 6 });
-              resolve(compressed);
-            } catch (err) {
-              reject(err);
-            }
-          }, 100);
-        });
-
-        const blob = new Blob([gzData], { type: 'application/gzip' });
-        const tempArchiveName = `.__ssh_monitor_upload_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.tar.gz`;
-        const archiveFile = new File([blob], tempArchiveName, { type: 'application/gzip' });
-        
-        console.log(`✅ TAR.GZ creation complete: ${archiveFile.size} bytes`);
-        
-        // Proceed to the actual upload
-        console.log(`📤 Starting upload for archive: ${archiveFile.name} (${archiveFile.size} bytes)`);
-        const uploadResult = await handleFileUpload(null, archiveFile, 0, path, entry.name);
-        console.log(`📤 Upload result:`, uploadResult);
-        
-        if (!uploadResult?.path || uploadResult?.interrupted) {
-          // Upload was interrupted — the partial archive may already exist on the server.
-          // Attempt a best-effort cleanup so it doesn't linger as a corrupt .tar.gz junk file.
-          const partialArchivePath = uploadResult?.path || (path === '.' ? tempArchiveName : `${path}/${tempArchiveName}`);
-          const cleanupSocket = socketRef.current;
-          if (cleanupSocket?.connected) {
-            console.warn(`🗑️ Cleaning up partial archive after interrupted upload: ${partialArchivePath}`);
-            cleanupSocket.emit('sftp:delete', partialArchivePath);
-          }
-          throw new Error('Archive upload paused while reconnecting. Please retry after the SSH session is ready.');
-        }
-        
-        // Once upload loop is done, trigger extraction
-        const archivePath = uploadResult.path;
-        console.log(`🚀 Upload finished, triggering extraction: ${archivePath}`);
-        socket.emit('sftp:extract', { path: archivePath, type: 'tar', cleanupArchive: true });
-        addNotification({ title: 'Upload Complete', message: `Starting extraction for ${entry.name}...`, type: 'info' });
-      } catch (err) {
-        console.error('❌ Folder upload failed:', err);
-        const errorTitle = err.message?.includes('timeout') ? 'Upload Timeout' : 
-                          err.message?.includes('reconnect') ? 'Connection Lost' : 
-                          'Upload Error';
-        addNotification({ title: errorTitle, message: err.message, type: 'error' });
-        setTransfer(null);
-        // Refresh file list so any partially uploaded archive is reflected accurately
-        if (refreshTimeoutRef.current) clearTimeout(refreshTimeoutRef.current);
-        refreshTimeoutRef.current = setTimeout(() => {
-          if (socketRef.current?.connected) {
-            socketRef.current.emit('sftp:list', currentPathRef.current || '.');
-          }
-        }, 800);
-      }
+      await handleFolderUpload(allEntries, path, entry.name);
     }
   };
 
@@ -3572,6 +3722,87 @@ export default function FileManager({
                     )}
                   </div>
                 </div>
+
+                {/* Dynamic CPU Thermal Mode Selector */}
+                {transfer.action === 'upload' && (
+                  <div className="mt-3 pt-2.5 border-t border-white/5">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-[var(--text-muted)] flex items-center gap-1 font-mono">
+                          <span>CPU:</span>
+                        </span>
+                        <label className="flex items-center gap-1 text-[10px] text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={autoCoolEnabled}
+                            onChange={(e) => {
+                              setAutoCoolEnabled(e.target.checked);
+                              if (typeof window !== 'undefined') {
+                                localStorage.setItem('ssh_monitor_auto_cool', e.target.checked ? 'true' : 'false');
+                              }
+                            }}
+                            className="w-3 h-3 rounded accent-blue-500 cursor-pointer"
+                          />
+                          <span title="Automatically switch to Eco mode if high CPU temperature/load is detected">Auto-Cool</span>
+                        </label>
+                      </div>
+                      <div className="flex items-center bg-black/40 rounded-lg p-0.5 border border-white/10 gap-0.5">
+                        {[
+                          { id: 'eco', label: '❄️ Eco (Cool)', tip: '5ms pacing · ~40°C · Silent fan · Low CPU' },
+                          { id: 'balanced', label: '⚖️ Balanced', tip: '1ms pacing · ~55°C · Fast & cool' },
+                          { id: 'turbo', label: '🚀 Turbo', tip: '0ms pacing · Max throughput' },
+                        ].map((m) => (
+                          <button
+                            key={m.id}
+                            type="button"
+                            title={m.tip}
+                            onClick={() => changeUploadCpuMode(m.id)}
+                            className={`px-2 py-0.5 rounded text-[10px] font-medium transition-all ${
+                              uploadCpuMode === m.id
+                                ? 'bg-blue-600/30 text-blue-300 border border-blue-500/50 shadow-sm'
+                                : 'text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-white/5'
+                            }`}
+                          >
+                            {m.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* High Thermal Pressure Detected Alert Banner */}
+                    {cpuThermalWarning && uploadCpuMode !== 'eco' && (
+                      <motion.div
+                        initial={{ opacity: 0, y: -4 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="mt-2.5 p-2 rounded-lg bg-amber-500/15 border border-amber-500/30 flex items-center justify-between gap-2"
+                      >
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="text-amber-400 text-xs">🔥</span>
+                          <span className="text-[10px] text-amber-200 truncate">High CPU load detected. Cool down?</span>
+                        </div>
+                        <div className="flex items-center gap-1 flex-shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              changeUploadCpuMode('eco');
+                              setCpuThermalWarning(false);
+                            }}
+                            className="px-2 py-0.5 rounded bg-emerald-500/25 hover:bg-emerald-500/40 text-emerald-300 text-[10px] font-semibold transition-colors"
+                          >
+                            ❄️ Switch to Eco
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setCpuThermalWarning(false)}
+                            className="px-1.5 py-0.5 rounded hover:bg-white/10 text-[var(--text-muted)] text-[10px]"
+                          >
+                            Ignore
+                          </button>
+                        </div>
+                      </motion.div>
+                    )}
+                  </div>
+                )}
               </div>
             </motion.div>
           </motion.div>
