@@ -100,9 +100,24 @@ const initialState = {
   },
 };
 
+// Settings can restore windows with z-index values from a previous session while
+// nextZIndex is missing or stale. Always allocate above every mounted window so a
+// newly opened (or focused) app cannot appear behind an existing one.
+const getNextWindowZIndex = (state) => {
+  const desktopWindows = Object.values(state.windowsByDesktop || {}).flat();
+  const highestWindowZIndex = [...(state.windows || []), ...desktopWindows]
+    .reduce((highest, window) => {
+      const zIndex = Number(window?.zIndex);
+      return Number.isFinite(zIndex) ? Math.max(highest, zIndex) : highest;
+    }, 99);
+
+  return Math.max(Number(state.nextZIndex) || 100, highestWindowZIndex + 1);
+};
+
 function osReducer(state, action) {
   switch (action.type) {
     case 'OPEN_WINDOW': {
+      const nextZIndex = getNextWindowZIndex(state);
       // Check if window with same ID already exists (e.g. settings)
       // Also scan windowsByDesktop in case windows[] fell out of sync.
       const existing = state.windows.find(w => w.id === action.payload.id)
@@ -119,17 +134,17 @@ function osReducer(state, action) {
           currentDesktopId: nextCurrentDesktopId,
           activeWindowId: existing.id,
           windows: state.windows.map(w =>
-            w.id === existing.id ? { ...w, isMinimized: false, zIndex: state.nextZIndex } : w
+            w.id === existing.id ? { ...w, isMinimized: false, zIndex: nextZIndex } : w
           ),
           windowsByDesktop: Object.fromEntries(
             Object.entries(state.windowsByDesktop || {}).map(([desktopId, list]) => [
               desktopId,
               (list || []).map(w =>
-                w.id === existing.id ? { ...w, isMinimized: false, zIndex: state.nextZIndex } : w
+                w.id === existing.id ? { ...w, isMinimized: false, zIndex: nextZIndex } : w
               ),
             ])
           ),
-          nextZIndex: state.nextZIndex + 1,
+          nextZIndex: nextZIndex + 1,
         };
       }
       const cascadeOffset = (state.windows.length % 10) * 30;
@@ -144,7 +159,7 @@ function osReducer(state, action) {
         height: action.payload.height ?? 600,
         isMinimized: false, 
         isMaximized: false, 
-        zIndex: state.nextZIndex 
+        zIndex: nextZIndex
       };
 
       return {
@@ -159,7 +174,7 @@ function osReducer(state, action) {
           ],
         },
         activeWindowId: action.payload.id,
-        nextZIndex: state.nextZIndex + 1,
+        nextZIndex: nextZIndex + 1,
       };
     }
     case 'CLOSE_WINDOW':
@@ -267,23 +282,25 @@ function osReducer(state, action) {
           ])
         ),
       };
-    case 'FOCUS_WINDOW':
+    case 'FOCUS_WINDOW': {
+      const nextZIndex = getNextWindowZIndex(state);
       return {
         ...state,
         activeWindowId: action.payload,
         windows: state.windows.map(w =>
-          w.id === action.payload ? { ...w, zIndex: state.nextZIndex, isMinimized: false } : w
+          w.id === action.payload ? { ...w, zIndex: nextZIndex, isMinimized: false } : w
         ),
         windowsByDesktop: Object.fromEntries(
           Object.entries(state.windowsByDesktop).map(([desktopId, wins]) => [
             desktopId,
             (wins || []).map(w =>
-              w.id === action.payload ? { ...w, zIndex: state.nextZIndex, isMinimized: false } : w
+              w.id === action.payload ? { ...w, zIndex: nextZIndex, isMinimized: false } : w
             ),
           ])
         ),
-        nextZIndex: state.nextZIndex + 1,
+        nextZIndex: nextZIndex + 1,
       };
+    }
     case 'SET_WALLPAPER':
       return {
         ...state,
