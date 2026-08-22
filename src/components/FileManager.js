@@ -9,7 +9,7 @@ import {
   Copy, Scissors, Clipboard, Wifi, AtSign, Replace, Columns, Rows,
   Sparkles, Brain, Clock, Settings2, Languages, CornerDownLeft, 
   MessagesSquare, BrainCircuit, ShieldAlert, Terminal,
-  Cpu, Zap, Flame, Gauge, Box, Layers, CheckCircle2
+  Cpu, Zap, Flame, Box, Layers, CheckCircle2, Lock, Unlock
 } from 'lucide-react';
 import io from 'socket.io-client';
 import { 
@@ -144,21 +144,55 @@ export default function FileManager({
   const [transferCountdown, setTransferCountdown] = useState(0);
   const transferCountdownRef = useRef(0);
   useEffect(() => { transferCountdownRef.current = transferCountdown; }, [transferCountdown]);
-  const [uploadCpuMode, setUploadCpuMode] = useState(() => (typeof window !== 'undefined' ? localStorage.getItem('ssh_monitor_upload_cpu_mode') || 'balanced' : 'balanced'));
+  const [sshMode, setSshMode] = useState(() => (typeof window !== 'undefined' ? localStorage.getItem('ssh_monitor_ssh_mode') || 'server' : 'server'));
+  const isRelayMode = sshMode === 'local';
+  const [uploadCpuMode, setUploadCpuMode] = useState(() => {
+    if (typeof window === 'undefined') return 'eco';
+    const currentSshMode = localStorage.getItem('ssh_monitor_ssh_mode') || 'server';
+    return currentSshMode === 'local' ? localStorage.getItem('ssh_monitor_upload_cpu_mode') || 'balanced' : 'eco';
+  });
   const [cpuThermalWarning, setCpuThermalWarning] = useState(false);
   const [autoCoolEnabled, setAutoCoolEnabled] = useState(() => (typeof window !== 'undefined' ? localStorage.getItem('ssh_monitor_auto_cool') === 'true' : true));
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      window.__uploadCpuMode = uploadCpuMode;
+      window.__uploadCpuMode = isRelayMode ? uploadCpuMode : 'eco';
     }
-  }, [uploadCpuMode]);
+  }, [uploadCpuMode, isRelayMode]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const syncSshMode = () => {
+      const nextMode = localStorage.getItem('ssh_monitor_ssh_mode') || 'server';
+      setSshMode(nextMode);
+      if (nextMode === 'server') {
+        setUploadCpuMode('eco');
+        window.__uploadCpuMode = 'eco';
+      } else {
+        const savedRelayMode = localStorage.getItem('ssh_monitor_upload_cpu_mode') || 'balanced';
+        setUploadCpuMode(savedRelayMode);
+        window.__uploadCpuMode = savedRelayMode;
+      }
+    };
+
+    syncSshMode();
+    window.addEventListener('ssh-mode-changed', syncSshMode);
+    return () => window.removeEventListener('ssh-mode-changed', syncSshMode);
+  }, []);
 
   const changeUploadCpuMode = (mode) => {
-    setUploadCpuMode(mode);
+    if (!isRelayMode && mode !== 'eco') {
+      setUploadCpuMode('eco');
+      if (typeof window !== 'undefined') window.__uploadCpuMode = 'eco';
+      return;
+    }
+
+    const nextMode = !isRelayMode ? 'eco' : mode;
+    setUploadCpuMode(nextMode);
     if (typeof window !== 'undefined') {
-      window.__uploadCpuMode = mode;
-      localStorage.setItem('ssh_monitor_upload_cpu_mode', mode);
+      window.__uploadCpuMode = nextMode;
+      if (isRelayMode) localStorage.setItem('ssh_monitor_upload_cpu_mode', nextMode);
     }
   };
 
@@ -243,6 +277,13 @@ export default function FileManager({
   const [uploadQueue, setUploadQueue] = useState([]); // Array of { file, path, offset }
   const uploadQueueRef = useRef([]);
   useEffect(() => { uploadQueueRef.current = uploadQueue; }, [uploadQueue]);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.__sshMonitorActiveUploadCount = transfer?.action === 'upload' ? 1 : 0;
+    return () => {
+      if (transfer?.action === 'upload') window.__sshMonitorActiveUploadCount = 0;
+    };
+  }, [transfer?.action]);
   const handleFileUploadRef = useRef(null);
   
   useEffect(() => { 
@@ -1234,21 +1275,33 @@ export default function FileManager({
       // Save socket to pool with TTL instead of disconnecting immediately.
       // If the same connectionId remounts within POOL_TTL ms (e.g. after Split),
       // it will reuse the socket seamlessly without reconnecting.
-      _fmSocketPool.set(connectionId, {
+      const poolEntry = {
         socket: newSocket,
         status: statusRef.current,
         currentPath: currentPathRef.current,
         files: filesRef.current,
-        cleanupTimer: setTimeout(() => {
+        isTransferActive: () => !!transferRef.current || (uploadQueueRef.current && uploadQueueRef.current.length > 0),
+      };
+
+      const schedulePoolCleanup = () => {
+        poolEntry.cleanupTimer = setTimeout(() => {
           const entry = _fmSocketPool.get(connectionId);
           if (entry?.socket === newSocket) {
+            if (entry.isTransferActive?.()) {
+              console.log('🔌 Pool TTL extended — active transfer still running for', connectionId);
+              schedulePoolCleanup();
+              return;
+            }
             console.log('🔌 Pool TTL expired — disconnecting socket for', connectionId);
             newSocket.emit('ssh:disconnect');
             newSocket.disconnect();
             _fmSocketPool.delete(connectionId);
           }
-        }, POOL_TTL),
-      });
+        }, POOL_TTL);
+      };
+
+      schedulePoolCleanup();
+      _fmSocketPool.set(connectionId, poolEntry);
     };
   }, [connectionId, reconnectNonce, isTransferChannelError, requestReconnect, vaultStatus, resumePendingUploads, addNotification, t]); // Removed 'connection' from dependencies to prevent loop
 
@@ -2154,10 +2207,13 @@ export default function FileManager({
         };
         activeAckCleanupRef.current = cleanupPipeline;
 
-        // Pre-read entire file slice for this pipeline run
-        const pipelineEnd = Math.min(offset + PIPELINE_SIZE * chunkSize, file.size);
+        // Keep send position separate from ACK-confirmed position. The previous
+        // code reused offset for both, which could rewind the sender when ACKs
+        // arrived while the pipeline window was still filling.
+        let sendOffset = offset;
+        let ackedOffset = offset;
 
-        while (offset < file.size) {
+        while (sendOffset < file.size) {
           if (transferRef.current !== transferObj || pipelineError || rateLimitResult || guardResult) break;
 
           // If window is full, wait for the oldest ACK before sending more
@@ -2176,9 +2232,9 @@ export default function FileManager({
             if (ackResult.rateLimited) { rateLimitResult = ackResult; break; }
             if (ackResult.guardBlocked) { guardResult = ackResult; break; }
 
-            offset = typeof ackResult.totalTransferred === 'number' ? ackResult.totalTransferred : offset;
+            ackedOffset = typeof ackResult.totalTransferred === 'number' ? ackResult.totalTransferred : ackedOffset;
             const now = Date.now();
-            const pct = Math.min(99, Math.round((offset / file.size) * 100));
+            const pct = Math.min(99, Math.round((ackedOffset / file.size) * 100));
             if (pct !== lastProgressPct && (now - lastProgressUi >= 250 || pct === 99)) {
               lastProgressUi = now;
               lastProgressPct = pct;
@@ -2187,12 +2243,12 @@ export default function FileManager({
             }
           }
 
-          const end = Math.min(offset + chunkSize, file.size);
-          const buf = await file.slice(offset, end).arrayBuffer();
+          const end = Math.min(sendOffset + chunkSize, file.size);
+          const buf = await file.slice(sendOffset, end).arrayBuffer();
           if (transferRef.current !== transferObj) break;
 
-          const chunkOffset = offset;
-          const chunkLen = end - offset;
+          const chunkOffset = sendOffset;
+          const chunkLen = end - sendOffset;
           const ackPromise = new Promise((resolve, reject) => {
             pendingAcks.push({ resolve, reject, chunkOffset, chunkSize: chunkLen });
           });
@@ -2208,7 +2264,7 @@ export default function FileManager({
 
           sockForPipeline.emit(`sftp:upload_chunk:${file.name}`, buf);
           inFlight++;
-          offset = end;
+          sendOffset = end;
         }
 
         // Drain remaining in-flight ACKs
@@ -2216,13 +2272,12 @@ export default function FileManager({
           const p = pendingAcks[0];
           const ackResult = await new Promise((res, rej) => { p.resolve = res; p.reject = rej; })
             .catch(err => { pipelineError = err; return null; });
-          pendingAcks.shift();
           if (!ackResult || pipelineError) break;
           if (ackResult.rateLimited) { rateLimitResult = ackResult; break; }
           if (ackResult.guardBlocked) { guardResult = ackResult; break; }
-          offset = typeof ackResult.totalTransferred === 'number' ? ackResult.totalTransferred : offset;
+          ackedOffset = typeof ackResult.totalTransferred === 'number' ? ackResult.totalTransferred : ackedOffset;
           const now = Date.now();
-          const pct = Math.min(99, Math.round((offset / file.size) * 100));
+          const pct = Math.min(99, Math.round((ackedOffset / file.size) * 100));
           if (pct !== lastProgressPct && (now - lastProgressUi >= 250 || pct === 99)) {
             lastProgressUi = now;
             lastProgressPct = pct;
@@ -2232,6 +2287,7 @@ export default function FileManager({
         }
 
         cleanupPipeline();
+        offset = ackedOffset;
 
         if (pipelineError) throw pipelineError;
 
@@ -3786,13 +3842,13 @@ export default function FileManager({
                   <div className="bg-white/[0.03] p-2 rounded-lg border border-white/5">
                     <span className="text-[9px] uppercase tracking-wider text-white/40 block mb-0.5">Mode</span>
                     <span className={`text-[12px] font-bold block truncate ${
-                      uploadCpuMode === 'eco'
+                      !isRelayMode || uploadCpuMode === 'eco'
                         ? 'text-cyan-400'
                         : uploadCpuMode === 'turbo'
                         ? 'text-amber-400'
                         : 'text-indigo-300'
                     }`}>
-                      {uploadCpuMode === 'eco' ? '❄️ Eco' : uploadCpuMode === 'turbo' ? '🚀 Turbo' : '⚖️ Balanced'}
+                      {!isRelayMode ? 'Eco Locked' : uploadCpuMode === 'eco' ? 'Eco' : uploadCpuMode === 'turbo' ? 'Turbo' : 'Balanced'}
                     </span>
                   </div>
                 </div>
@@ -3851,10 +3907,12 @@ export default function FileManager({
                 {transfer.action === 'upload' && (
                   <div className="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-2.5">
                     {/* Control Header */}
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-center justify-between gap-3">
                       <div className="flex items-center gap-1.5 text-[11px] font-medium text-white/90">
-                        <Gauge size={13} className="text-cyan-400" />
-                        <span className="font-mono text-[10px] tracking-wide text-white/70">SPEED CONTROL</span>
+                        {isRelayMode ? <Unlock size={13} className="text-emerald-400" /> : <Lock size={13} className="text-cyan-400" />}
+                        <span className="font-mono text-[10px] tracking-wide text-white/70">
+                          {isRelayMode ? 'RELAY SPEED CONTROL' : 'SERVER ECO LOCK'}
+                        </span>
                       </div>
 
                       {/* Auto-Cool Illuminated Switch Button */}
@@ -3868,15 +3926,36 @@ export default function FileManager({
                           }
                         }}
                         title="Automatically switch to Eco mode if system is under heavy load"
+                        disabled={!isRelayMode}
                         className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono transition-all border ${
-                          autoCoolEnabled
+                          !isRelayMode
+                            ? 'bg-cyan-500/10 border-cyan-500/30 text-cyan-300 cursor-default'
+                            : autoCoolEnabled
                             ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300 shadow-[0_0_10px_rgba(16,185,129,0.2)]'
                             : 'bg-white/5 border-white/10 text-white/40 hover:text-white/70'
                         }`}
                       >
-                        <Zap size={10} className={autoCoolEnabled ? 'text-emerald-400 animate-pulse' : 'text-white/30'} />
-                        <span className="font-bold">{autoCoolEnabled ? 'AUTO-COOL ON' : 'AUTO-COOL OFF'}</span>
+                        {!isRelayMode ? <Lock size={10} className="text-cyan-300" /> : <Zap size={10} className={autoCoolEnabled ? 'text-emerald-400 animate-pulse' : 'text-white/30'} />}
+                        <span className="font-bold">{!isRelayMode ? 'ECO ONLY' : autoCoolEnabled ? 'AUTO-COOL ON' : 'AUTO-COOL OFF'}</span>
                       </button>
+                    </div>
+
+                    <div className={`flex items-start gap-2 rounded-lg border px-2.5 py-2 ${
+                      isRelayMode
+                        ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-200'
+                        : 'border-cyan-500/25 bg-cyan-500/10 text-cyan-200'
+                    }`}>
+                      {isRelayMode ? <Unlock size={14} className="mt-0.5 shrink-0 text-emerald-300" /> : <Lock size={14} className="mt-0.5 shrink-0 text-cyan-300" />}
+                      <div className="min-w-0">
+                        <div className="text-[11px] font-semibold">
+                          {isRelayMode ? 'Relay mode unlocks speed profiles' : 'Server mode always uses ECO'}
+                        </div>
+                        <div className="text-[9px] opacity-75 leading-relaxed">
+                          {isRelayMode
+                            ? 'Balanced and Turbo send through your local relay/WebRTC path.'
+                            : 'Balanced and Turbo require Local Relay mode, so server bandwidth stays protected.'}
+                        </div>
+                      </div>
                     </div>
 
                     {/* Segmented Speed Profile Selector */}
@@ -3904,20 +3983,27 @@ export default function FileManager({
                           activeClass: 'bg-gradient-to-br from-amber-600/30 to-rose-600/30 text-amber-200 border-amber-500/50 shadow-[0_0_15px_rgba(245,158,11,0.25)]' 
                         },
                       ].map((m) => {
-                        const isActive = uploadCpuMode === m.id;
+                        const isLocked = !isRelayMode && m.id !== 'eco';
+                        const isActive = (!isRelayMode && m.id === 'eco') || uploadCpuMode === m.id;
                         return (
                           <button
                             key={m.id}
                             type="button"
                             onClick={() => changeUploadCpuMode(m.id)}
-                            title={m.desc}
+                            disabled={isLocked}
+                            title={isLocked ? `${m.title} requires Local Relay mode` : m.desc}
                             className={`flex flex-col items-center justify-center py-2 px-1 rounded-lg text-center transition-all border ${
                               isActive
                                 ? `${m.activeClass} font-semibold scale-[1.02]`
+                                : isLocked
+                                ? 'bg-white/[0.02] border-white/5 text-white/25 cursor-not-allowed'
                                 : 'bg-transparent border-transparent text-white/40 hover:text-white/80 hover:bg-white/5'
                             }`}
                           >
-                            <span className="text-[11px] leading-tight font-medium">{m.badge}</span>
+                            <span className="text-[11px] leading-tight font-medium flex items-center gap-1">
+                              {isLocked && <Lock size={9} />}
+                              {m.badge}
+                            </span>
                             <span className="text-[9px] opacity-75 font-mono mt-0.5">{m.title}</span>
                           </button>
                         );
@@ -5021,8 +5107,14 @@ export default function FileManager({
                 </button>
              </div>
           )}
-          <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium ${typeof window !== 'undefined' && localStorage.getItem('ssh_monitor_ssh_mode') === 'local' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-blue-500/15 text-blue-400'}`}>
-            {typeof window !== 'undefined' && localStorage.getItem('ssh_monitor_ssh_mode') === 'local' ? '⚡ Local' : '☁ Server'}
+          <span
+            className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium ${
+              isRelayMode ? 'bg-emerald-500/15 text-emerald-400' : 'bg-cyan-500/15 text-cyan-400'
+            }`}
+            title={isRelayMode ? 'Local Relay mode: Balanced and Turbo upload profiles are available' : 'Server mode: uploads are locked to ECO'}
+          >
+            {isRelayMode ? <Unlock size={9} /> : <Lock size={9} />}
+            {isRelayMode ? 'Relay · Speed Unlocked' : 'Server · ECO Locked'}
           </span>
           {rtcActive && (
             <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium bg-violet-500/15 text-violet-400" title="File transfers use direct WebRTC P2P — bypassing the server entirely">

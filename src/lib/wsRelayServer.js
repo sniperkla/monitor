@@ -698,16 +698,69 @@ class WsTcpRelay {
                   });
                 };
 
+                const verifyUploadedSize = (cb) => {
+                  const acknowledgedSize = offset + bytesReceived;
+                  if (acknowledgedSize !== size) {
+                    cb(new Error(`Socket upload incomplete: acknowledged ${acknowledgedSize}/${size} bytes`));
+                    return;
+                  }
+
+                  getSftp((statErr, statSftp) => {
+                    if (!statErr && statSftp) {
+                      statSftp.stat(destPath, (err, stats) => {
+                        if (err) return cb(err);
+                        const remoteSize = stats?.size ?? 0;
+                        if (remoteSize !== size) {
+                          return cb(new Error(`Remote file size mismatch: wrote ${remoteSize}/${size} bytes`));
+                        }
+                        cb(null);
+                      });
+                      return;
+                    }
+
+                    const statCmd = `stat -c%s ${shellQuote(destPath)} 2>/dev/null || wc -c < ${shellQuote(destPath)} 2>/dev/null`;
+                    sshClient.exec(statCmd, (err, stream) => {
+                      if (err) return cb(err);
+                      let output = '';
+                      let stderr = '';
+                      stream.on('data', (d) => { output += d.toString(); });
+                      stream.stderr.on('data', (d) => { stderr += d.toString(); });
+                      stream.on('close', (code) => {
+                        const remoteSize = parseInt(output.trim(), 10);
+                        if (code !== 0 || Number.isNaN(remoteSize)) {
+                          return cb(new Error(stderr.trim() || 'Could not verify uploaded file size'));
+                        }
+                        if (remoteSize !== size) {
+                          return cb(new Error(`Remote file size mismatch: wrote ${remoteSize}/${size} bytes`));
+                        }
+                        cb(null);
+                      });
+                    });
+                  });
+                };
+
                 let completionSent = false;
+                let completionVerifying = false;
                 let completionTimer = null;
                 
                 const sendCompletion = () => {
-                  if (completionSent) return;
-                  completionSent = true;
+                  if (completionSent || completionVerifying) return;
+                  completionVerifying = true;
                   clearTimeout(completionTimer);
-                  console.log(`📤 [wsRelay] Sending sftp:action_success for upload: ${destPath}`);
-                  finalize(() => { 
-                    socket.emit('sftp:action_success', { action: 'upload', path: destPath }); 
+                  verifyUploadedSize((verifyErr) => {
+                    completionVerifying = false;
+                    if (verifyErr) {
+                      console.warn(`❌ [wsRelay] Upload size verification failed for ${destPath}: ${verifyErr.message}`);
+                      failTransfer(verifyErr, 'Upload verification failed');
+                      return;
+                    }
+
+                    if (completionSent) return;
+                    completionSent = true;
+                    console.log(`📤 [wsRelay] Sending sftp:action_success for upload: ${destPath}`);
+                    finalize(() => { 
+                      socket.emit('sftp:action_success', { action: 'upload', path: destPath }); 
+                    });
                   });
                 };
 

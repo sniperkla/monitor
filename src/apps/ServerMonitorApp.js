@@ -5,7 +5,7 @@ import {
   Activity, Server, HardDrive, Wifi, Cpu, MemoryStick, Download, Upload, 
   Clock, Package, Database, Box, RefreshCw, AlertCircle, CheckCircle2, 
   Zap, TrendingUp, TrendingDown, Minus, Pause, Play, RotateCw, Radio,
-  Copy, Check, Terminal, Shield, Sparkles, ExternalLink, Laptop, AlertTriangle,
+  Check, Shield, Sparkles, ExternalLink, Laptop, AlertTriangle,
   ChevronDown, ListFilter, Search, XOctagon, Skull, ArrowUpDown, Trash2, X,
   ZoomIn, ZoomOut, Maximize2, Minimize2, GripHorizontal, MoveHorizontal, ChevronLeft, ChevronRight, Sliders, ChevronsRight, ChevronsLeft, Eye, History, Navigation,
   Flame, FileSpreadsheet, ScrollText
@@ -104,6 +104,55 @@ const formatBytes = (bytes) => {
   const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), sizes.length - 1);
   if (i < 0) return '0 B';
   return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
+};
+
+const asFiniteNumber = (value) => {
+  const number = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(number) ? number : null;
+};
+
+// Draw selection markers against Chart.js' plot area instead of using DOM
+// offsets. This keeps the guide aligned while axis width, zoom, and labels vary.
+const timelineMarkerPlugin = {
+  id: 'timelineMarker',
+  afterDatasetsDraw(chart, _args, options) {
+    const index = options?.index;
+    if (!Number.isInteger(index) || index < 0) return;
+
+    const xScale = chart.scales.x;
+    const { ctx, chartArea } = chart;
+    if (!xScale || !chartArea) return;
+
+    const x = xScale.getPixelForValue(index);
+    if (!Number.isFinite(x) || x < chartArea.left || x > chartArea.right) return;
+
+    ctx.save();
+    ctx.strokeStyle = 'rgba(244, 63, 94, 0.95)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([5, 4]);
+    ctx.beginPath();
+    ctx.moveTo(x, chartArea.top);
+    ctx.lineTo(x, chartArea.bottom);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    chart.data.datasets.forEach((dataset, datasetIndex) => {
+      const value = asFiniteNumber(dataset.data?.[index]);
+      const point = chart.getDatasetMeta(datasetIndex)?.data?.[index];
+      if (value === null || !point) return;
+
+      const position = point.getProps(['x', 'y'], true);
+      if (!Number.isFinite(position.x) || !Number.isFinite(position.y)) return;
+      ctx.fillStyle = dataset.borderColor || '#f43f5e';
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(position.x, position.y, 4.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    });
+    ctx.restore();
+  },
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -281,7 +330,7 @@ function ScrollableChartCard({
   const [peakHighlight, setPeakHighlight] = useState(null);
   const [activeHighlightIdx, setActiveHighlightIdx] = useState(null);
 
-  // Compute peak and spike points for this specific card
+  // Compute peak and spike points for this specific card.
   const { cardPeakIdx, cardPeakVal, cardSpikeIndices } = useMemo(() => {
     const hist = spikeData?.history ?? [];
     const threshold = spikeData?.threshold ?? 80;
@@ -290,7 +339,8 @@ function ScrollableChartCard({
     const spikes = [];
 
     hist.forEach((d, i) => {
-      const val = typeof d === 'number' ? d : d?.value ?? 0;
+      const val = asFiniteNumber(typeof d === 'number' ? d : d?.value);
+      if (val === null) return;
       if (val > maxVal) {
         maxVal = val;
         maxIdx = i;
@@ -301,13 +351,14 @@ function ScrollableChartCard({
     });
 
     return {
-      cardPeakIdx: maxIdx >= 0 ? maxIdx : (totalPoints > 0 ? totalPoints - 1 : 0),
-      cardPeakVal: maxVal >= 0 ? maxVal : 0,
+      cardPeakIdx: maxIdx,
+      cardPeakVal: maxVal >= 0 ? maxVal : null,
       cardSpikeIndices: spikes
     };
-  }, [spikeData, totalPoints]);
+  }, [spikeData]);
 
   const formattedPeak = useMemo(() => {
+    if (cardPeakVal === null) return '—';
     if (spikeData?.formatValue) return spikeData.formatValue(cardPeakVal);
     if (spikeData?.isBytes) return `${formatBytes(cardPeakVal)}/s`;
     return `${cardPeakVal.toFixed(0)}%`;
@@ -464,50 +515,32 @@ function ScrollableChartCard({
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Per-card interactive spike & peak badge */}
-          {spikeData && totalPoints > 0 && (
-            cardSpikeIndices.length > 0 ? (
-              <div className="flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-rose-500/15 border border-rose-500/30 text-rose-400 text-[10px] font-medium shadow-xs">
-                <button
-                  type="button"
-                  onClick={() => jumpToNextCardSpike('next')}
-                  className="flex items-center gap-1 hover:underline cursor-pointer"
-                  title="Click to jump to spike"
-                >
-                  <Flame size={11} className="animate-pulse text-rose-400" />
-                  <span>{cardSpikeIndices.length} {cardSpikeIndices.length === 1 ? 'spike' : 'spikes'}</span>
-                </button>
-                <div className="flex items-center ml-1 border-l border-rose-500/30 pl-1 gap-0.5">
-                  <button
-                    type="button"
-                    onClick={() => jumpToNextCardSpike('prev')}
-                    className="px-0.5 hover:bg-rose-500/20 rounded cursor-pointer transition-colors"
-                    title="Previous spike"
-                  >
-                    ◀
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => jumpToNextCardSpike('next')}
-                    className="px-0.5 hover:bg-rose-500/20 rounded cursor-pointer transition-colors"
-                    title="Next spike"
-                  >
-                    ▶
-                  </button>
-                </div>
-              </div>
-            ) : (
+          {/* Peak remains visible even when a metric also has threshold breaches. */}
+          {spikeData && totalPoints > 0 && cardPeakIdx >= 0 && (
+            <div className="flex items-center gap-1">
               <button
                 type="button"
                 onClick={() => jumpToIndex(cardPeakIdx, `Peak: ${formattedPeak} at ${chartData?.labels?.[cardPeakIdx] || 'past'}`)}
-                className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 hover:bg-emerald-500/20 hover:border-emerald-500/40 text-emerald-400 text-[10px] font-medium transition-all cursor-pointer shadow-xs"
-                title={`Click to scroll directly to highest peak: ${formattedPeak}`}
+                className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 hover:bg-emerald-500/20 hover:border-emerald-500/40 text-emerald-400 text-[10px] font-medium transition-colors cursor-pointer"
+                title={`Focus highest recorded value: ${formattedPeak}`}
+                aria-label={`Focus peak ${formattedPeak}`}
               >
-                <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                <TrendingUp size={11} />
                 <span>Peak {formattedPeak}</span>
-                <span className="text-[9px] opacity-75 ml-0.5">⚡</span>
               </button>
-            )
+              {cardSpikeIndices.length > 0 && (
+                <div className="flex items-center gap-0.5 px-1 py-0.5 rounded-full bg-rose-500/15 border border-rose-500/30 text-rose-400 text-[10px] font-medium">
+                  <Flame size={11} />
+                  <span>{cardSpikeIndices.length}</span>
+                  <button type="button" onClick={() => jumpToNextCardSpike('prev')} className="p-0.5 rounded hover:bg-rose-500/20 cursor-pointer" title="Previous threshold breach" aria-label="Previous threshold breach">
+                    <ChevronLeft size={11} />
+                  </button>
+                  <button type="button" onClick={() => jumpToNextCardSpike('next')} className="p-0.5 rounded hover:bg-rose-500/20 cursor-pointer" title="Next threshold breach" aria-label="Next threshold breach">
+                    <ChevronRight size={11} />
+                  </button>
+                </div>
+              )}
+            </div>
           )}
 
           {/* Individual Zoom Selector per Card (Only affects THIS card) */}
@@ -603,34 +636,17 @@ function ScrollableChartCard({
       >
         {totalPoints > 0 ? (
           <div style={{ width: chartWidth, height: '100%', minWidth: '100%' }} className="relative overflow-hidden">
-            <Line data={chartData} options={chartOptions} />
-
-            {/* DOM-rendered high-visibility Dicut Guideline on clicked Peak / Spike */}
-            {activeHighlightIdx != null && totalPoints > 0 && (
-              <div
-                className="absolute top-0 bottom-6 pointer-events-none z-30 transition-all duration-75"
-                style={{
-                  // Calibrated to align with Chart.js grid area (offset for left Y-axis ticks and right padding)
-                  left: `calc(40px + (100% - 54px) * ${Math.min(1, Math.max(0, activeHighlightIdx / Math.max(1, totalPoints - 1)))})`,
-                }}
-              >
-                {/* Vertical Glowing Dashed Dicut Line */}
-                <div className="h-full w-[2px] -ml-[1px] border-l-2 border-dashed border-rose-500 shadow-[0_0_12px_rgba(244,63,94,0.95)]" />
-                
-                {/* Glowing Center Beacon Dot */}
-                <div className="absolute top-1/2 -translate-y-1/2 -left-[5px] w-3 h-3 rounded-full bg-rose-500 border-2 border-white shadow-[0_0_10px_rgba(244,63,94,1)]" />
-
-                {/* Floating Dicut Badge at the top — aligned so it never overflows */}
-                <div 
-                  className={`absolute top-1 px-2 py-0.5 rounded-md bg-slate-950/95 border border-rose-500/80 text-rose-300 text-[10px] font-mono font-bold whitespace-nowrap shadow-xl flex items-center gap-1.5 backdrop-blur-md ${
-                    activeHighlightIdx < 3 ? 'left-0' : activeHighlightIdx > totalPoints - 4 ? 'right-0' : '-translate-x-1/2'
-                  }`}
-                >
-                  <span className="w-1.5 h-1.5 rounded-full bg-rose-400 animate-pulse" />
-                  <span>⚡ Peak: {formattedPeak}</span>
-                </div>
-              </div>
-            )}
+            <Line
+              data={chartData}
+              options={{
+                ...chartOptions,
+                plugins: {
+                  ...chartOptions.plugins,
+                  timelineMarker: { index: activeHighlightIdx },
+                },
+              }}
+              plugins={[timelineMarkerPlugin]}
+            />
           </div>
         ) : (
           emptyState || (
@@ -720,6 +736,8 @@ function TimelineNavigator({
   networkHistory = [],
   diskHistory = [],
   onJumpToIndividualPeak,
+  timelineTimestamps = [],
+  onInspectLogs,
 }) {
   const totalPoints = timelineLabels.length;
   const oldestTime = timelineLabels[0] || '—';
@@ -727,8 +745,18 @@ function TimelineNavigator({
 
   const [scrubPreview, setScrubPreview] = useState(null);
   const [showLogModal, setShowLogModal] = useState(false);
-  const [copiedLogCmd, setCopiedLogCmd] = useState(null);
-  const [spikeThreshold, setSpikeThreshold] = useState(50); // default 50% threshold for sensitive spike detection
+  const [logResult, setLogResult] = useState(null);
+  const [logLoading, setLogLoading] = useState(false);
+  const [activeLogTab, setActiveLogTab] = useState('system');
+  const [dockerLiveLines, setDockerLiveLines] = useState([]);
+  const [dockerStreamState, setDockerStreamState] = useState('idle');
+  const dockerStreamRef = useRef(null);
+  const logTerminalRef = useRef(null);
+  const logTerminalAtBottomRef = useRef(true);
+  const [spikeThreshold, setSpikeThreshold] = useState(70);
+  const historyRefreshLabel = historyRange === '24h' ? 'refreshes every minute'
+    : historyRange === '7d' || historyRange === '30d' ? 'refreshes every 5 min'
+      : 'refreshes every 30 sec';
 
   // Compute peaks for ALL 4 metrics (CPU, RAM, Network, Disk) + high load spike indices
   const { spikeIndices, cpuPeak, ramPeak, netPeak, diskPeak } = useMemo(() => {
@@ -741,19 +769,23 @@ function TimelineNavigator({
     if (historyData?.data && historyData.data.length > 0) {
       historyData.data.forEach((d, i) => {
         const time = d.label || '';
-        const cpu = d.cpu ?? 0;
-        if (cpu > maxCpu.val) maxCpu = { val: cpu, idx: i, time };
+        const cpu = asFiniteNumber(d.cpu);
+        if (cpu !== null && cpu > maxCpu.val) maxCpu = { val: cpu, idx: i, time };
 
-        const ram = d.ram ?? 0;
-        if (ram > maxRam.val) maxRam = { val: ram, idx: i, time };
+        const ram = asFiniteNumber(d.ram);
+        if (ram !== null && ram > maxRam.val) maxRam = { val: ram, idx: i, time };
 
-        const net = (d.rxBytes || 0) + (d.txBytes || 0);
-        if (net > maxNet.val) maxNet = { val: net, idx: i, time };
+        const rx = asFiniteNumber(d.rxBytes) ?? 0;
+        const tx = asFiniteNumber(d.txBytes) ?? 0;
+        const net = rx + tx;
+        if (asFiniteNumber(d.rxBytes) !== null || asFiniteNumber(d.txBytes) !== null) {
+          if (net > maxNet.val) maxNet = { val: net, idx: i, time };
+        }
 
-        const disk = d.disk ?? 0;
-        if (disk > maxDisk.val) maxDisk = { val: disk, idx: i, time };
+        const disk = asFiniteNumber(d.disk);
+        if (disk !== null && disk > maxDisk.val) maxDisk = { val: disk, idx: i, time };
 
-        if (cpu >= spikeThreshold || ram >= spikeThreshold) {
+        if ((cpu !== null && cpu >= spikeThreshold) || (ram !== null && ram >= spikeThreshold)) {
           indices.push(i);
         }
       });
@@ -761,19 +793,23 @@ function TimelineNavigator({
       const len = Math.max(cpuHistory.length, ramHistory.length, networkHistory.length, diskHistory.length);
       for (let i = 0; i < len; i++) {
         const time = cpuHistory[i]?.time || ramHistory[i]?.time || timelineLabels[i] || '';
-        const cpu = cpuHistory[i]?.value ?? 0;
-        if (cpu > maxCpu.val) maxCpu = { val: cpu, idx: i, time };
+        const cpu = asFiniteNumber(cpuHistory[i]?.value);
+        if (cpu !== null && cpu > maxCpu.val) maxCpu = { val: cpu, idx: i, time };
 
-        const ram = ramHistory[i]?.value ?? 0;
-        if (ram > maxRam.val) maxRam = { val: ram, idx: i, time };
+        const ram = asFiniteNumber(ramHistory[i]?.value);
+        if (ram !== null && ram > maxRam.val) maxRam = { val: ram, idx: i, time };
 
-        const net = (networkHistory[i]?.rx || 0) + (networkHistory[i]?.tx || 0);
-        if (net > maxNet.val) maxNet = { val: net, idx: i, time };
+        const rx = asFiniteNumber(networkHistory[i]?.rx) ?? 0;
+        const tx = asFiniteNumber(networkHistory[i]?.tx) ?? 0;
+        const net = rx + tx;
+        if (asFiniteNumber(networkHistory[i]?.rx) !== null || asFiniteNumber(networkHistory[i]?.tx) !== null) {
+          if (net > maxNet.val) maxNet = { val: net, idx: i, time };
+        }
 
-        const disk = diskHistory[i]?.value ?? 0;
-        if (disk > maxDisk.val) maxDisk = { val: disk, idx: i, time };
+        const disk = asFiniteNumber(diskHistory[i]?.value);
+        if (disk !== null && disk > maxDisk.val) maxDisk = { val: disk, idx: i, time };
 
-        if (cpu >= spikeThreshold || ram >= spikeThreshold) {
+        if ((cpu !== null && cpu >= spikeThreshold) || (ram !== null && ram >= spikeThreshold)) {
           indices.push(i);
         }
       }
@@ -810,8 +846,90 @@ function TimelineNavigator({
     setScrubPreview(timelineLabels[nextIdx]);
   };
 
+  const stopDockerStream = () => {
+    if (dockerStreamRef.current) {
+      dockerStreamRef.current.close();
+      dockerStreamRef.current = null;
+    }
+    setDockerStreamState('idle');
+  };
+
+  const startDockerStream = () => {
+    if (!selectedConnection || dockerStreamRef.current) return;
+
+    setDockerLiveLines([]);
+    setDockerStreamState('connecting');
+    const stream = new EventSource(`/api/server-monitor/logs/stream?connectionId=${encodeURIComponent(selectedConnection)}`);
+    dockerStreamRef.current = stream;
+
+    stream.onmessage = (event) => {
+      try {
+        const { message } = JSON.parse(event.data);
+        if (message) {
+          setDockerLiveLines(previous => [...previous, message].slice(-400));
+          setDockerStreamState(message.startsWith('__MONITOR_ERROR__') ? 'error' : 'live');
+        }
+      } catch {
+        setDockerLiveLines(previous => [...previous, event.data].slice(-400));
+        setDockerStreamState('live');
+      }
+    };
+
+    stream.onerror = () => {
+      if (dockerStreamRef.current !== stream) return;
+      stream.close();
+      dockerStreamRef.current = null;
+      setDockerStreamState('error');
+    };
+  };
+
+  const selectLogTab = (tabId) => {
+    setActiveLogTab(tabId);
+    if (tabId === 'docker') startDockerStream();
+    else stopDockerStream();
+  };
+
+  const closeLogViewer = () => {
+    stopDockerStream();
+    setShowLogModal(false);
+  };
+
+  useEffect(() => () => {
+    if (dockerStreamRef.current) dockerStreamRef.current.close();
+  }, []);
+
+  useEffect(() => {
+    if (activeLogTab === 'docker' && logTerminalAtBottomRef.current && logTerminalRef.current) {
+      logTerminalRef.current.scrollTop = logTerminalRef.current.scrollHeight;
+    }
+  }, [activeLogTab, dockerLiveLines]);
+
+  const openLogViewer = async () => {
+    const index = Math.min(Math.max(0, Math.floor((scrubberRatio ?? 1) * (totalPoints - 1))), totalPoints - 1);
+    const timestamp = timelineTimestamps[index];
+    setShowLogModal(true);
+    setActiveLogTab('system');
+    setLogResult(null);
+    stopDockerStream();
+
+    if (!timestamp || !onInspectLogs) {
+      setLogResult({ error: 'No exact timestamp is available for this sample.' });
+      return;
+    }
+
+    setLogLoading(true);
+    try {
+      setLogResult(await onInspectLogs(timestamp));
+    } catch (error) {
+      setLogResult({ error: error.message || 'Unable to retrieve server logs.' });
+    } finally {
+      setLogLoading(false);
+    }
+  };
+
   // Jump to absolute highest peak in the active timeline (global: sync all to same point)
   const jumpToPeak = () => {
+    const peakIdx = cpuPeak?.idx ?? ramPeak?.idx ?? netPeak?.idx ?? diskPeak?.idx;
     if (peakIdx == null || peakIdx < 0 || totalPoints === 0) return;
     const nextRatio = totalPoints > 1 ? peakIdx / (totalPoints - 1) : 1;
     if (setSyncEnabled) setSyncEnabled(true);
@@ -917,7 +1035,7 @@ function TimelineNavigator({
             historyLoading ? (
               <span className="flex items-center gap-1 text-indigo-400"><RefreshCw size={11} className="animate-spin" /> Loading history…</span>
             ) : historyData ? (
-              <span>{historyData.count} data points · auto-refresh 30s</span>
+              <span>{historyData.count} data points · {historyRefreshLabel}</span>
             ) : null
           ) : (
             <span className="flex items-center gap-1.5">
@@ -1150,9 +1268,9 @@ function TimelineNavigator({
                   {/* View Server Logs Button */}
                   <button
                     type="button"
-                    onClick={() => setShowLogModal(true)}
+                    onClick={openLogViewer}
                     className="px-2 py-0.5 rounded-md bg-[var(--bg-tertiary)] hover:bg-[var(--bg-primary)] border border-[var(--border-color)] text-indigo-300 text-[10px] font-medium flex items-center gap-1 transition-colors cursor-pointer"
-                    title="View server log command for this timestamp"
+                    title="Open server logs for this timestamp"
                   >
                     <ScrollText size={10} className="text-indigo-400" />
                     Inspect Logs
@@ -1219,83 +1337,75 @@ function TimelineNavigator({
       {/* Log Inspection Dialog Modal */}
       {showLogModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-[9999]">
-          <div className="bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-2xl w-full max-w-md shadow-2xl p-5 space-y-4 animate-scale-in">
+          <div className="bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl w-full max-w-3xl shadow-2xl p-4 space-y-3 animate-scale-in">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <div className="p-2 rounded-xl bg-indigo-500/10 text-indigo-400">
+                <div className="p-2 rounded-lg bg-indigo-500/10 text-indigo-400">
                   <ScrollText size={18} />
                 </div>
                 <div>
-                  <h3 className="font-semibold text-sm">Inspect Logs at Past Time</h3>
-                  <p className="text-[11px] text-[var(--text-muted)] font-mono">Timestamp: {scrubPreview || 'selected time'}</p>
+                  <h3 className="font-semibold text-sm">Server logs</h3>
+                  <p className="text-[11px] text-[var(--text-muted)] font-mono">
+                    {logResult?.from ? `${new Date(logResult.from).toLocaleString()} to ${new Date(logResult.until).toLocaleString()}` : `Loading ${scrubPreview || 'selected time'}`}
+                  </p>
                 </div>
               </div>
               <button
                 type="button"
-                onClick={() => setShowLogModal(false)}
+                onClick={closeLogViewer}
                 className="p-1 rounded-lg hover:bg-[var(--bg-tertiary)] text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer"
+                aria-label="Close log viewer"
               >
                 <X size={16} />
               </button>
             </div>
 
-            <p className="text-xs text-[var(--text-muted)]">
-              Run these commands on your server or in the Terminal App to inspect what happened around this timestamp:
-            </p>
-
-            <div className="space-y-2 text-xs">
-              {/* Journalctl / Systemd */}
-              <div className="p-2.5 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] space-y-1">
-                <div className="flex items-center justify-between text-[11px] font-medium text-indigo-400">
-                  <span>Systemd / Journalctl</span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      navigator.clipboard.writeText(`journalctl --since "${scrubPreview || '10 minutes ago'}" -n 100 --no-pager`);
-                      setCopiedLogCmd('journalctl');
-                      setTimeout(() => setCopiedLogCmd(null), 2000);
-                    }}
-                    className="text-[10px] text-[var(--text-muted)] hover:text-white flex items-center gap-1 cursor-pointer"
-                  >
-                    {copiedLogCmd === 'journalctl' ? <Check size={11} className="text-emerald-400" /> : <Copy size={11} />}
-                    {copiedLogCmd === 'journalctl' ? 'Copied' : 'Copy'}
+            <div className="flex items-center justify-between gap-2 border-b border-[var(--border-color)]">
+              <div className="flex items-center gap-1">
+                {[
+                  { id: 'system', label: 'System journal' },
+                  { id: 'docker', label: 'Docker' },
+                ].map(tab => (
+                  <button key={tab.id} type="button" onClick={() => selectLogTab(tab.id)} className={`px-2.5 py-1.5 text-xs font-medium border-b-2 transition-colors cursor-pointer ${activeLogTab === tab.id ? 'border-indigo-400 text-indigo-300' : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]'}`}>
+                    <span className="flex items-center gap-1.5">
+                      {tab.label}
+                      {tab.id === 'docker' && dockerStreamState !== 'idle' && <span className={`w-1.5 h-1.5 rounded-full ${dockerStreamState === 'live' ? 'bg-emerald-400 animate-pulse' : dockerStreamState === 'connecting' ? 'bg-amber-400 animate-pulse' : 'bg-rose-400'}`} />}
+                    </span>
                   </button>
-                </div>
-                <code className="block font-mono text-[10px] text-[var(--text-primary)] bg-[var(--bg-primary)] p-1.5 rounded select-all break-all">
-                  journalctl --since &quot;{scrubPreview || '10 minutes ago'}&quot; -n 100 --no-pager
-                </code>
+                ))}
               </div>
+              <button type="button" onClick={openLogViewer} disabled={logLoading} className="p-1.5 rounded hover:bg-[var(--bg-tertiary)] text-[var(--text-muted)] hover:text-[var(--text-primary)] disabled:opacity-50 cursor-pointer" title="Reload logs" aria-label="Reload logs">
+                <RefreshCw size={14} className={logLoading ? 'animate-spin' : ''} />
+              </button>
+            </div>
 
-              {/* Docker Logs */}
-              <div className="p-2.5 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] space-y-1">
-                <div className="flex items-center justify-between text-[11px] font-medium text-emerald-400">
-                  <span>Docker Containers</span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      navigator.clipboard.writeText(`docker ps -q | xargs -L 1 docker logs --tail 50`);
-                      setCopiedLogCmd('docker');
-                      setTimeout(() => setCopiedLogCmd(null), 2000);
-                    }}
-                    className="text-[10px] text-[var(--text-muted)] hover:text-white flex items-center gap-1 cursor-pointer"
-                  >
-                    {copiedLogCmd === 'docker' ? <Check size={11} className="text-emerald-400" /> : <Copy size={11} />}
-                    {copiedLogCmd === 'docker' ? 'Copied' : 'Copy'}
-                  </button>
-                </div>
-                <code className="block font-mono text-[10px] text-[var(--text-primary)] bg-[var(--bg-primary)] p-1.5 rounded select-all break-all">
-                  docker ps -q | xargs -L 1 docker logs --tail 50
-                </code>
-              </div>
+            <div
+              ref={logTerminalRef}
+              onScroll={(event) => {
+                const element = event.currentTarget;
+                logTerminalAtBottomRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 24;
+              }}
+              className="h-80 overflow-auto rounded-lg border border-[var(--border-color)] bg-[#0b1020] p-3 font-mono text-[11px] leading-5 text-slate-200 whitespace-pre-wrap break-words custom-scrollbar"
+              aria-live="polite"
+            >
+              {logLoading ? (
+                <span className="flex items-center gap-2 text-indigo-300"><RefreshCw size={14} className="animate-spin" /> Connecting to server and retrieving logs...</span>
+              ) : logResult?.error ? (
+                <span className="text-rose-300">{logResult.error}</span>
+              ) : (
+                activeLogTab === 'docker'
+                  ? [logResult?.docker, ...dockerLiveLines].filter(Boolean).join('\n') || 'No Docker entries were returned for this window.'
+                  : logResult?.system || 'No system journal entries were returned for this window.'
+              )}
             </div>
 
             <div className="flex justify-end pt-2">
               <button
                 type="button"
-                onClick={() => setShowLogModal(false)}
+                onClick={closeLogViewer}
                 className="px-4 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold cursor-pointer shadow-sm transition-colors"
               >
-                Done
+                Close
               </button>
             </div>
           </div>
@@ -1571,15 +1681,15 @@ export default function ServerMonitorApp() {
 
         // Update charts on client machine
         const timestamp = new Date(processed.timestampMs || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        setCpuHistory(prev => [...prev.slice(-359), { time: timestamp, value: processed.cpu?.usage || 0 }]);
-        setRamHistory(prev => [...prev.slice(-359), { time: timestamp, value: processed.memory?.usedPercent || 0 }]);
+        setCpuHistory(prev => [...prev.slice(-359), { time: timestamp, t: processed.timestampMs || Date.now(), value: processed.cpu?.usage || 0 }]);
+        setRamHistory(prev => [...prev.slice(-359), { time: timestamp, t: processed.timestampMs || Date.now(), value: processed.memory?.usedPercent || 0 }]);
         setNetworkHistory(prev => [...prev.slice(-359), { 
-          time: timestamp, 
+          time: timestamp, t: processed.timestampMs || Date.now(),
           rx: processed.network?.rxRate || 0, 
           tx: processed.network?.txRate || 0 
         }]);
         const primaryDisk = processed.disk?.filesystems?.[0];
-        setDiskHistory(prev => [...prev.slice(-359), { time: timestamp, value: primaryDisk?.usedPercent || 0 }]);
+        setDiskHistory(prev => [...prev.slice(-359), { time: timestamp, t: processed.timestampMs || Date.now(), value: primaryDisk?.usedPercent || 0 }]);
       } else {
         const errData = await response.json();
         setError(errData.error || 'Failed to fetch metrics');
@@ -1685,15 +1795,15 @@ export default function ServerMonitorApp() {
     setError(null);
 
     const timestamp = new Date(processed.timestampMs || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    setCpuHistory(prev => [...prev.slice(-359), { time: timestamp, value: processed.cpu?.usage || 0 }]);
-    setRamHistory(prev => [...prev.slice(-359), { time: timestamp, value: processed.memory?.usedPercent || 0 }]);
+    setCpuHistory(prev => [...prev.slice(-359), { time: timestamp, t: processed.timestampMs || Date.now(), value: processed.cpu?.usage || 0 }]);
+    setRamHistory(prev => [...prev.slice(-359), { time: timestamp, t: processed.timestampMs || Date.now(), value: processed.memory?.usedPercent || 0 }]);
     setNetworkHistory(prev => [...prev.slice(-359), { 
-      time: timestamp, 
+      time: timestamp, t: processed.timestampMs || Date.now(),
       rx: processed.network?.rxRate || 0, 
       tx: processed.network?.txRate || 0 
     }]);
     const primaryDisk = processed.disk?.filesystems?.[0];
-    setDiskHistory(prev => [...prev.slice(-359), { time: timestamp, value: primaryDisk?.usedPercent || 0 }]);
+    setDiskHistory(prev => [...prev.slice(-359), { time: timestamp, t: processed.timestampMs || Date.now(), value: primaryDisk?.usedPercent || 0 }]);
 
     // Throttled DB snapshot — at most once every 30 seconds
     const now = Date.now();
@@ -2088,6 +2198,26 @@ export default function ServerMonitorApp() {
     }
     return cpuHistory.map(d => d.time);
   }, [historyData, cpuHistory]);
+
+  const activeTimelineTimestamps = useMemo(() => {
+    if (historyData?.data && historyData.data.length > 0) {
+      return historyData.data.map(d => d.t);
+    }
+    return cpuHistory.map(d => d.t);
+  }, [historyData, cpuHistory]);
+
+  const inspectHistoryLogs = useCallback(async (timestamp) => {
+    const response = await apiFetch('/api/server-monitor/logs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ connectionId: selectedConnection, timestamp }),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.success) {
+      throw new Error(result.error || 'Unable to retrieve server logs.');
+    }
+    return result;
+  }, [apiFetch, selectedConnection]);
 
   // Lightweight Chart configuration (optimized for 60fps scrolling & dense points)
   const chartOptions = {
@@ -2649,6 +2779,8 @@ export default function ServerMonitorApp() {
               networkHistory={networkHistory}
               diskHistory={diskHistory}
               onJumpToIndividualPeak={() => setJumpToIndividualPeakSignal(s => s + 1)}
+              timelineTimestamps={activeTimelineTimestamps}
+              onInspectLogs={inspectHistoryLogs}
             />
 
             {/* Summary stats row — at the top for quick reference */}

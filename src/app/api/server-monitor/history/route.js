@@ -115,12 +115,10 @@ export async function GET(req) {
       .hint({ connectionId: 1, recordedAt: 1 })
       .lean();
 
-    // Downsample if raw count exceeds limit (pick evenly spaced points)
-    let points = raw;
-    if (raw.length > limit) {
-      const step = raw.length / limit;
-      points = Array.from({ length: limit }, (_, i) => raw[Math.round(i * step)]).filter(Boolean);
-    }
+    // Keep the full-resolution maxima in a reduced series. A purely even sample
+    // can skip a short CPU, memory, disk, or traffic peak and make the chart and
+    // its peak summary disagree with the underlying data.
+    const points = downsamplePreservingPeaks(raw, limit);
 
     // Format for frontend
     const data = points.map(p => {
@@ -165,4 +163,44 @@ function formatTime(date, windowMs) {
   if (windowMs >= 86_400_000) return `${mo}/${d} ${h}:${m}`;
   // 1h / 6h: show HH:mm:ss
   return `${h}:${m}:${s}`;
+}
+
+function downsamplePreservingPeaks(points, limit) {
+  if (points.length <= limit) return points;
+
+  const required = new Set([0, points.length - 1]);
+  const peakAccessors = [
+    point => point.cpu,
+    point => point.ram,
+    point => point.disk,
+    point => (point.rxBytes ?? 0) + (point.txBytes ?? 0),
+  ];
+
+  peakAccessors.forEach(accessor => {
+    let peakIndex = -1;
+    let peakValue = -Infinity;
+
+    points.forEach((point, index) => {
+      const value = Number(accessor(point));
+      if (Number.isFinite(value) && value > peakValue) {
+        peakValue = value;
+        peakIndex = index;
+      }
+    });
+
+    if (peakIndex >= 0) required.add(peakIndex);
+  });
+
+  const availableSlots = Math.max(0, limit - required.size);
+  if (availableSlots > 0) {
+    const step = (points.length - 1) / (availableSlots + 1);
+    for (let i = 1; i <= availableSlots; i += 1) {
+      required.add(Math.round(i * step));
+    }
+  }
+
+  return [...required]
+    .sort((a, b) => a - b)
+    .slice(0, limit)
+    .map(index => points[index]);
 }

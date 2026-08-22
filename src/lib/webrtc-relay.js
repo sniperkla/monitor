@@ -531,6 +531,10 @@ export async function streamTarUpload(peer, connId, entries, destPath, archiveFi
  */
 export function getPacingDelayMs() {
   if (typeof window === 'undefined') return 3;
+  // Hidden browser tabs clamp setTimeout heavily. During an active upload that
+  // turns small pacing delays into multi-second stalls, so rely on transport
+  // backpressure instead of timer sleeps while the tab is backgrounded.
+  if (document.visibilityState === 'hidden' && window.__sshMonitorActiveUploadCount > 0) return 0;
   const mode = window.__uploadCpuMode || localStorage.getItem('ssh_monitor_upload_cpu_mode') || 'balanced';
   switch (mode) {
     case 'eco':      return 20;

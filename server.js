@@ -3611,25 +3611,76 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                     socket.emit('sftp:can_upload', { filename, offset: actualOffset });
                     armInactivityTimer();
 
-                    let completionSent = false;
-                    const sendCompletion = () => {
-                      if (completionSent) return;
-                      completionSent = true;
-                      console.log(`📤 [server] Sending sftp:action_success for upload: ${destPath}`);
-                      finalize(() => {
-                        sessionData.pendingUploadPaths.delete(destPath);
-                        if (sessionData?.recentUploads) {
-                          sessionData.recentUploads.set(destPath, {
-                            uploadedAt: Date.now(),
-                            size,
-                            filename,
-                          });
-                          if (sessionData.recentUploads.size > 50) {
-                            const oldestKey = sessionData.recentUploads.keys().next().value;
-                            if (oldestKey) sessionData.recentUploads.delete(oldestKey);
+                    const verifyUploadedSize = (cb) => {
+                      const acknowledgedSize = actualOffset + bytesReceivedInSession;
+                      if (acknowledgedSize !== size) {
+                        cb(new Error(`Socket upload incomplete: acknowledged ${acknowledgedSize}/${size} bytes`));
+                        return;
+                      }
+
+                      if (!useFallback && sftp) {
+                        sftp.stat(destPath, (statErr, stats) => {
+                          if (statErr) return cb(statErr);
+                          const remoteSize = stats?.size ?? 0;
+                          if (remoteSize !== size) {
+                            return cb(new Error(`Remote file size mismatch: wrote ${remoteSize}/${size} bytes`));
                           }
+                          cb(null);
+                        });
+                        return;
+                      }
+
+                      const statCmd = `stat -c%s ${shellQuote(destPath)} 2>/dev/null || wc -c < ${shellQuote(destPath)} 2>/dev/null`;
+                      sshClient.exec(statCmd, (statErr, statStream) => {
+                        if (statErr) return cb(statErr);
+                        let output = '';
+                        let stderr = '';
+                        statStream.on('data', (d) => { output += d.toString(); });
+                        statStream.stderr.on('data', (d) => { stderr += d.toString(); });
+                        statStream.on('close', (code) => {
+                          const remoteSize = parseInt(output.trim(), 10);
+                          if (code !== 0 || Number.isNaN(remoteSize)) {
+                            return cb(new Error(stderr.trim() || 'Could not verify uploaded file size'));
+                          }
+                          if (remoteSize !== size) {
+                            return cb(new Error(`Remote file size mismatch: wrote ${remoteSize}/${size} bytes`));
+                          }
+                          cb(null);
+                        });
+                      });
+                    };
+
+                    let completionSent = false;
+                    let completionVerifying = false;
+                    const sendCompletion = () => {
+                      if (completionSent || completionVerifying) return;
+                      completionVerifying = true;
+                      verifyUploadedSize((verifyErr) => {
+                        completionVerifying = false;
+                        if (verifyErr) {
+                          console.warn(`❌ [server] Upload size verification failed for ${destPath}: ${verifyErr.message}`);
+                          failTransfer(verifyErr, 'Upload verification failed');
+                          return;
                         }
-                        socket.emit('sftp:action_success', { action: 'upload', path: destPath });
+
+                        if (completionSent) return;
+                        completionSent = true;
+                        console.log(`📤 [server] Sending sftp:action_success for upload: ${destPath}`);
+                        finalize(() => {
+                          sessionData.pendingUploadPaths.delete(destPath);
+                          if (sessionData?.recentUploads) {
+                            sessionData.recentUploads.set(destPath, {
+                              uploadedAt: Date.now(),
+                              size,
+                              filename,
+                            });
+                            if (sessionData.recentUploads.size > 50) {
+                              const oldestKey = sessionData.recentUploads.keys().next().value;
+                              if (oldestKey) sessionData.recentUploads.delete(oldestKey);
+                            }
+                          }
+                          socket.emit('sftp:action_success', { action: 'upload', path: destPath });
+                        });
                       });
                     };
 
@@ -5163,4 +5214,3 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
 
 // Export getModels for use by wsRelayServer
 module.exports = { getModels };
-
