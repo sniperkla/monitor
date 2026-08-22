@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom';
 import {
   Search, Terminal, Settings, Monitor, StickyNote, Book, Folder,
   ArrowRight, Command, CornerDownLeft, ChevronUp, ChevronDown,
-  Hash, FileText, Server, Globe, Database, Shield, Layers, X, GitBranch, CloudSync, Rocket, CloudCog, ShieldCheck
+  Hash, FileText, Server, Globe, Database, Shield, Layers, X, GitBranch, CloudSync, Rocket, CloudCog, ShieldCheck, BrickWallShield
 } from 'lucide-react';
 import { useOS } from '@/context/OSContext';
 import { useApp } from '@/context/AppContext';
@@ -34,6 +34,9 @@ const ServerBackupApp = dynamic(() => import('@/apps/ServerBackupApp'), {
 const RcloneApp = dynamic(() => import('@/apps/RcloneApp'), {
   ssr: false,
 });
+const FirewallBlocklistApp = dynamic(() => import('@/apps/FirewallBlocklistApp'), {
+  ssr: false,
+});
 
 const SYSTEM_APPS = [
   { id: 'ssh-manager', titleKey: 'ssh.manager', fallback: 'SSH Manager', icon: Monitor, component: <SSHApp />, category: 'app', initialWidth: 1400, initialHeight: 820 },
@@ -45,6 +48,7 @@ const SYSTEM_APPS = [
   { id: 'mongo-backup', titleKey: null, fallback: 'Mongo Sync', icon: Database, component: <MongoBackupApp />, category: 'app', initialWidth: 1050, initialHeight: 680 },
   { id: 'rclone', titleKey: null, fallback: 'Rclone Sync', icon: CloudCog, component: <RcloneApp />, category: 'app', initialWidth: 1100, initialHeight: 720 },
   { id: 'server-backup', titleKey: null, fallback: 'Server Backup', icon: ShieldCheck, component: <ServerBackupApp />, category: 'app', initialWidth: 1200, initialHeight: 780 },
+  { id: 'firewall-blocklist', titleKey: null, fallback: 'Firewall Blocklist', icon: BrickWallShield, component: <FirewallBlocklistApp />, category: 'app', initialWidth: 1180, initialHeight: 780 },
   { id: 'settings', titleKey: 'common.settings', fallback: 'Settings', icon: Settings, component: <SettingsApp />, category: 'app', initialWidth: 700, initialHeight: 500 },
 ];
 

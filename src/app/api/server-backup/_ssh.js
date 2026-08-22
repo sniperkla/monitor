@@ -164,10 +164,18 @@ export function execCommand(sshConfig, command, options = {}) {
               try { conn.end(); } catch {}
               
               // Fallback non-pooled execution
-              return execCommand(sshConfig, command, { pool: false }).then(resolve).catch(reject);
+              return execCommand(sshConfig, command, { ...options, pool: false }).then(resolve).catch(reject);
             }
-            stream.on('data', (d) => { stdout += d.toString(); });
-            stream.stderr.on('data', (d) => { stderr += d.toString(); });
+            stream.on('data', (d) => {
+              const chunk = d.toString();
+              stdout += chunk;
+              options.onStdout?.(chunk);
+            });
+            stream.stderr.on('data', (d) => {
+              const chunk = d.toString();
+              stderr += chunk;
+              options.onStderr?.(chunk);
+            });
             stream.on('close', (code) => {
               const exitCode = typeof code === 'number' ? code : (stderr.trim() && !stdout.trim() ? 1 : 0);
               resolve({ code: exitCode, stdout, stderr });
@@ -176,7 +184,7 @@ export function execCommand(sshConfig, command, options = {}) {
         })
         .catch((err) => {
           // If pool creation failed, try direct connection once
-          execCommand(sshConfig, command, { pool: false }).then(resolve).catch(reject);
+          execCommand(sshConfig, command, { ...options, pool: false }).then(resolve).catch(reject);
         });
     });
   }
@@ -189,8 +197,16 @@ export function execCommand(sshConfig, command, options = {}) {
     conn.on('ready', () => {
       conn.exec(command, (err, stream) => {
         if (err) { conn.end(); return reject(err); }
-        stream.on('data', (d) => { stdout += d.toString(); });
-        stream.stderr.on('data', (d) => { stderr += d.toString(); });
+        stream.on('data', (d) => {
+          const chunk = d.toString();
+          stdout += chunk;
+          options.onStdout?.(chunk);
+        });
+        stream.stderr.on('data', (d) => {
+          const chunk = d.toString();
+          stderr += chunk;
+          options.onStderr?.(chunk);
+        });
         stream.on('close', (code) => {
           conn.end();
           const exitCode = typeof code === 'number' ? code : (stderr.trim() && !stdout.trim() ? 1 : 0);
@@ -203,17 +219,32 @@ export function execCommand(sshConfig, command, options = {}) {
   });
 }
 
-export function sftpUpload(sshConfig, localPath, remotePath) {
+export function sftpUpload(sshConfig, localPath, remotePath, { onProgress } = {}) {
   return new Promise((resolve, reject) => {
     const fs = require('fs');
+    let totalBytes = 0;
+    try { totalBytes = fs.statSync(localPath).size; } catch {}
     const conn = new Client();
     conn.on('ready', () => {
       conn.sftp((err, sftp) => {
         if (err) { conn.end(); return reject(err); }
         const readStream = fs.createReadStream(localPath);
         const writeStream = sftp.createWriteStream(remotePath);
+        let lastReported = -1;
+        const reportProgress = () => {
+          const transferred = Number.isFinite(writeStream.bytesWritten) ? writeStream.bytesWritten : (readStream.bytesRead || 0);
+          if (transferred === lastReported && transferred !== totalBytes) return;
+          lastReported = transferred;
+          onProgress?.(transferred, totalBytes);
+        };
+        // ssh2 advances bytesWritten only as its SFTP stream drains, so this
+        // represents remote upload progress rather than merely local file reads.
+        writeStream.on('drain', reportProgress);
+        readStream.on('data', () => {
+          if (!Number.isFinite(writeStream.bytesWritten)) reportProgress();
+        });
         readStream.pipe(writeStream);
-        writeStream.on('close', () => { conn.end(); resolve(); });
+        writeStream.on('close', () => { onProgress?.(totalBytes, totalBytes); conn.end(); resolve(); });
         writeStream.on('error', (e) => { conn.end(); reject(e); });
         readStream.on('error', (e) => { conn.end(); reject(e); });
       });

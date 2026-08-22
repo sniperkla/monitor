@@ -1,5 +1,5 @@
 import React from 'react';
-import { Terminal, Settings, Monitor, Database, Folder, MonitorPlay, Server, FileText, Globe, StickyNote, Book, BookOpen, Shield, Radio, Radiation, Cpu, HardDrive, Wrench, Archive, CloudSync, Rocket, CloudCog, ShieldCheck } from 'lucide-react';
+import { Terminal, Settings, Monitor, Database, Folder, MonitorPlay, Server, FileText, Globe, StickyNote, Book, BookOpen, Shield, Radio, Radiation, Cpu, HardDrive, Wrench, Archive, CloudSync, Rocket, CloudCog, ShieldCheck, BrickWallShield } from 'lucide-react';
 
 const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "glass", isDesktop = false }) => {
   const iconId = id?.split('-')[0] || id;
@@ -629,6 +629,7 @@ const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "g
     mongo: Database,
     rclone: CloudCog,
     server: ShieldCheck,
+    firewall: BrickWallShield,
     auto: Rocket,
   }[iconId] || Globe;
 

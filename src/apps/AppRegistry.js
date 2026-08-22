@@ -1,4 +1,4 @@
-import { Terminal, Settings, Monitor, Database, Folder, AlertCircle, StickyNote, Book, MonitorPlay, Server, FileText, GitBranch, CloudSync, Rocket, HardDrive, CloudCog, ShieldCheck, Activity } from 'lucide-react';
+import { Terminal, Settings, Monitor, Database, Folder, AlertCircle, StickyNote, Book, MonitorPlay, Server, FileText, GitBranch, CloudSync, Rocket, HardDrive, CloudCog, ShieldCheck, Activity, BrickWallShield } from 'lucide-react';
 
 import TerminalApp from '@/apps/TerminalApp';
 import SettingsApp from '@/apps/SettingsApp';
@@ -15,9 +15,15 @@ import MongoBackupApp from '@/apps/MongoBackupApp';
 import ServerBackupApp from '@/apps/ServerBackupApp';
 import RcloneApp from '@/apps/RcloneApp';
 import ServerMonitorApp from '@/apps/ServerMonitorApp';
+import FirewallBlocklistApp from '@/apps/FirewallBlocklistApp';
 
 // Add other apps here as needed
 export const AppRegistry = {
+  'firewall-blocklist': {
+    component: FirewallBlocklistApp,
+    icon: BrickWallShield,
+    defaultTitle: 'Firewall Blocklist'
+  },
   'server-monitor': {
     component: ServerMonitorApp,
     icon: Activity,
