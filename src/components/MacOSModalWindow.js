@@ -386,7 +386,7 @@ export default function MacOSModalWindow({
                   style={{
                     background: 'var(--window-bg)',
                     boxShadow: effectiveMaximized ? 'none' : '0 25px 50px -12px rgba(0,0,0,0.5), 0 0 0 1px var(--border-color)',
-                    backdropFilter: osState.glassmorphism ? 'blur(20px)' : 'none',
+                    backdropFilter: osState.glassmorphism ? 'blur(var(--glass-blur, 20px))' : 'none',
                   }}
                 >
                   {showTitleBar && (
@@ -423,7 +423,7 @@ export default function MacOSModalWindow({
                 style={{
                   background: 'var(--window-bg)',
                   boxShadow: effectiveMaximized ? 'none' : '0 25px 50px -12px rgba(0,0,0,0.5), 0 0 0 1px var(--border-color)',
-                  backdropFilter: osState.glassmorphism ? 'blur(20px)' : 'none',
+                  backdropFilter: osState.glassmorphism ? 'blur(var(--glass-blur, 20px))' : 'none',
                 }}
               >
                 {showTitleBar && (

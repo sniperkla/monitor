@@ -728,6 +728,7 @@ export default function DesktopEnvironment({ bootPhase }) {
       onMouseUp={handleMouseUp}
       className={`h-screen w-screen relative overflow-hidden bg-cover bg-center select-none desktop-env ${!osState.glassmorphism ? 'no-glass' : ''} ${isShaking ? 'fallout-screen-shake' : ''}`}
       style={{
+        '--glass-blur': `${osState.glassIntensity ?? 20}px`,
         backgroundImage: `url("${osState.wallpaper}")`,
         fontFamily: "'Inter', sans-serif",
         transition: 'background-image 0.5s ease, filter 0.3s ease',
@@ -878,7 +879,7 @@ export default function DesktopEnvironment({ bootPhase }) {
                 top: contextMenu.y, 
                 left: contextMenu.x,
                 background: osState.glassmorphism ? 'var(--window-bg)' : 'var(--bg-primary)',
-                backdropFilter: 'blur(24px)',
+                backdropFilter: 'blur(var(--glass-blur, 24px))',
                 boxShadow: '0 8px 32px var(--shadow-strong), 0 0 0 1px var(--border-color)'
               }}
             >
@@ -1037,7 +1038,7 @@ export default function DesktopEnvironment({ bootPhase }) {
               top: Math.min(dropMenu.y, window.innerHeight - 200),
               left: Math.min(dropMenu.x, window.innerWidth - 240),
               background: 'var(--window-bg)',
-              backdropFilter: 'blur(20px)',
+              backdropFilter: 'blur(var(--glass-blur, 20px))',
               boxShadow: '0 8px 32px rgba(0,0,0,0.6), 0 0 0 1px var(--border-color)',
             }}
           >
@@ -1145,7 +1146,7 @@ function ContextSubmenuItem({ icon: Icon, label, children, active, onHover, onLe
           className="absolute left-full top-0 ml-0.5 w-52 py-1.5 rounded-lg border border-[var(--border-color)] shadow-2xl z-10"
           style={{
             background: 'var(--window-bg)',
-            backdropFilter: 'blur(24px)',
+            backdropFilter: 'blur(var(--glass-blur, 24px))',
             boxShadow: '0 8px 32px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.04)'
           }}
         >

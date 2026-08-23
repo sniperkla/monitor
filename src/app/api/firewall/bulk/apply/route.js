@@ -4,6 +4,7 @@ import { authOptions } from '@/lib/auth';
 import { getSshConfig, execCommand, sftpUpload } from '@/app/api/server-backup/_ssh';
 import { getBulkBatch, discardBulkBatch } from '@/lib/firewallBulkImport';
 import { buildIpSetApplyScript } from '@/lib/firewallRemoteApply';
+import { remoteClientIps, sanitizeManualEntries, getConflictingEntries } from '@/lib/firewallBlocklist';
 
 const matchesConfirmation = (value) => {
   const v = String(value || '').trim().toLowerCase();
@@ -47,11 +48,16 @@ function remoteProgressReporter(emit) {
 export async function POST(request) {
   try {
     if (!await getServerSession(authOptions)) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-    const { connectionId, batchId, confirmation } = await request.json();
-    if (!connectionId || !batchId) return NextResponse.json({ success: false, error: 'connectionId and batchId are required' }, { status: 400 });
+    const { connectionId, batchId, confirmation, manualBlocks = [] } = await request.json();
+    if (!connectionId || !batchId) return NextResponse.json({ success: false, error: 'connectionId and batchId are required.' }, { status: 400 });
     if (!matchesConfirmation(confirmation)) return NextResponse.json({ success: false, error: 'Type confirm to confirm this firewall change.' }, { status: 400 });
     const batch = getBulkBatch(batchId);
     if (batch.conflicts.length) return NextResponse.json({ success: false, error: 'Blocked to prevent self-lockout.', conflicts: batch.conflicts }, { status: 409 });
+    const cleanManual = sanitizeManualEntries(manualBlocks);
+    if (cleanManual.length !== manualBlocks.length) return NextResponse.json({ success: false, error: 'Manual blocks contain invalid or non-IPv4 entries.' }, { status: 400 });
+    const bulkProtection = [...new Set([...remoteClientIps(request.headers), ...(batch.protectedIps || [])])];
+    const manualConflicts = bulkProtection.length ? getConflictingEntries(cleanManual, bulkProtection) : [];
+    if (manualConflicts.length) return NextResponse.json({ success: false, error: 'Blocked to prevent self-lockout.', conflicts: manualConflicts }, { status: 409 });
 
     const remoteFile = `/tmp/monitor-firewall-${batchId}.txt`;
     const runApply = async (emit) => {
@@ -69,7 +75,7 @@ export async function POST(request) {
         },
       });
       emit?.({ type: 'progress', progress: 24, message: 'Upload complete — starting safe replacement' });
-      const result = await execCommand(sshConfig, buildIpSetApplyScript(remoteFile), {
+      const result = await execCommand(sshConfig, buildIpSetApplyScript(remoteFile, batch.protectedIps || [], cleanManual), {
         pool: false,
         onStdout: emit ? remoteProgressReporter(emit) : undefined,
       });

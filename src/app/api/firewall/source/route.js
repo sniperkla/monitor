@@ -3,7 +3,7 @@ import { isIP } from 'node:net';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
-import { MAX_BLOCKLIST_ENTRIES, normalizeEntry, remoteClientIps } from '@/lib/firewallBlocklist';
+import { MAX_BLOCKLIST_ENTRIES, normalizeEntry, remoteClientIps, sanitizeManualEntries, buildManualSetCommands, buildDropRuleCommands, buildSnapshotSaveCommands, buildRestoreServiceExec, buildAllowlistRestoreFragment } from '@/lib/firewallBlocklist';
 
 const SCRIPT = '$HOME/.monitor-firewall-source-update.sh';
 const LOG = '$HOME/.monitor-firewall-source-update.log';
@@ -39,6 +39,8 @@ function validateSourceUrl(value) {
 
 function updateScript(url, protectedIps) {
   const protectedList = protectedIps.map(shellQuote).join(' ');
+  const allowlistRestore = buildAllowlistRestoreFragment(protectedIps);
+  const restoreExec = buildRestoreServiceExec(allowlistRestore);
   return String.raw`#!/bin/bash
 set -u
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
@@ -75,20 +77,30 @@ done
 echo "[$(date -Is)] Protection check passed. Swapping IPSet atomically…"
 run ipset swap monitor_blocklist_next monitor_blocklist
 run ipset destroy monitor_blocklist_next || true
+# Ensure the manual quick-block set and its composite wiring exist — the swap
+# above only replaced the feed set, so quick blocks are preserved as-is.
+${buildManualSetCommands()}
 
-# 1. Protect Host binding ports (SSH, host services)
-run iptables -C INPUT -m set --match-set monitor_blocklist src -j DROP 2>/dev/null || run iptables -I INPUT 1 -m set --match-set monitor_blocklist src -j DROP
+# 1-3. Protect Host ports, Docker published ports, and routed traffic via the
+# composite set (unions feed + manual quick blocks).
+${buildDropRuleCommands()}
 
-# 2. Protect Docker published container ports (DOCKER-USER chain)
+# 4. Admin allowlist — always takes precedence over the blocklist.
+#    Includes the server's own egress IP plus the baked-in protected IPs.
+run ipset create monitor_allowlist hash:ip family inet -exist
+run ipset flush monitor_allowlist
+OWN_EGRESS="$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") {print $(i+1); exit}}')"
+if [ -n "$OWN_EGRESS" ]; then run ipset add monitor_allowlist "$OWN_EGRESS" -exist; fi
+for wl_ip in "\${PROTECTED_IPS[@]}"; do [ -n "$wl_ip" ] && run ipset add monitor_allowlist "$wl_ip" -exist; done
+run iptables -C INPUT -m set --match-set monitor_allowlist src -j ACCEPT 2>/dev/null || run iptables -I INPUT 1 -m set --match-set monitor_allowlist src -j ACCEPT
 if run iptables -L DOCKER-USER >/dev/null 2>&1; then
-  run iptables -C DOCKER-USER -m set --match-set monitor_blocklist src -j DROP 2>/dev/null || run iptables -I DOCKER-USER 1 -m set --match-set monitor_blocklist src -j DROP
+  run iptables -C DOCKER-USER -m set --match-set monitor_allowlist src -j ACCEPT 2>/dev/null || run iptables -I DOCKER-USER 1 -m set --match-set monitor_allowlist src -j ACCEPT
 fi
-
-# 3. Protect generic bridged / forwarded container traffic
-run iptables -C FORWARD -m set --match-set monitor_blocklist src -j DROP 2>/dev/null || run iptables -I FORWARD 1 -m set --match-set monitor_blocklist src -j DROP
+run iptables -C FORWARD -m set --match-set monitor_allowlist src -j ACCEPT 2>/dev/null || run iptables -I FORWARD 1 -m set --match-set monitor_allowlist src -j ACCEPT
 
 run install -d -m 700 /var/lib/monitor-firewall
-run sh -c 'ipset save monitor_blocklist > /var/lib/monitor-firewall/monitor_blocklist.ipset'
+${buildSnapshotSaveCommands()}
+run sh -c 'ipset save monitor_allowlist > /var/lib/monitor-firewall/monitor_allowlist.ipset'
 if command -v systemctl >/dev/null 2>&1; then
   run sh -c 'cat > /etc/systemd/system/monitor-blocklist-restore.service <<"UNIT"
 [Unit]
@@ -98,7 +110,7 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/bin/sh -c "ipset restore -exist < /var/lib/monitor-firewall/monitor_blocklist.ipset; iptables -C INPUT -m set --match-set monitor_blocklist src -j DROP 2>/dev/null || iptables -I INPUT 1 -m set --match-set monitor_blocklist src -j DROP; iptables -C FORWARD -m set --match-set monitor_blocklist src -j DROP 2>/dev/null || iptables -I FORWARD 1 -m set --match-set monitor_blocklist src -j DROP; if iptables -L DOCKER-USER >/dev/null 2>&1; then iptables -C DOCKER-USER -m set --match-set monitor_blocklist src -j DROP 2>/dev/null || iptables -I DOCKER-USER 1 -m set --match-set monitor_blocklist src -j DROP; fi"
+ExecStart=/bin/sh -c "${restoreExec}"
 RemainAfterExit=yes
 
 [Install]
@@ -143,13 +155,15 @@ tail -n 160 ${LOG} 2>/dev/null || true
 export async function POST(request) {
   try {
     if (!await getServerSession(authOptions)) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-    const { connectionId, sourceUrl, protectedIps = [], schedule, runNow = false, confirmation } = await request.json();
+    const { connectionId, sourceUrl, protectedIps = [], manualBlocks = [], schedule, runNow = false, confirmation } = await request.json();
     if (!connectionId) return NextResponse.json({ success: false, error: 'connectionId is required' }, { status: 400 });
     if (!matchesConfirmation(confirmation)) return NextResponse.json({ success: false, error: 'Type confirm to allow automatic firewall updates.' }, { status: 400 });
     const url = validateSourceUrl(sourceUrl);
     const cronSchedule = validateSchedule(schedule || '*/30 * * * *');
     const manualProtection = protectedIps.map(normalizeEntry).filter(Boolean);
     if (manualProtection.some(ip => ip.includes('/'))) return NextResponse.json({ success: false, error: 'Automated updates currently require individual protected IP addresses, not CIDR ranges.' }, { status: 400 });
+    const cleanManual = sanitizeManualEntries(manualBlocks);
+    if (cleanManual.length !== manualBlocks.length) return NextResponse.json({ success: false, error: 'Manual blocks contain invalid or non-IPv4 entries.' }, { status: 400 });
     const ips = [...new Set([...remoteClientIps(request.headers), ...manualProtection])].filter(ip => isIP(ip) === 4);
     const config = await ssh(request, connectionId);
     const encoded = Buffer.from(updateScript(url, ips), 'utf8').toString('base64');
@@ -165,6 +179,21 @@ rm -f "$TMP_CRON"
 ${runNow ? `nohup /bin/bash ${SCRIPT} >> ${LOG} 2>&1 < /dev/null &` : 'true'}
 `, { pool: false });
     if (install.code !== 0) return NextResponse.json({ success: false, error: install.stderr?.trim() || 'Could not install the automated source update.' }, { status: 500 });
+    // One-time migration: move the dashboard's quick-block chips into the
+    // manual set now. The cron script itself never carries entries, so IPs
+    // removed from the dashboard later stay removed.
+    const seed = await execCommand(config, String.raw`
+set -eu
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+run() { if [ "$(id -u)" = "0" ]; then "$@"; elif sudo -n true 2>/dev/null; then sudo -n "$@"; else echo "NO_PRIVILEGE" >&2; exit 41; fi; }
+command -v ipset >/dev/null 2>&1 && run ipset list monitor_blocklist >/dev/null 2>&1 || exit 0
+${buildManualSetCommands(cleanManual)}
+${buildDropRuleCommands()}
+run install -d -m 700 /var/lib/monitor-firewall
+${buildSnapshotSaveCommands()}
+echo SEEDED
+`, { pool: false });
+    if (seed.code !== 0) return NextResponse.json({ success: false, error: seed.stderr?.trim() || 'Could not seed manual blocks on this server.' }, { status: 500 });
     return NextResponse.json({ success: true, schedule: cronSchedule, message: runNow ? 'Automated source update installed and started. Open the activity view below to follow it.' : `Automated source update installed for ${cronSchedule}.` });
   } catch (error) {
     return NextResponse.json({ success: false, error: error.message || 'Could not configure the source update' }, { status: 500 });

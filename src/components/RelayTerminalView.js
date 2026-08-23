@@ -34,16 +34,6 @@ function decryptCreds(encoded) {
   } catch { return null; }
 }
 
-const hexToRgba = (hex, alpha) => {
-  if (!hex || typeof hex !== 'string') return hex;
-  let h = hex.replace('#', '');
-  if (h.length === 3) h = h.split('').map(c => c + c).join('');
-  const r = parseInt(h.substring(0, 2), 16);
-  const g = parseInt(h.substring(2, 4), 16);
-  const b = parseInt(h.substring(4, 6), 16);
-  return `rgba(${r},${g},${b},${alpha})`;
-};
-
 export default function RelayTerminalView({
   connectionId,
   connection,
@@ -136,7 +126,6 @@ export default function RelayTerminalView({
 
     // Read terminal settings directly from ref to avoid osState dependency
     const settings = osStateRef.current?.terminalSettings || {};
-    const bgOpacity = settings.backgroundOpacity ?? 1;
     const baseBg = settings.theme?.background || '#0c0c0c';
 
     const term = new Terminal({
@@ -148,12 +137,11 @@ export default function RelayTerminalView({
       letterSpacing: settings.letterSpacing || 0,
       macOptionClickForcesSelection: true,
       theme: {
-        background: hexToRgba(baseBg, bgOpacity),
+        background: baseBg,
         foreground: '#e2e8f0',
         cursor: '#818cf8',
         selectionBackground: '#818cf840',
       },
-      allowTransparency: true,
       scrollback: 5000,
       tabStopWidth: 4,
     });

@@ -121,3 +121,159 @@ export function remoteClientIps(headers) {
   return forwarded.split(',').map(value => normalizeEntry(value)?.split('/')[0]).filter(Boolean)
     .filter(ip => ip !== '127.0.0.1' && ip !== '::1');
 }
+
+// ── Composite block set (manual quick blocks survive re-applies) ────────────
+// iptables DROP rules match a single `monitor_all` list:set which unions the
+// feed-managed `monitor_blocklist` with `monitor_manual_blocks` (dashboard
+// quick blocks). Applies and scheduled syncs swap only the feed set, so
+// quick-blocked IPs survive every re-apply; the manual set is never flushed
+// by anything except an explicit blocklist removal.
+export const MANUAL_SET = 'monitor_manual_blocks';
+export const COMPOSITE_SET = 'monitor_all';
+export const MAX_MANUAL_BLOCK_ENTRIES = 500;
+
+export function sanitizeManualEntries(entries) {
+  return [...new Set((entries || []).map(normalizeEntry).filter(Boolean))]
+    .filter(entry => isIP(entry.split('/')[0]) === 4)
+    .slice(0, MAX_MANUAL_BLOCK_ENTRIES);
+}
+
+// Creates (idempotently) the manual set and the composite list:set, wiring
+// both members. Optionally seeds entries — used by applies to migrate the
+// dashboard's quick-block list onto the server in the same transaction.
+export function buildManualSetCommands(manualEntries = [], indent = '') {
+  const entries = sanitizeManualEntries(manualEntries);
+  const encoded = Buffer.from(entries.join('\n') + '\n', 'utf8').toString('base64');
+  const addEntries = entries.length
+    ? `${indent}printf '%s' '${encoded}' | base64 -d | while IFS= read -r mb_ip; do [ -n "$mb_ip" ] && run ipset add ${MANUAL_SET} "$mb_ip" -exist; done`
+    : '';
+  return [
+    `${indent}run ipset create monitor_blocklist hash:net family inet hashsize 4096 maxelem ${MAX_BLOCKLIST_ENTRIES} -exist`,
+    `${indent}run ipset create ${MANUAL_SET} hash:net family inet hashsize 1024 maxelem ${MAX_MANUAL_BLOCK_ENTRIES} -exist`,
+    `${indent}run ipset create ${COMPOSITE_SET} list:set -exist`,
+    `${indent}run ipset add ${COMPOSITE_SET} monitor_blocklist -exist`,
+    `${indent}run ipset add ${COMPOSITE_SET} ${MANUAL_SET} -exist`,
+    addEntries,
+  ].filter(Boolean).join('\n');
+}
+
+// Installs the DROP rules against the composite set, then retires any legacy
+// single-set rules from pre-list:set deploys (install first, delete after, so
+// protection never gaps during the migration).
+export function buildDropRuleCommands(indent = '') {
+  const chains = ['INPUT', 'FORWARD'];
+  const lines = [
+    `${indent}run iptables -C INPUT -m set --match-set ${COMPOSITE_SET} src -j DROP 2>/dev/null || run iptables -I INPUT 1 -m set --match-set ${COMPOSITE_SET} src -j DROP`,
+    `${indent}if run iptables -L DOCKER-USER >/dev/null 2>&1; then`,
+    `${indent}  run iptables -C DOCKER-USER -m set --match-set ${COMPOSITE_SET} src -j DROP 2>/dev/null || run iptables -I DOCKER-USER 1 -m set --match-set ${COMPOSITE_SET} src -j DROP`,
+    `${indent}fi`,
+    `${indent}run iptables -C FORWARD -m set --match-set ${COMPOSITE_SET} src -j DROP 2>/dev/null || run iptables -I FORWARD 1 -m set --match-set ${COMPOSITE_SET} src -j DROP`,
+  ];
+  for (const chain of chains) {
+    lines.push(`${indent}while run iptables -C ${chain} -m set --match-set monitor_blocklist src -j DROP 2>/dev/null; do run iptables -D ${chain} -m set --match-set monitor_blocklist src -j DROP; done`);
+  }
+  lines.push(`${indent}if run iptables -L DOCKER-USER >/dev/null 2>&1; then`);
+  lines.push(`${indent}  while run iptables -C DOCKER-USER -m set --match-set monitor_blocklist src -j DROP 2>/dev/null; do run iptables -D DOCKER-USER -m set --match-set monitor_blocklist src -j DROP; done`);
+  lines.push(`${indent}fi`);
+  return lines.join('\n');
+}
+
+// Snapshot now contains all three sets (children before the list:set, which
+// is the order `ipset restore` requires) under the historical filename.
+export function buildSnapshotSaveCommands(indent = '') {
+  return [
+    `${indent}run sh -c '{ ipset save monitor_blocklist; ipset save ${MANUAL_SET}; ipset save ${COMPOSITE_SET}; } > /var/lib/monitor-firewall/monitor_blocklist.ipset'`,
+  ].join('\n');
+}
+
+// Inner sh command for the reboot-restore service: re-creates the set trio,
+// restores the snapshot, re-installs composite rules, retires legacy rules.
+export function buildRestoreServiceExec(allowlistRestore = '') {
+  return [
+    `ipset create monitor_blocklist hash:net family inet hashsize 4096 maxelem ${MAX_BLOCKLIST_ENTRIES} -exist`,
+    `ipset create ${MANUAL_SET} hash:net family inet hashsize 1024 maxelem ${MAX_MANUAL_BLOCK_ENTRIES} -exist`,
+    `ipset create ${COMPOSITE_SET} list:set -exist`,
+    `ipset add ${COMPOSITE_SET} monitor_blocklist -exist`,
+    `ipset add ${COMPOSITE_SET} ${MANUAL_SET} -exist`,
+    `ipset restore -exist < /var/lib/monitor-firewall/monitor_blocklist.ipset`,
+    `iptables -C INPUT -m set --match-set ${COMPOSITE_SET} src -j DROP 2>/dev/null || iptables -I INPUT 1 -m set --match-set ${COMPOSITE_SET} src -j DROP`,
+    `iptables -C FORWARD -m set --match-set ${COMPOSITE_SET} src -j DROP 2>/dev/null || iptables -I FORWARD 1 -m set --match-set ${COMPOSITE_SET} src -j DROP`,
+    `if iptables -L DOCKER-USER >/dev/null 2>&1; then iptables -C DOCKER-USER -m set --match-set ${COMPOSITE_SET} src -j DROP 2>/dev/null || iptables -I DOCKER-USER 1 -m set --match-set ${COMPOSITE_SET} src -j DROP; fi`,
+    `while iptables -C INPUT -m set --match-set monitor_blocklist src -j DROP 2>/dev/null; do iptables -D INPUT -m set --match-set monitor_blocklist src -j DROP; done`,
+    `while iptables -C FORWARD -m set --match-set monitor_blocklist src -j DROP 2>/dev/null; do iptables -D FORWARD -m set --match-set monitor_blocklist src -j DROP; done`,
+    `if iptables -L DOCKER-USER >/dev/null 2>&1; then while iptables -C DOCKER-USER -m set --match-set monitor_blocklist src -j DROP 2>/dev/null; do iptables -D DOCKER-USER -m set --match-set monitor_blocklist src -j DROP; done; fi${allowlistRestore ? allowlistRestore : ''}`,
+  ].join('; ');
+}
+
+// ── Persistent admin allowlist ──────────────────────────────────────────────
+// Every firewall apply installs a `monitor_allowlist` ipset plus ACCEPT rules
+// ABOVE the blocklist DROPs, so whitelisted IPs (auto-detected client IPs +
+// manually protected IPs) can never be locked out — even when a future
+// blocklist update contains a subnet covering them.
+export function sanitizeProtectedIps(protectedIps) {
+  return [...new Set(
+    (protectedIps || [])
+      .map(ip => normalizeEntry(ip)?.split('/')[0])
+      .filter(Boolean)
+      .filter(ip => isIP(ip) === 4)
+  )];
+}
+
+export function buildAllowlistCommands(protectedIps, indent = '') {
+  const ips = sanitizeProtectedIps(protectedIps);
+  const addUserIps = ips.length
+    ? `${indent}printf '%s' '${Buffer.from(ips.join('\n') + '\n', 'utf8').toString('base64')}' | base64 -d | while IFS= read -r wl_ip; do [ -n "$wl_ip" ] && run ipset add monitor_allowlist "$wl_ip" -exist; done`
+    : '';
+  return [
+    `${indent}run ipset create monitor_allowlist hash:ip family inet -exist`,
+    `${indent}run ipset flush monitor_allowlist`,
+    // Always include the server's own egress IP (from its routing table — no external service)
+    `${indent}OWN_EGRESS="$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") {print $(i+1); exit}}')"`,
+    `${indent}if [ -n "$OWN_EGRESS" ]; then run ipset add monitor_allowlist "$OWN_EGRESS" -exist; fi`,
+    addUserIps,
+    `${indent}run iptables -C INPUT -m set --match-set monitor_allowlist src -j ACCEPT 2>/dev/null || run iptables -I INPUT 1 -m set --match-set monitor_allowlist src -j ACCEPT`,
+    `${indent}if run iptables -L DOCKER-USER >/dev/null 2>&1; then`,
+    `${indent}  run iptables -C DOCKER-USER -m set --match-set monitor_allowlist src -j ACCEPT 2>/dev/null || run iptables -I DOCKER-USER 1 -m set --match-set monitor_allowlist src -j ACCEPT`,
+    `${indent}fi`,
+    `${indent}run iptables -C FORWARD -m set --match-set monitor_allowlist src -j ACCEPT 2>/dev/null || run iptables -I FORWARD 1 -m set --match-set monitor_allowlist src -j ACCEPT`,
+  ].filter(Boolean).join('\n');
+}
+
+// Restore-service fragment: safely re-installs the allowlist ACCEPT rules
+// after reboot (guarded by the saved snapshot file so it no-ops when the
+// server has no allowlist).
+export function buildAllowlistRestoreFragment() {
+  return ' if [ -f /var/lib/monitor-firewall/monitor_allowlist.ipset ]; then ipset restore -exist < /var/lib/monitor-firewall/monitor_allowlist.ipset; iptables -C INPUT -m set --match-set monitor_allowlist src -j ACCEPT 2>/dev/null || iptables -I INPUT 1 -m set --match-set monitor_allowlist src -j ACCEPT; iptables -C FORWARD -m set --match-set monitor_allowlist src -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -m set --match-set monitor_allowlist src -j ACCEPT; if iptables -L DOCKER-USER >/dev/null 2>&1; then iptables -C DOCKER-USER -m set --match-set monitor_allowlist src -j ACCEPT 2>/dev/null || iptables -I DOCKER-USER 1 -m set --match-set monitor_allowlist src -j ACCEPT; fi; fi;';
+}
+
+// ── Last-resort recovery ────────────────────────────────────────────────────
+// After a manual apply, the server arms a watchdog: unless the manager
+// confirms access within the timeout (the app auto-confirms on its first
+// successful status poll), the firewall removes itself. Guarantees the app
+// can never permanently lock itself out of a server it just changed.
+export function buildLastResortCommands(timeoutSec = 900) {
+  return `
+# ── Last-resort safety net — auto-revert if the manager loses access ──
+run sh -c 'cat > /var/lib/monitor-firewall/last-resort.sh <<"LRSCRIPT"
+#!/bin/sh
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+for SET in ${COMPOSITE_SET} monitor_blocklist; do
+  while iptables -C INPUT -m set --match-set "$SET" src -j DROP 2>/dev/null; do iptables -D INPUT -m set --match-set "$SET" src -j DROP; done
+  while iptables -C FORWARD -m set --match-set "$SET" src -j DROP 2>/dev/null; do iptables -D FORWARD -m set --match-set "$SET" src -j DROP; done
+  if iptables -L DOCKER-USER >/dev/null 2>&1; then
+    while iptables -C DOCKER-USER -m set --match-set "$SET" src -j DROP 2>/dev/null; do iptables -D DOCKER-USER -m set --match-set "$SET" src -j DROP; done
+  fi
+done
+ipset destroy ${COMPOSITE_SET} 2>/dev/null
+ipset destroy monitor_blocklist 2>/dev/null
+ipset destroy ${MANUAL_SET} 2>/dev/null
+systemctl disable --now monitor-blocklist-restore.service 2>/dev/null
+systemctl disable --now monitor-docker-firewall-hook.service 2>/dev/null
+rm -f /var/lib/monitor-firewall/rollback.pending
+echo "[$(date -Is)] LAST_RESORT auto-revert executed (manager did not confirm access)" >> /var/lib/monitor-firewall/rollback.log
+LRSCRIPT'
+run chmod 700 /var/lib/monitor-firewall/last-resort.sh
+run sh -c 'date -Is > /var/lib/monitor-firewall/rollback.pending'
+run sh -c 'setsid sh -c "sleep ${timeoutSec}; if [ -f /var/lib/monitor-firewall/rollback.pending ]; then sh /var/lib/monitor-firewall/last-resort.sh; fi" >/dev/null 2>&1 < /dev/null &'
+`;
+}

@@ -361,6 +361,7 @@ function collectSystemTelemetry() {
       arch: os.arch(),
       uptime: os.uptime() || 0,
     },
+    firewall: getFirewallStreamSnapshot(),
   };
 }
 
@@ -530,6 +531,93 @@ function createWebSocket(url) {
 }
 
 let activeStreams = new Map();
+
+// ── Firewall Attack-History Sampler (background, 24/7) ──────────────────────
+// Reads cumulative kernel drop counters for the firewall's DROP rules (the
+// monitor_all composite set of feed + manual quick blocks, falling back to
+// the legacy monitor_blocklist set on servers not yet re-applied) and flushes
+// them to the central server, so the firewall telemetry graph keeps recording
+// attacks even while no dashboard is open.
+const FW_SAMPLE_INTERVAL = 10 * 1000;
+const FW_FLUSH_INTERVAL = 60 * 1000;
+const FW_BUFFER_MAX = 720; // ~2h of samples retained while offline
+const fwSampleBuffer = [];
+
+const FW_COUNTERS_SCRIPT = `
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+command -v iptables >/dev/null 2>&1 || exit 0
+run_ipt() {
+  if [ "$(id -u)" = "0" ]; then iptables "$@" 2>/dev/null
+  elif sudo -n true 2>/dev/null; then sudo -n iptables "$@" 2>/dev/null
+  else return 1; fi
+}
+for chain in INPUT DOCKER-USER FORWARD; do run_ipt -nvx -L "$chain"; done | awk '/match-set monitor_all src/ { c++; cp+=$1; cb+=$2 } /match-set monitor_blocklist src/ { l++; lp+=$1; lb+=$2 } END { if (c) printf "%d %d\\n", cp, cb; else if (l) printf "%d %d\\n", lp, lb }'
+`;
+
+function collectFirewallCounters() {
+  try {
+    const res = spawnSync('/bin/sh', ['-c', FW_COUNTERS_SCRIPT], { timeout: 8000, encoding: 'utf8' });
+    const out = String(res.stdout || '').trim();
+    if (!out) return null; // firewall rule not active or no privileges
+    const parts = out.split(/\s+/);
+    const p = Number(parts[0]);
+    const b = Number(parts[1]);
+    if (!Number.isFinite(p) || !Number.isFinite(b)) return null;
+    return { t: Date.now(), packets: p, bytes: b };
+  } catch (_) {
+    return null;
+  }
+}
+
+// Stream-facing snapshot (cached ~500ms so multiple concurrent streams and
+// fast intervals don't spawn iptables more than twice per second)
+let fwStreamCache = { at: 0, snap: null };
+function getFirewallStreamSnapshot() {
+  if (Date.now() - fwStreamCache.at < 500) return fwStreamCache.snap;
+  const snap = collectFirewallCounters();
+  fwStreamCache = { at: Date.now(), snap };
+  return snap; // null when the firewall rule is not active
+}
+
+function postFirewallSamples(samples) {
+  return new Promise((resolve) => {
+    try {
+      const payload = JSON.stringify({ connectionId: CONNECTION_ID || undefined, samples });
+      const target = new URL(`${SERVER}/api/firewall/agent-sync`);
+      const mod = target.protocol === 'https:' ? https : http;
+      const req = mod.request(target, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(payload),
+          'x-agent-token': TOKEN,
+        },
+        timeout: 10 * 1000,
+      }, (res) => {
+        res.resume();
+        res.on('end', () => resolve(res.statusCode >= 200 && res.statusCode < 300));
+      });
+      req.on('error', () => resolve(false));
+      req.on('timeout', () => { req.destroy(); resolve(false); });
+      req.end(payload);
+    } catch (_) { resolve(false); }
+  });
+}
+
+setInterval(() => {
+  const snap = collectFirewallCounters();
+  if (!snap) return;
+  fwSampleBuffer.push(snap);
+  if (fwSampleBuffer.length > FW_BUFFER_MAX) fwSampleBuffer.splice(0, fwSampleBuffer.length - FW_BUFFER_MAX);
+}, FW_SAMPLE_INTERVAL).unref();
+
+setInterval(async () => {
+  if (fwSampleBuffer.length === 0) return;
+  const batch = fwSampleBuffer.slice();
+  const ok = await postFirewallSamples(batch);
+  if (ok) fwSampleBuffer.splice(0, batch.length); // keep samples taken during the flush
+}, FW_FLUSH_INTERVAL).unref();
+console.log(`🛡️  [Monitor Agent] Firewall attack-history sampler active (every ${FW_SAMPLE_INTERVAL / 1000}s)`);
 
 function connect() {
   const wsUrl = `${SERVER.replace(/^http/, 'ws')}/agent-ws?token=${encodeURIComponent(TOKEN)}&name=${encodeURIComponent(AGENT_NAME)}`;

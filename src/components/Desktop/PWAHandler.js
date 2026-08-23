@@ -70,7 +70,7 @@ export default function PWAHandler() {
           animate={{ scale: 1, y: 0 }}
           exit={{ scale: 0.9, y: 20 }}
           className="relative w-full max-w-md bg-[var(--window-bg)] border border-[var(--border-color)] rounded-3xl shadow-2xl p-8 overflow-hidden"
-          style={{ backdropFilter: 'blur(24px)' }}
+          style={{ backdropFilter: 'blur(var(--glass-blur, 24px))' }}
         >
           {/* Decorative background elements */}
           <div className="absolute -top-24 -right-24 w-48 h-48 bg-indigo-500/10 rounded-full blur-3xl" />

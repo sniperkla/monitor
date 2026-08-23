@@ -1129,7 +1129,7 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
             left: contextMenu.x,
             top: contextMenu.y,
             background: 'var(--window-bg)',
-            backdropFilter: 'blur(24px)',
+            backdropFilter: 'blur(var(--glass-blur, 24px))',
             boxShadow: '0 12px 40px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.05)',
           }}
           onMouseDown={(e) => e.stopPropagation()}

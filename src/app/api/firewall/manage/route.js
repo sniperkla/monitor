@@ -2,10 +2,27 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
-import { getConflictingEntries, parseBlocklistLine, remoteClientIps, normalizeEntry } from '@/lib/firewallBlocklist';
+import { getConflictingEntries, parseBlocklistLine, remoteClientIps, normalizeEntry, MAX_BLOCKLIST_ENTRIES, COMPOSITE_SET, MANUAL_SET, buildDropRuleCommands } from '@/lib/firewallBlocklist';
 
 const SNAPSHOT = '/var/lib/monitor-firewall/monitor_blocklist.ipset';
 const SERVICE = 'monitor-blocklist-restore.service';
+
+// Removes DROP rules matching both the composite set and the legacy
+// single-set deploys, in every chain the firewall installs them in.
+const purgeDropRules = (indent = '') => [
+  ...['INPUT', 'FORWARD'].map(chain =>
+    `${indent}while run iptables -C ${chain} -m set --match-set ${COMPOSITE_SET} src -j DROP 2>/dev/null; do run iptables -D ${chain} -m set --match-set ${COMPOSITE_SET} src -j DROP; done`,
+  ),
+  `${indent}if run iptables -L DOCKER-USER >/dev/null 2>&1; then`,
+  `${indent}  while run iptables -C DOCKER-USER -m set --match-set ${COMPOSITE_SET} src -j DROP 2>/dev/null; do run iptables -D DOCKER-USER -m set --match-set ${COMPOSITE_SET} src -j DROP; done`,
+  `${indent}fi`,
+  ...['INPUT', 'FORWARD'].map(chain =>
+    `${indent}while run iptables -C ${chain} -m set --match-set monitor_blocklist src -j DROP 2>/dev/null; do run iptables -D ${chain} -m set --match-set monitor_blocklist src -j DROP; done`,
+  ),
+  `${indent}if run iptables -L DOCKER-USER >/dev/null 2>&1; then`,
+  `${indent}  while run iptables -C DOCKER-USER -m set --match-set monitor_blocklist src -j DROP 2>/dev/null; do run iptables -D DOCKER-USER -m set --match-set monitor_blocklist src -j DROP; done`,
+  `${indent}fi`,
+].join('\n');
 
 const scripts = {
   disable: String.raw`
@@ -14,11 +31,7 @@ export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 run() { if [ "$(id -u)" = "0" ]; then "$@"; elif sudo -n true 2>/dev/null; then sudo -n "$@"; else echo "NO_PRIVILEGE" >&2; exit 41; fi; }
 run systemctl disable --now ${SERVICE} 2>/dev/null || true
 run systemctl stop monitor-docker-firewall-hook.service 2>/dev/null || true
-while run iptables -C INPUT -m set --match-set monitor_blocklist src -j DROP 2>/dev/null; do run iptables -D INPUT -m set --match-set monitor_blocklist src -j DROP; done
-while run iptables -C FORWARD -m set --match-set monitor_blocklist src -j DROP 2>/dev/null; do run iptables -D FORWARD -m set --match-set monitor_blocklist src -j DROP; done
-if run iptables -L DOCKER-USER >/dev/null 2>&1; then
-  while run iptables -C DOCKER-USER -m set --match-set monitor_blocklist src -j DROP 2>/dev/null; do run iptables -D DOCKER-USER -m set --match-set monitor_blocklist src -j DROP; done
-fi
+${purgeDropRules()}
 echo DISABLED
 `,
   reactivate: String.raw`
@@ -28,12 +41,17 @@ run() { if [ "$(id -u)" = "0" ]; then "$@"; elif sudo -n true 2>/dev/null; then 
 command -v ipset >/dev/null 2>&1 || { echo "IPSET_UNAVAILABLE" >&2; exit 42; }
 command -v iptables >/dev/null 2>&1 || { echo "IPTABLES_UNAVAILABLE" >&2; exit 43; }
 if [ "$(id -u)" = "0" ]; then test -r ${SNAPSHOT}; elif sudo -n test -r ${SNAPSHOT} 2>/dev/null; then :; else echo "SNAPSHOT_MISSING" >&2; exit 44; fi
-run sh -c 'ipset restore -exist < ${SNAPSHOT}'
-run iptables -C INPUT -m set --match-set monitor_blocklist src -j DROP 2>/dev/null || run iptables -I INPUT 1 -m set --match-set monitor_blocklist src -j DROP
-if run iptables -L DOCKER-USER >/dev/null 2>&1; then
-  run iptables -C DOCKER-USER -m set --match-set monitor_blocklist src -j DROP 2>/dev/null || run iptables -I DOCKER-USER 1 -m set --match-set monitor_blocklist src -j DROP
+# The snapshot carries feed + manual + composite sets (children listed first)
+run sh -c 'ipset create monitor_blocklist hash:net family inet hashsize 4096 maxelem ${MAX_BLOCKLIST_ENTRIES} -exist; ipset create ${MANUAL_SET} hash:net family inet hashsize 1024 maxelem 500 -exist; ipset create ${COMPOSITE_SET} list:set -exist; ipset add ${COMPOSITE_SET} monitor_blocklist -exist; ipset add ${COMPOSITE_SET} ${MANUAL_SET} -exist; ipset restore -exist < ${SNAPSHOT}'
+${buildDropRuleCommands()}
+# Admin allowlist — re-install ACCEPT rules above the blocklist if present
+if run ipset list monitor_allowlist >/dev/null 2>&1; then
+  run iptables -C INPUT -m set --match-set monitor_allowlist src -j ACCEPT 2>/dev/null || run iptables -I INPUT 1 -m set --match-set monitor_allowlist src -j ACCEPT
+  if run iptables -L DOCKER-USER >/dev/null 2>&1; then
+    run iptables -C DOCKER-USER -m set --match-set monitor_allowlist src -j ACCEPT 2>/dev/null || run iptables -I DOCKER-USER 1 -m set --match-set monitor_allowlist src -j ACCEPT
+  fi
+  run iptables -C FORWARD -m set --match-set monitor_allowlist src -j ACCEPT 2>/dev/null || run iptables -I FORWARD 1 -m set --match-set monitor_allowlist src -j ACCEPT
 fi
-run iptables -C FORWARD -m set --match-set monitor_blocklist src -j DROP 2>/dev/null || run iptables -I FORWARD 1 -m set --match-set monitor_blocklist src -j DROP
 if command -v systemctl >/dev/null 2>&1; then
   run systemctl enable --now ${SERVICE} 2>/dev/null || run systemctl enable ${SERVICE} 2>/dev/null || true
   run systemctl restart monitor-docker-firewall-hook.service 2>/dev/null || run systemctl start monitor-docker-firewall-hook.service 2>/dev/null || true
@@ -48,14 +66,19 @@ if command -v systemctl >/dev/null 2>&1; then
   run systemctl disable --now ${SERVICE} 2>/dev/null || run systemctl disable ${SERVICE} 2>/dev/null || true
   run systemctl disable --now monitor-docker-firewall-hook.service 2>/dev/null || true
 fi
-while run iptables -C INPUT -m set --match-set monitor_blocklist src -j DROP 2>/dev/null; do run iptables -D INPUT -m set --match-set monitor_blocklist src -j DROP; done
-while run iptables -C FORWARD -m set --match-set monitor_blocklist src -j DROP 2>/dev/null; do run iptables -D FORWARD -m set --match-set monitor_blocklist src -j DROP; done
+${purgeDropRules()}
+# Clean the admin allowlist too
+while run iptables -C INPUT -m set --match-set monitor_allowlist src -j ACCEPT 2>/dev/null; do run iptables -D INPUT -m set --match-set monitor_allowlist src -j ACCEPT; done
+while run iptables -C FORWARD -m set --match-set monitor_allowlist src -j ACCEPT 2>/dev/null; do run iptables -D FORWARD -m set --match-set monitor_allowlist src -j ACCEPT; done
 if run iptables -L DOCKER-USER >/dev/null 2>&1; then
-  while run iptables -C DOCKER-USER -m set --match-set monitor_blocklist src -j DROP 2>/dev/null; do run iptables -D DOCKER-USER -m set --match-set monitor_blocklist src -j DROP; done
+  while run iptables -C DOCKER-USER -m set --match-set monitor_allowlist src -j ACCEPT 2>/dev/null; do run iptables -D DOCKER-USER -m set --match-set monitor_allowlist src -j ACCEPT; done
 fi
+run ipset destroy ${COMPOSITE_SET} 2>/dev/null || true
 run ipset destroy monitor_blocklist 2>/dev/null || true
 run ipset destroy monitor_blocklist_next 2>/dev/null || true
-run rm -f ${SNAPSHOT} /etc/systemd/system/${SERVICE} \
+run ipset destroy ${MANUAL_SET} 2>/dev/null || true
+run ipset destroy monitor_allowlist 2>/dev/null || true
+run rm -f ${SNAPSHOT} /var/lib/monitor-firewall/monitor_allowlist.ipset /etc/systemd/system/${SERVICE} \
   /etc/systemd/system/monitor-docker-firewall-hook.service \
   /usr/local/bin/monitor-docker-firewall-hook.sh
 if command -v systemctl >/dev/null 2>&1; then

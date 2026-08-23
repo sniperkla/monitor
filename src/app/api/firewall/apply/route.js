@@ -3,7 +3,7 @@ import { isIP } from 'node:net';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
-import { getConflictingEntries, normalizeEntry, remoteClientIps, MAX_BLOCKLIST_ENTRIES } from '@/lib/firewallBlocklist';
+import { getConflictingEntries, normalizeEntry, remoteClientIps, MAX_BLOCKLIST_ENTRIES, sanitizeManualEntries, buildManualSetCommands, buildDropRuleCommands, buildSnapshotSaveCommands, buildRestoreServiceExec, buildAllowlistCommands, buildAllowlistRestoreFragment, buildLastResortCommands } from '@/lib/firewallBlocklist';
 
 const matchesConfirmation = (value) => {
   const v = String(value || '').trim().toLowerCase();
@@ -45,8 +45,12 @@ function remoteProgressReporter(emit) {
   };
 }
 
-function buildApplyScript(entries) {
+function buildApplyScript(entries, protectedIps = [], manualEntries = []) {
   const encodedEntries = Buffer.from(entries.join('\n') + '\n', 'utf8').toString('base64');
+  const allowlistCmds = buildAllowlistCommands(protectedIps);
+  const allowlistSave = `run sh -c 'ipset save monitor_allowlist > /var/lib/monitor-firewall/monitor_allowlist.ipset'`;
+  const restoreExec = buildRestoreServiceExec(buildAllowlistRestoreFragment());
+  const lastResort = buildLastResortCommands();
   return String.raw`
 set -eu
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
@@ -63,13 +67,17 @@ run ipset create monitor_blocklist_next hash:net family inet hashsize 4096 maxel
 run ipset flush monitor_blocklist_next
 echo "MONITOR_PROGRESS|58|Loading entries into the replacement set"
 while IFS= read -r entry; do [ -n "$entry" ] && run ipset add monitor_blocklist_next "$entry" -exist; done < "$WORK_FILE"
-echo "MONITOR_PROGRESS|76|Atomically switching the active protection"
+echo "MONITOR_PROGRESS|70|Atomically switching the active protection"
 run ipset swap monitor_blocklist_next monitor_blocklist
 run ipset destroy monitor_blocklist_next || true
-run iptables -C INPUT -m set --match-set monitor_blocklist src -j DROP 2>/dev/null || run iptables -I INPUT 1 -m set --match-set monitor_blocklist src -j DROP
+# Re-seed the manual quick-block set from the dashboard (never flushed here)
+${buildManualSetCommands(manualEntries)}
+${buildDropRuleCommands()}
+${allowlistCmds}
 echo "MONITOR_PROGRESS|88|Saving the reboot recovery configuration"
 run install -d -m 700 /var/lib/monitor-firewall
-run sh -c 'ipset save monitor_blocklist > /var/lib/monitor-firewall/monitor_blocklist.ipset'
+${buildSnapshotSaveCommands()}
+${allowlistSave}
 run sh -c 'cat > /etc/systemd/system/monitor-blocklist-restore.service <<"UNIT"
 [Unit]
 Description=Restore Monitor IPSet blocklist
@@ -78,7 +86,7 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/bin/sh -c "ipset restore -exist < /var/lib/monitor-firewall/monitor_blocklist.ipset; iptables -C INPUT -m set --match-set monitor_blocklist src -j DROP 2>/dev/null || iptables -I INPUT 1 -m set --match-set monitor_blocklist src -j DROP"
+ExecStart=/bin/sh -c "${restoreExec}"
 RemainAfterExit=yes
 
 [Install]
@@ -86,31 +94,35 @@ WantedBy=multi-user.target
 UNIT'
 run systemctl daemon-reload
 run systemctl enable monitor-blocklist-restore.service
+${lastResort}
 echo "MONITOR_PROGRESS|96|Verifying the firewall configuration"
-echo "APPLIED=$(wc -l < \"$WORK_FILE\" | tr -d ' ')"
+echo "APPLIED=$(wc -l < "$WORK_FILE" | tr -d ' ')"
 `;
 }
 
 export async function POST(request) {
   try {
     if (!await getServerSession(authOptions)) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-    const { connectionId, entries, protectedIps = [], confirmation } = await request.json();
+    const { connectionId, entries, protectedIps = [], manualBlocks = [], confirmation } = await request.json();
     if (!connectionId) return NextResponse.json({ success: false, error: 'connectionId is required' }, { status: 400 });
     if (!matchesConfirmation(confirmation)) return NextResponse.json({ success: false, error: 'Type confirm to confirm this firewall change.' }, { status: 400 });
     if (!Array.isArray(entries) || entries.length === 0) return NextResponse.json({ success: false, error: 'No valid blocklist entries were provided.' }, { status: 400 });
 
     const cleanEntries = [...new Set(entries.map(normalizeEntry).filter(Boolean))];
     if (cleanEntries.length !== entries.length || cleanEntries.length > MAX_BLOCKLIST_ENTRIES || cleanEntries.some(entry => isIP(entry.split('/')[0]) !== 4)) return NextResponse.json({ success: false, error: 'The blocklist contains invalid, unsupported IPv6, or too many entries.' }, { status: 400 });
+    const cleanManual = sanitizeManualEntries(manualBlocks);
+    if (cleanManual.length !== manualBlocks.length) return NextResponse.json({ success: false, error: 'Manual blocks contain invalid or non-IPv4 entries.' }, { status: 400 });
     const automaticProtection = remoteClientIps(request.headers);
     const allProtection = [...new Set([...automaticProtection, ...protectedIps.map(normalizeEntry).filter(Boolean).map(ip => ip.split('/')[0])])];
     const conflicts = allProtection.length ? getConflictingEntries(cleanEntries, allProtection) : [];
-    if (conflicts.length) return NextResponse.json({ success: false, error: 'Blocked to prevent self-lockout.', conflicts }, { status: 409 });
+    const manualConflicts = allProtection.length ? getConflictingEntries(cleanManual, allProtection) : [];
+    if (conflicts.length || manualConflicts.length) return NextResponse.json({ success: false, error: 'Blocked to prevent self-lockout.', conflicts: [...conflicts, ...manualConflicts] }, { status: 409 });
 
     const runApply = async (emit) => {
       emit?.({ type: 'progress', progress: 5, message: 'Connecting securely to the server' });
       const sshConfig = await getSshConfig(connectionId, { sshMode: request.headers.get('x-ssh-mode'), preferredRelay: request.headers.get('x-preferred-relay') });
       emit?.({ type: 'progress', progress: 12, message: 'Starting the safe replacement process' });
-      const result = await execCommand(sshConfig, buildApplyScript(cleanEntries), {
+      const result = await execCommand(sshConfig, buildApplyScript(cleanEntries, allProtection, cleanManual), {
         pool: false,
         onStdout: emit ? remoteProgressReporter(emit) : undefined,
       });

@@ -1521,6 +1521,8 @@ const resources = {
           skip: "Skip",
           next: "Next",
           getStarted: "Get Started",
+          skipTour: "Skip Tour",
+          startTour: "Start Tour",
           steps: {
             welcome: {
               title: "Welcome to Firewall Protection",
@@ -1541,15 +1543,25 @@ const resources = {
               description: "Upload .ipset, .netset, or .txt files or drag entire folders with millions of threat IPs. Inspect, edit, and apply them with 1-click zero-downtime deployment.",
               tip: "💡 High Speed: IPSet can load 500,000+ malicious subnets in seconds and test IP lookups in <1 microsecond.",
             },
+            quickBlock: {
+              title: "Instant Quick Blocks",
+              description: "Once protection is active, instantly block or unblock individual IPs and CIDR ranges on the live firewall — no file import or full re-apply needed. You can also ban attackers straight from the threat telemetry table, and keep trusted IPs safe on the allowlist.",
+              tip: "💡 Persistent by design: quick blocks live in their own dedicated kernel set, so list re-applies and scheduled syncs never remove them. Your allowlisted IPs (like your own) are synced to the server and never blocked.",
+            },
             telemetry: {
               title: "Live Telemetry & Sniffer",
-              description: "Monitor real-time packet drop rates, bandwidth savings, and inspect incoming exploit attempts (Redis RCE, MySQL brute force, web probes) with raw wire hex dumps.",
-              tip: "💡 Zero CPU load: Packets are dropped at the network interface before reaching web servers or SSH sockets.",
+              description: "Monitor real-time packet drop rates, bandwidth savings, and inspect incoming exploit attempts (Redis RCE, MySQL brute force, web probes) with raw wire hex dumps. Install the Server Agent to unlock a 1-second realtime stream and 24/7 recorded attack history — even while this window is closed.",
+              tip: "💡 Zero CPU load: Packets are dropped at the network interface before reaching web servers or SSH sockets. Pan the graph to scrub through recorded history.",
             },
             docker: {
               title: "Full Docker & Swarm Coverage",
               description: "Firewall rules automatically inject into INPUT, DOCKER-USER, and FORWARD chains — protecting all published Docker container ports (-p) with automatic recovery on Docker daemon restarts.",
               tip: "💡 Zero-knowledge protection: A background watcher daemon automatically reinjects firewall rules whenever Docker restarts.",
+            },
+            lastResort: {
+              title: "Emergency Disable (Last Resort)",
+              description: "This red power button is your panic switch. One click instantly removes all firewall rules, the blocklist sets, and the restore services on the selected server — useful if you ever get locked out or something breaks.",
+              tip: "💡 A safety watchdog also auto-reverts the firewall shortly after an apply until the app confirms it can still reach the server, so you can't lock yourself out.",
             },
             done: {
               title: "You're all set!",
@@ -3075,6 +3087,8 @@ const resources = {
           skip: "ข้าม",
           next: "ถัดไป",
           getStarted: "เริ่มต้นใช้งาน",
+          skipTour: "ข้ามทัวร์",
+          startTour: "เริ่มทัวร์",
           steps: {
             welcome: {
               title: "ยินดีต้อนรับสู่ระบบป้องกันไฟร์วอลล์",
@@ -3095,15 +3109,25 @@ const resources = {
               description: "อัปโหลดไฟล์ .ipset, .netset, หรือ .txt หรือลากโฟลเดอร์ที่มีรายชื่อ IP อันตรายนับล้านรายการ พร้อมระบบกรอง IP ซ้ำและอัปเดตได้ในคลิกเดียว",
               tip: "💡 ความเร็วสูง: IPSet รองรับ Subnet อันตรายได้มากกว่า 500,000 รายการ และค้นหา IP ได้เร็วต่ำกว่า 1 ไมโครวินาที",
             },
+            quickBlock: {
+              title: "บล็อกด่วนทันใจ",
+              description: "เมื่อเปิดระบบป้องกันแล้ว คุณสามารถบล็อกหรือปลดบล็อก IP และช่วง CIDR เฉพาะรายการได้ทันทีบนไฟร์วอลล์ที่ทำงานอยู่ โดยไม่ต้องนำเข้าไฟล์หรืออัปเดตรายการใหม่ทั้งหมด แบนผู้โจมตีได้ทันทีจากตารางสถิติภัยคุกคาม และเก็บ IP ที่เชื่อถือได้ไว้ใน Allowlist ได้อย่างปลอดภัย",
+              tip: "💡 ถาวรโดยการออกแบบ: รายการบล็อกด่วนถูกเก็บไว้ใน IPSet ชุดแยกต่างหาก การอัปเดตรายชื่อใหม่หรือซิงค์อัตโนมัติจึงไม่ลบรายการเหล่านี้ออก ส่วน IP ใน Allowlist (เช่น IP ของคุณเอง) จะถูกซิงค์ไปยังเซิร์ฟเวอร์และไม่ถูกบล็อก",
+            },
             telemetry: {
               title: "สถิติสดและตัวตรวจจับแพ็กเก็ต",
-              description: "ดูกราฟอัตราการบล็อกแพ็กเก็ตแบบเรียลไทม์ ปริมาณแบนด์วิดท์ที่ประหยัดได้ และดูโค้ดที่บอทพยายามโจมตี (Redis RCE, MySQL brute force, Web probe) พร้อม Hex dump",
-              tip: "💡 ประหยัดทรัพยากร: แพ็กเก็ตถูกบล็อกตั้งแต่การ์ดเครือข่ายก่อนถึง Web server หรือ SSH daemon",
+              description: "ดูกราฟอัตราการบล็อกแพ็กเก็ตแบบเรียลไทม์ ปริมาณแบนด์วิดท์ที่ประหยัดได้ และดูโค้ดที่บอทพยายามโจมตี (Redis RCE, MySQL brute force, Web probe) พร้อม Hex dump ติดตั้ง Server Agent เพื่อปลดล็อกกราฟเรียลไทม์ 1 วินาที และบันทึกประวัติการโจมตีตลอด 24 ชั่วโมง แม้ปิดหน้าต่างนี้ไปแล้ว",
+              tip: "💡 ประหยัดทรัพยากร: แพ็กเก็ตถูกบล็อกตั้งแต่การ์ดเครือข่ายก่อนถึง Web server หรือ SSH daemon ลากกราฟเพื่อเลื่อนดูประวัติที่บันทึกไว้",
             },
             docker: {
               title: "ปกป้อง Docker และ Swarm เต็มรูปแบบ",
               description: "กฎไฟร์วอลล์จะแทรกเข้าสู่ INPUT, DOCKER-USER และ FORWARD โดยอัตโนมัติ ปกป้องทุกพอร์ตที่เปิดใน Docker (-p) พร้อมระบบกู้คืนกฎอัตโนมัติเมื่อ Docker รีสตาร์ท",
               tip: "💡 ไม่ต้องตั้งค่าเพิ่ม: มี background service คอยตรวจจับการรีสตาร์ทของ Docker และใส่กฎไฟร์วอลล์กลับเข้าไปให้ทันที",
+            },
+            lastResort: {
+              title: "ปิดฉุกเฉิน (Last Resort)",
+              description: "ปุ่มสีแดงนี้คือสวิตช์ฉุกเฉินของคุณ คลิกเดียวเพื่อลบกฎไฟร์วอลล์ กฎ blocklist sets และ restore services ทั้งหมดบนเซิร์ฟเวอร์ที่เลือกทันที — มีประโยชน์เมื่อคุณถูกล็อกหรือระบบมีปัญหา",
+              tip: "💡 ระบบ safety watchdog จะย้อนกลับไฟร์วอลล์ชั่วคราวหลัง apply จนกว่าแอปจะยืนยันว่ายังเข้าถึงเซิร์ฟเวอร์ได้ คุณจึงล็อกตัวเองออกไม่ได้",
             },
             done: {
               title: "พร้อมใช้งานแล้ว!",
@@ -4562,6 +4586,8 @@ const resources = {
           skip: "跳过",
           next: "下一步",
           getStarted: "开始使用",
+          skipTour: "跳过导览",
+          startTour: "开始导览",
           steps: {
             welcome: {
               title: "欢迎使用防火墙安全防护",
@@ -4582,15 +4608,25 @@ const resources = {
               description: "上传 .ipset、.netset 或 .txt 文件，或拖入包含数百万威胁 IP 的整个文件夹。支持自动去重并在单次点击中完成零停机应用。",
               tip: "💡 超高性能：IPSet 可在数秒内加载 500,000+ 恶意网段，单次 IP 查找耗时 <1 微秒。",
             },
+            quickBlock: {
+              title: "即时快速封锁",
+              description: "防护开启后，可直接在运行中的防火墙上即时封锁或解封单个 IP 与 CIDR 网段——无需导入文件或重新应用整个列表，还可以从威胁遥测表中一键封锁攻击者，并将可信 IP 安全保存在白名单中。",
+              tip: "💡 独立集设计：快速封锁保存在专属的内核 IPSet 集合中，列表重新应用与计划同步都不会将其移除。白名单中的 IP（例如您自己的 IP）会同步到服务器，永远不会被封。",
+            },
             telemetry: {
               title: "实时遥测与数据包嗅探",
-              description: "监控实时数据包拦截速率、带宽节省量，并检查进入的漏洞利用尝试（Redis RCE、MySQL 爆破、Web 探针）与原始十六进制转储。",
-              tip: "💡 零系统负载：数据包在进入网络接口的第一时间即被丢弃，不会触及 Web 服务或 SSH 守护进程。",
+              description: "监控实时数据包拦截速率、带宽节省量，并检查进入的漏洞利用尝试（Redis RCE、MySQL 爆破、Web 探针）与原始十六进制转储。安装 Server Agent 可解锁 1 秒级实时流与 24/7 全天候攻击历史记录——即使关闭本窗口也在持续记录。",
+              tip: "💡 零系统负载：数据包在进入网络接口的第一时间即被丢弃，不会触及 Web 服务或 SSH 守护进程。拖动图表可回溯查看已记录的历史。",
             },
             docker: {
               title: "Docker 与 Swarm 全面保护",
               description: "防火墙规则会自动注入到 INPUT、DOCKER-USER 和 FORWARD 链中，全面保护所有 Docker 容器映射端口 (-p)，且支持 Docker 重启后自动恢复。",
               tip: "💡 零配置免维护：后台监听服务会在 Docker 守护进程重启时自动重新挂载防火墙规则。",
+            },
+            lastResort: {
+              title: "紧急关闭（最后手段）",
+              description: "这个红色电源按钮就是您的紧急开关。一键立即移除所选服务器上的所有防火墙规则、黑名单集合和恢复服务——当您被锁在门外或出现异常时非常有用。",
+              tip: "💡 安全 watchdog 会在应用后临时自动回滚防火墙，直到应用确认仍能访问服务器，因此您不会把自己锁在门外。",
             },
             done: {
               title: "一切就绪！",

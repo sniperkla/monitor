@@ -12,20 +12,23 @@ echo "===IPSET==="
 if command -v ipset >/dev/null 2>&1 && run ipset list monitor_blocklist >/dev/null 2>&1; then
   echo present
   run ipset list monitor_blocklist | awk -F': ' '/Number of entries:/{print "entries=" $2}'
+  run ipset list monitor_manual_blocks 2>/dev/null | awk -F': ' '/Number of entries:/{print "manual_entries=" $2}'
   run ipset list monitor_blocklist | sed -n '/^Members:/,$p' | sed '1d' | head -n 12
 else
   echo missing
 fi
 echo "===RULE==="
 if command -v iptables >/dev/null 2>&1; then
+  # Composite (monitor_all) rules are current; legacy monitor_blocklist rules
+  # may still exist on servers not re-applied since the list:set migration.
   echo "--- INPUT Chain (Host Ports) ---"
-  run iptables -S INPUT 2>/dev/null | grep -- '--match-set monitor_blocklist src' || echo "No monitor_blocklist rule in INPUT"
+  run iptables -S INPUT 2>/dev/null | grep -E -- '--match-set (monitor_all|monitor_blocklist) src' || echo "No monitor blocklist rule in INPUT"
   if run iptables -L DOCKER-USER >/dev/null 2>&1; then
     echo "--- DOCKER-USER Chain (Docker Containers) ---"
-    run iptables -S DOCKER-USER 2>/dev/null | grep -- '--match-set monitor_blocklist src' || echo "No monitor_blocklist rule in DOCKER-USER"
+    run iptables -S DOCKER-USER 2>/dev/null | grep -E -- '--match-set (monitor_all|monitor_blocklist) src' || echo "No monitor blocklist rule in DOCKER-USER"
   fi
   echo "--- FORWARD Chain (Routed/Bridged Containers) ---"
-  run iptables -S FORWARD 2>/dev/null | grep -- '--match-set monitor_blocklist src' || echo "No monitor_blocklist rule in FORWARD"
+  run iptables -S FORWARD 2>/dev/null | grep -E -- '--match-set (monitor_all|monitor_blocklist) src' || echo "No monitor blocklist rule in FORWARD"
 fi
 echo "===RESTORE==="
 systemctl is-enabled monitor-blocklist-restore.service 2>/dev/null || true
@@ -59,14 +62,14 @@ export async function GET(request) {
     const ipset = section(result.stdout, 'IPSET');
     const snapshot = section(result.stdout, 'SNAPSHOT');
     const restore = section(result.stdout, 'RESTORE').split(/\r?\n/).filter(Boolean);
-    const samples = ipset.split(/\r?\n/).filter(line => line && line !== 'present' && !line.startsWith('entries=')).slice(0, 12);
+    const samples = ipset.split(/\r?\n/).filter(line => line && line !== 'present' && !line.startsWith('entries=') && !line.startsWith('manual_entries=')).slice(0, 12);
     const rule = section(result.stdout, 'RULE').split(/\r?\n/).filter(Boolean)[0] || '';
 
     return NextResponse.json({
       success: true,
       inspectedAt: new Date().toISOString(),
       access: section(result.stdout, 'ACCESS') || 'limited',
-      ipset: { present: ipset.startsWith('present'), entries: Number(field(ipset, 'entries', '0')) || 0, samples },
+      ipset: { present: ipset.startsWith('present'), entries: Number(field(ipset, 'entries', '0')) || 0, manualEntries: Number(field(ipset, 'manual_entries', '0')) || 0, samples },
       rule: { active: Boolean(rule), value: rule },
       restore: { enabled: restore.includes('enabled'), active: restore.includes('active'), states: restore },
       snapshot: { present: snapshot.startsWith('present'), modified: field(snapshot, 'modified'), bytes: Number(field(snapshot, 'bytes', '0')) || 0 },

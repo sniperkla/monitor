@@ -23,16 +23,6 @@ import { diff_match_patch } from 'diff-match-patch';
 
 let Terminal, FitAddon, WebLinksAddon;
 
-const hexToRgba = (hex, alpha) => {
-  if (!hex || typeof hex !== 'string') return hex;
-  let h = hex.replace('#', '');
-  if (h.length === 3) h = h.split('').map(c => c + c).join('');
-  const r = parseInt(h.substring(0, 2), 16);
-  const g = parseInt(h.substring(2, 4), 16);
-  const b = parseInt(h.substring(4, 6), 16);
-  return `rgba(${r},${g},${b},${alpha})`;
-};
-
 const extractUnifiedDiff = (text) => {
   const t = String(text || '');
   if (!t) return null;
@@ -1292,7 +1282,6 @@ logstash:
     const settings = osState?.terminalSettings || {};
     const preset = TERMINAL_PRESETS[settings.activePreset || 'modern'] || TERMINAL_PRESETS.modern;
     const isRetro = settings.activePreset === 'retro';
-    const bgOpacity = settings.backgroundOpacity ?? 1;
     const baseBg = settings.theme?.background || preset.theme?.background || '#0c0c0c';
 
     const term = new Terminal({
@@ -1306,9 +1295,8 @@ logstash:
       theme: {
         ...(preset.theme || {}),
         ...(settings.theme || {}),
-        background: hexToRgba(baseBg, bgOpacity)
+        background: baseBg
       },
-      allowTransparency: true,
       scrollback: 5000,
       tabStopWidth: 4,
     });
@@ -1851,9 +1839,8 @@ logstash:
     const settings = osState?.terminalSettings || {};
     const preset = TERMINAL_PRESETS[settings.activePreset || 'modern'] || TERMINAL_PRESETS.modern;
     const isRetro = settings.activePreset === 'retro';
-    const bgOpacity = settings.backgroundOpacity ?? 1;
     const baseBg = settings.theme?.background || preset.theme?.background || '#0c0c0c';
-    
+
     termInstanceRef.current.options = {
       fontFamily: settings.fontFamily || preset.fontFamily,
       fontSize: settings.fontSize || preset.fontSize,
@@ -1864,7 +1851,7 @@ logstash:
       theme: {
         ...(preset.theme || {}),
         ...(settings.theme || {}),
-        background: hexToRgba(baseBg, bgOpacity)
+        background: baseBg
       }
     };
 

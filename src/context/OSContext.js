@@ -13,6 +13,7 @@ const initialState = {
   nextZIndex: 100,
   wallpaper: 'https://images.unsplash.com/photo-1451187580459-43490279c0fa?q=80&w=2072&auto=format&fit=crop',
   glassmorphism: true,
+  glassIntensity: 20, // blur strength in px (0–40)
   iconPositions: {}, // { [id]: { x, y } }
   iconSize: 'medium', // small, medium, large
   iconStyle: 'glass', // glass, flat, neumorphic, outline, minimal
@@ -328,6 +329,12 @@ function osReducer(state, action) {
       return {
         ...state,
         glassmorphism: action.payload,
+        timestamp: Date.now()
+      };
+    case 'SET_GLASS_INTENSITY':
+      return {
+        ...state,
+        glassIntensity: Math.max(0, Math.min(40, Number(action.payload) || 0)),
         timestamp: Date.now()
       };
     case 'UPDATE_ICON_POSITIONS':
@@ -878,6 +885,7 @@ export function OSProvider({ children }) {
     return JSON.stringify({
       wallpaper: s.wallpaper,
       glassmorphism: !!s.glassmorphism,
+      glassIntensity: s.glassIntensity ?? 20,
       desktops: safeDesktops,
       currentDesktopId: s.currentDesktopId || 'desktop-1',
       windowsByDesktop: safeWindowsByDesktop,
@@ -1024,15 +1032,16 @@ export function OSProvider({ children }) {
       timestamp: state.timestamp || Date.now()
     }));
   }, [
-    state.wallpaper, 
-    state.glassmorphism, 
+    state.wallpaper,
+    state.glassmorphism,
+    state.glassIntensity,
     state.desktops,
     state.currentDesktopId,
     state.windowsByDesktop,
-    state.iconPositions, 
-    state.iconSize, 
-    state.iconStyle, 
-    state.sortBy, 
+    state.iconPositions,
+    state.iconSize,
+    state.iconStyle,
+    state.sortBy,
     state.brightness, 
     state.uiScale, 
     state.notifications, 
@@ -1115,17 +1124,18 @@ export function OSProvider({ children }) {
     return () => clearTimeout(timer);
   }, [
     session?.user?.email,
-    state.wallpaper, 
-    state.glassmorphism, 
+    state.wallpaper,
+    state.glassmorphism,
+    state.glassIntensity,
     state.desktops,
     state.currentDesktopId,
     state.windowsByDesktop,
-    state.iconPositions, 
-    state.iconSize, 
+    state.iconPositions,
+    state.iconSize,
     state.iconStyle,
-    state.sortBy, 
-    state.brightness, 
-    state.uiScale, 
+    state.sortBy,
+    state.brightness,
+    state.uiScale,
     state.notifications,
     state.language,
     state.customWallpapers,
@@ -1233,6 +1243,10 @@ export function OSProvider({ children }) {
 
   const setGlassmorphism = (enabled) => {
     dispatch({ type: 'TOGGLE_GLASS', payload: enabled });
+  };
+
+  const setGlassIntensity = (intensity) => {
+    dispatch({ type: 'SET_GLASS_INTENSITY', payload: intensity });
   };
 
   const updateIconPosition = (id, x, y) => {
@@ -1638,7 +1652,8 @@ export function OSProvider({ children }) {
       toggleMinimize, 
       toggleMaximize,
       snapWindow, 
-      setGlassmorphism, 
+      setGlassmorphism,
+      setGlassIntensity,
       setIconSize, 
       setIconStyle,
       setBrightness,

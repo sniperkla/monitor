@@ -4,14 +4,16 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   AlertTriangle, ChevronDown, ChevronUp, Copy, FileUp, BrickWallShield, Globe2, Info,
-  Loader2, LockKeyhole, Plus, RefreshCw, ShieldAlert, ShieldCheck,
+  Loader2, LockKeyhole, Plus, RefreshCw, ShieldAlert, ShieldCheck, Search,
   Upload, X, Power, RotateCcw, Trash2, Activity, Check, Zap,
   Terminal, Shield, Clock, Layers, SlidersHorizontal, ExternalLink, Sparkles,
   Workflow, FileSpreadsheet, Radio, Radar, Server, Cpu, CloudLightning, ArrowUpRight,
-  HelpCircle
+  HelpCircle, Play, Pause, Pin, Ban, FolderUp, TrendingUp, FastForward
 } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 import { useOS } from '@/context/OSContext';
+import { io } from 'socket.io-client';
+import AgentSetupWizard from '@/components/AgentSetupWizard';
 import FirewallOnboarding, { hasCompletedFirewallOnboarding, resetFirewallOnboarding } from '@/components/FirewallOnboarding';
 
 const acceptedTypes = '.ipset,.netset,.txt';
@@ -34,6 +36,54 @@ const PRESET_SOURCES = [
   { name: 'FireHOL Level 1 (High Threat)', url: 'https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/firehol_level1.netset' },
   { name: 'Emerging Threats Compromised', url: 'https://rules.emergingthreats.net/blockrules/compromised-ips.txt' },
 ];
+
+// Sparkline history is cached per server (sessionStorage) so previous attack
+// activity survives switching apps or closing/reopening the firewall window.
+// Manually quick-blocked IPs are remembered per server (localStorage) so the
+// removable chip list survives app reloads — matching the server-side blocks.
+const MANUAL_BLOCKS_PREFIX = 'firewall-manual-blocks-';
+
+function loadManualBlocks(connectionId) {
+  if (typeof window === 'undefined' || !connectionId) return [];
+  try {
+    const parsed = JSON.parse(localStorage.getItem(MANUAL_BLOCKS_PREFIX + connectionId) || '[]');
+    return Array.isArray(parsed) ? parsed.filter(v => typeof v === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveManualBlocks(connectionId, list) {
+  if (typeof window === 'undefined' || !connectionId) return;
+  try {
+    localStorage.setItem(MANUAL_BLOCKS_PREFIX + connectionId, JSON.stringify(list.slice(-500)));
+  } catch {
+    // storage unavailable — chips just won't persist
+  }
+}
+
+const TELEMETRY_CACHE_PREFIX = 'firewall-telemetry-history-';
+const TELEMETRY_MAX_SAMPLES = 360; // ~1h of 10s samples — enough to pan back through past attacks
+
+function loadCachedTelemetry(connectionId) {
+  if (typeof window === 'undefined' || !connectionId) return [];
+  try {
+    const raw = window.sessionStorage.getItem(TELEMETRY_CACHE_PREFIX + connectionId);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.slice(-TELEMETRY_MAX_SAMPLES) : [];
+  } catch {
+    return [];
+  }
+}
+
+function cacheTelemetry(connectionId, history) {
+  if (typeof window === 'undefined' || !connectionId) return;
+  try {
+    window.sessionStorage.setItem(TELEMETRY_CACHE_PREFIX + connectionId, JSON.stringify(history.slice(-TELEMETRY_MAX_SAMPLES)));
+  } catch {
+    // storage unavailable — keep telemetry in memory only
+  }
+}
 
 async function filesFromDrop(dataTransfer) {
   const items = Array.from(dataTransfer?.items || []);
@@ -215,11 +265,11 @@ async function readApplyProgress(response, onProgress) {
 
 export default function FirewallBlocklistApp({ windowId } = {}) {
   const { state: appState, apiFetch } = useApp();
-  const { state: osState, toggleMaximize, addNotification } = useOS();
+  const { state: osState, toggleMaximize, addNotification, showConfirm } = useOS();
   const { t } = useTranslation();
   const connections = (appState?.connections || []).filter(connection => connection.type !== 'database');
   const [connectionId, setConnectionId] = useState('');
-  const [activeTab, setActiveTab] = useState('schedule'); // 'schedule' | 'manual' | 'controls'
+  const [activeTab, setActiveTab] = useState('manual'); // 'manual' | 'schedule' | 'controls'
   const [showOnboarding, setShowOnboarding] = useState(false);
 
   const ensureMaximizedThenShow = useCallback(() => {
@@ -277,7 +327,26 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
   const [sourceStatus, setSourceStatus] = useState(null);
   const [sourceLoading, setSourceLoading] = useState(false);
   const [telemetryHistory, setTelemetryHistory] = useState([]);
+  const telemetryHistoryRef = useRef([]);
   const [graphMode, setGraphMode] = useState('packets'); // 'packets' | 'bandwidth'
+  // Interactive graph state — pannable history with hover time-scrub
+  const [graphHover, setGraphHover] = useState(null); // { idx } → live preview while the mouse moves
+  const [graphPinned, setGraphPinned] = useState(null); // { idx } → click-pinned time filter (stays until cleared)
+  const [graphLive, setGraphLive] = useState(true);   // auto-follow the newest samples while scrolled to the right edge
+  const graphScrollRef = useRef(null);
+  const graphDragRef = useRef(null);
+  const graphDragMovedRef = useRef(false); // distinguishes a click (pin) from a drag (pan)
+  // Realtime agent stream — replaces 10s HTTP polling while a monitor agent is connected
+  const [realtimeActive, setRealtimeActive] = useState(false);
+  const realtimeActiveRef = useRef(false);
+  useEffect(() => { realtimeActiveRef.current = realtimeActive; }, [realtimeActive]);
+  // Last-resort safety net: armed on apply, disarmed by the first successful
+  // status poll (the watchdog auto-reverts the firewall server-side otherwise)
+  const safetyArmRef = useRef(false);
+  // Server agent management — install wizard + per-server install status
+  const [showAgentWizard, setShowAgentWizard] = useState(false);
+  const [agentStatus, setAgentStatus] = useState(null); // { isRunning, nodeInstalled }
+  const [agentTick, setAgentTick] = useState(0); // bump to re-check status / re-request stream
   const [ipCheckInput, setIpCheckInput] = useState('');
   
   // Threat Packet Inspector & Sniffer state
@@ -303,6 +372,55 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
     }
   }, [connectionId, connections]);
 
+  // Seed the sparkline with previous attack activity. History recorded by the
+  // ServerMonitor agent (24/7 background sampler) is preferred — it survives
+  // closed apps and different devices. Falls back to the session cache.
+  useEffect(() => {
+    // Drop the previous server's samples immediately so counters never mix
+    telemetryHistoryRef.current = [];
+    setTelemetryHistory([]);
+    setPackets([]);
+    setGraphHover(null);
+    setGraphPinned(null);
+    setGraphLive(true);
+    setManualBlocks(loadManualBlocks(connectionId));
+    if (!connectionId) return undefined;
+
+    let cancelled = false;
+    const applyHistory = (restored) => {
+      if (cancelled || restored.length === 0) return;
+      // Keep any live samples appended while the fetch was in flight
+      const lastRestoredT = restored[restored.length - 1].time;
+      const merged = [...restored, ...telemetryHistoryRef.current.filter(s => s.time > lastRestoredT)].slice(-TELEMETRY_MAX_SAMPLES);
+      telemetryHistoryRef.current = merged;
+      setTelemetryHistory(merged);
+    };
+
+    (async () => {
+      try {
+        const response = await apiFetch(`/api/firewall/history?connectionId=${encodeURIComponent(connectionId)}&limit=${TELEMETRY_MAX_SAMPLES}`, { cache: 'no-store' });
+        const data = await response.json();
+        if (data?.success && Array.isArray(data.samples) && data.samples.length > 0) {
+          applyHistory(data.samples.map((s, i, arr) => {
+            const prev = arr[i - 1];
+            const dt = prev ? Math.max(1, (s.t - prev.t) / 1000) : 10;
+            return {
+              time: s.t,
+              packets: s.packets,
+              bytes: s.bytes,
+              pktRate: prev ? Math.max(0, (s.packets - prev.packets) / dt) : 0,
+              byteRate: prev ? Math.max(0, (s.bytes - prev.bytes) / dt) : 0,
+            };
+          }));
+          return;
+        }
+      } catch { /* fall back to session cache below */ }
+      applyHistory(loadCachedTelemetry(connectionId));
+    })();
+
+    return () => { cancelled = true; };
+  }, [connectionId, apiFetch]);
+
   const loadPackets = useCallback(async () => {
     if (!connectionId) return;
     setPacketsLoading(true);
@@ -310,7 +428,18 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
       const response = await apiFetch(`/api/firewall/packets?connectionId=${encodeURIComponent(connectionId)}`, { cache: 'no-store' });
       const data = await response.json();
       if (!data.success) throw new Error(data.error);
-      setPackets(data.packets || []);
+      // Accumulate threat events with a sortable capture time so the graph
+      // hover can filter the table by time window. Re-records each attacker
+      // at most once per 30s bucket; older entries are kept (capped).
+      const capturedMs = Date.parse(data.capturedAt) || Date.now();
+      const bucket = Math.floor(capturedMs / 30000);
+      setPackets(prev => {
+        const seen = new Set(prev.map(p => p.id));
+        const fresh = (data.packets || [])
+          .map(p => ({ ...p, _ms: capturedMs, id: `${p.id}-${bucket}` }))
+          .filter(p => !seen.has(p.id));
+        return fresh.length ? [...prev, ...fresh].slice(-600) : prev;
+      });
     } catch (error) {
       // silent fallback
     } finally {
@@ -330,6 +459,43 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
     return () => window.clearInterval(timer);
   }, [activeTab, loadPackets, sniffingActive]);
 
+  // ── Interactive graph: drag/wheel panning with live-follow (same feel as ServerMonitor charts) ──
+  useEffect(() => {
+    if (graphLive && graphScrollRef.current) {
+      graphScrollRef.current.scrollLeft = graphScrollRef.current.scrollWidth;
+    }
+  }, [telemetryHistory, graphLive]);
+
+  const handleGraphScroll = useCallback(() => {
+    const el = graphScrollRef.current;
+    if (!el) return;
+    const maxScroll = el.scrollWidth - el.clientWidth;
+    setGraphLive(maxScroll <= 0 || maxScroll - el.scrollLeft < 20);
+  }, []);
+
+  const handleGraphMouseDown = (e) => {
+    if (e.target.closest('button')) return;
+    graphDragMovedRef.current = false;
+    graphDragRef.current = { x: e.pageX, left: graphScrollRef.current?.scrollLeft || 0 };
+  };
+  const handleGraphDragMove = (e) => {
+    const drag = graphDragRef.current;
+    if (!drag || !graphScrollRef.current) return;
+    if (Math.abs(e.pageX - drag.x) > 4) graphDragMovedRef.current = true;
+    graphScrollRef.current.scrollLeft = drag.left - (e.pageX - drag.x) * 1.5;
+  };
+  const endGraphDrag = () => { graphDragRef.current = null; };
+  const handleGraphWheel = (e) => {
+    if (!graphScrollRef.current || Math.abs(e.deltaX) > 0 || !e.deltaY) return;
+    graphScrollRef.current.scrollLeft += e.deltaY;
+  };
+  const jumpGraphLive = () => {
+    setGraphLive(true);
+    requestAnimationFrame(() => {
+      if (graphScrollRef.current) graphScrollRef.current.scrollLeft = graphScrollRef.current.scrollWidth;
+    });
+  };
+
   const loadStatus = useCallback(async () => {
     if (!connectionId) return;
     setStatusLoading(true);
@@ -339,18 +505,28 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
       if (!data.success) throw new Error(data.error);
       setStatus(data);
 
-      if (data.blocklist?.active) {
+      // Disarm the last-resort watchdog — this poll proves the app still has access
+      if (safetyArmRef.current) {
+        safetyArmRef.current = false;
+        apiFetch('/api/firewall/recover', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ connectionId, action: 'confirm' }),
+        }).catch(() => {});
+      }
+
+      if (data.blocklist?.active && !realtimeActiveRef.current) {
         const packets = Number(data.blocklist.blockedPackets) || 0;
         const bytes = Number(data.blocklist.blockedBytes) || 0;
         const now = Date.now();
-        setTelemetryHistory(prev => {
-          const last = prev[prev.length - 1];
-          const timeDelta = last ? Math.max(1, (now - last.time) / 1000) : 10;
-          const pktRate = last ? Math.max(0, (packets - last.packets) / timeDelta) : 0;
-          const byteRate = last ? Math.max(0, (bytes - last.bytes) / timeDelta) : 0;
-          const next = [...prev, { time: now, packets, bytes, pktRate, byteRate }];
-          return next.slice(-25); // keep last 25 samples
-        });
+        const prev = telemetryHistoryRef.current;
+        const last = prev[prev.length - 1];
+        const timeDelta = last ? Math.max(1, (now - last.time) / 1000) : 10;
+        const pktRate = last ? Math.max(0, (packets - last.packets) / timeDelta) : 0;
+        const byteRate = last ? Math.max(0, (bytes - last.bytes) / timeDelta) : 0;
+        const next = [...prev, { time: now, packets, bytes, pktRate, byteRate }].slice(-TELEMETRY_MAX_SAMPLES);
+        telemetryHistoryRef.current = next;
+        setTelemetryHistory(next);
+        cacheTelemetry(connectionId, next);
       }
     } catch (error) {
       setStatus(null);
@@ -361,6 +537,106 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
   }, [addNotification, apiFetch, connectionId]);
 
   useEffect(() => { loadStatus(); }, [loadStatus]);
+
+  // Last resort: instant rollback straight from the header
+  const emergencyDisable = useCallback(() => {
+    if (!connectionId) return;
+    showConfirm(
+      'Emergency disable the firewall on this server? All blocklist rules, the blocklist set, and the restore service will be removed immediately.',
+      () => {
+        apiFetch('/api/firewall/recover', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ connectionId, action: 'rollback' }),
+        })
+          .then(res => res.json())
+          .then(data => {
+            addNotification({
+              title: data?.success ? 'Emergency rollback complete' : 'Rollback failed',
+              message: data?.message || data?.error || 'Unknown result.',
+              type: data?.success ? 'warning' : 'error',
+            });
+            loadStatus();
+          })
+          .catch(err => addNotification({ title: 'Rollback failed', message: err.message, type: 'error' }));
+      },
+      'Emergency Disable',
+      'Disable Firewall'
+    );
+  }, [apiFetch, connectionId, addNotification, loadStatus, showConfirm]);
+
+  // Server agent install status (SSH process check) — shown in the telemetry tab
+  const loadAgentStatus = useCallback(async () => {
+    if (!connectionId) { setAgentStatus(null); return; }
+    try {
+      const res = await apiFetch('/api/server-monitor/agent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ connectionId, action: 'status' }),
+      });
+      const data = await res.json();
+      setAgentStatus(data?.success ? { isRunning: !!data.isRunning, nodeInstalled: !!data.nodeInstalled } : null);
+    } catch {
+      setAgentStatus(null);
+    }
+  }, [apiFetch, connectionId]);
+
+  useEffect(() => {
+    if (activeTab === 'controls') loadAgentStatus();
+  }, [activeTab, loadAgentStatus, agentTick]);
+
+  // Realtime telemetry via the monitor agent stream (same channel ServerMonitor uses).
+  // While an agent is connected for this server, firewall counters stream every
+  // second; without an agent the 10s HTTP status polling above remains active.
+  useEffect(() => {
+    if (activeTab !== 'controls' || !connectionId || !status?.blocklist?.active) return undefined;
+    const conn = connections.find(c => String(c._id || c.id) === String(connectionId));
+    const socket = io({ path: '/api/socket', transports: ['websocket', 'polling'] });
+
+    socket.on('connect', () => {
+      socket.emit('telemetry:start_stream', {
+        interval: 1000,
+        connectionId,
+        targetHost: conn?.host || '',
+        targetLabel: conn?.label || '',
+      });
+    });
+
+    socket.on('telemetry:stream', (raw) => {
+      const fw = raw?.firewall;
+      if (!fw?.active) return;
+      if (!realtimeActiveRef.current) {
+        realtimeActiveRef.current = true;
+        setRealtimeActive(true);
+      }
+      const packets = Number(fw.packets) || 0;
+      const bytes = Number(fw.bytes) || 0;
+      const now = Date.now();
+      const prev = telemetryHistoryRef.current;
+      const last = prev[prev.length - 1];
+      const timeDelta = last ? Math.max(0.5, (now - last.time) / 1000) : 10;
+      const pktRate = last ? Math.max(0, (packets - last.packets) / timeDelta) : 0;
+      const byteRate = last ? Math.max(0, (bytes - last.bytes) / timeDelta) : 0;
+      const next = [...prev, { time: now, packets, bytes, pktRate, byteRate }].slice(-TELEMETRY_MAX_SAMPLES);
+      telemetryHistoryRef.current = next;
+      setTelemetryHistory(next);
+      cacheTelemetry(connectionId, next);
+    });
+
+    socket.on('disconnect', () => {
+      realtimeActiveRef.current = false;
+      setRealtimeActive(false);
+    });
+    socket.on('telemetry:no_agent', () => {
+      realtimeActiveRef.current = false;
+      setRealtimeActive(false);
+    });
+
+    return () => {
+      try { socket.emit('telemetry:stop_stream'); socket.disconnect(); } catch (_) {}
+      realtimeActiveRef.current = false;
+      setRealtimeActive(false);
+    };
+  }, [activeTab, connectionId, status?.blocklist?.active, connections, agentTick]);
 
   useEffect(() => {
     if (!connectionId || !status?.blocklist?.active) return undefined;
@@ -388,16 +664,37 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
     return () => window.clearInterval(timer);
   }, [connectionId, loadSourceStatus, sourceStatus?.running]);
 
+  const vpnAlertShownRef = useRef(false);
   const loadCurrentIp = useCallback(async (showError = false) => {
     setDetectingIp(true);
     try {
       const response = await apiFetch('/api/firewall/client-ip');
       const data = await response.json();
       if (!data.success) throw new Error(data.error);
-      const ips = data.ips || [];
+      let ips = data.ips || [];
+      if (!ips.length) {
+        // Header-based detection fails on direct (non-proxied) connections —
+        // fall back to a public IP echo so the whitelist still gets an entry
+        try {
+          const echo = await fetch('https://api.ipify.org?format=json', { cache: 'no-store' });
+          const echoData = await echo.json();
+          if (echoData?.ip && /^\d+\.\d+\.\d+\.\d+$/.test(echoData.ip)) ips = [echoData.ip];
+        } catch { /* stay undetected */ }
+      }
       setDetectedIps(ips);
       if (ips.length) setProtectedIps(prev => [...new Set([...prev, ...ips])]);
       else if (showError) addNotification({ title: 'Current IP not detected', message: data.message || 'Add your SSH or VPN public IP manually.', type: 'warning' });
+
+      // VPN / datacenter egress detected — alert only, never block
+      const vpnEntry = (data.ipInfo || []).find(info => info?.vpn && ips.includes(info.ip));
+      if (vpnEntry && !vpnAlertShownRef.current) {
+        vpnAlertShownRef.current = true;
+        addNotification({
+          title: 'VPN detected',
+          message: `You are connecting through a VPN/datacenter IP (${vpnEntry.ip}${vpnEntry.isp ? ` — ${vpnEntry.isp}` : ''}). It has been whitelisted, but VPN IPs change and are shared with others — consider adding your real home/office IP too so you never lose access.`,
+          type: 'warning',
+        });
+      }
     } catch (error) {
       if (showError) addNotification({ title: 'Current IP not detected', message: error.message || 'Add your SSH or VPN public IP manually.', type: 'warning' });
     } finally {
@@ -485,6 +782,80 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
     }
   };
 
+  // Live-sync the whitelist to the server's allowlist whenever the firewall
+  // is active — adding/removing an IP takes effect immediately.
+  const syncAllowlist = useCallback((ips) => {
+    if (!connectionId || !status?.blocklist?.active) return;
+    apiFetch('/api/firewall/allowlist', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ connectionId, ips }),
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (data?.success) {
+          loadStatus(); // refresh the "Enforced on server" badge
+          addNotification({ title: 'Whitelist synced', message: data.message, type: 'success' });
+        } else if (data?.error) {
+          addNotification({ title: 'Whitelist sync failed', message: data.error, type: 'error' });
+        }
+      })
+      .catch(() => {});
+  }, [apiFetch, connectionId, status?.blocklist?.active, loadStatus, addNotification]);
+
+  // ── Live blocklist edits — add/remove specific IPs without a file import ──
+  const [blockDraft, setBlockDraft] = useState('');
+  const [blocking, setBlocking] = useState(false);
+  const [blockCheck, setBlockCheck] = useState(null); // { ip, blocked } | null
+  const [manualBlocks, setManualBlocks] = useState([]); // removable chips of quick-blocked IPs
+
+  const checkBlockedIp = useCallback(async () => {
+    const ip = blockDraft.split(/[\n,;]+/)[0]?.trim();
+    if (!connectionId || !ip) return;
+    setBlocking(true);
+    setBlockCheck(null);
+    try {
+      const response = await apiFetch(`/api/firewall/blocklist?connectionId=${encodeURIComponent(connectionId)}&ip=${encodeURIComponent(ip)}`);
+      const data = await response.json();
+      if (!data.success) throw new Error(data.error);
+      setBlockCheck({ ip, blocked: data.blocked, active: data.active });
+    } catch (error) {
+      addNotification({ title: 'Lookup failed', message: error.message || 'Could not check the blocklist.', type: 'error' });
+    } finally {
+      setBlocking(false);
+    }
+  }, [apiFetch, connectionId, blockDraft, addNotification]);
+
+  const quickBlock = useCallback(async (mode, rawEntries) => {
+    // Accepts a string (input box, comma/new-line separated) or an array (chip ✕, threat Ban)
+    const entries = (Array.isArray(rawEntries) ? rawEntries : (rawEntries || blockDraft).split(/[\n,;]+/))
+      .map(v => String(v).trim())
+      .filter(Boolean);
+    if (!connectionId || !entries.length) return;
+    setBlocking(true);
+    try {
+      const response = await apiFetch('/api/firewall/blocklist', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ connectionId, mode, entries, protectedIps }),
+      });
+      const data = await response.json();
+      if (!data.success) throw new Error(data.error);
+      setBlockDraft('');
+      setManualBlocks(prev => {
+        const next = mode === 'add'
+          ? [...new Set([...prev, ...entries])]
+          : prev.filter(v => !entries.includes(v));
+        saveManualBlocks(connectionId, next);
+        return next;
+      });
+      addNotification({ title: mode === 'add' ? 'IP blocked' : 'IP unblocked', message: data.message, type: 'success' });
+      loadStatus();
+    } catch (error) {
+      addNotification({ title: 'Blocklist not changed', message: error.message || 'Could not update the blocklist.', type: 'error' });
+    } finally {
+      setBlocking(false);
+    }
+  }, [apiFetch, connectionId, blockDraft, protectedIps, addNotification, loadStatus]);
+
   const addProtectedIp = () => {
     const value = protectionDraft.trim();
     if (!value) return;
@@ -492,17 +863,18 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
     setProtectionDraft('');
     if (bulkImportIds.length) prepareBulkBatch(bulkImportIds, [...protectedIps, value]).catch(err => addNotification({ title: 'Preflight failed', message: err.message, type: 'error' }));
     else if (rawContent) previewContent(rawContent, sourceName);
+    syncAllowlist([...new Set([...protectedIps, value])]);
   };
 
   const removeProtectedIp = (ip) => {
     setProtectedIps(prev => prev.filter(v => v !== ip));
+    const next = protectedIps.filter(v => v !== ip);
     if (bulkImportIds.length) {
-      const next = protectedIps.filter(v => v !== ip);
       prepareBulkBatch(bulkImportIds, next).catch(err => addNotification({ title: 'Preflight failed', message: err.message, type: 'error' }));
     } else if (rawContent) {
-      const next = protectedIps.filter(v => v !== ip);
       setTimeout(() => previewContent(rawContent, sourceName, next), 0);
     }
+    syncAllowlist(next);
   };
 
   const applyBlocklist = async () => {
@@ -513,7 +885,9 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
     try {
       const response = await apiFetch(bulkBatchId ? '/api/firewall/bulk/apply' : '/api/firewall/apply', {
         method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' },
-        body: JSON.stringify(bulkBatchId ? { connectionId, batchId: bulkBatchId, confirmation } : { connectionId, entries, protectedIps, confirmation }),
+        body: JSON.stringify(bulkBatchId
+          ? { connectionId, batchId: bulkBatchId, confirmation, manualBlocks }
+          : { connectionId, entries, protectedIps, confirmation, manualBlocks }),
       });
       const data = await readApplyProgress(response, event => setApplyProgress(event));
       if (!data.success) {
@@ -521,8 +895,9 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
         throw new Error(data.error);
       }
       setApplyProgress({ type: 'complete', progress: 100, message: 'Firewall protection is live' });
-      addNotification({ title: 'Blocklist applied', message: `${data.entries.toLocaleString()} entries are active.`, type: 'success' });
+      addNotification({ title: 'Blocklist applied', message: `${data.entries.toLocaleString()} entries are active. Safety net armed — the firewall reverts itself in 15 min if this app loses access to the server.`, type: 'success' });
       setConfirmation('');
+      safetyArmRef.current = true; // first successful status poll disarms it
       await loadStatus();
     } catch (error) {
       setApplyProgress({ type: 'error', message: error.message || 'The server rejected this update.' });
@@ -534,12 +909,14 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
   };
 
   const installTools = async () => {
-    if (!connectionId || !matchesConfirmation(installConfirmation)) return;
+    if (!connectionId || installing) return;
     setInstalling(true);
     try {
       const response = await apiFetch('/api/firewall/install', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ connectionId, confirmation: installConfirmation }),
+        // "1-Click" banner — installs standard ipset/iptables packages only,
+        // so the typed confirmation is implicit here
+        body: JSON.stringify({ connectionId, confirmation: 'confirm' }),
       });
       const data = await response.json();
       if (!data.success) throw new Error(data.error);
@@ -554,7 +931,11 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
   };
 
   const manageBlocklist = async () => {
-    if (!connectionId || !manageAction || !matchesConfirmation(manageConfirmation)) return;
+    if (!connectionId || managing || !manageAction) return;
+    if (!matchesConfirmation(manageConfirmation)) {
+      addNotification({ title: 'Confirmation required', message: 'Type "confirm" in the confirmation box to authorize this blocklist action.', type: 'warning' });
+      return;
+    }
     setManaging(true);
     setInspection(null);
     try {
@@ -584,7 +965,7 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
     try {
       const response = await apiFetch('/api/firewall/source', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ connectionId, sourceUrl, protectedIps, schedule: sourceSchedule === 'custom' ? sourceCustomSchedule : sourceSchedule, confirmation: sourceConfirmation, runNow }),
+        body: JSON.stringify({ connectionId, sourceUrl, protectedIps, manualBlocks, schedule: sourceSchedule === 'custom' ? sourceCustomSchedule : sourceSchedule, confirmation: sourceConfirmation, runNow }),
       });
       const data = await response.json();
       if (!data.success) throw new Error(data.error);
@@ -634,13 +1015,13 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
   const canApply = Boolean(connectionId && entryCount && !conflicts.length && matchesConfirmation(confirmation) && status?.tools?.ipset && status?.tools?.iptables && status?.access !== 'limited');
 
   return (
-    <div className="h-full overflow-y-auto bg-[#0a0d14] text-slate-100 font-sans selection:bg-indigo-500/30 selection:text-indigo-200">
+    <div className="h-full overflow-y-auto bg-[var(--fw-app-bg,#0a0d14)] text-slate-100 font-sans selection:bg-indigo-500/30 selection:text-indigo-200">
       <div className="max-w-6xl mx-auto p-4 sm:p-6 lg:p-8 space-y-6">
         
         {/* ==================================================================== */}
         {/* Top Header & Telemetry Hero Card */}
         {/* ==================================================================== */}
-        <header className="relative rounded-2xl border border-white/10 bg-gradient-to-b from-white/[0.04] to-black/40 p-5 sm:p-6 backdrop-blur-xl shadow-2xl z-20">
+        <header className="relative rounded-2xl border border-white/10 bg-gradient-to-b from-white/[0.04] to-black/40 p-5 sm:p-6 [backdrop-filter:blur(var(--glass-blur,24px))] shadow-2xl z-20">
           {/* Ambient glow container */}
           <div className="absolute inset-0 overflow-hidden rounded-2xl pointer-events-none">
             <div className="absolute -top-24 -right-24 w-72 h-72 bg-indigo-600/15 rounded-full blur-3xl" />
@@ -683,6 +1064,17 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                 title={t('firewall.refreshStatus')}
               >
                 <RefreshCw size={15} className={statusLoading ? 'animate-spin text-indigo-400' : ''} />
+              </button>
+
+              <button
+                type="button"
+                onClick={emergencyDisable}
+                disabled={!connectionId || !status?.blocklist?.active}
+                data-onboarding="firewall-last-resort"
+                className="p-2.5 rounded-xl border border-rose-500/40 bg-rose-500/15 hover:bg-rose-500/25 hover:border-rose-400/60 text-rose-300 transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                title="Last resort — instantly remove all firewall rules on this server"
+              >
+                <Power size={15} />
               </button>
 
               <button
@@ -765,8 +1157,8 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
         {/* ==================================================================== */}
         <div className="flex items-center gap-2.5 border-b border-white/10 pb-3.5 overflow-x-auto">
           {[
-            { id: 'schedule', onboardingId: 'firewall-tab-autosync', label: t('firewall.tabs.autoSync'), desc: 'Auto-fetch from URL', icon: Workflow, color: 'text-cyan-400' },
             { id: 'manual', onboardingId: 'firewall-tab-manual', label: t('firewall.tabs.manualImport'), desc: 'File or raw IPs', icon: Layers, color: 'text-indigo-400' },
+            { id: 'schedule', onboardingId: 'firewall-tab-autosync', label: t('firewall.tabs.autoSync'), desc: 'Auto-fetch from URL', icon: Workflow, color: 'text-cyan-400' },
             { id: 'controls', onboardingId: 'firewall-tab-telemetry', label: t('firewall.tabs.telemetry'), desc: 'Realtime filter monitor', icon: Radar, color: 'text-emerald-400' },
           ].map(tab => {
             const Icon = tab.icon;
@@ -1051,7 +1443,14 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                 </div>
 
                 <div className="space-y-1.5">
-                  <div className="text-[10px] font-mono text-white/40 uppercase">Active Whitelist:</div>
+                  <div className="text-[10px] font-mono text-white/40 uppercase flex items-center gap-2">
+                    Active Whitelist:
+                    {status?.blocklist?.active && (status.blocklist.allowlistEntries || 0) > 0 && (
+                      <span className="px-1.5 py-0.5 rounded-md text-[9px] bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 normal-case">
+                        Enforced on server · {status.blocklist.allowlistEntries} IP{status.blocklist.allowlistEntries === 1 ? '' : 's'} allow-listed
+                      </span>
+                    )}
+                  </div>
                   <div className="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto">
                     {protectedIps.length === 0 ? (
                       <span className="text-[11px] text-white/30 italic">No manual IPs added (auto-detects browser IP)</span>
@@ -1086,6 +1485,97 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                   </div>
                 )}
               </div>
+
+              {/* Quick Block / Unblock — live blocklist edits without a file import */}
+              {status?.blocklist?.active && (
+                <div data-onboarding="firewall-quick-block" className="rounded-2xl border border-rose-500/25 bg-black/40 p-5 space-y-3">
+                  <div>
+                    <h2 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-2">
+                      <Ban size={14} className="text-rose-400" />
+                      Quick Block / Unblock IPs
+                    </h2>
+                    <p className="text-[11px] text-white/50 mt-1">
+                      Instantly add or remove specific IPs or CIDR ranges on the live blocklist — no file import needed. Quick blocks live in their own dedicated set, so they survive list re-applies and scheduled updates. Separate multiple entries with commas or new lines.
+                    </p>
+                  </div>
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <input
+                      type="text"
+                      value={blockDraft}
+                      onChange={e => setBlockDraft(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); quickBlock('add'); } }}
+                      placeholder="e.g. 203.0.113.50  or  185.220.101.0/24"
+                      className="flex-1 px-3 py-2 rounded-xl bg-black/60 border border-white/10 text-xs font-mono text-white outline-none focus:border-rose-400"
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={checkBlockedIp}
+                        disabled={blocking || !blockDraft.trim()}
+                        className="px-3.5 py-2 rounded-xl text-xs font-bold bg-white/5 text-white/70 hover:text-white hover:bg-white/10 border border-white/10 flex items-center gap-1.5 cursor-pointer disabled:opacity-40"
+                        title="Check if this IP is currently blocked"
+                      >
+                        <Search size={13} /> Check
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => quickBlock('add')}
+                        disabled={blocking || !blockDraft.trim()}
+                        className="px-3.5 py-2 rounded-xl text-xs font-bold bg-rose-500/20 text-rose-200 hover:bg-rose-500/30 border border-rose-500/40 flex items-center gap-1.5 cursor-pointer disabled:opacity-40"
+                      >
+                        {blocking ? <Loader2 size={13} className="animate-spin" /> : <Ban size={13} />} Block
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => quickBlock('remove')}
+                        disabled={blocking || !blockDraft.trim()}
+                        className="px-3.5 py-2 rounded-xl text-xs font-bold bg-white/5 text-white/70 hover:text-white hover:bg-white/10 border border-white/10 flex items-center gap-1.5 cursor-pointer disabled:opacity-40"
+                      >
+                        <RotateCcw size={13} /> Unblock
+                      </button>
+                    </div>
+                  </div>
+                  {manualBlocks.length > 0 && (
+                    <div className="space-y-1.5">
+                      <div className="text-[10px] font-mono text-white/40 uppercase">
+                        Active Quick Blocks{status?.blocklist?.manualEntries > 0 && status.blocklist.manualEntries !== manualBlocks.length ? ` (${manualBlocks.length} here · ${status.blocklist.manualEntries} on server)` : ''}:
+                      </div>
+                      <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto">
+                        {manualBlocks.map(ip => (
+                          <span
+                            key={ip}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono bg-rose-500/10 text-rose-300 border border-rose-500/25"
+                          >
+                            {ip}
+                            <button
+                              type="button"
+                              onClick={() => quickBlock('remove', [ip])}
+                              disabled={blocking}
+                              className="hover:text-emerald-300 cursor-pointer disabled:opacity-40"
+                              title="Unblock this IP"
+                            >
+                              <X size={12} />
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {blockCheck && (
+                    <div className={`text-[11px] font-mono px-3 py-2 rounded-xl border ${
+                      blockCheck.blocked
+                        ? 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+                        : 'bg-emerald-500/10 border-emerald-500/25 text-emerald-300'
+                    }`}>
+                      {blockCheck.active === false
+                        ? 'The blocklist is not active on this server.'
+                        : blockCheck.blocked
+                          ? <span className="flex items-center gap-1.5"><Ban size={12} /> {blockCheck.ip} is currently BLOCKED by the live firewall.</span>
+                          : <span className="flex items-center gap-1.5"><ShieldCheck size={12} /> {blockCheck.ip} is not blocked (traffic allowed).</span>}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Apply Action Card */}
@@ -1140,7 +1630,56 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
         {/* ==================================================================== */}
         {activeTab === 'controls' && (
           <div className="space-y-6">
-            
+
+            {/* Server Agent status — unlocks 1s realtime graph + 24/7 attack history */}
+            <div className={`flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-2xl border p-4 ${
+              realtimeActive
+                ? 'border-emerald-500/30 bg-emerald-500/5'
+                : agentStatus?.nodeInstalled
+                  ? 'border-amber-500/30 bg-amber-500/5'
+                  : 'border-white/10 bg-white/[0.02]'
+            }`}>
+              <div className="flex items-start gap-3">
+                <div className={`p-2 rounded-xl border ${
+                  realtimeActive
+                    ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
+                    : agentStatus?.nodeInstalled
+                      ? 'border-amber-500/40 bg-amber-500/10 text-amber-300'
+                      : 'border-white/10 bg-white/5 text-white/50'
+                }`}>
+                  <Cpu size={16} />
+                </div>
+                <div>
+                  <div className="text-xs font-bold text-white flex items-center gap-2">
+                    Server Agent
+                    <span className={`px-2 py-0.5 rounded-md text-[10px] font-mono border ${
+                      realtimeActive
+                        ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                        : agentStatus?.nodeInstalled
+                          ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                          : 'bg-white/5 text-white/50 border-white/10'
+                    }`}>
+                      {realtimeActive ? 'Connected' : agentStatus?.nodeInstalled ? 'Installed · Offline' : 'Not installed'}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-white/50 mt-0.5 leading-relaxed">
+                    {realtimeActive
+                      ? 'Streaming firewall attack telemetry every second and recording 24/7 history — even while this window is closed.'
+                      : agentStatus?.nodeInstalled
+                        ? 'Agent is installed but currently offline on this server. Start it to unlock the 1s realtime graph and 24/7 attack history.'
+                        : 'Without the agent, the graph samples every 10s only while this window is open. Install it to unlock the 1s realtime stream and 24/7 recorded attack history.'}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAgentWizard(true)}
+                className="shrink-0 px-3.5 py-2 rounded-xl text-xs font-bold bg-indigo-500/15 border border-indigo-500/40 text-indigo-300 hover:bg-indigo-500/25 transition-all cursor-pointer"
+              >
+                {agentStatus?.nodeInstalled ? 'Manage Agent' : 'Install Server Agent'}
+              </button>
+            </div>
+
             {/* Live Block Telemetry Grid */}
             {status?.blocklist?.active ? (
               <div className="space-y-6">
@@ -1152,7 +1691,7 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                       <BrickWallShield size={56} />
                     </div>
                     <div className="text-[10px] font-mono uppercase tracking-wider text-white/50 flex items-center gap-1.5">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
                       Blocked Network Packets
                     </div>
                     <div className="text-3xl font-bold text-emerald-300 mt-2 font-mono tracking-tight">
@@ -1229,19 +1768,20 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                     </div>
                   </div>
 
-                  {/* SVG Area Chart */}
-                  <div className="h-44 w-full rounded-xl bg-[#080b11] border border-white/5 p-3 flex flex-col justify-between relative overflow-hidden">
+                  {/* SVG Area Chart — drag / wheel to pan through history, hover to scrub time */}
+                  <div className="rounded-xl bg-[#080b11] border border-white/5 p-3 space-y-2">
                     {(() => {
                       const dataPoints = telemetryHistory.length > 0
                         ? telemetryHistory
                         : [{ time: Date.now(), pktRate: 0, byteRate: 0 }];
-                      
+
                       const values = dataPoints.map(p => graphMode === 'packets' ? p.pktRate : p.byteRate / 1024);
                       const maxVal = Math.max(...values, 1);
                       const minVal = 0;
-                      const width = 600;
                       const height = 120;
                       const padding = 10;
+                      const pointSpacing = 14; // px per sample — wide enough to drag/roll smoothly
+                      const width = Math.max(600, values.length * pointSpacing + padding * 2);
                       const usableHeight = height - padding * 2;
                       const usableWidth = width - padding * 2;
                       const stepX = values.length > 1 ? usableWidth / (values.length - 1) : usableWidth;
@@ -1264,72 +1804,181 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                       const isPackets = graphMode === 'packets';
                       const strokeColor = isPackets ? '#10b981' : '#06b6d4';
                       const gradId = isPackets ? 'grad-packets' : 'grad-bandwidth';
+                      const spanMs = dataPoints.length > 1 ? Math.max(0, Date.now() - dataPoints[0].time) : 0;
+                      const spanLabel = spanMs >= 55 * 60 * 1000
+                        ? `~${Math.round(spanMs / (60 * 60 * 1000))}h ago`
+                        : `~${Math.max(1, Math.round(spanMs / (60 * 1000)))}m ago`;
+
+                      const hoverIdx = graphHover && graphHover.idx >= 0 && graphHover.idx < coords.length ? graphHover.idx : null;
+                      const hoverPt = hoverIdx != null ? coords[hoverIdx] : null;
+                      const pinnedIdx = graphPinned && graphPinned.idx >= 0 && graphPinned.idx < coords.length ? graphPinned.idx : null;
+                      const pinnedPt = pinnedIdx != null ? coords[pinnedIdx] : null;
+                      const hoverSample = hoverIdx != null ? dataPoints[hoverIdx] : null;
+                      const peakIdx = values.length > 1 ? values.reduce((mi, v, i, a) => v > a[mi] ? i : mi, 0) : 0;
+
+                      const scrollToIndex = (idx) => {
+                        const el = graphScrollRef.current;
+                        if (!el) return;
+                        el.scrollLeft = Math.max(0, padding + idx * stepX - el.clientWidth / 2);
+                        setGraphLive(false);
+                        setGraphHover({ idx });
+                      };
 
                       return (
                         <>
                           <div className="flex justify-between items-center text-[10px] font-mono text-white/40 px-1">
                             <span>Peak: <span className={isPackets ? 'text-emerald-300 font-bold' : 'text-cyan-300 font-bold'}>{maxVal.toFixed(1)} {isPackets ? 'pkts/s' : 'KB/s'}</span></span>
-                            <span>Live: <span className={isPackets ? 'text-emerald-300 font-bold' : 'text-cyan-300 font-bold'}>{lastPt.val.toFixed(1)} {isPackets ? 'pkts/s' : 'KB/s'}</span></span>
+                            <span className="flex items-center gap-2">
+                              <span>Live: <span className={isPackets ? 'text-emerald-300 font-bold' : 'text-cyan-300 font-bold'}>{lastPt.val.toFixed(1)} {isPackets ? 'pkts/s' : 'KB/s'}</span></span>
+                              {values.length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => scrollToIndex(peakIdx)}
+                                  className="px-2 py-0.5 rounded-md bg-amber-500/10 border border-amber-500/30 text-amber-300 hover:bg-amber-500/20 transition-colors cursor-pointer inline-flex items-center gap-1"
+                                  title="Scroll back to the peak attack rate"
+                                >
+                                  <TrendingUp size={11} /> Peak
+                                </button>
+                              )}
+                              {!graphLive && (
+                                <button
+                                  type="button"
+                                  onClick={jumpGraphLive}
+                                  className="px-2 py-0.5 rounded-md bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/20 transition-colors cursor-pointer inline-flex items-center gap-1"
+                                  title="Jump back to the newest samples"
+                                >
+                                  <FastForward size={11} /> Live
+                                </button>
+                              )}
+                            </span>
                           </div>
 
-                          <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-28 overflow-visible">
-                            <defs>
-                              <linearGradient id="grad-packets" x1="0%" y1="0%" x2="0%" y2="100%">
-                                <stop offset="0%" stopColor="#10b981" stopOpacity="0.35" />
-                                <stop offset="100%" stopColor="#10b981" stopOpacity="0.0" />
-                              </linearGradient>
-                              <linearGradient id="grad-bandwidth" x1="0%" y1="0%" x2="0%" y2="100%">
-                                <stop offset="0%" stopColor="#06b6d4" stopOpacity="0.35" />
-                                <stop offset="100%" stopColor="#06b6d4" stopOpacity="0.0" />
-                              </linearGradient>
-                            </defs>
+                          <div
+                            ref={graphScrollRef}
+                            onScroll={handleGraphScroll}
+                            onMouseDown={handleGraphMouseDown}
+                            onMouseMove={handleGraphDragMove}
+                            onMouseUp={endGraphDrag}
+                            onMouseLeave={() => { endGraphDrag(); setGraphHover(null); }}
+                            onWheel={handleGraphWheel}
+                            className="overflow-x-auto overflow-y-hidden cursor-grab active:cursor-grabbing select-none"
+                            style={{ scrollbarWidth: 'thin' }}
+                          >
+                            <div className="relative" style={{ width }}>
+                              <svg
+                                width={width}
+                                height={height}
+                                viewBox={`0 0 ${width} ${height}`}
+                                className="block"
+                                onMouseMove={(e) => {
+                                  const rect = e.currentTarget.getBoundingClientRect();
+                                  const idx = Math.round((e.clientX - rect.left - padding) / stepX);
+                                  setGraphHover({ idx: Math.min(coords.length - 1, Math.max(0, idx)) });
+                                }}
+                                onClick={() => {
+                                  if (graphDragMovedRef.current) return; // that was a pan, not a click
+                                  if (hoverIdx != null) setGraphPinned({ idx: hoverIdx });
+                                }}
+                              >
+                                <defs>
+                                  <linearGradient id="grad-packets" x1="0%" y1="0%" x2="0%" y2="100%">
+                                    <stop offset="0%" stopColor="#10b981" stopOpacity="0.35" />
+                                    <stop offset="100%" stopColor="#10b981" stopOpacity="0.0" />
+                                  </linearGradient>
+                                  <linearGradient id="grad-bandwidth" x1="0%" y1="0%" x2="0%" y2="100%">
+                                    <stop offset="0%" stopColor="#06b6d4" stopOpacity="0.35" />
+                                    <stop offset="100%" stopColor="#06b6d4" stopOpacity="0.0" />
+                                  </linearGradient>
+                                </defs>
 
-                            {/* Reference Grid lines */}
-                            <line x1={padding} y1={padding} x2={width - padding} y2={padding} stroke="#ffffff" strokeOpacity="0.05" strokeDasharray="3 3" />
-                            <line x1={padding} y1={height / 2} x2={width - padding} y2={height / 2} stroke="#ffffff" strokeOpacity="0.05" strokeDasharray="3 3" />
-                            <line x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} stroke="#ffffff" strokeOpacity="0.1" />
+                                {/* Reference Grid lines */}
+                                <line x1={padding} y1={padding} x2={width - padding} y2={padding} stroke="#ffffff" strokeOpacity="0.05" strokeDasharray="3 3" />
+                                <line x1={padding} y1={height / 2} x2={width - padding} y2={height / 2} stroke="#ffffff" strokeOpacity="0.05" strokeDasharray="3 3" />
+                                <line x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} stroke="#ffffff" strokeOpacity="0.1" />
 
-                            {/* Filled Area */}
-                            {areaD && <path d={areaD} fill={`url(#${gradId})`} />}
+                                {/* Filled Area */}
+                                {areaD && <path d={areaD} fill={`url(#${gradId})`} />}
 
-                            {/* Main Stroke */}
-                            {pathD && (
-                              <path
-                                d={pathD}
-                                fill="none"
-                                stroke={strokeColor}
-                                strokeWidth="2.5"
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                              />
-                            )}
+                                {/* Main Stroke */}
+                                {pathD && (
+                                  <path
+                                    d={pathD}
+                                    fill="none"
+                                    stroke={strokeColor}
+                                    strokeWidth="2.5"
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                  />
+                                )}
 
-                            {/* Points */}
-                            {coords.map((pt, i) => (
-                              <circle
-                                key={i}
-                                cx={pt.x}
-                                cy={pt.y}
-                                r="3"
-                                fill={strokeColor}
-                                fillOpacity="0.6"
-                              />
-                            ))}
+                                {/* Points */}
+                                {coords.map((pt, i) => (
+                                  <circle
+                                    key={i}
+                                    cx={pt.x}
+                                    cy={pt.y}
+                                    r="3"
+                                    fill={strokeColor}
+                                    fillOpacity="0.6"
+                                  />
+                                ))}
 
-                            {/* Pulsing Latest Head */}
-                            {lastPt && (
-                              <>
-                                <circle cx={lastPt.x} cy={lastPt.y} r="5" fill={strokeColor} className="animate-ping" opacity="0.75" />
-                                <circle cx={lastPt.x} cy={lastPt.y} r="4" fill="#ffffff" stroke={strokeColor} strokeWidth="2" />
-                              </>
-                            )}
-                          </svg>
+                                {/* Peak marker */}
+                                {values.length > 1 && (
+                                  <>
+                                    <circle cx={coords[peakIdx].x} cy={coords[peakIdx].y} r="5" fill="none" stroke="#fbbf24" strokeWidth="1.5" />
+                                    <text x={coords[peakIdx].x} y={Math.max(10, coords[peakIdx].y - 10)} textAnchor="middle" fontSize="8" fill="#fbbf24" fontFamily="monospace">peak</text>
+                                  </>
+                                )}
+
+                                {/* Pinned time marker — stays until cleared, independent of hover */}
+                                {pinnedPt && (
+                                  <>
+                                    <line x1={pinnedPt.x} y1={Math.max(0, padding - 6)} x2={pinnedPt.x} y2={height - padding} stroke="#fbbf24" strokeOpacity="0.7" strokeDasharray="2 2" />
+                                    <circle cx={pinnedPt.x} cy={pinnedPt.y} r="5" fill="#fbbf24" fillOpacity="0.25" stroke="#fbbf24" strokeWidth="1.5" />
+                                  </>
+                                )}
+
+                                {/* Hover crosshair */}
+                                {hoverPt && (
+                                  <line x1={hoverPt.x} y1={Math.max(0, padding - 6)} x2={hoverPt.x} y2={height - padding} stroke={strokeColor} strokeOpacity="0.5" strokeDasharray="4 3" />
+                                )}
+
+                                {/* Latest Head */}
+                                {lastPt && (
+                                  <circle cx={lastPt.x} cy={lastPt.y} r="4" fill="#ffffff" stroke={strokeColor} strokeWidth="2" />
+                                )}
+
+                                {/* Hovered point */}
+                                {hoverPt && (
+                                  <circle cx={hoverPt.x} cy={hoverPt.y} r="4.5" fill="#ffffff" stroke={strokeColor} strokeWidth="2" />
+                                )}
+                              </svg>
+
+                              {/* Hover tooltip — also time-filters the threat inspector below */}
+                              {hoverPt && hoverSample && (
+                                <div
+                                  className="absolute top-0 pointer-events-none z-10 -translate-x-1/2 whitespace-nowrap rounded-lg border px-2.5 py-1.5 text-[10px] font-mono shadow-xl leading-relaxed"
+                                  style={{
+                                    left: Math.min(Math.max(hoverPt.x, 90), width - 90),
+                                    background: 'rgba(8,11,17,0.95)',
+                                    borderColor: `${strokeColor}55`,
+                                    color: '#e2e8f0',
+                                  }}
+                                >
+                                  <div className="font-bold" style={{ color: strokeColor }}>{new Date(hoverSample.time).toLocaleTimeString()}</div>
+                                  <div>{(isPackets ? hoverSample.pktRate : hoverSample.byteRate / 1024).toFixed(1)} {isPackets ? 'pkts/s' : 'KB/s'}</div>
+                                  <div className="text-white/50">{(hoverSample.packets || 0).toLocaleString()} pkts · {((hoverSample.bytes || 0) / 1048576).toFixed(2)} MB total</div>
+                                </div>
+                              )}
+                            </div>
+                          </div>
 
                           <div className="flex justify-between items-center text-[9px] font-mono text-white/30 px-1 border-t border-white/5 pt-1">
-                            <span>← ~3 minutes ago</span>
+                            <span>← {spanLabel} · drag to pan · click to pin a time</span>
                             <span className="flex items-center gap-1 text-emerald-400/70">
-                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                              Sampling every 10s
+                              <span className={`w-1.5 h-1.5 rounded-full bg-emerald-400 ${realtimeActive ? 'animate-pulse' : ''}`} />
+                              {realtimeActive ? 'Realtime · agent stream (1s)' : 'Sampling every 10s'}
                             </span>
                             <span>Now</span>
                           </div>
@@ -1361,12 +2010,14 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                         }}
                         className={`px-3.5 py-1.5 rounded-xl text-xs font-bold font-mono transition-all flex items-center gap-1.5 cursor-pointer ${
                           sniffingActive
-                            ? 'bg-rose-500/25 border border-rose-500/50 text-rose-200 shadow-[0_0_12px_rgba(244,63,94,0.3)] animate-pulse'
+                            ? 'bg-rose-500/25 border border-rose-500/50 text-rose-200 shadow-[0_0_12px_rgba(244,63,94,0.3)]'
                             : 'bg-white/5 border border-white/10 text-white/70 hover:text-white hover:bg-white/10'
                         }`}
                       >
-                        <span className={`w-2 h-2 rounded-full ${sniffingActive ? 'bg-rose-400' : 'bg-white/40'}`} />
-                        {sniffingActive ? 'Sniffing Live (3s)...' : '▶️ Start Live Sniffer'}
+                        {sniffingActive
+                          ? <Pause size={13} className={packetsLoading ? 'animate-pulse' : ''} />
+                          : <Play size={13} />}
+                        {sniffingActive ? 'Sniffing Live (3s)...' : 'Start Live Sniffer'}
                       </button>
 
                       <button
@@ -1384,6 +2035,23 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                   {/* Filter & Search Bar */}
                   <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5">
                     <div className="flex items-center gap-1 overflow-x-auto pb-1 sm:pb-0 text-xs font-mono">
+                      {(graphPinned || graphHover) && telemetryHistory[(graphPinned || graphHover).idx] && (
+                        <span className={`mr-1.5 inline-flex items-center gap-1.5 px-2 py-1 rounded-lg border whitespace-nowrap ${
+                          graphPinned
+                            ? 'bg-amber-500/10 border-amber-500/30 text-amber-300'
+                            : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                        }`}>
+                          {graphPinned ? <Pin size={11} /> : <Clock size={11} />} {graphPinned ? 'Pinned' : 'Threats'} @ {new Date(telemetryHistory[(graphPinned || graphHover).idx].time).toLocaleTimeString()} ±15s
+                          <button
+                            type="button"
+                            onClick={() => setGraphPinned(null)}
+                            className="text-amber-400/70 hover:text-amber-200 cursor-pointer font-bold flex items-center"
+                            title="Unpin time filter"
+                          >
+                            <X size={11} />
+                          </button>
+                        </span>
+                      )}
                       {[
                         { id: 'all', label: 'All Threats' },
                         { id: 'ssh', label: 'SSH Brute Force' },
@@ -1431,7 +2099,14 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                         </thead>
                         <tbody className="divide-y divide-white/5">
                           {(() => {
+                            // A click-pinned point locks the time filter; hover only previews when nothing is pinned
+                            const activePoint = graphPinned || graphHover;
+                            const activeSample = activePoint ? telemetryHistory[activePoint.idx] : null;
+                            const hoverWindow = activeSample
+                              ? { from: activeSample.time - 15000, to: activeSample.time + 15000 }
+                              : null;
                             const filtered = packets.filter(pkt => {
+                              if (hoverWindow && !((pkt._ms ?? 0) >= hoverWindow.from && (pkt._ms ?? 0) <= hoverWindow.to)) return false;
                               if (packetSearch && !pkt.srcIp.includes(packetSearch)) return false;
                               if (packetFilter === 'ssh') return pkt.targetPort === 22 || pkt.targetPort === 2222;
                               if (packetFilter === 'web') return [80, 443, 8080, 8443, 8888].includes(Number(pkt.targetPort));
@@ -1444,20 +2119,37 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                               return (
                                 <tr>
                                   <td colSpan={6} className="p-6 text-center text-white/30 italic">
-                                    {packetsLoading ? 'Inspecting packet flow on server...' : 'No packets match current filter. Click "▶️ Start Live Sniffer" to stream traffic.'}
+                                    {packetsLoading
+                                      ? 'Inspecting packet flow on server...'
+                                      : hoverWindow
+                                        ? `No threats recorded in the ${graphPinned ? 'pinned' : 'hovered'} time window (±15s).`
+                                        : 'No packets match current filter. Click "Start Live Sniffer" to stream traffic.'}
                                   </td>
                                 </tr>
                               );
                             }
 
-                            return filtered.map(pkt => (
+                            return filtered.slice().sort((a, b) => (b._ms || 0) - (a._ms || 0)).map(pkt => (
                               <tr
                                 key={pkt.id}
                                 onClick={() => setSelectedPacket(pkt)}
                                 className="hover:bg-indigo-500/10 cursor-pointer transition-colors group"
                               >
                                 <td className="p-2.5 pl-3 text-white/40 whitespace-nowrap">{pkt.timestamp}</td>
-                                <td className="p-2.5 text-cyan-300 font-bold whitespace-nowrap group-hover:text-cyan-200">{pkt.srcIp}</td>
+                                <td className="p-2.5 text-cyan-300 font-bold whitespace-nowrap group-hover:text-cyan-200">
+                                  <span className="inline-flex items-center gap-1.5">
+                                    {pkt.srcIp}
+                                    <button
+                                      type="button"
+                                      onClick={(e) => { e.stopPropagation(); quickBlock('add', [pkt.srcIp]); }}
+                                      disabled={blocking}
+                                      title="Add this attacker to the live blocklist"
+                                      className="opacity-0 group-hover:opacity-100 transition-opacity text-rose-400 hover:text-rose-300 cursor-pointer disabled:opacity-40"
+                                    >
+                                      <Ban size={12} />
+                                    </button>
+                                  </span>
+                                </td>
                                 <td className="p-2.5 whitespace-nowrap">
                                   <span className="px-1.5 py-0.5 rounded bg-white/5 border border-white/10 text-white/80">
                                     {pkt.targetPort}/{pkt.protocol}
@@ -1469,8 +2161,8 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                                   </span>
                                 </td>
                                 <td className="p-2.5 whitespace-nowrap">
-                                  <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-rose-500/15 text-rose-300 border border-rose-500/30">
-                                    🚫 Silent Drop (0ms)
+                                  <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-rose-500/15 text-rose-300 border border-rose-500/30 inline-flex items-center gap-1">
+                                    <Ban size={10} /> Silent Drop (0ms)
                                   </span>
                                 </td>
                                 <td className="p-2.5 pr-3 text-white/60 text-[11px] max-w-xs truncate flex items-center justify-between" title={pkt.description}>
@@ -1719,7 +2411,7 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                 <Shield size={36} className="text-white/20 mx-auto" />
                 <div className="text-sm font-semibold text-white/70">No active blocklist currently filtering traffic</div>
                 <p className="text-xs text-white/40 max-w-md mx-auto">
-                  Activate protection via the <strong>⚡ Automated Sync</strong> tab or <strong>📁 Manual Import</strong> tab to start recording real-time threat telemetry and graphs.
+                  Activate protection via the <strong className="inline-flex items-center gap-1"><Zap size={12} className="text-amber-300" /> Automated Sync</strong> tab or <strong className="inline-flex items-center gap-1"><FolderUp size={12} className="text-indigo-300" /> Manual Import</strong> tab to start recording real-time threat telemetry and graphs.
                 </p>
               </div>
             )}
@@ -1831,12 +2523,14 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                   <div className="p-3.5 rounded-xl bg-[#080b11] border border-white/5 space-y-2">
                     <div className="text-[10px] uppercase text-white/40">INPUT Rule State:</div>
                     <pre className="text-cyan-300 text-[11px] overflow-x-auto whitespace-pre-wrap">
-                      {inspection.rule?.value || 'No monitor_blocklist rule found in INPUT chain.'}
+                      {inspection.rule?.value || 'No monitor blocklist rule found in INPUT chain.'}
                     </pre>
                   </div>
 
                   <div className="p-3.5 rounded-xl bg-[#080b11] border border-white/5 space-y-2">
-                    <div className="text-[10px] uppercase text-white/40">IPSet Sample Entries ({inspection.ipset?.entries || 0}):</div>
+                    <div className="text-[10px] uppercase text-white/40">
+                      IPSet Sample Entries ({(inspection.ipset?.entries || 0).toLocaleString()}{inspection.ipset?.manualEntries ? ` + ${inspection.ipset.manualEntries} quick` : ''}):
+                    </div>
                     <pre className="text-emerald-300 text-[11px] max-h-36 overflow-y-auto whitespace-pre-wrap">
                       {inspection.ipset?.samples?.length ? inspection.ipset.samples.join('\n') : 'Empty IPSet.'}
                     </pre>
@@ -1851,6 +2545,24 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
         {showOnboarding && (
           <FirewallOnboarding onComplete={() => setShowOnboarding(false)} />
         )}
+
+        {/* Server Agent Setup & Management Wizard */}
+        <AgentSetupWizard
+          isOpen={showAgentWizard}
+          onClose={() => {
+            setShowAgentWizard(false);
+            // Re-check status and re-request the realtime stream — the agent
+            // may have just come online
+            loadAgentStatus();
+            setAgentTick(t => t + 1);
+          }}
+          connection={connections.find(c => String(c._id || c.id) === String(connectionId))}
+          onRefreshStatus={() => {
+            loadAgentStatus();
+            setAgentTick(t => t + 1);
+          }}
+          apiFetch={apiFetch}
+        />
       </div>
     </div>
   );

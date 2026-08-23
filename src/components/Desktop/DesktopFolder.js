@@ -261,7 +261,7 @@ export default function DesktopFolder({ group, allIcons, isMobile, onOpenIcon })
         >
           <div
             className="w-64 rounded-2xl border border-white/10 shadow-2xl overflow-hidden"
-            style={{ background: 'rgba(15,18,30,0.92)', backdropFilter: 'blur(24px)' }}
+            style={{ background: 'rgba(15,18,30,0.92)', backdropFilter: 'blur(var(--glass-blur, 24px))' }}
           >
             <div className="flex items-center justify-between px-3 py-2.5 border-b border-white/8">
               <div className="flex items-center gap-2">

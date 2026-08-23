@@ -93,7 +93,7 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
   const isMobile = useIsMobile();
   const isMaximized = _isMaximized;
   const { state: osState, focusWindow, closeWindow, toggleMinimize, toggleMaximize, snapWindow, updateWindowPosition } = useOS();
-  const { glassmorphism, taskbarPosition, windowLayout } = osState;
+  const { glassmorphism, glassIntensity, taskbarPosition, windowLayout } = osState;
   const { snapSide } = osState.windows.find(w => w.id === id) || {};
   
   const rndRef = useRef(null);
@@ -542,14 +542,15 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
             background: (glassmorphism && windowState.appType === 'terminal') 
               ? 'transparent' 
               : (glassmorphism ? 'var(--window-bg)' : 'var(--bg-primary)'),
-            backdropFilter: !isMobile && glassmorphism ? 'blur(20px)' : 'none',
+            backdropFilter: !isMobile && glassmorphism ? `blur(${glassIntensity ?? 20}px)` : 'none',
             borderColor: 'var(--border-color)',
           }}
           onClick={() => focusWindow(id)}
         >
-          {/* Title Bar */}
+          {/* Title Bar — transparent in glass mode so the blurred window
+              background shows through; opaque gradient when glassmorphism is off */}
           <div
-            className={`title-bar h-10 flex items-center bg-gradient-to-b from-[var(--bg-secondary)] to-[var(--bg-tertiary)] border-b border-[var(--border-color)] ${windowLayout === 'mac' ? 'px-3 justify-between' : 'flex-row-reverse justify-between'}`}
+            className={`title-bar h-10 flex items-center ${glassmorphism ? '' : 'bg-gradient-to-b from-[var(--bg-secondary)] to-[var(--bg-tertiary)]'} border-b border-[var(--border-color)] ${windowLayout === 'mac' ? 'px-3 justify-between' : 'flex-row-reverse justify-between'}`}
             style={{ position: 'relative', zIndex: 60 }}
           >
             {/* Drag Handle Layer (behind controls) */}

@@ -17,7 +17,7 @@ import {
   Database, CheckCircle, AlertCircle, RefreshCw, Zap, Wifi, WifiOff, Server, Box, Package,
   Loader, Trash2, Lock, Unlock, Key, Mail, Code, Volume2, Sun, Moon, Cpu,
   Search, Terminal, Network, Download, Copy, X, CheckCheck, Sparkles,
-  GitBranch, GitCommit, ChevronDown, Settings, Send, Music, ChevronRight, Globe, LogOut, Check,
+  GitBranch, GitCommit, ChevronDown, Settings, Send, Music, ChevronRight, LogOut, Check,
   RotateCcw, Menu
 } from 'lucide-react';
 import { useOS } from '@/context/OSContext';
@@ -72,27 +72,6 @@ function Toggle({ value, onChange, accent = 'indigo' }) {
       style={{ border: value ? 'none' : '1px solid var(--border-color)' }}
     >
       <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow-md transition-transform duration-200 ${value ? 'translate-x-5' : 'translate-x-0'}`} />
-    </button>
-  );
-}
-
-function PillButton({ active, onClick, children, accent = 'indigo', className = '' }) {
-  const accents = {
-    indigo: active ? 'bg-indigo-500/15 border-indigo-500/50 text-indigo-400 shadow-sm shadow-indigo-500/10' : '',
-    emerald: active ? 'bg-emerald-500/15 border-emerald-500/50 text-emerald-400 shadow-sm shadow-emerald-500/10' : '',
-    amber: active ? 'bg-amber-500/15 border-amber-500/50 text-amber-400 shadow-sm shadow-amber-500/10' : '',
-    rose: active ? 'bg-rose-500/15 border-rose-500/50 text-rose-400 shadow-sm shadow-rose-500/10' : '',
-  };
-  return (
-    <button
-      onClick={onClick}
-      className={`px-4 py-2.5 rounded-xl text-xs font-semibold border transition-all duration-150 cursor-pointer ${
-        active
-          ? accents[accent] || accents.indigo
-          : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-card-hover)]'
-      } ${className}`}
-    >
-      {children}
     </button>
   );
 }
@@ -166,7 +145,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
   const [activeTab, setActiveTabState] = useState(initialTab || propActiveTab || (deploymentOnly ? 'deployment' : 'appearance'));
   const { data: session } = useSession();
   const { t, i18n } = useTranslation();
-  const { state: osState, updateWindowProps, setWallpaper, setGlassmorphism, setIconSize, setIconStyle, setBrightness, setUiScale, setNotifications, setLanguage, setTheme, setTaskbarPosition, setWindowLayout, addCustomWallpaper, removeCustomWallpaper, saveSettings, addNotification, showConfirm, setKeyboardShortcuts, setTerminalSettings } = useOS();
+  const { state: osState, updateWindowProps, setWallpaper, setGlassmorphism, setGlassIntensity, setIconSize, setBrightness, setNotifications, setTheme, setTaskbarPosition, setWindowLayout, addCustomWallpaper, removeCustomWallpaper, saveSettings, addNotification, showConfirm, setKeyboardShortcuts, setTerminalSettings } = useOS();
 
   const setActiveTab = (tab) => {
     setActiveTabState(tab);
@@ -190,7 +169,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
   }, [osState.windows, windowId]);
   const { state: appState, dispatch, apiFetch, fetchConnections, connectionsReady } = useApp();
   const { vaultStatus, decryptedUri, lockVault, clearVault, setupVault, showVault } = useVault();
-  const { glassmorphism, brightness, uiScale, notifications } = osState;
+  const { glassmorphism, brightness, notifications } = osState;
 
   // Database config state (for non-vault / legacy mode)
   const [dbUri, setDbUri] = useState('');
@@ -1485,7 +1464,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
       {!deploymentOnly && (
         <div className={`
           ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
-          fixed md:relative z-20 md:z-0 w-64 border-r border-[var(--border-color)] flex flex-col shrink-0 h-full overflow-y-auto custom-scrollbar transition-transform duration-300 bg-[var(--bg-secondary)]/60 backdrop-blur-xl
+          fixed md:relative z-20 md:z-0 w-64 border-r border-[var(--border-color)] flex flex-col shrink-0 h-full overflow-y-auto custom-scrollbar transition-transform duration-300 bg-[var(--bg-secondary)] [backdrop-filter:blur(var(--glass-blur,24px))]
         `}>
         {/* User Profile Section */}
         <div className="p-4 border-b border-[var(--border-color)]/60">
@@ -1743,23 +1722,23 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                 <SettingRow label={t('settings_ui.appearance.glassmorphism')} description={t('settings_ui.appearance.glassmorphismDesc')} noBorder>
                   <Toggle value={glassmorphism} onChange={() => setGlassmorphism(!glassmorphism)} />
                 </SettingRow>
-              </SettingsCard>
-
-              {/* Icon Style */}
-              <SettingsCard>
-                <div className="flex items-center gap-2 mb-4">
-                  <Layout size={15} className="text-purple-400" />
-                  <h3 className="text-sm font-semibold text-[var(--text-primary)]">{t('settings_ui.appearance.iconStyle')}</h3>
-                </div>
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
-                  {['glass', 'flat', 'neumorphic', 'outline', 'minimal'].map(id => (
-                    <button key={id} onClick={() => setIconStyle(id)}
-                      className={`p-3 rounded-xl border transition-all text-center ${osState.iconStyle === id ? 'bg-indigo-500/10 border-indigo-500/40 shadow-sm' : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] hover:bg-[var(--bg-card-hover)]'}`}>
-                      <span className="block text-[11px] font-semibold text-[var(--text-primary)]">{t(`settings_ui.appearance.styles.${id}`)}</span>
-                      <span className="block text-[9px] text-[var(--text-muted)] mt-0.5">{t(`settings_ui.appearance.styles.${id}Desc`)}</span>
-                    </button>
-                  ))}
-                </div>
+                {glassmorphism && (
+                  <div className="mt-4 pt-4 border-t border-[var(--border-color)]">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs font-medium text-[var(--text-secondary)]">Glass Intensity</span>
+                      <span className="text-xs font-mono text-indigo-400">{osState.glassIntensity ?? 20}px</span>
+                    </div>
+                    <input
+                      type="range" min="0" max="40" value={osState.glassIntensity ?? 20}
+                      onChange={(e) => setGlassIntensity(parseInt(e.target.value))}
+                      className="w-full h-1.5 bg-[var(--bg-tertiary)] rounded-full appearance-none cursor-pointer accent-indigo-500"
+                    />
+                    <div className="flex justify-between mt-1.5 text-[10px] text-[var(--text-muted)]">
+                      <span>Clear (0px)</span>
+                      <span>Frosted (40px)</span>
+                    </div>
+                  </div>
+                )}
               </SettingsCard>
 
               {/* Theme */}
@@ -1779,27 +1758,6 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                       className={`p-4 rounded-xl border transition-all flex flex-col items-center gap-2.5 ${osState.theme === theme.id ? 'bg-indigo-500/10 border-indigo-500/40' : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] hover:bg-[var(--bg-card-hover)]'}`}>
                       <theme.icon size={22} className={osState.theme === theme.id ? 'text-indigo-400' : 'text-[var(--text-muted)]'} />
                       <span className="text-xs font-semibold text-[var(--text-primary)]">{theme.label}</span>
-                    </button>
-                  ))}
-                </div>
-              </SettingsCard>
-
-              {/* Language */}
-              <SettingsCard>
-                <div className="flex items-center gap-2 mb-4">
-                  <Globe size={15} className="text-blue-400" />
-                  <h3 className="text-sm font-semibold text-[var(--text-primary)]">{t('settings_ui.appearance.language')}</h3>
-                </div>
-                <div className="grid grid-cols-3 gap-2">
-                  {[
-                    { code: 'en', label: 'English', flag: '🇺🇸' },
-                    { code: 'th', label: 'ภาษาไทย', flag: '🇹🇭' },
-                    { code: 'cn', label: '简体中文', flag: '🇨🇳' },
-                  ].map(lang => (
-                    <button key={lang.code} onClick={() => setLanguage(lang.code)}
-                      className={`p-3 rounded-xl border transition-all flex items-center gap-3 ${i18n.language === lang.code ? 'bg-indigo-500/10 border-indigo-500/40' : 'bg-[var(--bg-tertiary)] border-[var(--border-color)] hover:bg-[var(--bg-card-hover)]'}`}>
-                      <span className="text-lg">{lang.flag}</span>
-                      <span className="text-xs font-semibold text-[var(--text-primary)]">{lang.label}</span>
                     </button>
                   ))}
                 </div>
@@ -1872,26 +1830,11 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                 <SettingRow label={t('settings_ui.display.brightness')} description={t('settings_ui.display.brightnessDesc')}>
                   <span className="text-xs font-mono text-[var(--text-muted)] w-10 text-right">{brightness}%</span>
                 </SettingRow>
-                <input 
+                <input
                   type="range" min="30" max="100" value={brightness}
                   onChange={(e) => setBrightness(parseInt(e.target.value))}
                   className="w-full h-1.5 bg-[var(--bg-tertiary)] rounded-full appearance-none cursor-pointer accent-indigo-500 mt-2"
                 />
-              </SettingsCard>
-
-              <SettingsCard>
-                <div className="flex items-center gap-2 mb-4">
-                  <Monitor size={15} className="text-blue-400" />
-                  <h3 className="text-sm font-semibold text-[var(--text-primary)]">{t('settings_ui.display.interfaceScaling')}</h3>
-                </div>
-                <div className="grid grid-cols-3 gap-2">
-                  {[75, 100, 125].map(scale => (
-                    <PillButton key={scale} active={uiScale === scale} onClick={() => { setUiScale(scale); addNotification({ title: 'UI Scale', message: t('settings_ui.display.scalingSet', { scale }), type: 'success' }); }}>
-                      {scale}%
-                    </PillButton>
-                  ))}
-                </div>
-                <p className="mt-3 text-[11px] text-[var(--text-muted)]">{t('settings_ui.display.scalingInfo')}</p>
               </SettingsCard>
             </section>
           </div>
@@ -4223,16 +4166,6 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                     </div>
                   ))}
                 </div>
-              </SettingsCard>
-
-              {/* Opacity */}
-              <SettingsCard>
-                <SettingRow label={t('settings_ui.terminal.opacity') || 'Background Opacity'} description="Lower opacity allows the desktop wallpaper to shine through.">
-                  <span className="text-xs font-mono text-blue-400">{Math.round((osState.terminalSettings?.backgroundOpacity ?? 1) * 100)}%</span>
-                </SettingRow>
-                <input type="range" min="30" max="100" value={(osState.terminalSettings?.backgroundOpacity ?? 1) * 100}
-                  onChange={(e) => setTerminalSettings({ backgroundOpacity: parseInt(e.target.value) / 100 })}
-                  className="w-full h-1.5 bg-[var(--bg-tertiary)] rounded-full appearance-none cursor-pointer accent-blue-500 mt-2" />
               </SettingsCard>
 
               {/* Behavior */}

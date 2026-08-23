@@ -287,7 +287,7 @@ export default function Taskbar() {
           }`}
           style={{
             background: glassmorphism ? 'var(--taskbar-bg)' : 'var(--bg-primary)',
-            backdropFilter: glassmorphism ? 'blur(18px)' : 'none',
+            backdropFilter: glassmorphism ? 'blur(var(--glass-blur, 18px))' : 'none',
             boxShadow: '0 0 30px var(--shadow-strong)'
           }}
         >
@@ -313,7 +313,7 @@ export default function Taskbar() {
                 style={{
                   ...getStartMenuStyle(),
                   background: glassmorphism ? 'var(--window-bg)' : 'var(--bg-primary)',
-                  backdropFilter: 'blur(24px)',
+                  backdropFilter: 'blur(var(--glass-blur, 24px))',
                   zIndex: 10002,
                 }}
               >
@@ -679,7 +679,7 @@ export default function Taskbar() {
                 background: 'var(--window-bg)',
                 ...contextMenu,
                 // Ensure contextMenu contains its own positioning keys (left, top, bottom, right)
-                backdropFilter: 'blur(24px)',
+                backdropFilter: 'blur(var(--glass-blur, 24px))',
                 boxShadow: '0 12px 40px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.05)'
               }}
               onClick={(e) => e.stopPropagation()}
@@ -761,7 +761,7 @@ export default function Taskbar() {
               style={{ 
                 background: 'var(--window-bg)',
                 ...taskbarContextMenu,
-                backdropFilter: 'blur(24px)',
+                backdropFilter: 'blur(var(--glass-blur, 24px))',
                 boxShadow: '0 12px 40px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.05)'
               }}
               onClick={(e) => e.stopPropagation()}
@@ -942,10 +942,11 @@ function LanguageSwitcher({ vertical, taskbarPosition }) {
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.95 }}
-            className="w-32 backdrop-blur-xl border border-[var(--border-color)] rounded-xl shadow-2xl overflow-hidden overflow-y-auto max-h-60 custom-scrollbar z-[10002]"
+            className="w-32 border border-[var(--border-color)] rounded-xl shadow-2xl overflow-hidden overflow-y-auto max-h-60 custom-scrollbar z-[10002]"
             style={{
               ...getPopupStyle(),
-              background: 'var(--window-bg)'
+              background: 'var(--window-bg)',
+              backdropFilter: 'blur(var(--glass-blur, 24px))'
             }}
           >
             {languages.map(lang => (

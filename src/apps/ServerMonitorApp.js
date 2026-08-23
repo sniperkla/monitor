@@ -595,7 +595,7 @@ function ScrollableChartCard({
 
       {/* Floating Past Time / Peak Highlight Badge */}
       {(!isAtEnd && activeZoom !== 'fit' && totalPoints > 0) || peakHighlight ? (
-        <div className="absolute top-12 right-4 z-10 flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-900/95 border border-indigo-500/40 text-[11px] shadow-xl backdrop-blur-md animate-fade-in">
+        <div className="absolute top-12 right-4 z-10 flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-900/95 border border-indigo-500/40 text-[11px] shadow-xl [backdrop-filter:blur(var(--glass-blur,12px))] animate-fade-in">
           <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
           {peakHighlight ? (
             <span className="font-mono font-semibold text-emerald-300">{peakHighlight}</span>

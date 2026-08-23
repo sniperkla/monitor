@@ -205,7 +205,7 @@ export default function PreviewWindow({ isOpen, onClose }) {
     ghost.style.borderRadius = '14px';
     ghost.style.boxShadow = '0 25px 60px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.12)';
     ghost.style.transition = 'transform 0.1s ease-out, opacity 0.2s ease-in-out';
-    ghost.style.backdropFilter = 'blur(12px)';
+    ghost.style.backdropFilter = 'blur(var(--glass-blur, 12px))';
     
     // Initial position
     const initX = e.clientX - offsetX;
@@ -476,8 +476,8 @@ export default function PreviewWindow({ isOpen, onClose }) {
                 borderRadius: 14,
                 background: 'var(--bg-tertiary)',
                 border: '1px solid var(--border-color)',
-                backdropFilter: 'blur(10px)',
-                WebkitBackdropFilter: 'blur(10px)',
+                backdropFilter: 'blur(var(--glass-blur, 10px))',
+                WebkitBackdropFilter: 'blur(var(--glass-blur, 10px))',
                 boxShadow: '0 18px 38px rgba(0,0,0,0.45)',
               }}
             />

@@ -69,9 +69,10 @@ function NotificationItem({ notification, removeNotification, glassmorphism }) {
       animate={{ opacity: 1, x: 0, scale: 1 }}
       exit={{ opacity: 0, scale: 0.9, transition: { duration: 0.2 } }}
       transition={{ type: "spring", stiffness: 500, damping: 30 }}
-      className={`pointer-events-auto relative w-full overflow-hidden rounded-lg border shadow-lg backdrop-blur-md select-none group`}
+      className={`pointer-events-auto relative w-full overflow-hidden rounded-lg border shadow-lg select-none group`}
       style={{
         background: glassmorphism ? 'var(--window-bg)' : 'var(--bg-primary)',
+        backdropFilter: glassmorphism ? 'blur(var(--glass-blur, 16px))' : 'none',
         borderColor: 'var(--border-color)',
         boxShadow: '0 8px 32px rgba(0, 0, 0, 0.25)',
       }}
