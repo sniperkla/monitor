@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import connectDB from '@/lib/mongodb';
 import User from '@/models/User';
 import { sendVerificationEmail } from '@/lib/resend';
+import { logger } from '@/lib/logger';
 
 /**
  * POST /api/auth/verify-email
@@ -60,16 +61,16 @@ export async function POST(request) {
 
       try {
         const emailResult = await sendVerificationEmail({ to: cleanEmail, code: verifyCode });
-        console.log(`[Resend] Re-sent verification code to ${cleanEmail}:`, emailResult);
+        logger.info(`[Resend] Re-sent verification code to ${cleanEmail}:`, emailResult);
         if (emailResult?.error) {
-          console.error('[Resend Error Details]:', emailResult.error);
+          logger.error('[Resend Error Details]:', emailResult.error);
           return NextResponse.json({
             success: false,
             error: `Failed to send email via Resend: ${emailResult.error.message || JSON.stringify(emailResult.error)}`
           }, { status: 500 });
         }
       } catch (err) {
-        console.error('[Resend Exception]:', err);
+        logger.error('[Resend Exception]:', err);
         return NextResponse.json({
           success: false,
           error: `Failed to send email: ${err.message}`
@@ -119,7 +120,7 @@ export async function POST(request) {
     return NextResponse.json({ success: false, error: 'Invalid action' }, { status: 400 });
 
   } catch (error) {
-    console.error('Verify email route error:', error);
+    logger.error('Verify email route error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

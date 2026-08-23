@@ -8,6 +8,7 @@ import AiHistory from '@/models/AiHistory';
 import { checkAndTrackAiUsage } from '@/utils/aiLimiter';
 import { checkRateLimit } from '@/lib/serverGuard';
 import { canUseServerAi, aiSupporterRequiredResponse } from '@/utils/supporter';
+import { logger } from '@/lib/logger';
 
 
 export async function POST(req) {
@@ -219,7 +220,7 @@ ${guideContext?.commands?.map(c => `- ${c.code} (${c.label})`).join('\n') || 'No
                     actualUsedModel = currentModel;
                     break;
                 } else if (response.status === 429) {
-                     console.warn(`Wiki Chat Rate limit hit on key index ${tryIndex} for model ${currentModel}. Rotating...`);
+                     logger.warn(`Wiki Chat Rate limit hit on key index ${tryIndex} for model ${currentModel}. Rotating...`);
                      continue;
                 } else {
                      const errBody = await response.text().catch(() => '');
@@ -239,7 +240,7 @@ ${guideContext?.commands?.map(c => `- ${c.code} (${c.label})`).join('\n') || 'No
              SystemSetting.updateOne(
                { key: 'ai_api_keys' },
                { $set: { 'value.currentIndex': nextIndex } }
-             ).catch(err => console.error('Failed to update key index:', err));
+             ).catch(err => logger.error('Failed to update key index:', err));
         }
         let usageInfo = null;
         if (session) {
@@ -260,7 +261,7 @@ ${guideContext?.commands?.map(c => `- ${c.code} (${c.label})`).join('\n') || 'No
               ]
             });
           } catch (dbErr) {
-            console.error('Failed to save Wiki AI history:', dbErr);
+            logger.error('Failed to save Wiki AI history:', dbErr);
           }
         }
         return NextResponse.json({ success: true, message: aiMessage, usage: usageInfo });
@@ -272,7 +273,7 @@ ${guideContext?.commands?.map(c => `- ${c.code} (${c.label})`).join('\n') || 'No
     );
 
   } catch (error) {
-    console.error('Wiki Chat API Error:', error);
+    logger.error('Wiki Chat API Error:', error);
     return NextResponse.json(
       { success: false, error: 'Internal Server Error' },
       { status: 500 }

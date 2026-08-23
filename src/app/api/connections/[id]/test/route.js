@@ -8,6 +8,7 @@ import { decrypt } from '@/utils/encryption';
 import { getPooledConnection } from '@/lib/dbPool';
 import { checkRateLimit } from '@/lib/serverGuard';
 import { attachRequestUserId, isRelayConnectionError } from '@/lib/requestUser';
+import { logger } from '@/lib/logger';
 
 // POST test connection
 export async function POST(request, { params }) {
@@ -85,7 +86,7 @@ export async function POST(request, { params }) {
 
     return NextResponse.json(result);
   } catch (error) {
-    console.error('Test connection error:', error);
+    logger.error('Test connection error:', error);
     return NextResponse.json(
       { success: false, error: error.message },
       { status: 500 }
@@ -107,7 +108,7 @@ async function testDatabaseConnection(conn) {
         version = `v${status.version}`;
       } catch (e) {
         // Fallback: Just connected is enough if it didn't throw
-        console.log('ServerStatus restricted, using basic connection success');
+        logger.info('ServerStatus restricted, using basic connection success');
       }
       // Don't close! Connection stays in pool for reuse
       return { success: true, info: `MongoDB ${version}` };

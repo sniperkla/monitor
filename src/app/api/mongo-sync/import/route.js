@@ -7,6 +7,7 @@ import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import { sanitizeDocument, normalizeMongoConnection } from '@/lib/mongoSyncUtils';
 import { attachRequestUserId } from '@/lib/requestUser';
 import mongoose from 'mongoose';
+import { logger } from '@/lib/logger';
 
 const MAX_IMPORT_DOCS = 100000;
 
@@ -90,7 +91,7 @@ export async function POST(request) {
     });
 
   } catch (error) {
-    console.error('Import collection error:', error);
+    logger.error('Import collection error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

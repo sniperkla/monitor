@@ -5,6 +5,7 @@ import connectDB from '@/lib/mongodb';
 import User from '@/models/User.js';
 import SystemSetting from '@/models/SystemSetting';
 import { extendExpiry, invalidateSupporter, DEFAULT_GRANT_DAYS } from '@/utils/supporter';
+import { logger } from '@/lib/logger';
 
 export const dynamic = 'force-dynamic';
 
@@ -52,7 +53,7 @@ function killUserRelays(email, userDoc) {
       global.__persistRelayTokens().catch(() => {});
     }
   } catch (e) {
-    console.warn('killUserRelays failed:', e.message);
+    logger.warn('killUserRelays failed:', e.message);
   }
 }
 
@@ -115,7 +116,7 @@ export async function GET() {
 
     return NextResponse.json({ success: true, supporters, requests, kofiUnmatched, defaultGrantDays: DEFAULT_GRANT_DAYS });
   } catch (error) {
-    console.error('Admin supporters API error:', error);
+    logger.error('Admin supporters API error:', error);
     return NextResponse.json({ success: false, error: 'Internal Server Error' }, { status: 500 });
   }
 }
@@ -181,7 +182,7 @@ export async function POST(request) {
 
     return NextResponse.json({ success: false, error: 'Unknown action' }, { status: 400 });
   } catch (error) {
-    console.error('Admin supporters POST error:', error);
+    logger.error('Admin supporters POST error:', error);
     return NextResponse.json({ success: false, error: 'Internal Server Error' }, { status: 500 });
   }
 }

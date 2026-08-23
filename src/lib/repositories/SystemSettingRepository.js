@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import SystemSetting from '../../models/SystemSetting.js';
+import { logger } from '@/lib/logger';
 
 /**
  * SystemSettingRepository
@@ -65,7 +66,7 @@ export class SystemSettingRepository {
           WHERE table_name = 'system_settings' AND column_name = 'createdat'
         `);
         if (check.rows?.length > 0) {
-          console.log('[SystemSettings] Migrating lowercase columns to camelCase...');
+          logger.info('[SystemSettings] Migrating lowercase columns to camelCase...');
           const renames = [
             ['createdat', 'createdAt'],
             ['updatedat', 'updatedAt']

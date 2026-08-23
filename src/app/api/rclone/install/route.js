@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
+import { logger } from '@/lib/logger';
 
 function quote(str) {
   return `'${String(str).replace(/'/g, `'\\''`)}'`;
@@ -127,7 +128,7 @@ export async function POST(req) {
     });
 
   } catch (error) {
-    console.error('[rclone/install POST] error:', error.message);
+    logger.error('[rclone/install POST] error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }
@@ -167,7 +168,7 @@ export async function GET(req) {
     });
 
   } catch (error) {
-    console.error('[rclone/install GET] error:', error.message);
+    logger.error('[rclone/install GET] error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

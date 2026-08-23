@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
+import { logger } from '@/lib/logger';
 
 export async function POST(req) {
   try {
@@ -55,7 +56,7 @@ rm -f /tmp/rclone-lock-*.lock
       output: killRes.stdout || '',
     });
   } catch (error) {
-    console.error('[rclone/kill] error:', error.message);
+    logger.error('[rclone/kill] error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

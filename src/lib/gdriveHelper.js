@@ -1,6 +1,7 @@
 import connectDB from './mongodb.js';
 import { SystemSettingRepository } from './repositories/SystemSettingRepository.js';
 import { withRetry } from './mongoSyncUtils.js';
+import { logger } from '@/lib/logger';
 
 const SIMPLE_UPLOAD_LIMIT = 5 * 1024 * 1024; // 5MB — Google's limit for simple upload
 
@@ -38,7 +39,7 @@ export async function getGoogleAccessToken(userId = null) {
     throw new Error('Google OAuth credentials (Client ID/Secret) are missing.');
   }
 
-  console.log('🔄 Refreshing Google Drive Access Token...');
+  logger.info('🔄 Refreshing Google Drive Access Token...');
   const res = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -52,7 +53,7 @@ export async function getGoogleAccessToken(userId = null) {
 
   const data = await res.json();
   if (data.error) {
-    console.error('❌ Failed to refresh Google token:', data);
+    logger.error('❌ Failed to refresh Google token:', data);
     throw new Error(`Google token refresh failed: ${data.error_description || data.error}`);
   }
 

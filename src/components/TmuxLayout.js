@@ -1048,7 +1048,7 @@ export default function TmuxLayout({ windowId = 'default', isTmuxMode = false })
 
 // ── Terminal Bridge Component ───────────────────────────────────────────────
 
-const TerminalBridge = React.memo(({ term, target, hiddenRoom, onClose }) => {
+const TerminalBridge = React.memo(function TerminalBridge({ term, target, hiddenRoom, onClose }) {
   const bridgeRef = useRef(null);
   const wrapperRef = useRef(null);
   const { relayInfo } = useApp();

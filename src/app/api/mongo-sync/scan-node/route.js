@@ -5,6 +5,7 @@ import connectDB from '@/lib/mongodb';
 import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import { Client as SshClient } from 'ssh2';
 import { decryptWithMetadata } from '@/utils/encryption';
+import { logger } from '@/lib/logger';
 
 // Helper: quick SSH exec → returns stdout+stderr
 function sshExec(sshConfig, command, timeoutMs = 10000) {
@@ -330,7 +331,7 @@ echo "$ALL_PORTS"
     return NextResponse.json({ success: false, error: 'Unknown action' }, { status: 400 });
 
   } catch (error) {
-    console.error('scan-node error:', error);
+    logger.error('scan-node error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

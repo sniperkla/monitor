@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { logger } from '@/lib/logger';
 
 /**
  * Convert 24-char hex strings or { $oid: "..." } objects to ObjectId instances.
@@ -54,7 +55,7 @@ export async function withRetry(fn, { maxAttempts = 3, baseDelayMs = 1000, label
       lastErr = err;
       if (attempt < maxAttempts) {
         const delay = baseDelayMs * Math.pow(2, attempt - 1);
-        console.warn(`[retry] ${label} failed (attempt ${attempt}/${maxAttempts}), retrying in ${delay}ms: ${err.message}`);
+        logger.warn(`[retry] ${label} failed (attempt ${attempt}/${maxAttempts}), retrying in ${delay}ms: ${err.message}`);
         await new Promise(r => setTimeout(r, delay));
       }
     }

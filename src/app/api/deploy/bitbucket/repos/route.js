@@ -5,6 +5,7 @@ import connectDB from '@/lib/mongodb';
 import SystemSetting from '@/models/SystemSetting';
 import { decrypt } from '@/utils/encryption';
 import { resolveUserIdQuery, normalizeUserId } from '@/lib/deployUserQuery';
+import { logger } from '@/lib/logger';
 
 // GET /api/deploy/bitbucket/repos?project=projectId
 export async function GET(request) {
@@ -63,7 +64,7 @@ export async function GET(request) {
 
     return NextResponse.json({ success: true, repos });
   } catch (error) {
-    console.error('[deploy/bitbucket/repos] GET error:', error.message);
+    logger.error('[deploy/bitbucket/repos] GET error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

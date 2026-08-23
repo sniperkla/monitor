@@ -9,6 +9,7 @@ import { SystemSettingRepository } from './repositories/SystemSettingRepository.
 import { uploadFileToGoogleDrive } from './gdriveHelper.js';
 import { attachRequestUserId } from './requestUser.js';
 import { normalizeMongoConnection } from './mongoSyncUtils.js';
+import { logger } from '@/lib/logger';
 
 export async function executeMongoSyncJob(request, jobId) {
   const session = await getServerSession(authOptions);
@@ -74,7 +75,7 @@ export async function executeMongoSyncJob(request, jobId) {
     const isAllCollections = allCollectionNames.includes(job.collection);
     const isAllDatabases = allDatabaseNames.includes(job.database);
 
-    console.log(`[mongo-sync] Running backup job ${job.id} db=${job.database} col=${job.collection}`);
+    logger.info(`[mongo-sync] Running backup job ${job.id} db=${job.database} col=${job.collection}`);
 
     if (isAllDatabases) {
       let dbNames = [];
@@ -134,7 +135,7 @@ export async function executeMongoSyncJob(request, jobId) {
     }
 
   } catch (err) {
-    console.error('Backup run error:', err.message, { jobId: job.id });
+    logger.error('Backup run error:', err.message, { jobId: job.id });
     runStatus = 'error';
     runMessage = err.message;
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });

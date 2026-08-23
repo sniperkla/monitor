@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import mongoose from 'mongoose';
 import User from "@/models/User";
+import { logger } from '@/lib/logger';
 
 async function ensureConnected() {
   if (mongoose.connection.readyState === 1) return; // already connected by server.js
@@ -27,7 +28,7 @@ export async function GET() {
       settings: user?.settings || {}
     });
   } catch (error) {
-    console.error('[settings] GET error:', error.message);
+    logger.error('[settings] GET error:', error.message);
     return NextResponse.json({ success: true, settings: {} }); // graceful fallback — use localStorage
   }
 }
@@ -50,6 +51,6 @@ export async function POST(request) {
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    console.error('[settings] POST error:', error.message);
+    logger.error('[settings] POST error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }}

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
+import { logger } from '@/lib/logger';
 
 export async function POST(req) {
   try {
@@ -109,7 +110,7 @@ echo "arch:$(uname -m)"
     });
 
   } catch (error) {
-    console.error('[check-dependencies] error:', error);
+    logger.error('[check-dependencies] error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

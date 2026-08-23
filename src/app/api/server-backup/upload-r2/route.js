@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { getSshConfig, sftpReadStream } from '../_ssh';
 import { uploadStreamToR2, getPresignedUrl, isR2Configured } from '@/lib/r2';
+import { logger } from '@/lib/logger';
 
 export async function POST(request) {
   try {
@@ -23,14 +24,14 @@ export async function POST(request) {
     const name = filename || filePath.split('/').pop() || 'backup.tar.gz';
     const key = `backups/${connectionId}/${name}`;
 
-    console.log(`[upload-r2] Starting upload: ${key}`);
+    logger.info(`[upload-r2] Starting upload: ${key}`);
 
     const sshConfig = await getSshConfig(connectionId);
     const stream = await sftpReadStream(sshConfig, filePath);
 
     await uploadStreamToR2(key, stream, 'application/gzip');
 
-    console.log(`[upload-r2] Upload complete: ${key}`);
+    logger.info(`[upload-r2] Upload complete: ${key}`);
 
     const downloadUrl = await getPresignedUrl(key, 86400); // 24h expiry
 
@@ -40,7 +41,7 @@ export async function POST(request) {
       key,
     });
   } catch (error) {
-    console.error('[upload-r2] error:', error.message);
+    logger.error('[upload-r2] error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

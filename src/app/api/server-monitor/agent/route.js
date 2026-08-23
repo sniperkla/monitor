@@ -5,6 +5,7 @@ import { getSshConfig, execCommand, sftpUpload } from '@/app/api/server-backup/_
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import { logger } from '@/lib/logger';
 
 export async function POST(request) {
   try {
@@ -285,7 +286,7 @@ export async function POST(request) {
           await sftpUpload(sshConfig, agentFilePath, '.monitor-agent.js');
         }
       } catch (err) {
-        console.warn('SFTP direct upload fallback to curl:', err.message);
+        logger.warn('SFTP direct upload fallback to curl:', err.message);
       }
 
       let installScript = '';
@@ -438,7 +439,7 @@ LAUNCHER_EOF
 
     return NextResponse.json({ success: false, error: 'Unknown action' }, { status: 400 });
   } catch (error) {
-    console.error('[server-monitor/agent] error:', error);
+    logger.error('[server-monitor/agent] error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

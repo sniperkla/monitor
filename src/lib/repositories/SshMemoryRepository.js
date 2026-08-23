@@ -1,4 +1,5 @@
 import { getSshMemoryModel } from '../../models/SshMemory.js';
+import { logger } from '@/lib/logger';
 
 export class SshMemoryRepository {
   constructor(db) {
@@ -67,7 +68,7 @@ export class SshMemoryRepository {
             AND column_name = 'userid'
          `);
          if (cols.rows?.length > 0) {
-            console.log('[SshMemory] Migrating lowercase columns to camelCase...');
+            logger.info('[SshMemory] Migrating lowercase columns to camelCase...');
             const renames = [
               ['userid', 'userId'],
               ['loginuser', 'loginUser'],
@@ -87,7 +88,7 @@ export class SshMemoryRepository {
             }
          }
       } catch(e) {
-         console.warn('[SshMemory] Migration check failed:', e.message);
+         logger.warn('[SshMemory] Migration check failed:', e.message);
       }
     }
   }

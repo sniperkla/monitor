@@ -542,7 +542,7 @@ function DynamicCronPicker({ value, onChange }) {
         {mode === 'custom' && (
           <div className="space-y-1">
             <label className="text-[10px] font-semibold text-[var(--text-muted)] block">
-              Custom Cron or Natural Input (e.g., "5 min", "18:00", "every 2 hours", "*/5 * * * *"):
+              Custom Cron or Natural Input (e.g., &quot;5 min&quot;, &quot;18:00&quot;, &quot;every 2 hours&quot;, &quot;*/5 * * * *&quot;):
             </label>
             <input
               type="text"

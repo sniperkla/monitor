@@ -1285,7 +1285,7 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                       onClick={() => setSourceConfirmation('confirm')}
                       className="px-2 py-1 rounded-lg text-[10px] font-mono bg-white/5 hover:bg-white/10 text-white/40 hover:text-white/80 border border-white/5 cursor-pointer"
                     >
-                      Fill "confirm"
+                      Fill &quot;confirm&quot;
                     </button>
                   </div>
 
@@ -1606,7 +1606,7 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                     onClick={() => setConfirmation('confirm')}
                     className="px-2 py-1 rounded-lg text-[10px] font-mono bg-white/5 hover:bg-white/10 text-white/40 hover:text-white/80 border border-white/5 cursor-pointer"
                   >
-                    Fill "confirm"
+                    Fill &quot;confirm&quot;
                   </button>
                   <button
                     type="button"
@@ -2424,7 +2424,7 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                   Blocklist Lifecycle Controls
                 </h3>
                 <p className="text-xs text-white/50 mt-1">
-                  Manage the state of the active IPSet without altering your server's other iptables rules.
+                  Manage the state of the active IPSet without altering your server&apos;s other iptables rules.
                 </p>
               </div>
 
@@ -2485,7 +2485,7 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                     onClick={() => setManageConfirmation('confirm')}
                     className="px-2 py-1 rounded-lg text-[10px] font-mono bg-white/5 hover:bg-white/10 text-white/40 hover:text-white/80 border border-white/5 cursor-pointer"
                   >
-                    Fill "confirm"
+                    Fill &quot;confirm&quot;
                   </button>
                   <button
                     type="button"

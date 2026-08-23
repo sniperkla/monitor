@@ -98,27 +98,8 @@ export default function FilesApp({ onEditConnection, initialConnection, initialC
     }
   }, [tabs, windowId]);
 
-  // Restore mode: auto-connect from persisted initialConnectionId
-  useEffect(() => {
-    if (tabs.length > 0) return;
-    const targetId = initialConnIdRef.current;
-    if (!targetId) return;
-    if (!connectionsReady || connections.length === 0) return;
 
-    let baseConnId = targetId;
-    if (typeof targetId === 'string' && targetId.startsWith('docker-')) {
-       // Format: docker-containerId:baseConnId
-       baseConnId = targetId.split(':').pop();
-    }
-
-    const conn = connections.find((c) => c._id === baseConnId);
-    if (!conn) return;
-
-    initialConnIdRef.current = null;
-    handleConnect(conn, targetId);
-  }, [connectionsReady, connections, tabs.length]);
-
-  const handleConnect = (conn, overrideId = null) => {
+  function handleConnect(conn, overrideId = null) {
     if (conn.storage === 'manual') {
       onEditConnection(conn);
       return;
@@ -139,7 +120,27 @@ export default function FilesApp({ onEditConnection, initialConnection, initialC
 
     setTabs(prev => [...prev, newTab]);
     setIsSelecting(false);
-  };
+  }
+
+  // Restore mode: auto-connect from persisted initialConnectionId
+  useEffect(() => {
+    if (tabs.length > 0) return;
+    const targetId = initialConnIdRef.current;
+    if (!targetId) return;
+    if (!connectionsReady || connections.length === 0) return;
+
+    let baseConnId = targetId;
+    if (typeof targetId === 'string' && targetId.startsWith('docker-')) {
+       // Format: docker-containerId:baseConnId
+       baseConnId = targetId.split(':').pop();
+    }
+
+    const conn = connections.find((c) => c._id === baseConnId);
+    if (!conn) return;
+
+    initialConnIdRef.current = null;
+    handleConnect(conn, targetId);
+  }, [connectionsReady, connections, tabs.length]);
 
   const handleCloseFileManager = (id) => {
     setTabs(prev => {

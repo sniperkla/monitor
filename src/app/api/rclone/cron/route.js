@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
+import { logger } from '@/lib/logger';
 
 function parseCronHuman(cronExpr) {
   const parts = cronExpr.trim().split(/\s+/);
@@ -162,7 +163,7 @@ done
 
     return NextResponse.json({ success: true, jobs });
   } catch (error) {
-    console.error('[rclone/cron GET] error:', error.message);
+    logger.error('[rclone/cron GET] error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }
@@ -348,7 +349,7 @@ rm -f "$TMP_CRON"
     return NextResponse.json({ success: false, error: addRes.stderr || 'Failed to add crontab job' }, { status: 500 });
 
   } catch (error) {
-    console.error('[rclone/cron POST] error:', error.message);
+    logger.error('[rclone/cron POST] error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }
@@ -512,7 +513,7 @@ rm -f "$TMP_CRON"
     return NextResponse.json({ success: false, error: updateRes.stderr || 'Failed to update crontab job' }, { status: 500 });
 
   } catch (error) {
-    console.error('[rclone/cron PUT] error:', error.message);
+    logger.error('[rclone/cron PUT] error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }
@@ -559,7 +560,7 @@ rm -f "$TMP_CRON"
     return NextResponse.json({ success: delRes.code === 0, error: delRes.code !== 0 ? delRes.stderr : null });
 
   } catch (error) {
-    console.error('[rclone/cron DELETE] error:', error.message);
+    logger.error('[rclone/cron DELETE] error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

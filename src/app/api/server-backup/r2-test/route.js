@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { isR2Configured, uploadStreamToR2, getPresignedUrl } from '@/lib/r2';
 import { Readable } from 'stream';
+import { logger } from '@/lib/logger';
 
 export async function GET(request) {
   try {
@@ -51,7 +52,7 @@ export async function GET(request) {
       bucket: process.env.R2_BUCKET_NAME,
     });
   } catch (error) {
-    console.error('[r2-test] error:', error.message);
+    logger.error('[r2-test] error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

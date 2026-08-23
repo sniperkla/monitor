@@ -7,6 +7,7 @@
  */
 import net from 'net';
 import { Client as SshClient } from 'ssh2';
+import { logger } from '@/lib/logger';
 
 // Global tunnel pool — survives hot-reloads in dev
 const tunnelPool = global.__sshTunnelPool || (global.__sshTunnelPool = new Map());
@@ -216,7 +217,7 @@ export function normalizeRelayDatabaseUri(uri) {
                 ? relay.targetPort
                 : 27017;
             url.port = String(restoredPort);
-            console.log(
+            logger.info(
               `🔧 [Relay] Normalized URI port ${uriPort} → ${restoredPort} (relay proxy port)`
             );
             return url.toString();
@@ -228,7 +229,7 @@ export function normalizeRelayDatabaseUri(uri) {
             ? userRelays.targetPort
             : 27017;
         url.port = String(restoredPort);
-        console.log(
+        logger.info(
           `🔧 [Relay] Normalized URI port ${uriPort} → ${restoredPort} (relay proxy port)`
         );
         return url.toString();
@@ -248,7 +249,7 @@ export function resolveLocalhostViaRelay(host, port, userId, relayId) {
   const found = findActiveRelay(userId, relayId);
   if (!found?.relay?.localPort) {
     if (process.env.NODE_ENV === 'development') {
-      console.warn('⚠️ [Relay] No active relay — using server localhost (development only)');
+      logger.warn('⚠️ [Relay] No active relay — using server localhost (development only)');
       return { host, port, usedRelay: false };
     }
     throw new Error(
@@ -257,7 +258,7 @@ export function resolveLocalhostViaRelay(host, port, userId, relayId) {
   }
 
   applyRelayTarget(found.relay, host, port);
-  console.log(
+  logger.info(
     `🔗 Relay: routing ${found.relay.targetHost}:${found.relay.targetPort} → 127.0.0.1:${found.relay.localPort}` +
     (userId ? ` (user ${userId})` : ' (single active relay)')
   );

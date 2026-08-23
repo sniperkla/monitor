@@ -8,6 +8,7 @@ import { encrypt, decryptWithMetadata } from '@/utils/encryption';
 import SystemSetting from '@/models/SystemSetting';
 import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import { resolveUserIdQuery, normalizeUserId } from '@/lib/deployUserQuery';
+import { logger } from '@/lib/logger';
 
 const defaultConfig = {
   id: 'default',
@@ -120,7 +121,7 @@ export async function GET(request) {
 
     return NextResponse.json({ success: true, projects });
   } catch (error) {
-    console.error('[deploy/config] GET error:', error.message);
+    logger.error('[deploy/config] GET error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }
@@ -148,7 +149,7 @@ export async function POST(request) {
     // This ensures we can access relay/user database connections
     if (targetType === 'ssh' && normalizedConnectionId && body.connectionId) {
       try {
-        console.log(`[deploy/config] Looking up SSH connection from user database: ${normalizedConnectionId}`);
+        logger.info(`[deploy/config] Looking up SSH connection from user database: ${normalizedConnectionId}`);
         const userDb = await connectDB();
         const userRepo = new ConnectionRepository(userDb);
         await userRepo.init();
@@ -165,12 +166,12 @@ export async function POST(request) {
             privateKey: connection.privateKey || '',
             passphrase: connection.passphrase || ''
           };
-          console.log(`[deploy/config] ✅ Found SSH connection in user database: ${normalizedConnectionId}`);
+          logger.info(`[deploy/config] ✅ Found SSH connection in user database: ${normalizedConnectionId}`);
         } else {
-          console.log(`[deploy/config] ⚠️ SSH connection not found in user database: ${normalizedConnectionId}`);
+          logger.info(`[deploy/config] ⚠️ SSH connection not found in user database: ${normalizedConnectionId}`);
         }
       } catch (err) {
-        console.log(`[deploy/config] ⚠️ Failed to lookup SSH connection from user DB: ${err.message}`);
+        logger.info(`[deploy/config] ⚠️ Failed to lookup SSH connection from user DB: ${err.message}`);
       }
     }
 
@@ -291,7 +292,7 @@ export async function POST(request) {
 
     return NextResponse.json({ success: true, config: updatedValue });
   } catch (error) {
-    console.error('[deploy/config] POST error:', error.message);
+    logger.error('[deploy/config] POST error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }
@@ -318,7 +319,7 @@ export async function DELETE(request) {
 
     return NextResponse.json({ success: true, message: 'Project deployment config deleted' });
   } catch (error) {
-    console.error('[deploy/config] DELETE error:', error.message);
+    logger.error('[deploy/config] DELETE error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

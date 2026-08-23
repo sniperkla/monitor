@@ -4,6 +4,7 @@ import { authOptions } from '@/lib/auth';
 import connectDB from '@/lib/mongodb';
 import SystemSetting from '@/models/SystemSetting';
 import crypto from 'crypto';
+import { logger } from '@/lib/logger';
 
 // GET /api/deploy/github/connect?project=projectId
 export async function GET(request) {
@@ -45,7 +46,7 @@ export async function GET(request) {
     const githubUrl = `https://github.com/login/oauth/authorize?${params.toString()}`;
     return NextResponse.redirect(githubUrl);
   } catch (error) {
-    console.error('[deploy/github/connect] error:', error.message);
+    logger.error('[deploy/github/connect] error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

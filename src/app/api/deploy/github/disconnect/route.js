@@ -5,6 +5,7 @@ import connectDB from '@/lib/mongodb';
 import SystemSetting from '@/models/SystemSetting';
 import { decrypt } from '@/utils/encryption';
 import { resolveUserIdQuery, normalizeUserId } from '@/lib/deployUserQuery';
+import { logger } from '@/lib/logger';
 
 // POST /api/deploy/github/disconnect?project=projectId
 export async function POST(request) {
@@ -51,7 +52,7 @@ export async function POST(request) {
           body: JSON.stringify({ access_token: token })
         });
       } catch (err) {
-        console.warn('GitHub token revoke failed:', err.message);
+        logger.warn('GitHub token revoke failed:', err.message);
       }
     }
 
@@ -61,7 +62,7 @@ export async function POST(request) {
 
     return NextResponse.json({ success: true, message: 'Disconnected GitHub for project' });
   } catch (error) {
-    console.error('[deploy/github/disconnect] error:', error.message);
+    logger.error('[deploy/github/disconnect] error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

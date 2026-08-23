@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { readdir, readFile } from 'fs/promises';
 import { join } from 'path';
+import { logger } from '@/lib/logger';
 
 export const dynamic = 'force-dynamic';
 
@@ -99,10 +100,10 @@ export async function POST(req) {
     try {
       session = await getServerSession(authOptions);
     } catch (e) {
-      console.warn('[Skills Local] Session resolution failed:', e.message);
+      logger.warn('[Skills Local] Session resolution failed:', e.message);
     }
     if (!session) {
-      console.warn('[Skills Local] No session found — proceeding anyway.');
+      logger.warn('[Skills Local] No session found — proceeding anyway.');
     }
 
     const { q } = await req.json();
@@ -185,7 +186,7 @@ export async function POST(req) {
       allAvailable: allSkills.map(s => `${s.name}(${s.source})`),
     });
   } catch (error) {
-    console.error('[Skills Local] Error:', error);
+    logger.error('[Skills Local] Error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

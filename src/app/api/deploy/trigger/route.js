@@ -7,6 +7,7 @@ import SystemSetting from "@/models/SystemSetting";
 import { runDeployment } from '../webhook/route';
 import { getRunning, enqueueDeployment } from '@/lib/deployProcesses';
 import { resolveUserIdQuery, normalizeUserId } from '@/lib/deployUserQuery';
+import { logger } from '@/lib/logger';
 
 function timingSafeCompare(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string') return false;
@@ -54,7 +55,7 @@ async function handleTrigger(request) {
     const webhookToken = searchParams.get('webhook_token');
     let dbKey = projectId === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${projectId}`;
 
-    console.log(`[trigger] Received direct trigger request for project: ${projectId}`);
+    logger.info(`[trigger] Received direct trigger request for project: ${projectId}`);
 
     // 1. Fetch deployment config from global/center database
     await connectDB(process.env.MONGODB_URI, true);
@@ -71,7 +72,7 @@ async function handleTrigger(request) {
     } else {
       const session = await getServerSession(authOptions);
       if (!session && !secretToken) {
-        console.log(`[trigger] ❌ No secret configured and no session — rejecting unauthenticated trigger`);
+        logger.info(`[trigger] ❌ No secret configured and no session — rejecting unauthenticated trigger`);
         return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
       }
       const userId = normalizeUserId(session?.user?.id || session?.user?.sub || session?.user?.email);
@@ -83,30 +84,30 @@ async function handleTrigger(request) {
     // 2. Security validation: require secret token OR authenticated session (BEFORE any config checks)
     if (config?.secret) {
       if (!secretToken || !timingSafeCompare(secretToken, config.secret)) {
-        console.log(`[trigger] ❌ Invalid or missing secret token for project: ${projectId}`);
+        logger.info(`[trigger] ❌ Invalid or missing secret token for project: ${projectId}`);
         return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
       }
     } else {
       const session = await getServerSession(authOptions);
       if (!session) {
-        console.log(`[trigger] ❌ No secret configured and no session — rejecting unauthenticated trigger`);
+        logger.info(`[trigger] ❌ No secret configured and no session — rejecting unauthenticated trigger`);
         return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
       }
     }
 
     // 3. Now check config state (only reachable by authenticated users)
     if (!config) {
-      console.log(`[trigger] ❌ Project config for "${projectId}" not found`);
+      logger.info(`[trigger] ❌ Project config for "${projectId}" not found`);
       return NextResponse.json({ success: false, error: `Project "${projectId}" not found or deployment not configured` }, { status: 404 });
     }
 
     if (!config.enabled) {
-      console.log(`[trigger] ❌ Deployment is disabled for project: ${projectId}`);
+      logger.info(`[trigger] ❌ Deployment is disabled for project: ${projectId}`);
       return NextResponse.json({ success: false, error: `Auto-deployment for project "${projectId}" is disabled` }, { status: 400 });
     }
 
     if (!config.deployCommand?.trim()) {
-      console.log(`[trigger] ❌ No deployment command configured for project: ${projectId}`);
+      logger.info(`[trigger] ❌ No deployment command configured for project: ${projectId}`);
       return NextResponse.json({ success: false, error: 'Deployment command is not configured' }, { status: 400 });
     }
 
@@ -114,7 +115,7 @@ async function handleTrigger(request) {
     if (config.status === 'running') {
       const activeProcess = getRunning(projectId);
       if (!activeProcess) {
-        console.log(`[trigger] Stale running state detected for project: ${projectId}. Resetting status.`);
+        logger.info(`[trigger] Stale running state detected for project: ${projectId}. Resetting status.`);
         await SystemSetting.findOneAndUpdate(
           { key: dbKey },
           {
@@ -135,13 +136,13 @@ async function handleTrigger(request) {
       return NextResponse.json({ success: false, error: `Rate limit exceeded. Try again in ${Math.ceil(rateCheck.resetIn / 1000)}s.` }, { status: 429 });
     }
 
-    console.log(`[trigger] ✅ Launching deployment in background for project: ${projectId}`);
+    logger.info(`[trigger] ✅ Launching deployment in background for project: ${projectId}`);
     enqueueDeployment(projectId, async () => {
       await runDeployment(config, {
         triggerSource: 'Direct Trigger URL (curl/script)'
       });
     }).catch(err => {
-      console.error('[trigger] Queued deployment error:', err.message);
+      logger.error('[trigger] Queued deployment error:', err.message);
     });
 
     return NextResponse.json({ 
@@ -150,7 +151,7 @@ async function handleTrigger(request) {
     });
 
   } catch (error) {
-    console.error('[deploy/trigger] Error:', error.message);
+    logger.error('[deploy/trigger] Error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

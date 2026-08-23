@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import connectDB from '@/lib/mongodb';
 import { SystemSettingRepository } from '@/lib/repositories/SystemSettingRepository';
+import { logger } from '@/lib/logger';
 
 export async function GET(request) {
   try {
@@ -83,7 +84,7 @@ export async function GET(request) {
       });
       userInfo = await infoRes.json();
     } catch (infoErr) {
-      console.error('Failed to fetch Google user info:', infoErr);
+      logger.error('Failed to fetch Google user info:', infoErr);
     }
 
     // Save configuration (persist clientId and clientSecret for background sync)
@@ -178,7 +179,7 @@ export async function GET(request) {
     });
 
   } catch (error) {
-    console.error('Google Drive Callback error:', error);
+    logger.error('Google Drive Callback error:', error);
     return new NextResponse(`<h1>Internal Server Error: ${error.message}</h1>`, {
       headers: { 'Content-Type': 'text/html' }
     });

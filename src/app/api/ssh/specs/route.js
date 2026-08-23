@@ -6,6 +6,7 @@ import connectDB from '@/lib/mongodb';
 import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import { decrypt } from '@/utils/encryption';
 import { checkRateLimit } from '@/lib/serverGuard';
+import { logger } from '@/lib/logger';
 
 const SPECS_COMMAND = `echo "__DISTRO__" && (. /etc/os-release 2>/dev/null && echo "$PRETTY_NAME" || uname -s) && echo "__OS__" && uname -srm && echo "__CPU__" && cat /proc/cpuinfo 2>/dev/null | grep -m1 'model name' || sysctl -n machdep.cpu.brand_string 2>/dev/null || echo "Unknown" && echo "__CORES__" && nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null && echo "__RAM__" && free -b 2>/dev/null | awk '/^Mem:/{print $2}' || sysctl -n hw.memsize 2>/dev/null && echo "__RAMFMT__" && free -h 2>/dev/null | awk '/^Mem:/{print $2}' || echo "" && echo "__UPTIME__" && uptime -p 2>/dev/null || uptime && echo "__HOSTNAME__" && hostname 2>/dev/null && echo "__KERNEL__" && uname -r 2>/dev/null`;
 
@@ -145,7 +146,7 @@ export async function POST(request) {
 
     return NextResponse.json({ success: false, error: result.error });
   } catch (error) {
-    console.error('Fetch specs error:', error);
+    logger.error('Fetch specs error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

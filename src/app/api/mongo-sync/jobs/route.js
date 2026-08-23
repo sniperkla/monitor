@@ -5,6 +5,7 @@ import connectDB from '@/lib/mongodb';
 import mongoose from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
 import { SystemSettingRepository } from '@/lib/repositories/SystemSettingRepository';
+import { logger } from '@/lib/logger';
 
 async function getSettingRepo(userId) {
   const db = await connectDB();
@@ -34,7 +35,7 @@ export async function GET(request) {
     return NextResponse.json({ success: true, data: jobs });
 
   } catch (error) {
-    console.error('Fetch Sync Jobs error:', error);
+    logger.error('Fetch Sync Jobs error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }
@@ -91,7 +92,7 @@ export async function POST(request) {
     return NextResponse.json({ success: true, data: updatedJobs });
 
   } catch (error) {
-    console.error('Save Sync Job error:', error);
+    logger.error('Save Sync Job error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }
@@ -122,7 +123,7 @@ export async function DELETE(request) {
     return NextResponse.json({ success: true, data: filteredJobs });
 
   } catch (error) {
-    console.error('Delete Sync Job error:', error);
+    logger.error('Delete Sync Job error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

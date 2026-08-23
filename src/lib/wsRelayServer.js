@@ -1,3 +1,4 @@
+import { logger } from '@/lib/logger';
 /**
  * WebSocket-to-TCP Relay Server (Lightweight SSH Mode)
  *
@@ -55,13 +56,13 @@ class WsTcpRelay {
         socket.user = token;
         next();
       } catch (err) {
-        console.error('[relay] Auth error:', err.message);
+        logger.error('[relay] Auth error:', err.message);
         next(new Error('Unauthorized'));
       }
     });
 
     this.nsp.on('connection', (socket) => this.handleConnection(socket));
-    console.log(`[relay] Namespace /relay initialized (max: ${this.maxConnections})`);
+    logger.info(`[relay] Namespace /relay initialized (max: ${this.maxConnections})`);
 
     // Prevent rate limiter Map from growing unboundedly — purge expired entries every 5 min
     setInterval(() => {
@@ -137,7 +138,7 @@ class WsTcpRelay {
     let connectionInProgress = false;
 
     socket.on('relay:connect', async (opts) => {
-      console.log(`[relay] ${socket.id} received relay:connect:`, {
+      logger.info(`[relay] ${socket.id} received relay:connect:`, {
         connectionId: opts.connectionId,
         hasConnection: !!opts.connection,
         cols: opts.cols,
@@ -150,14 +151,14 @@ class WsTcpRelay {
       
       // Guard: prevent duplicate concurrent connection attempts
       if (isConnecting) {
-        console.warn(`[relay] ${socket.id} connection already in progress - ignoring duplicate relay:connect`);
+        logger.warn(`[relay] ${socket.id} connection already in progress - ignoring duplicate relay:connect`);
         socket.emit('relay:error', { message: 'Connection already in progress', recoverable: true });
         return;
       }
       
       // If this is a resume request and we have an active connection, just confirm it
       if (opts.resuming && sshClient && sshClient._state !== 'closed' && sshStream) {
-        console.log(`[relay] ${socket.id} resuming existing connection`);
+        logger.info(`[relay] ${socket.id} resuming existing connection`);
         socket.emit('relay:connected', { 
           host: connection?.host || opts.connection?.host,
           resumed: true 
@@ -167,7 +168,7 @@ class WsTcpRelay {
       
       // Guard: if this socket already has an active SSH connection, clean it up first
       if (sshClient || sshStream) {
-        console.warn(`[relay] ${socket.id} already has an active connection - cleaning up first`);
+        logger.warn(`[relay] ${socket.id} already has an active connection - cleaning up first`);
         this.cleanup(socket.id);
         sshClient = null;
         sshStream = null;
@@ -183,7 +184,7 @@ class WsTcpRelay {
         connection = connectionData;
 
         if (connectionId && !connectionId.startsWith('local-')) {
-          console.log(`[relay] ${socket.id} fetching connection from database...`);
+          logger.info(`[relay] ${socket.id} fetching connection from database...`);
           try {
             const getModels = require('../../server').getModels;
             const repo = await getModels(null, userId);
@@ -192,33 +193,33 @@ class WsTcpRelay {
               const dbConn = await ConnectionModel.findById(connectionId);
               if (dbConn) {
                 connection = dbConn.toObject ? dbConn.toObject() : dbConn;
-                console.log(`[relay] ${socket.id} loaded connection from DB: ${connection.host}:${connection.port}`);
+                logger.info(`[relay] ${socket.id} loaded connection from DB: ${connection.host}:${connection.port}`);
               } else {
-                console.warn(`[relay] ${socket.id} connection ${connectionId} not found in DB`);
+                logger.warn(`[relay] ${socket.id} connection ${connectionId} not found in DB`);
               }
             }
           } catch (dbErr) {
-            console.error(`[relay] ${socket.id} DB error:`, dbErr.message);
+            logger.error(`[relay] ${socket.id} DB error:`, dbErr.message);
           }
         }
 
-        console.log(`[relay] ${socket.id} building SSH config...`);
+        logger.info(`[relay] ${socket.id} building SSH config...`);
         const sshConfig = await this.buildSshConfig(connection);
-        console.log(`[relay] ${socket.id} SSH config built for ${sshConfig.host}:${sshConfig.port}`);
+        logger.info(`[relay] ${socket.id} SSH config built for ${sshConfig.host}:${sshConfig.port}`);
 
         sshClient.on('ready', () => {
-          console.log(`[relay] ${socket.id} SSH client ready, opening SFTP subsystem...`);
+          logger.info(`[relay] ${socket.id} SSH client ready, opening SFTP subsystem...`);
           isConnecting = false; // Connection established successfully
           // Open SFTP subsystem
           sshClient.sftp((err, sftpInst) => {
             if (!err) {
               sftp = sftpInst;
-              console.log(`[relay] ${socket.id} SFTP subsystem ready`);
+              logger.info(`[relay] ${socket.id} SFTP subsystem ready`);
               // Store sftp ref so cleanup() can end the channel properly
               const conn = this.connections.get(socket.id);
               if (conn) conn.sftp = sftpInst;
             } else {
-              console.warn(`[relay] ${socket.id} SFTP init failed (will use exec fallback):`, err.message);
+              logger.warn(`[relay] ${socket.id} SFTP init failed (will use exec fallback):`, err.message);
             }
           });
 
@@ -229,16 +230,16 @@ class WsTcpRelay {
             modes: { VERASE: 127, 3: 127 }
           }, (err, stream) => {
             if (err) {
-              console.error(`[relay] ${socket.id} shell error:`, err.message);
+              logger.error(`[relay] ${socket.id} shell error:`, err.message);
               socket.emit('relay:error', { message: err.message });
               return;
             }
 
-            console.log(`[relay] ${socket.id} shell stream opened, registering handlers...`);
+            logger.info(`[relay] ${socket.id} shell stream opened, registering handlers...`);
             sshStream = stream;
             this.connections.set(socket.id, { sshClient, sshStream, userId });
             
-            console.log(`[relay] ${socket.id} emitting relay:connected to client`);
+            logger.info(`[relay] ${socket.id} emitting relay:connected to client`);
             socket.emit('relay:connected', { host: sshConfig.host });
 
             stream.on('data', (data) => {
@@ -253,7 +254,7 @@ class WsTcpRelay {
             });
 
             stream.on('close', () => {
-              console.log(`[relay] ${socket.id} stream closed`);
+              logger.info(`[relay] ${socket.id} stream closed`);
               socket.emit('relay:closed');
               this.cleanup(socket.id);
             });
@@ -270,7 +271,7 @@ class WsTcpRelay {
                 
                 // Add timeout to prevent hanging on slow/large directories (fixes initial scan issue)
                 const listTimeout = setTimeout(() => {
-                  console.warn(`[relay] sftp:list timeout for ${targetPath} - falling back to ls`);
+                  logger.warn(`[relay] sftp:list timeout for ${targetPath} - falling back to ls`);
                   fallbackFileListing(sshClient, listPath);
                 }, 10000); // 10 second timeout
                 
@@ -281,7 +282,7 @@ class WsTcpRelay {
                   // Limit to first 10,000 files to prevent memory issues on huge directories
                   const limitedList = list.slice(0, 10000);
                   if (list.length > 10000) {
-                    console.warn(`[relay] Directory ${targetPath} has ${list.length} items, limiting to 10,000`);
+                    logger.warn(`[relay] Directory ${targetPath} has ${list.length} items, limiting to 10,000`);
                   }
                   
                   socket.emit('sftp:list', { path: listPath, files: limitedList });
@@ -684,9 +685,9 @@ class WsTcpRelay {
                 };
 
                 const doneHandler = () => {
-                  console.log(`📤 [wsRelay] Upload done for ${filename}: received ${bytesReceived} bytes, expected ${size} bytes (offset: ${offset})`);
+                  logger.info(`📤 [wsRelay] Upload done for ${filename}: received ${bytesReceived} bytes, expected ${size} bytes (offset: ${offset})`);
                   if (bytesReceived + offset !== size) {
-                    console.warn(`⚠️  [wsRelay] SIZE MISMATCH: received ${bytesReceived + offset} bytes, expected ${size} bytes`);
+                    logger.warn(`⚠️  [wsRelay] SIZE MISMATCH: received ${bytesReceived + offset} bytes, expected ${size} bytes`);
                   }
                   if (!settled && wStream.writable) wStream.end();
                 };
@@ -750,14 +751,14 @@ class WsTcpRelay {
                   verifyUploadedSize((verifyErr) => {
                     completionVerifying = false;
                     if (verifyErr) {
-                      console.warn(`❌ [wsRelay] Upload size verification failed for ${destPath}: ${verifyErr.message}`);
+                      logger.warn(`❌ [wsRelay] Upload size verification failed for ${destPath}: ${verifyErr.message}`);
                       failTransfer(verifyErr, 'Upload verification failed');
                       return;
                     }
 
                     if (completionSent) return;
                     completionSent = true;
-                    console.log(`📤 [wsRelay] Sending sftp:action_success for upload: ${destPath}`);
+                    logger.info(`📤 [wsRelay] Sending sftp:action_success for upload: ${destPath}`);
                     finalize(() => { 
                       socket.emit('sftp:action_success', { action: 'upload', path: destPath }); 
                     });
@@ -765,18 +766,18 @@ class WsTcpRelay {
                 };
 
                 wStream.on('close', () => {
-                  console.log(`📤 [wsRelay] Stream close event for: ${destPath}`);
+                  logger.info(`📤 [wsRelay] Stream close event for: ${destPath}`);
                   sendCompletion();
                 });
                 
                 wStream.on('finish', () => {
-                  console.log(`📤 [wsRelay] Stream finish event for: ${destPath} (completionSent: ${completionSent})`);
+                  logger.info(`📤 [wsRelay] Stream finish event for: ${destPath} (completionSent: ${completionSent})`);
                   // Set a short timer to ensure close event has a chance to fire first,
                   // but don't wait forever
                   if (!completionSent) {
                     completionTimer = setTimeout(() => {
                       if (!completionSent) {
-                        console.log(`📤 [wsRelay] Finish fallback (500ms) - sending completion for: ${destPath}`);
+                        logger.info(`📤 [wsRelay] Finish fallback (500ms) - sending completion for: ${destPath}`);
                         sendCompletion();
                       }
                     }, 500);
@@ -785,7 +786,7 @@ class WsTcpRelay {
                 
                 wStream.on('error', (err) => { 
                   clearTimeout(completionTimer);
-                  console.error(`❌ [wsRelay] Stream error for: ${destPath}:`, err.message);
+                  logger.error(`❌ [wsRelay] Stream error for: ${destPath}:`, err.message);
                   failTransfer(err, 'Upload failed'); 
                 });
               };
@@ -986,25 +987,25 @@ class WsTcpRelay {
         });
 
         sshClient.on('error', (err) => {
-          console.error(`[relay] ${socket.id} SSH error:`, err.message);
+          logger.error(`[relay] ${socket.id} SSH error:`, err.message);
           isConnecting = false; // Reset on error
           socket.emit('relay:error', { message: err.message });
           this.cleanup(socket.id);
         });
 
         sshClient.on('end', () => {
-          console.log(`[relay] ${socket.id} SSH ended`);
+          logger.info(`[relay] ${socket.id} SSH ended`);
           isConnecting = false; // Reset on end
           socket.emit('relay:closed');
           this.cleanup(socket.id);
         });
 
-        console.log(`[relay] ${socket.id} calling sshClient.connect()...`);
+        logger.info(`[relay] ${socket.id} calling sshClient.connect()...`);
         sshClient.connect(sshConfig);
-        console.log(`[relay] ${socket.id} sshClient.connect() called`);
+        logger.info(`[relay] ${socket.id} sshClient.connect() called`);
 
       } catch (err) {
-        console.error(`[relay] ${socket.id} connect error:`, err.message);
+        logger.error(`[relay] ${socket.id} connect error:`, err.message);
         isConnecting = false; // Reset on catch
         socket.emit('relay:error', { message: err.message });
       }
@@ -1041,7 +1042,7 @@ class WsTcpRelay {
 
   async buildSshConfig(connection) {
     const conn = connection || {};
-    console.log('[relay] buildSshConfig input:', {
+    logger.info('[relay] buildSshConfig input:', {
       host: conn.host,
       port: conn.port,
       username: conn.username,
@@ -1063,29 +1064,29 @@ class WsTcpRelay {
       const { text, success } = decryptWithMetadata(conn.password);
       if (success) {
         config.password = text;
-        console.log('[relay] Password decrypted successfully');
+        logger.info('[relay] Password decrypted successfully');
       } else {
-        console.error('[relay] Password decryption failed for', conn.host);
+        logger.error('[relay] Password decryption failed for', conn.host);
       }
     }
     if (conn.privateKey) {
       const { text, success } = decryptWithMetadata(conn.privateKey);
       if (success) {
         config.privateKey = text;
-        console.log('[relay] Private key decrypted successfully');
+        logger.info('[relay] Private key decrypted successfully');
       } else {
-        console.error('[relay] Private key decryption failed for', conn.host);
+        logger.error('[relay] Private key decryption failed for', conn.host);
       }
       if (conn.passphrase) {
         const { text: ppText, success: ppSuccess } = decryptWithMetadata(conn.passphrase);
         if (ppSuccess) {
           config.passphrase = ppText;
-          console.log('[relay] Passphrase decrypted successfully');
+          logger.info('[relay] Passphrase decrypted successfully');
         }
       }
     }
 
-    console.log('[relay] buildSshConfig output:', {
+    logger.info('[relay] buildSshConfig output:', {
       host: config.host,
       port: config.port,
       username: config.username,
@@ -1104,7 +1105,7 @@ class WsTcpRelay {
       try { conn.sftp?.end(); } catch (_) {}        // end SFTP channel before SSH client
       try { conn.sshClient?.end(); } catch (_) {}
       this.connections.delete(socketId);
-      console.log(`[relay] ${socketId} cleaned up (active: ${this.connections.size})`);
+      logger.info(`[relay] ${socketId} cleaned up (active: ${this.connections.size})`);
     }
   }
 

@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { logger } from '@/lib/logger';
 
 export async function POST(req) {
   try {
@@ -48,7 +49,7 @@ export async function POST(req) {
 
     return NextResponse.json({ success: false, error: 'Translation failed' }, { status: 500 });
   } catch (error) {
-    console.error('Translation API error:', error);
+    logger.error('Translation API error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

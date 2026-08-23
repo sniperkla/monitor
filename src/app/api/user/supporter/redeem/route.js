@@ -6,6 +6,7 @@ import connectDB from '@/lib/mongodb';
 import User from '@/models/User.js';
 import SystemSetting from '@/models/SystemSetting';
 import { extendExpiry, invalidateSupporter, DEFAULT_GRANT_DAYS } from '@/utils/supporter';
+import { logger } from '@/lib/logger';
 
 export const dynamic = 'force-dynamic';
 
@@ -87,7 +88,7 @@ export async function POST(request) {
       expiresAt: newExpiry,
     });
   } catch (error) {
-    console.error('Supporter redeem API error:', error);
+    logger.error('Supporter redeem API error:', error);
     return NextResponse.json({ success: false, error: 'Internal Server Error' }, { status: 500 });
   }
 }

@@ -5,6 +5,7 @@ import { authOptions } from '@/lib/auth';
 import connectDB from '@/lib/mongodb';
 import SystemSetting from '@/models/SystemSetting';
 import { DEFAULT_GRANT_DAYS } from '@/utils/supporter';
+import { logger } from '@/lib/logger';
 
 export const dynamic = 'force-dynamic';
 
@@ -77,7 +78,7 @@ export async function POST(request) {
       codes: fresh.map((f) => f.code),
     });
   } catch (error) {
-    console.error('Admin codes API error:', error);
+    logger.error('Admin codes API error:', error);
     return NextResponse.json({ success: false, error: 'Internal Server Error' }, { status: 500 });
   }
 }
@@ -106,7 +107,7 @@ export async function GET() {
       available: codes.filter((c) => !c.usedAt).length,
     });
   } catch (error) {
-    console.error('Admin codes GET error:', error);
+    logger.error('Admin codes GET error:', error);
     return NextResponse.json({ success: false, error: 'Internal Server Error' }, { status: 500 });
   }
 }

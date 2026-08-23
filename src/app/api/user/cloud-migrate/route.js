@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import connectDB from '@/lib/mongodb';
 import User from '@/models/User';
+import { logger } from '@/lib/logger';
 
 /**
  * POST /api/user/cloud-migrate
@@ -110,7 +111,7 @@ export async function POST(request) {
     user.markModified('syncedConnections');
     await user.save();
 
-    console.log(
+    logger.info(
       `☁️  [cloud-migrate] ${session.user.email}: saved=${saved} skipped=${skipped} total=${user.syncedConnections.length} replace=${replace}`
     );
 
@@ -121,7 +122,7 @@ export async function POST(request) {
       total: user.syncedConnections.length,
     });
   } catch (error) {
-    console.error('[cloud-migrate] Error:', error);
+    logger.error('[cloud-migrate] Error:', error);
     return NextResponse.json({ error: 'Server error', detail: error.message }, { status: 500 });
   }
 }

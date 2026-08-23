@@ -6,6 +6,7 @@ import crypto from 'crypto';
 import { writeFile, unlink } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { logger } from '@/lib/logger';
 
 export async function POST(request) {
   let tempFile = null;
@@ -52,7 +53,7 @@ export async function POST(request) {
       exitCode: result.code,
     });
   } catch (error) {
-    console.error('[server-backup/restore] error:', error.message);
+    logger.error('[server-backup/restore] error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   } finally {
     if (tempFile) { try { await unlink(tempFile); } catch {} }

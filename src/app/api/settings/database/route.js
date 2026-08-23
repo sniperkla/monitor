@@ -6,6 +6,7 @@ import { Client } from 'pg';
 import { migrateConnections } from './migrate/migrator';
 import { getActiveRelayInfo } from '@/lib/mongodb';
 import { rewriteUriForTunnel, normalizeRelayDatabaseUri } from '@/lib/sshTunnel';
+import { logger } from '@/lib/logger';
 
 function getCurrentUri() {
   return process.env.MONGODB_URI || '';
@@ -101,7 +102,7 @@ export async function POST(request) {
       if (relayInfo) {
         effectiveUri = rewriteUriForTunnel(normalizedUri, relayInfo.port);
         usedRelay = true;
-        console.log(`🔗 [settings/database] Relay active: ${normalizedUri} → ${effectiveUri}`);
+        logger.info(`🔗 [settings/database] Relay active: ${normalizedUri} → ${effectiveUri}`);
       } else if (process.env.NODE_ENV !== 'development') {
         return NextResponse.json({
           success: true,
@@ -120,7 +121,7 @@ export async function POST(request) {
           connectTimeoutMS: usedRelay ? 15000 : 10000,
           ...(usedRelay ? { directConnection: true } : {}),
         });
-        console.log('✅ Live-connected to new MongoDB');
+        logger.info('✅ Live-connected to new MongoDB');
       } catch (connectErr) {
         return NextResponse.json({
           success: false,
@@ -132,7 +133,7 @@ export async function POST(request) {
         const connection = await mysql.createConnection(effectiveUri);
         await connection.ping();
         await connection.end();
-        console.log('✅ Live-connected to new MySQL');
+        logger.info('✅ Live-connected to new MySQL');
       } catch (connectErr) {
         return NextResponse.json({
           success: false,
@@ -144,7 +145,7 @@ export async function POST(request) {
         const client = new Client({ connectionString: effectiveUri, connectionTimeoutMillis: 5000 });
         await client.connect();
         await client.end();
-        console.log('✅ Live-connected to new PostgreSQL');
+        logger.info('✅ Live-connected to new PostgreSQL');
       } catch (connectErr) {
         let errorHint = connectErr.message;
         if (connectErr.message.includes('role "postgres" does not exist')) {
@@ -161,11 +162,11 @@ export async function POST(request) {
     let migration = null;
     if (!skipMigration && oldUri && oldUri !== uri) {
       try {
-        console.log(`🔄 Auto-migration: changing database connection`);
+        logger.info(`🔄 Auto-migration: changing database connection`);
         migration = await migrateConnections(oldUri, uri);
-        console.log('✅ Auto-migration result:', migration);
+        logger.info('✅ Auto-migration result:', migration);
       } catch (migErr) {
-        console.error('⚠️ Auto-migration failed (non-fatal):', migErr.message);
+        logger.error('⚠️ Auto-migration failed (non-fatal):', migErr.message);
         migration = { success: false, error: migErr.message, migrated: 0, skipped: 0 };
       }
     }

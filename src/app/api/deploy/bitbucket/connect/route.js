@@ -5,6 +5,7 @@ import connectDB from '@/lib/mongodb';
 import SystemSetting from '@/models/SystemSetting';
 import { encrypt } from '@/utils/encryption';
 import { resolveUserIdQuery, normalizeUserId } from '@/lib/deployUserQuery';
+import { logger } from '@/lib/logger';
 
 // POST /api/deploy/bitbucket/connect?project=projectId
 // Body: { username, appPassword }
@@ -58,7 +59,7 @@ export async function POST(request) {
 
     return NextResponse.json({ success: true, bitbucketUser: bbUser });
   } catch (error) {
-    console.error('[deploy/bitbucket/connect] error:', error.message);
+    logger.error('[deploy/bitbucket/connect] error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

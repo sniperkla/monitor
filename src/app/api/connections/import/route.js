@@ -7,6 +7,7 @@ import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 
 import { encrypt, decryptWithPassword, decryptWithMetadata, encryptWithPassword } from '@/utils/encryption';
 import crypto from 'crypto';
+import { logger } from '@/lib/logger';
 
 /**
  * Decrypt an encrypted blob using an arbitrary hex key.
@@ -47,40 +48,40 @@ function reEncrypt(value, password, oldKey, fieldName) {
 
   // If it's not and doesn't look like an encrypted string (no colons), treat as plain text
   if (typeof value === 'string' && !value.includes(':')) {
-    console.log(`[reEncrypt] ${fieldName} - plain text detected`);
+    logger.info(`[reEncrypt] ${fieldName} - plain text detected`);
     return encrypt(value);
   }
 
   if (password) {
     const plain = decryptWithPassword(value, password);
     if (plain !== null) {
-      console.log(`[reEncrypt] ${fieldName} - Success using password`);
+      logger.info(`[reEncrypt] ${fieldName} - Success using password`);
       return encrypt(plain);
     } else {
-      console.log(`[reEncrypt] ${fieldName} - FAILED using password`);
+      logger.info(`[reEncrypt] ${fieldName} - FAILED using password`);
     }
   }
 
   if (oldKey) {
     const plain = decryptWithCustomKey(value, oldKey);
     if (plain !== null) {
-      console.log(`[reEncrypt] ${fieldName} - Success using oldKey`);
+      logger.info(`[reEncrypt] ${fieldName} - Success using oldKey`);
       return encrypt(plain);
     } else {
-      console.log(`[reEncrypt] ${fieldName} - FAILED using oldKey!`);
+      logger.info(`[reEncrypt] ${fieldName} - FAILED using oldKey!`);
     }
   }
 
   // Fallback: try to decrypt with current key (maybe it's a same-server import)
   const meta = decryptWithMetadata(value);
   if (meta.success && meta.text !== value) {
-     console.log(`[reEncrypt] ${fieldName} - Success using current key fallback`);
+     logger.info(`[reEncrypt] ${fieldName} - Success using current key fallback`);
      return encrypt(meta.text); 
   }
 
   // All decryption methods failed. Return null rather than double-encrypting the blob,
   // which would produce garbage that is indistinguishable from a valid encrypted field.
-  console.warn(`[reEncrypt] ${fieldName} - All decryption failed — storing null to avoid corrupted credential.`);
+  logger.warn(`[reEncrypt] ${fieldName} - All decryption failed — storing null to avoid corrupted credential.`);
   return null;
 }
 
@@ -113,7 +114,7 @@ export async function POST(request) {
     await repo.init();
 
     const body = await request.json();
-    console.log(`📥 Import requested. Body keys: ${Object.keys(body).join(', ')}`);
+    logger.info(`📥 Import requested. Body keys: ${Object.keys(body).join(', ')}`);
 
     let items, oldKey, password;
 
@@ -137,7 +138,7 @@ export async function POST(request) {
       }
       const check = decryptWithPassword(verifyStr, password);
       if (check !== '__ok__') {
-        console.warn('🔑 Import rejected: wrong password (verify sentinel mismatch)');
+        logger.warn('🔑 Import rejected: wrong password (verify sentinel mismatch)');
         return NextResponse.json(
           { success: false, error: 'WRONG_PASSWORD' },
           { status: 422 }
@@ -147,20 +148,20 @@ export async function POST(request) {
 
     const MAX_IMPORT_LIMIT = 100;
     if (items.length > MAX_IMPORT_LIMIT) {
-      console.warn(`⚠️ Import blocked: ${items.length} items exceeds limit.`);
+      logger.warn(`⚠️ Import blocked: ${items.length} items exceeds limit.`);
       return NextResponse.json({ 
         success: false, 
         error: `Import limit exceeded. Maximum ${MAX_IMPORT_LIMIT} connections allowed per file.` 
       }, { status: 400 });
     }
 
-    console.log(`📦 Processing ${items.length} items for import...`);
+    logger.info(`📦 Processing ${items.length} items for import...`);
     let imported = 0;
     let updated = 0;
     let credentialFailures = 0;
     for (const item of items) {
       if (!item.name || !item.host) {
-        console.warn('⏭️ Skipping item without name or host:', item.name || 'unnamed');
+        logger.warn('⏭️ Skipping item without name or host:', item.name || 'unnamed');
         continue;
       }
 
@@ -216,22 +217,22 @@ export async function POST(request) {
       });
 
       if (existing) {
-        console.log(`🔄 Updating existing connection: ${item.name} (${existing._id})`);
+        logger.info(`🔄 Updating existing connection: ${item.name} (${existing._id})`);
         await repo.update(existing._id, connectionData);
         updated++;
       } else {
-        console.log(`✨ Creating new connection: ${item.name}`);
+        logger.info(`✨ Creating new connection: ${item.name}`);
         await repo.create(connectionData);
         imported++;
       }
     }
 
-    console.log(`🏁 Import finished: ${imported} imported, ${updated} updated, ${credentialFailures} credential failures.`);
+    logger.info(`🏁 Import finished: ${imported} imported, ${updated} updated, ${credentialFailures} credential failures.`);
     return NextResponse.json({ success: true, count: imported, updated, credentialFailures });
 
 
   } catch (error) {
-    console.error('Import Error:', error);
+    logger.error('Import Error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

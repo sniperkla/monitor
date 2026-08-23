@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { getSshConfig, execCommand } from '../_ssh';
+import { logger } from '@/lib/logger';
 
 export async function GET(request) {
   try {
@@ -40,7 +41,7 @@ export async function GET(request) {
       outFile
     });
   } catch (error) {
-    console.error('[server-backup/status] error:', error.message);
+    logger.error('[server-backup/status] error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

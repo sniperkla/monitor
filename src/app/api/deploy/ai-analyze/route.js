@@ -10,6 +10,7 @@ import { decrypt } from '@/utils/encryption';
 import OpenAI from 'openai';
 import { resolveUserIdQuery, normalizeUserId } from '@/lib/deployUserQuery';
 import { canUseServerAi, aiSupporterRequiredResponse } from '@/utils/supporter';
+import { logger } from '@/lib/logger';
 
 
 // Supported model options
@@ -256,7 +257,7 @@ ${safeFilesListing}
 Existing deployment script (USE AS BASELINE REFERENCE to preserve cd, git pull, etc.):
 ${existingScript || '# No previous script set'}`;
 
-    console.log(`[ai-analyze] OpenAI SDK Client -> baseURL: ${baseURL} | model: ${modelName} | keyPrefix: ${apiKey ? apiKey.slice(0, 8) + '...' : 'EMPTY'}`);
+    logger.info(`[ai-analyze] OpenAI SDK Client -> baseURL: ${baseURL} | model: ${modelName} | keyPrefix: ${apiKey ? apiKey.slice(0, 8) + '...' : 'EMPTY'}`);
 
     // Initialize official OpenAI client SDK
     const openai = new OpenAI({
@@ -297,7 +298,7 @@ ${existingScript || '# No previous script set'}`;
         }
       }
     } catch (aiErr) {
-      console.error('[ai-analyze] OpenAI SDK call failed:', aiErr.message);
+      logger.error('[ai-analyze] OpenAI SDK call failed:', aiErr.message);
       return NextResponse.json({ 
         success: false, 
         error: `AI analysis failed: ${aiErr.message}`
@@ -327,7 +328,7 @@ ${existingScript || '# No previous script set'}`;
     }
     // Fallback: search the whole listing if marker not found
     if (!composeContent) composeContent = normalizedListing;
-    console.log(`[ai-analyze] compose content length: ${composeContent.length} chars`);
+    logger.info(`[ai-analyze] compose content length: ${composeContent.length} chars`);
 
     // ── Step 2: Parse per-service blocks from compose YAML ───────────────────
     // Returns { containerName: { buildDir, ports[] } }
@@ -388,7 +389,7 @@ ${existingScript || '# No previous script set'}`;
         }
 
         parsed[containerName] = { buildDir, ports };
-        console.log(`[ai-analyze] Parsed service: ${h.name} → containerName=${containerName}, buildDir=${buildDir || '(root)'}, ports=[${ports.join(',')}]`);
+        logger.info(`[ai-analyze] Parsed service: ${h.name} → containerName=${containerName}, buildDir=${buildDir || '(root)'}, ports=[${ports.join(',')}]`);
       }
       return parsed;
     }
@@ -411,7 +412,7 @@ ${existingScript || '# No previous script set'}`;
             composeServices[name].ports = [port.includes(':') ? port : `${port}:${port}`];
           }
         }
-        console.log(`[ai-analyze] Merged AI LLM service: ${name} -> buildDir=${buildDir}, port=${port}`);
+        logger.info(`[ai-analyze] Merged AI LLM service: ${name} -> buildDir=${buildDir}, port=${port}`);
       }
     }
 
@@ -420,7 +421,7 @@ ${existingScript || '# No previous script set'}`;
       // Filter out common infra-only containers
       const infraRe = /^(db|database|redis|mongo|mysql|postgres|rabbitmq|memcached|elasticsearch|zookeeper|kafka)$/i;
       services = Object.keys(composeServices).filter(s => !infraRe.test(s));
-      console.log(`[ai-analyze] Services from compose YAML & AI LLM: ${services.join(', ')}`);
+      logger.info(`[ai-analyze] Services from compose YAML & AI LLM: ${services.join(', ')}`);
     }
 
 
@@ -429,7 +430,7 @@ ${existingScript || '# No previous script set'}`;
       const cnMatches = normalizedListing.match(/container_name:\s*([a-zA-Z0-9._-]+)/g);
       if (cnMatches) {
         services = Array.from(new Set(cnMatches.map(m => m.replace(/container_name:\s*/, '').trim())));
-        console.log(`[ai-analyze] Services from container_name grep: ${services.join(', ')}`);
+        logger.info(`[ai-analyze] Services from container_name grep: ${services.join(', ')}`);
       }
     }
 
@@ -437,9 +438,9 @@ ${existingScript || '# No previous script set'}`;
     if (services.length === 0) {
       const folderName = resolvedPath.split('/').filter(Boolean).pop() || 'app';
       services = [folderName.toLowerCase().replace(/[^a-z0-9._-]/g, '')];
-      console.warn(`[ai-analyze] WARNING: Falling back to folder name: ${services[0]}`);
+      logger.warn(`[ai-analyze] WARNING: Falling back to folder name: ${services[0]}`);
     } else {
-      console.log(`[ai-analyze] Final services: ${services.join(', ')}`);
+      logger.info(`[ai-analyze] Final services: ${services.join(', ')}`);
     }
 
     // ── Step 3b: Extract Nginx port map as fallback ───────────────────────────
@@ -462,21 +463,21 @@ ${existingScript || '# No previous script set'}`;
           const after = listing.slice(idx + marker.length);  // skip exact marker length
           const nextSection = after.indexOf('\n===');
           const content = (nextSection !== -1 ? after.slice(0, nextSection) : after).trim();
-          console.log(`[ai-analyze] Nginx section "${section}" found — ${content.length} chars`);
+          logger.info(`[ai-analyze] Nginx section "${section}" found — ${content.length} chars`);
           nginxContent += content + '\n';
         } else {
-          console.log(`[ai-analyze] Nginx section "${section}" NOT found in probe output`);
+          logger.info(`[ai-analyze] Nginx section "${section}" NOT found in probe output`);
         }
       }
 
       if (!nginxContent.trim()) {
-        console.warn('[ai-analyze] No Nginx config content extracted from probe. Port detection will be skipped.');
+        logger.warn('[ai-analyze] No Nginx config content extracted from probe. Port detection will be skipped.');
         return nginxPortMap;
       }
 
-      console.log(`[ai-analyze] Total Nginx content: ${nginxContent.length} chars`);
+      logger.info(`[ai-analyze] Total Nginx content: ${nginxContent.length} chars`);
       // Log first 500 chars of nginx content for debugging
-      console.log('[ai-analyze] Nginx content preview:', nginxContent.slice(0, 500).replace(/\n/g, '\\n'));
+      logger.info('[ai-analyze] Nginx content preview:', nginxContent.slice(0, 500).replace(/\n/g, '\\n'));
 
       for (const svc of svcNames) {
         // proxy_pass http://autfrontend:PORT  or  proxy_pass http://autfrontend:PORT/
@@ -484,7 +485,7 @@ ${existingScript || '# No previous script set'}`;
         if (proxyMatch) {
           const p = proxyMatch[1];
           nginxPortMap[svc] = `${p}:${p}`;
-          console.log(`[ai-analyze] Nginx port for ${svc}: ${p} (from proxy_pass)`);
+          logger.info(`[ai-analyze] Nginx port for ${svc}: ${p} (from proxy_pass)`);
           continue;
         }
         // server autfrontend:PORT; (inside upstream block)
@@ -492,10 +493,10 @@ ${existingScript || '# No previous script set'}`;
         if (upstreamMatch) {
           const p = upstreamMatch[1];
           nginxPortMap[svc] = `${p}:${p}`;
-          console.log(`[ai-analyze] Nginx port for ${svc}: ${p} (from upstream server)`);
+          logger.info(`[ai-analyze] Nginx port for ${svc}: ${p} (from upstream server)`);
           continue;
         }
-        console.log(`[ai-analyze] No Nginx port pattern found for: ${svc}`);
+        logger.info(`[ai-analyze] No Nginx port pattern found for: ${svc}`);
       }
       return nginxPortMap;
     }
@@ -608,9 +609,9 @@ echo "[$(date +%H:%M:%S)] ✅ All builds complete"
         const port = (info.ports && info.ports[0]) ? info.ports[0] : (nginxPortMap[svc] || '');
         const img = info.image || `${svc}:latest`;
         if (port) {
-          console.log(`[ai-analyze] ${svc}: using port ${port}`);
+          logger.info(`[ai-analyze] ${svc}: using port ${port}`);
         } else {
-          console.log(`[ai-analyze] ${svc}: no port found — overlay network only`);
+          logger.info(`[ai-analyze] ${svc}: no port found — overlay network only`);
         }
         svcSection += `deploy_service ${svc} ${img} ${port || ''}\n`;
       }
@@ -833,7 +834,7 @@ docker container prune -f 2>/dev/null || true`;
       const missingSvcs = services.filter(s => !finalScript.includes(s));
       if (missingSvcs.length > 0) {
         validationWarning = `⚠️ WARNING: Detected services [${missingSvcs.join(', ')}] were missing from the generated script. Please check your docker-compose.yml or click "Re-Analyze".`;
-        console.warn(`[ai-analyze] ${validationWarning}`);
+        logger.warn(`[ai-analyze] ${validationWarning}`);
       }
     }
 
@@ -884,7 +885,7 @@ docker container prune -f 2>/dev/null || true`;
     });
 
   } catch (error) {
-    console.error('[deploy/ai-analyze] POST error:', error.message);
+    logger.error('[deploy/ai-analyze] POST error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import connectDB from '@/lib/mongodb';
 import { SystemSettingRepository } from '@/lib/repositories/SystemSettingRepository';
+import { logger } from '@/lib/logger';
 
 export async function GET(request) {
   try {
@@ -24,7 +25,7 @@ export async function GET(request) {
 
     return NextResponse.json({ success: true, data: history });
   } catch (error) {
-    console.error('Fetch Sync History error:', error);
+    logger.error('Fetch Sync History error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }
@@ -48,7 +49,7 @@ export async function DELETE(request) {
 
     return NextResponse.json({ success: true, data: [] });
   } catch (error) {
-    console.error('Clear Sync History error:', error);
+    logger.error('Clear Sync History error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

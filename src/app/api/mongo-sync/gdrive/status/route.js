@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import { getGoogleDriveConfig, saveGoogleDriveConfig, listGoogleDriveFolders } from '@/lib/gdriveHelper';
+import { logger } from '@/lib/logger';
 
 export async function GET(request) {
   try {
@@ -19,7 +20,7 @@ export async function GET(request) {
       try {
         folders = await listGoogleDriveFolders(null, userId);
       } catch (err) {
-        console.warn('Could not list Google Drive folders:', err);
+        logger.warn('Could not list Google Drive folders:', err);
       }
     }
 
@@ -34,7 +35,7 @@ export async function GET(request) {
     });
 
   } catch (error) {
-    console.error('Google Drive Status API error:', error);
+    logger.error('Google Drive Status API error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }
@@ -73,7 +74,7 @@ export async function POST(request) {
     return NextResponse.json({ success: true, message: 'Google Drive configuration updated successfully.' });
 
   } catch (error) {
-    console.error('Google Drive Config Update error:', error);
+    logger.error('Google Drive Config Update error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

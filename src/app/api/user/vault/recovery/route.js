@@ -7,6 +7,7 @@ import crypto from 'crypto';
 import { Resend } from 'resend';
 import fs from 'fs';
 import path from 'path';
+import { logger } from '@/lib/logger';
 
 /**
  * POST /api/user/vault/recovery
@@ -95,11 +96,11 @@ Code: ${recoveryCode}
 Time: ${new Date().toLocaleString()}
 ============================================
 `;
-    console.log(`[Vault Recovery] Code generated for user`);
+    logger.info(`[Vault Recovery] Code generated for user`);
     try {
       fs.writeFileSync(path.join(process.cwd(), 'RECOVERY_CODE.txt'), debugInfo);
     } catch (fsErr) {
-      console.error('Failed to write RECOVERY_CODE.txt');
+      logger.error('Failed to write RECOVERY_CODE.txt');
     }
 
     try {
@@ -109,9 +110,9 @@ Time: ${new Date().toLocaleString()}
         subject: '🔐 Vault Recovery Code — SSH Monitor',
         html: htmlContent,
       });
-      console.log('Resend email sent successfully');
+      logger.info('Resend email sent successfully');
     } catch (emailErr) {
-      console.error('Resend email failed:', emailErr.message);
+      logger.error('Resend email failed:', emailErr.message);
     }
 
     const parts = session.user.email.split('@');
@@ -123,7 +124,7 @@ Time: ${new Date().toLocaleString()}
       maskedEmail: masked,
     });
   } catch (error) {
-    console.error('Recovery email error:', error);
+    logger.error('Recovery email error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

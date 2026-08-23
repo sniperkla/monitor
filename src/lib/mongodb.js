@@ -11,6 +11,7 @@ import {
   normalizeRelayDatabaseUri,
 } from './sshTunnel.js';
 import { Pool as PgPool } from 'pg';
+import { logger } from '@/lib/logger';
 
 /**
  * Global is used here to maintain a cached connection across hot reloads
@@ -182,7 +183,7 @@ export async function flushRelayDynamicConnections(reason = 'relay disconnect', 
     flushed++;
   }
   if (flushed > 0) {
-    console.log(`🧹 [mongodb] Flushed ${flushed} relay-backed connection(s) (${reason}${filterPort ? ` port ${filterPort}` : ''})`);
+    logger.info(`🧹 [mongodb] Flushed ${flushed} relay-backed connection(s) (${reason}${filterPort ? ` port ${filterPort}` : ''})`);
   }
 }
 
@@ -202,7 +203,7 @@ async function getDynamicConnection(uri, tunnelConfig = null, relayName = null) 
     if (relayInfo) {
       connectUri = rewriteUriForTunnel(uri, relayInfo.port);
       cachePrefix = `relay:${relayInfo.userId}:`;
-      console.log(`🔗 [Local Relay] ${uri} → ${connectUri}`);
+      logger.info(`🔗 [Local Relay] ${uri} → ${connectUri}`);
     } else if (isLocalhost) {
       // Localhost URI but no relay active.
       // In development the server itself is on localhost, so direct access is fine.
@@ -247,7 +248,7 @@ async function getDynamicConnection(uri, tunnelConfig = null, relayName = null) 
       remotePort,
     });
     connectUri = rewriteUriForTunnel(uri, localPort);
-    console.log(`🔒 [Vault Tunnel] ${tunnelConfig.sshUser}@${tunnelConfig.sshHost} → ${remoteHost}:${remotePort} (local :${localPort})`);
+    logger.info(`🔒 [Vault Tunnel] ${tunnelConfig.sshUser}@${tunnelConfig.sshHost} → ${remoteHost}:${remotePort} (local :${localPort})`);
   }
 
   if (connectUri.startsWith('mysql://')) {

@@ -4,6 +4,7 @@ import connectDB from '@/lib/mongodb';
 import User from '@/models/User.js';
 import SystemSetting from '@/models/SystemSetting';
 import { extendExpiry, invalidateSupporter } from '@/utils/supporter';
+import { logger } from '@/lib/logger';
 
 export const dynamic = 'force-dynamic';
 
@@ -141,7 +142,7 @@ export async function POST(request) {
   } catch (error) {
     // Nothing was logged or granted, so let Ko-fi retry (same message_id is
     // deduped once it eventually lands) rather than silently losing a payment.
-    console.error('Ko-fi webhook error (message_id:', messageId + '):', error.message);
+    logger.error('Ko-fi webhook error (message_id:', messageId + '):', error.message);
     return NextResponse.json({ success: false }, { status: 500 });
   }
 }

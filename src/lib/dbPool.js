@@ -21,6 +21,7 @@ import { Client as SshClient } from 'ssh2';
 import { decrypt } from '../utils/encryption.js';
 import { resolveLocalhostViaRelay } from './sshTunnel.js';
 import { headers } from 'next/headers.js';
+import { logger } from '@/lib/logger';
 
 
 // Global pool (survives hot reloads in dev)
@@ -113,7 +114,7 @@ async function createSSHTunnel(conn) {
     const existing = tunnelPool.get(tunnelKey);
     if (existing.alive) {
       existing.lastUsed = Date.now();
-      console.log(`♻️ SSH Tunnel: Reusing tunnel on port ${existing.port} (${tunnelKey})`);
+      logger.info(`♻️ SSH Tunnel: Reusing tunnel on port ${existing.port} (${tunnelKey})`);
       return { port: existing.port, tunnelKey };
     }
     // Dead tunnel — clean it up
@@ -149,7 +150,7 @@ async function createSSHTunnel(conn) {
     const localServer = net.createServer((localSocket) => {
       sshClient.forwardOut('127.0.0.1', 0, targetHost, targetPort, (err, stream) => {
         if (err) {
-          console.error(`[SSH Tunnel] forwardOut error: ${err.message}`);
+          logger.error(`[SSH Tunnel] forwardOut error: ${err.message}`);
           localSocket.destroy();
           return;
         }
@@ -165,7 +166,7 @@ async function createSSHTunnel(conn) {
     sshClient.once('ready', () => {
       localServer.listen(0, '127.0.0.1', () => {
         const localPort = localServer.address().port;
-        console.log(`🔌 SSH Tunnel: OPEN — ${conn.sshTunnelHost} → 127.0.0.1:${localPort} → ${targetHost}:${targetPort}`);
+        logger.info(`🔌 SSH Tunnel: OPEN — ${conn.sshTunnelHost} → 127.0.0.1:${localPort} → ${targetHost}:${targetPort}`);
         tunnelPool.set(tunnelKey, {
           sshClient,
           server: localServer,
@@ -199,7 +200,7 @@ async function closeSSHTunnel(tunnelKey) {
   try { tunnel.server.close(); } catch (_) {}
   try { tunnel.sshClient.end(); } catch (_) {}
   tunnelPool.delete(tunnelKey);
-  console.log(`🔌 SSH Tunnel: CLOSED — ${tunnelKey}`);
+  logger.info(`🔌 SSH Tunnel: CLOSED — ${tunnelKey}`);
 }
 
 /**
@@ -256,7 +257,7 @@ export async function getPooledConnection(conn) {
         return cached;
       }
     } catch (e) {
-      console.log(`♻️ Pool: Stale connection removed for ${key}: ${e.message}`);
+      logger.info(`♻️ Pool: Stale connection removed for ${key}: ${e.message}`);
       try { await cached.db.close?.() || await cached.db.end?.(); } catch (_) {}
       if (cached.tunnelKey) await closeSSHTunnel(cached.tunnelKey);
       globalPool.delete(key);
@@ -277,7 +278,7 @@ export async function getPooledConnection(conn) {
       const old = globalPool.get(oldestKey);
       try { await old.db.close?.() || await old.db.end?.(); } catch (_) {}
       globalPool.delete(oldestKey);
-      console.log(`♻️ Pool: Evicted oldest connection (pool full): ${oldestKey}`);
+      logger.info(`♻️ Pool: Evicted oldest connection (pool full): ${oldestKey}`);
     }
   }
 
@@ -289,8 +290,8 @@ export async function getPooledConnection(conn) {
     const uri = buildMongoUri(tunnelConn, password);
     // DEBUG: log masked URI to diagnose auth failures
     const maskedUri = uri.replace(/:([^@]+)@/, ':***@');
-    console.log('[dbPool] MongoDB URI:', maskedUri);
-    console.log('[dbPool] authSource:', tunnelConn.authSource, '| password length:', password?.length || 0, '| username:', tunnelConn.username);
+    logger.info('[dbPool] MongoDB URI:', maskedUri);
+    logger.info('[dbPool] authSource:', tunnelConn.authSource, '| password length:', password?.length || 0, '| username:', tunnelConn.username);
     try {
       db = await mongoose.createConnection(uri, {
         serverSelectionTimeoutMS: 15000,
@@ -302,17 +303,17 @@ export async function getPooledConnection(conn) {
         appName: 'ssh-monitor',
       }).asPromise();
     } catch (err) {
-      console.error(`[dbPool] Mongo connection error for user:${tunnelConn.username} host:${connectHost} port:${connectPort} authSource:${tunnelConn.authSource} - ${err.message}`);
+      logger.error(`[dbPool] Mongo connection error for user:${tunnelConn.username} host:${connectHost} port:${connectPort} authSource:${tunnelConn.authSource} - ${err.message}`);
 
       // If authentication failed and no authSource was provided, try a safe fallback to authSource=admin
       const authFailed = String(err.message || '').toLowerCase().includes('authentication failed') || err.code === 18;
       if (authFailed && !tunnelConn.authSource) {
         try {
-          console.log('[dbPool] Attempting fallback with authSource=admin');
+          logger.info('[dbPool] Attempting fallback with authSource=admin');
           const fallbackConn = { ...tunnelConn, authSource: 'admin' };
           const fallbackUri = buildMongoUri(fallbackConn, password);
           const maskedFallback = fallbackUri.replace(/:([^@]+)@/, ':***@');
-          console.log('[dbPool] MongoDB fallback URI:', maskedFallback);
+          logger.info('[dbPool] MongoDB fallback URI:', maskedFallback);
           db = await mongoose.createConnection(fallbackUri, {
             serverSelectionTimeoutMS: 15000,
             connectTimeoutMS: 15000,
@@ -325,7 +326,7 @@ export async function getPooledConnection(conn) {
           // Update tunnelConn.authSource so cache key reflects the chosen authSource
           tunnelConn.authSource = 'admin';
         } catch (fbErr) {
-          console.error('[dbPool] Mongo fallback authSource=admin failed:', fbErr.message);
+          logger.error('[dbPool] Mongo fallback authSource=admin failed:', fbErr.message);
           throw err; // rethrow original for upstream handling
         }
       } else {
@@ -367,7 +368,7 @@ export async function getPooledConnection(conn) {
   globalPool.set(key, entry);
 
   const via = tunnelKey ? 'SSH tunnel' : usedRelay ? `relay :${connectPort}` : 'direct';
-  console.log(`🔗 Pool: New connection created for ${key} (via ${via}, pool size: ${globalPool.size})`);
+  logger.info(`🔗 Pool: New connection created for ${key} (via ${via}, pool size: ${globalPool.size})`);
   return entry;
 }
 
@@ -389,7 +390,7 @@ export async function flushRelayPooledConnections(reason = 'relay disconnect', f
     flushed++;
   }
   if (flushed > 0) {
-    console.log(`🧹 Pool: Flushed ${flushed} relay-backed connection(s) (${reason}${filterPort ? ` port ${filterPort}` : ''})`);
+    logger.info(`🧹 Pool: Flushed ${flushed} relay-backed connection(s) (${reason}${filterPort ? ` port ${filterPort}` : ''})`);
   }
 }
 
@@ -429,7 +430,7 @@ function startPoolCleanup() {
     const now = Date.now();
     for (const [key, entry] of globalPool.entries()) {
       if (now - entry.lastUsed > POOL_TTL_MS) {
-        console.log(`🧹 Pool: Cleaning idle connection: ${key}`);
+        logger.info(`🧹 Pool: Cleaning idle connection: ${key}`);
         try {
           if (entry.provider === 'mongodb') await entry.db.close();
           else if (entry.provider === 'mysql' || entry.provider === 'postgres') await entry.db.end();

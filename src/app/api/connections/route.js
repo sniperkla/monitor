@@ -5,6 +5,7 @@ import { checkRateLimit } from '@/lib/serverGuard';
 import connectDB from '@/lib/mongodb';
 import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import { encrypt } from '@/utils/encryption';
+import { logger } from '@/lib/logger';
 
 // GET all connections
 export async function GET(request) {
@@ -84,7 +85,7 @@ export async function GET(request) {
 
     return NextResponse.json({ success: true, data: sanitized });
   } catch (error) {
-    console.error('API Error:', error);
+    logger.error('API Error:', error);
     return NextResponse.json(
       { success: false, error: error.message },
       { status: 500 }

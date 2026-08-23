@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
+import { logger } from '@/lib/logger';
 
 export const dynamic = 'force-dynamic';
 
@@ -48,7 +49,7 @@ export async function POST(req) {
     });
 
   } catch (error) {
-    console.error('[SkillsMP Install] Error:', error);
+    logger.error('[SkillsMP Install] Error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

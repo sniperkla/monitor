@@ -5,6 +5,7 @@ import connectDB from '@/lib/mongodb';
 import SystemSetting from '@/models/SystemSetting';
 import { decrypt, decryptWithMetadata } from '@/utils/encryption';
 import { resolveUserIdQuery, normalizeUserId } from '@/lib/deployUserQuery';
+import { logger } from '@/lib/logger';
 
 function resolveBotToken(tokenInput, savedToken) {
   if (tokenInput && tokenInput.trim()) {
@@ -112,7 +113,7 @@ export async function GET(request) {
       chats
     });
   } catch (err) {
-    console.error('Error fetching Telegram chats:', err);
+    logger.error('Error fetching Telegram chats:', err);
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }
 }
@@ -195,7 +196,7 @@ export async function POST(request) {
       message: `Test notification sent to ${succeeded} chat(s)!${failed.length > 0 ? ` (${failed.length} failed)` : ''}`
     });
   } catch (err) {
-    console.error('Error sending test Telegram notification:', err);
+    logger.error('Error sending test Telegram notification:', err);
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }
 }

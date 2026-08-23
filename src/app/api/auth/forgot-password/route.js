@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import connectDB from '@/lib/mongodb';
 import User from '@/models/User';
 import { sendPasswordResetEmail } from '@/lib/resend';
+import { logger } from '@/lib/logger';
 
 /**
  * POST /api/auth/forgot-password
@@ -60,16 +61,16 @@ export async function POST(request) {
     let emailResult = null;
     try {
       emailResult = await sendPasswordResetEmail({ to: cleanEmail, code: resetCode });
-      console.log(`[Resend] Password reset code sent to ${cleanEmail}:`, emailResult);
+      logger.info(`[Resend] Password reset code sent to ${cleanEmail}:`, emailResult);
       if (emailResult?.error) {
-        console.error('[Resend Error Details]:', emailResult.error);
+        logger.error('[Resend Error Details]:', emailResult.error);
         return NextResponse.json({
           success: false,
           error: `Failed to send email via Resend: ${emailResult.error.message || JSON.stringify(emailResult.error)}`
         }, { status: 500 });
       }
     } catch (emailErr) {
-      console.error('[Resend Exception]:', emailErr);
+      logger.error('[Resend Exception]:', emailErr);
       return NextResponse.json({
         success: false,
         error: `Failed to send email: ${emailErr.message}`
@@ -81,7 +82,7 @@ export async function POST(request) {
       message: 'Password reset code has been sent to your email address.',
     });
   } catch (error) {
-    console.error('Forgot password error:', error);
+    logger.error('Forgot password error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

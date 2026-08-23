@@ -6,6 +6,7 @@ import connectDB from '@/lib/mongodb';
 import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import { decrypt } from '@/utils/encryption';
 import { checkRateLimit } from '@/lib/serverGuard';
+import { logger } from '@/lib/logger';
 
 // Lightweight SSH ping - only measures connection time, no commands
 export async function POST(request, { params }) {
@@ -78,7 +79,7 @@ export async function POST(request, { params }) {
 
     return NextResponse.json(result);
   } catch (error) {
-    console.error('Ping error:', error);
+    logger.error('Ping error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

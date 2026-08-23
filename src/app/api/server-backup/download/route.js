@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { getSshConfig, sftpReadStream } from '../_ssh';
+import { logger } from '@/lib/logger';
 
 export async function GET(request) {
   try {
@@ -27,7 +28,7 @@ export async function GET(request) {
       },
     });
   } catch (error) {
-    console.error('[server-backup/download] error:', error.message);
+    logger.error('[server-backup/download] error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

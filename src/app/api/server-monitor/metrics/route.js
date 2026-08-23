@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
+import { logger } from '@/lib/logger';
 
 // Shell script that collects all metrics instantly in a single SSH session without sleep bottlenecks
 const METRICS_SCRIPT = `
@@ -257,7 +258,7 @@ export async function GET(request) {
       },
     });
   } catch (error) {
-    console.error('[server-monitor/metrics] error:', error.message);
+    logger.error('[server-monitor/metrics] error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

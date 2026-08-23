@@ -1,4 +1,5 @@
 import AiUsage from '../../models/AiUsage.js';
+import { logger } from '@/lib/logger';
 
 export class AiUsageRepository {
   constructor(db) {
@@ -43,7 +44,7 @@ export class AiUsageRepository {
           WHERE table_name = 'ai_usage' AND column_name = 'daykey'
         `);
         if (check.rows?.length > 0) {
-          console.log('[AiUsage] Migrating lowercase columns to camelCase...');
+          logger.info('[AiUsage] Migrating lowercase columns to camelCase...');
           const renames = [
             ['daykey', 'dayKey'],
             ['tokensused', 'tokensUsed'],

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
+import { logger } from '@/lib/logger';
 
 // Shell script that probes each application in a single SSH session.
 // Each section is delimited so we can parse them independently.
@@ -282,14 +283,14 @@ export async function GET(request) {
     const sshConfig = await getSshConfig(connectionId);
     const result = await execCommand(sshConfig, APPS_SCRIPT);
 
-    console.log('[server-monitor/apps] SSH result:', {
+    logger.info('[server-monitor/apps] SSH result:', {
       code: result.code,
       stdoutLength: result.stdout?.length || 0,
       stderrLength: result.stderr?.length || 0
     });
 
     if (result.code !== 0 && !result.stdout) {
-      console.error('[server-monitor/apps] Command failed:', result.stderr);
+      logger.error('[server-monitor/apps] Command failed:', result.stderr);
       return NextResponse.json(
         { success: false, error: result.stderr || 'Failed to detect applications' },
         { status: 500 }
@@ -299,7 +300,7 @@ export async function GET(request) {
     const output = result.stdout || '';
     
     // Log the raw output for debugging (first 500 chars)
-    console.log('[server-monitor/apps] Output preview:', output.substring(0, 500));
+    logger.info('[server-monitor/apps] Output preview:', output.substring(0, 500));
 
     // ── Parse each app block ─────────────────────────────────────────────────
 
@@ -383,7 +384,7 @@ export async function GET(request) {
       installed: apps.filter(a => a.installed).map(a => a.name),
     });
   } catch (error) {
-    console.error('[server-monitor/apps] error:', error.message);
+    logger.error('[server-monitor/apps] error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

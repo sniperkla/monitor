@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { migrateConnections } from './migrator';
+import { logger } from '@/lib/logger';
 
 /**
  * POST /api/settings/database/migrate
@@ -38,7 +39,7 @@ export async function POST(request) {
           : 'No connections found in the source database.',
     });
   } catch (error) {
-    console.error('Migration Error:', error);
+    logger.error('Migration Error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

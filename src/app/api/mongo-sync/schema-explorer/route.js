@@ -7,6 +7,7 @@ import { getPooledConnection } from '@/lib/dbPool';
 import { normalizeMongoConnection } from '@/lib/mongoSyncUtils';
 import { attachRequestUserId } from '@/lib/requestUser';
 import mongoose from 'mongoose';
+import { logger } from '@/lib/logger';
 
 export async function POST(request) {
   try {
@@ -32,10 +33,10 @@ export async function POST(request) {
       }
       connData = fullConn.toObject ? fullConn.toObject() : fullConn;
       // DEBUG: log before normalization and connection
-      console.log('[schema-explorer] raw connData.type:', connData?.type, '| dbProvider:', connData?.dbProvider, '| port:', connData?.port, '| database:', connData?.database);
+      logger.info('[schema-explorer] raw connData.type:', connData?.type, '| dbProvider:', connData?.dbProvider, '| port:', connData?.port, '| database:', connData?.database);
       connData = await attachRequestUserId(request, connData);
       connData = normalizeMongoConnection(connData);
-      console.log('[schema-explorer] normalized: sshTunnel:', connData?.sshTunnel, '| host:', connData?.host, '| port:', connData?.port, '| database:', connData?.database);
+      logger.info('[schema-explorer] normalized: sshTunnel:', connData?.sshTunnel, '| host:', connData?.host, '| port:', connData?.port, '| database:', connData?.database);
       pooled = await getPooledConnection(connData);
     }
 
@@ -43,14 +44,14 @@ export async function POST(request) {
     const dbInstance = isDefault ? pooled.db : pooled.db.db;
 
     // DEBUG: log exactly what we got
-    console.log('[schema-explorer] connectionId:', connectionId);
-    console.log('[schema-explorer] connData.database:', connData?.database);
-    console.log('[schema-explorer] connData.dbProvider:', connData?.dbProvider);
-    console.log('[schema-explorer] connData.type:', connData?.type);
-    console.log('[schema-explorer] connData.host:', connData?.host);
-    console.log('[schema-explorer] connData.port:', connData?.port);
-    console.log('[schema-explorer] dbInstance.databaseName:', dbInstance?.databaseName);
-    console.log('[schema-explorer] requested database:', database);
+    logger.info('[schema-explorer] connectionId:', connectionId);
+    logger.info('[schema-explorer] connData.database:', connData?.database);
+    logger.info('[schema-explorer] connData.dbProvider:', connData?.dbProvider);
+    logger.info('[schema-explorer] connData.type:', connData?.type);
+    logger.info('[schema-explorer] connData.host:', connData?.host);
+    logger.info('[schema-explorer] connData.port:', connData?.port);
+    logger.info('[schema-explorer] dbInstance.databaseName:', dbInstance?.databaseName);
+    logger.info('[schema-explorer] requested database:', database);
 
     // The database this connection is scoped to:
     // - For default (system): dbInstance.databaseName (the system DB)
@@ -83,7 +84,7 @@ export async function POST(request) {
         ];
         return NextResponse.json({ success: true, collections: collectionNames });
       } catch (collErr) {
-        console.warn('schema-explorer listCollections retry on dbInstance:', collErr.message);
+        logger.warn('schema-explorer listCollections retry on dbInstance:', collErr.message);
         try {
           const collections = await dbInstance.listCollections().toArray();
           const collectionNames = [
@@ -123,7 +124,7 @@ export async function POST(request) {
       }
 
       // Configured DB is empty — try to list all actual databases so the user can select the right one
-      console.log(`[schema-explorer] configuredDb "${configuredDb}" has no collections, falling back to listDatabases`);
+      logger.info(`[schema-explorer] configuredDb "${configuredDb}" has no collections, falling back to listDatabases`);
     }
 
     // For the system default connection (or connections without a configured DB):
@@ -142,7 +143,7 @@ export async function POST(request) {
         }
       }
     } catch (err) {
-      console.warn('schema-explorer listDatabases warning:', err.message);
+      logger.warn('schema-explorer listDatabases warning:', err.message);
     }
 
     if (dbs.length === 0) {
@@ -152,7 +153,7 @@ export async function POST(request) {
     return NextResponse.json({ success: true, databases: dbs });
 
   } catch (error) {
-    console.error('schema-explorer error:', error);
+    logger.error('schema-explorer error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

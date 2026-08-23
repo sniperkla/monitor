@@ -1,4 +1,5 @@
 import AiHistory from '../../models/AiHistory.js';
+import { logger } from '@/lib/logger';
 
 export class AiHistoryRepository {
   constructor(db) {
@@ -45,7 +46,7 @@ export class AiHistoryRepository {
             WHERE table_name = 'ai_histories' AND column_name = 'userid'
          `);
          if (check.rows?.length > 0) {
-            console.log('[AiHistory] Migrating lowercase columns to camelCase...');
+            logger.info('[AiHistory] Migrating lowercase columns to camelCase...');
             const renames = [
               ['userid', 'userId'],
               ['lastactive', 'lastActive'],

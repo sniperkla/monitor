@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import connectDB from '@/lib/mongodb';
 import { SshMemoryRepository } from '@/lib/repositories/SshMemoryRepository';
+import { logger } from '@/lib/logger';
 
 // ── GET /api/ssh/memory?host=xxx ──────────────────────────────────────────────
 export async function GET(req) {
@@ -21,7 +22,7 @@ export async function GET(req) {
     const mem = await repo.findOne({ userId: session.user.email, host });
     return NextResponse.json({ success: true, memory: mem || null });
   } catch (e) {
-    console.error('SshMemory GET error:', e);
+    logger.error('SshMemory GET error:', e);
     return NextResponse.json({ success: false, error: e.message }, { status: 500 });
   }
 }
@@ -115,7 +116,7 @@ export async function PATCH(req) {
 
     return NextResponse.json({ success: true, memory: mem });
   } catch (e) {
-    console.error('SshMemory PATCH error:', e);
+    logger.error('SshMemory PATCH error:', e);
     return NextResponse.json({ success: false, error: e.message }, { status: 500 });
   }
 }

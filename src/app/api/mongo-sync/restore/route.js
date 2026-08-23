@@ -8,6 +8,7 @@ import { listDriveFiles, downloadDriveFile } from '@/lib/gdriveHelper';
 import { sanitizeDocument, normalizeMongoConnection } from '@/lib/mongoSyncUtils';
 import { attachRequestUserId } from '@/lib/requestUser';
 import mongoose from 'mongoose';
+import { logger } from '@/lib/logger';
 
 const MAX_RESTORE_DOCS = 100000;
 
@@ -30,7 +31,7 @@ export async function GET(request) {
     return NextResponse.json({ success: true, files });
 
   } catch (error) {
-    console.error('List Drive backup files error:', error);
+    logger.error('List Drive backup files error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }
@@ -94,12 +95,12 @@ export async function POST(request) {
           insertedCount += (r.upsertedCount || 0) + (r.insertedCount || 0);
           updatedCount  += r.modifiedCount || 0;
           matchedCount  += r.matchedCount || 0;
-        } catch (e) { console.warn('bulkWrite error:', e.message); }
+        } catch (e) { logger.warn('bulkWrite error:', e.message); }
       } else {
         try {
           const r = await col.insertMany(sanitized, { ordered: false });
           insertedCount += r.insertedCount || sanitized.length;
-        } catch (e) { console.warn('insertMany error:', e.message); }
+        } catch (e) { logger.warn('insertMany error:', e.message); }
       }
     };
 
@@ -154,7 +155,7 @@ export async function POST(request) {
             }
           }
         } catch (fileErr) {
-          console.warn(`[Batch Restore] Error restoring file ${file.name}:`, fileErr.message);
+          logger.warn(`[Batch Restore] Error restoring file ${file.name}:`, fileErr.message);
         }
       }
 
@@ -169,7 +170,7 @@ export async function POST(request) {
     }
 
     // 1. Single File Download from Google Drive
-    console.log(`📥 Downloading backup file ${fileId} from Google Drive...`);
+    logger.info(`📥 Downloading backup file ${fileId} from Google Drive...`);
     const backupData = await downloadDriveFile(fileId, userId);
 
     // Detect file shape
@@ -246,7 +247,7 @@ export async function POST(request) {
     });
 
   } catch (error) {
-    console.error('Restore backup error:', error);
+    logger.error('Restore backup error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

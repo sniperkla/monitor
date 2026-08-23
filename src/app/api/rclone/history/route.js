@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
+import { logger } from '@/lib/logger';
 
 export async function GET(req) {
   try {
@@ -355,7 +356,7 @@ export async function GET(req) {
     });
 
   } catch (error) {
-    console.error('[rclone/history] error:', error.message);
+    logger.error('[rclone/history] error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }
@@ -381,7 +382,7 @@ export async function DELETE(req) {
       message: 'Successfully cleared all rclone history log files.',
     });
   } catch (error) {
-    console.error('[rclone/history/DELETE] error:', error.message);
+    logger.error('[rclone/history/DELETE] error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

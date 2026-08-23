@@ -292,7 +292,7 @@ function CronBuilder({ value, onChange }) {
         {mode === 'custom' && (
           <div className="space-y-1">
             <label className="text-[10px] font-semibold text-[var(--text-muted)] block">
-              Custom Cron or Natural Input (e.g., "5 min", "18:00", "every 2 hours", "*/5 * * * *"):
+              Custom Cron or Natural Input (e.g., &quot;5 min&quot;, &quot;18:00&quot;, &quot;every 2 hours&quot;, &quot;*/5 * * * *&quot;):
             </label>
             <input
               type="text"
@@ -3904,7 +3904,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                                 </div>
                               ) : (
                                 <div className="p-4 text-center text-[11px] text-[var(--text-muted)] italic">
-                                  Click "Fetch Log" to load the latest cron run output from the SSH server.
+                                  Click &quot;Fetch Log&quot; to load the latest cron run output from the SSH server.
                                 </div>
                               )
                             )}
@@ -3928,7 +3928,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                     </div>
                   ) : historyRuns.length === 0 ? (
                     <div className="py-8 text-center text-xs text-[var(--text-muted)] italic">
-                      No run history yet. Use the "Run Now" button on a job to trigger a manual backup.
+                      No run history yet. Use the &quot;Run Now&quot; button on a job to trigger a manual backup.
                     </div>
                   ) : (
                     <div className="space-y-3 max-h-[500px] overflow-y-auto custom-scrollbar pr-1 divide-y divide-[var(--border-color)]/40">
@@ -4532,7 +4532,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                       return (
                         <div className="flex flex-col items-center justify-center py-10 text-[var(--text-muted)] text-xs gap-2">
                           {q ? (
-                            <span>No folders match <b className="text-[var(--text-primary)]">"{drivePicker.search}"</b></span>
+                            <span>No folders match <b className="text-[var(--text-primary)]">&quot;{drivePicker.search}&quot;</b></span>
                           ) : (
                             <>
                               <span>No subfolders here.</span>

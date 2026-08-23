@@ -9,6 +9,7 @@ import { SystemSettingRepository } from '@/lib/repositories/SystemSettingReposit
 import { uploadFileToGoogleDrive, ensureDriveFolder } from '@/lib/gdriveHelper';
 import { attachRequestUserId } from '@/lib/requestUser';
 import { normalizeMongoConnection } from '@/lib/mongoSyncUtils';
+import { logger } from '@/lib/logger';
 
 export async function POST(request, { params }) {
   try {
@@ -79,7 +80,7 @@ export async function POST(request, { params }) {
       const isAllCollections = allCollectionNames.includes(job.collection);
       const isAllDatabases = allDatabaseNames.includes(job.database);
 
-      console.log(`[mongo-sync] Running backup job ${job.id} db=${job.database} col=${job.collection}`);
+      logger.info(`[mongo-sync] Running backup job ${job.id} db=${job.database} col=${job.collection}`);
 
       // ── Build shared YYYY-MM-DD_HH-MM subfolder (matches cron structure) ──
       const now = new Date();
@@ -153,7 +154,7 @@ export async function POST(request, { params }) {
       }
 
     } catch (err) {
-      console.error('Backup run error:', err.message, { jobId: job.id, database: job.database, collection: job.collection });
+      logger.error('Backup run error:', err.message, { jobId: job.id, database: job.database, collection: job.collection });
       runStatus = 'error';
       runMessage = err.message;
     }
@@ -193,7 +194,7 @@ export async function POST(request, { params }) {
     });
 
   } catch (error) {
-    console.error('Run Sync Job error:', error);
+    logger.error('Run Sync Job error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

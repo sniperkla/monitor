@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import connectDB from '@/lib/mongodb';
 import User from '@/models/User';
+import { logger } from '@/lib/logger';
 
 /**
  * POST /api/auth/reset-password
@@ -60,14 +61,14 @@ export async function POST(request) {
       }
     );
 
-    console.log(`🔑 Password reset successfully for user: ${cleanEmail}`);
+    logger.info(`🔑 Password reset successfully for user: ${cleanEmail}`);
 
     return NextResponse.json({
       success: true,
       message: 'Your password has been reset successfully! You can now log in with your new password.',
     });
   } catch (error) {
-    console.error('Reset password error:', error);
+    logger.error('Reset password error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

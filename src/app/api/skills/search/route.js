@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
+import { logger } from '@/lib/logger';
 
 export const dynamic = 'force-dynamic';
 
@@ -14,10 +15,10 @@ export async function POST(req) {
     try {
       session = await getServerSession(authOptions);
     } catch (e) {
-      console.warn('[SkillsMP Search] Session resolution failed:', e.message);
+      logger.warn('[SkillsMP Search] Session resolution failed:', e.message);
     }
     if (!session) {
-      console.warn('[SkillsMP Search] No session found — proceeding with API key auth only.');
+      logger.warn('[SkillsMP Search] No session found — proceeding with API key auth only.');
     }
 
     const { q, type = 'smart' } = await req.json();
@@ -31,7 +32,7 @@ export async function POST(req) {
     }
     
     // DEBUG: Log key prefix and length to verify it's loaded correctly
-    console.log(`[SkillsMP] Key check: configured=${!!apiKey}, length=${apiKey.length}`);
+    logger.info(`[SkillsMP] Key check: configured=${!!apiKey}, length=${apiKey.length}`);
 
     // 'smart' mode: use Groq to extract concise keywords, then call normal keyword search
     // 'ai' mode: use SkillsMP AI vector search (hits rate limit)
@@ -75,18 +76,18 @@ Keywords:`
             const extracted = groqData?.choices?.[0]?.message?.content?.trim();
             if (extracted) {
               searchQuery = extracted;
-              console.log(`[SkillsMP] Smart keywords: "${searchQuery}" (from: "${q}")`);
+              logger.info(`[SkillsMP] Smart keywords: "${searchQuery}" (from: "${q}")`);
             }
           } else {
              const groqErr = await groqRes.json().catch(() => ({}));
              if (groqRes.status === 401) {
-               console.warn('[SkillsMP] Groq 401: Invalid API Key. Falling back to raw query.');
+               logger.warn('[SkillsMP] Groq 401: Invalid API Key. Falling back to raw query.');
              } else {
-               console.warn(`[SkillsMP] Groq ${groqRes.status}: ${groqErr?.error?.message || 'Unknown error'}`);
+               logger.warn(`[SkillsMP] Groq ${groqRes.status}: ${groqErr?.error?.message || 'Unknown error'}`);
              }
           }
         } catch (e) {
-          console.warn('[SkillsMP] Keyword extraction failed, using raw query:', e.message);
+          logger.warn('[SkillsMP] Keyword extraction failed, using raw query:', e.message);
         }
       }
     }
@@ -95,7 +96,7 @@ Keywords:`
     const params = new URLSearchParams({ q: searchQuery });
     const url = `${SKILLS_MP_API_BASE}${endpoint}?${params}`;
     
-    console.log(`[SkillsMP] GET ${url}`);
+    logger.info(`[SkillsMP] GET ${url}`);
 
     const response = await fetch(url, {
       method: 'GET',
@@ -108,7 +109,7 @@ Keywords:`
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
       const errorMessage = errorData?.error?.message || errorData?.message || `SkillsMP API error: ${response.status}`;
-      console.warn(`[SkillsMP] ${response.status}: ${errorMessage}`);
+      logger.warn(`[SkillsMP] ${response.status}: ${errorMessage}`);
       return NextResponse.json({ 
         success: false, 
         error: errorMessage
@@ -141,11 +142,11 @@ Keywords:`
         };
     });
 
-    console.log(`[SkillsMP] Found ${skills.length} skills`);
+    logger.info(`[SkillsMP] Found ${skills.length} skills`);
     return NextResponse.json({ success: true, skills });
 
   } catch (error) {
-    console.error('[SkillsMP Search] Error:', error);
+    logger.error('[SkillsMP Search] Error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

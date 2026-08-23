@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { listGoogleDriveFolders, createGoogleDriveFolder } from '@/lib/gdriveHelper';
+import { logger } from '@/lib/logger';
 
 export async function GET(request) {
   try {
@@ -15,7 +16,7 @@ export async function GET(request) {
     const folders = await listGoogleDriveFolders(parentId || null, userId);
     return NextResponse.json({ success: true, folders });
   } catch (err) {
-    console.error('List Drive subfolders error:', err);
+    logger.error('List Drive subfolders error:', err);
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }
 }
@@ -43,7 +44,7 @@ export async function POST(request) {
       folderName: folder.name
     });
   } catch (error) {
-    console.error('Google Drive Folders API error:', error);
+    logger.error('Google Drive Folders API error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

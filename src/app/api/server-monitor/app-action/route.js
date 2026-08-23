@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
+import { logger } from '@/lib/logger';
 
 /**
  * Map app names to their service names
@@ -141,11 +142,11 @@ export async function POST(request) {
     const sshConfig = await getSshConfig(connectionId);
     const command = getActionCommand(appName, action);
     
-    console.log(`[server-monitor/app-action] Executing ${action} for ${appName}`);
+    logger.info(`[server-monitor/app-action] Executing ${action} for ${appName}`);
     
     const result = await execCommand(sshConfig, command);
 
-    console.log(`[server-monitor/app-action] Result:`, {
+    logger.info(`[server-monitor/app-action] Result:`, {
       code: result.code,
       stdoutLength: result.stdout?.length || 0,
       stderrLength: result.stderr?.length || 0
@@ -176,7 +177,7 @@ export async function POST(request) {
     return NextResponse.json(responseBody);
 
   } catch (error) {
-    console.error('[server-monitor/app-action] error:', error.message);
+    logger.error('[server-monitor/app-action] error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

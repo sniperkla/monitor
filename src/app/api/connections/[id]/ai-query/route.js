@@ -7,6 +7,7 @@ import AiHistory from '@/models/AiHistory';
 import { checkRateLimit } from '@/lib/serverGuard';
 import { checkAndTrackAiUsage } from '@/utils/aiLimiter';
 import { canUseServerAi, aiSupporterRequiredResponse } from '@/utils/supporter';
+import { logger } from '@/lib/logger';
 
 
 const stripAiQueryEnvelope = (text = '') => {
@@ -124,7 +125,7 @@ const requestChatCompletion = async ({ modelName, messages, aiConfig, apiKey, pr
     }
 
     const resData = await response.json();
-    console.log('[OpenRouter] Response status:', resData.error ? 'error' : 'success');
+    logger.info('[OpenRouter] Response status:', resData.error ? 'error' : 'success');
     
     if (resData.error) {
        throw new Error(resData.error.message || JSON.stringify(resData.error));
@@ -384,7 +385,7 @@ RULES:
              SystemSetting.updateOne(
                { key: 'ai_api_keys' },
                { $set: { 'value.currentIndex': nextIndex } }
-             ).catch(err => console.error('Failed to update query key index:', err));
+             ).catch(err => logger.error('Failed to update query key index:', err));
         }
         
         let finalAnswer = answer || '';
@@ -407,7 +408,7 @@ RULES:
                 cleanedQuery = stripAiQueryEnvelope(finalAnswer);
               }
             } catch (repairError) {
-              console.warn('AI SQL repair pass failed:', repairError.message);
+              logger.warn('AI SQL repair pass failed:', repairError.message);
             }
 
             if (!sqlQueryLooksUsable(cleanedQuery)) {
@@ -443,7 +444,7 @@ RULES:
               ]
             });
           } catch (dbErr) {
-            console.error('Failed to save DB AI history:', dbErr);
+            logger.error('Failed to save DB AI history:', dbErr);
           }
         }
         return NextResponse.json({ success: true, query: finalAnswer, usage: usageInfo, usedModel: actualUsedModel });
@@ -452,7 +453,7 @@ RULES:
     return NextResponse.json({ success: false, error: lastError?.message || 'AI Rate limit exceeded on all keys.' }, { status: 429 });
 
   } catch (error) {
-    console.error('AI Query Error:', error);
+    logger.error('AI Query Error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

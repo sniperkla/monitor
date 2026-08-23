@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import connectDB from '@/lib/mongodb';
 import SystemSetting from '@/models/SystemSetting';
+import { logger } from '@/lib/logger';
 
 const HISTORY_KEY = 'server_backup_history';
 const MAX_ENTRIES = 100;
@@ -17,7 +18,7 @@ export async function GET(request) {
     const setting = await SystemSetting.findOne({ key: HISTORY_KEY });
     return NextResponse.json({ success: true, history: setting?.value || [] });
   } catch (error) {
-    console.error('[server-backup/history] GET error:', error.message);
+    logger.error('[server-backup/history] GET error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }
@@ -47,7 +48,7 @@ export async function POST(request) {
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    console.error('[server-backup/history] POST error:', error.message);
+    logger.error('[server-backup/history] POST error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

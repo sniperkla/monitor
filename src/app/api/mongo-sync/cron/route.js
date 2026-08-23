@@ -82,7 +82,7 @@ function rewriteDockerUri(uri) {
     const internalPort = match[4];
     const hostPort = process.env.DOCKER_MONGO_HOST_PORT || '27021';
     const rewritten = uri.replace(`${internalHost}:${internalPort}`, `127.0.0.1:${hostPort}`);
-    console.log(`[mongo-sync/cron] Rewrote Docker URI: ${internalHost}:${internalPort} → 127.0.0.1:${hostPort}`);
+    logger.info(`[mongo-sync/cron] Rewrote Docker URI: ${internalHost}:${internalPort} → 127.0.0.1:${hostPort}`);
     return rewritten;
   } catch {
     return uri;
@@ -548,6 +548,7 @@ PROBE_LOG="$HOME/.mongosync-scripts/logs/mongosync-${safeId}-$(date +%Y%m%d_%H%M
   MONGO_REACHABLE=$(python3 -c "
 from pymongo import MongoClient
 import sys
+import { logger } from '@/lib/logger';
 try:
     c = MongoClient('${mongoUri.replace(/'/g, "'\\''")}', serverSelectionTimeoutMS=3000)
     c.admin.command('ping')
@@ -580,7 +581,7 @@ echo "INSTALLED_SUCCESS"
       const errMsg = syntaxErr
         ? `Script syntax error: ${syntaxErr}`
         : result.stderr.trim() || result.stdout.trim() || 'Failed to install script on target SSH server';
-      console.error('[mongo-sync/cron POST] SSH exec failure:', errMsg);
+      logger.error('[mongo-sync/cron POST] SSH exec failure:', errMsg);
       return NextResponse.json({
         success: false,
         error: errMsg,
@@ -617,7 +618,7 @@ echo "INSTALLED_SUCCESS"
     });
 
   } catch (error) {
-    console.error('[mongo-sync/cron POST] error:', error);
+    logger.error('[mongo-sync/cron POST] error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }
@@ -657,7 +658,7 @@ echo "REMOVED"
     });
 
   } catch (error) {
-    console.error('[mongo-sync/cron DELETE] error:', error);
+    logger.error('[mongo-sync/cron DELETE] error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

@@ -5,6 +5,7 @@ import SystemSetting from '@/models/SystemSetting';
 import { broadcastDeploymentStatus } from '@/app/api/deploy/sse/route';
 import { getRunning, clearRunning } from '@/lib/deployProcesses';
 import { resolveUserIdQuery, normalizeUserId } from '@/lib/deployUserQuery';
+import { logger } from '@/lib/logger';
 
 async function updateStatusToCancelled(projectId, message, userId = 'global') {
   try {
@@ -26,7 +27,7 @@ async function updateStatusToCancelled(projectId, message, userId = 'global') {
     });
     await broadcastDeploymentStatus(projectId);
   } catch (err) {
-    console.error('[deploy/cancel] Failed to update status after cancellation:', err.message);
+    logger.error('[deploy/cancel] Failed to update status after cancellation:', err.message);
   }
 }
 
@@ -64,10 +65,10 @@ export async function POST(request) {
           const tmuxSession = `deploy-${projectId.replace(/[^a-zA-Z0-9_-]/g, '-')}`.slice(0, 60);
           running.conn.exec(`tmux kill-session -t ${tmuxSession} 2>/dev/null; rm -f /tmp/deploy_${tmuxSession}.log /tmp/deploy_tmux_${projectId}.sh; true`, () => {});
         } catch {}
-        try { running.conn.end(); } catch (e) { console.warn('[deploy/cancel] Failed to end SSH connection:', e.message); }
+        try { running.conn.end(); } catch (e) { logger.warn('[deploy/cancel] Failed to end SSH connection:', e.message); }
       }
     } catch (err) {
-      console.error('[deploy/cancel] Error while attempting to cancel:', err.message);
+      logger.error('[deploy/cancel] Error while attempting to cancel:', err.message);
     }
 
     clearRunning(projectId);
@@ -75,7 +76,7 @@ export async function POST(request) {
 
     return NextResponse.json({ success: true, message: 'Cancellation requested' });
   } catch (err) {
-    console.error('[deploy/cancel] POST error:', err.message);
+    logger.error('[deploy/cancel] POST error:', err.message);
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }
 }

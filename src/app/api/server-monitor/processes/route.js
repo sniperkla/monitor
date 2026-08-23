@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
+import { logger } from '@/lib/logger';
 
 const PROCESS_LIST_SCRIPT = `
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
@@ -94,7 +95,7 @@ export async function GET(request) {
       timestamp: Date.now()
     });
   } catch (error) {
-    console.error('[server-monitor/processes] GET error:', error);
+    logger.error('[server-monitor/processes] GET error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }
@@ -151,7 +152,7 @@ export async function POST(request) {
       }, { status: 500 });
     }
   } catch (error) {
-    console.error('[server-monitor/processes] POST error:', error);
+    logger.error('[server-monitor/processes] POST error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

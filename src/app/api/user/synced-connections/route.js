@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import connectDB from '@/lib/mongodb';
 import User from '@/models/User';
+import { logger } from '@/lib/logger';
 
 // GET: Fetch all synced connections for the current user
 export async function GET() {
@@ -22,10 +23,10 @@ export async function GET() {
     }
 
     const connections = user.syncedConnections || [];
-    console.log(`📋 GET synced-connections: found ${connections.length} for ${session.user.email}`);
+    logger.info(`📋 GET synced-connections: found ${connections.length} for ${session.user.email}`);
     return NextResponse.json({ connections });
   } catch (error) {
-    console.error('GET synced-connections error:', error);
+    logger.error('GET synced-connections error:', error);
     return NextResponse.json({ error: 'Server error' }, { status: 500 });
   }
 }
@@ -97,7 +98,7 @@ export async function POST(request) {
     await user.save();
     return NextResponse.json({ success: true, added, updated, total: user.syncedConnections.length });
   } catch (error) {
-    console.error('POST synced-connections error:', error);
+    logger.error('POST synced-connections error:', error);
     return NextResponse.json({ error: 'Server error' }, { status: 500 });
   }
 }
@@ -142,7 +143,7 @@ export async function DELETE(request) {
 
     return NextResponse.json({ success: true, removed: before - user.syncedConnections.length });
   } catch (error) {
-    console.error('DELETE synced-connections error:', error);
+    logger.error('DELETE synced-connections error:', error);
     return NextResponse.json({ error: 'Server error' }, { status: 500 });
   }
 }

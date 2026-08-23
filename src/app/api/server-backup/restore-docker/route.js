@@ -23,7 +23,7 @@ export async function POST(request) {
     const extractPath = `/tmp/docker_restore_${restoreId}`;
 
     // 1. High-Speed Direct Stream from source server to target server (0 temporary disk space needed)
-    console.log(`[restore-docker] High-speed direct streaming ${sourceFilePath} from source to target...`);
+    logger.info(`[restore-docker] High-speed direct streaming ${sourceFilePath} from source to target...`);
     await sftpTransfer(sourceSshConfig, sourceFilePath, targetSshConfig, remotePath);
 
     // 2. Extract and discover what's inside
@@ -216,6 +216,7 @@ print(h)
     # Command
     CMD=$(cat ${extractPath}/inspect_${name}.json | python3 -c "
 import json, sys
+import { logger } from '@/lib/logger';
 data = json.load(sys.stdin)
 cmd = data.get('Config', {}).get('Cmd')
 if cmd:
@@ -281,7 +282,7 @@ echo "---END---"
     });
 
   } catch (error) {
-    console.error('[restore-docker] error:', error.message);
+    logger.error('[restore-docker] error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

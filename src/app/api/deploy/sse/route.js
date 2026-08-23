@@ -4,6 +4,7 @@ import { authOptions } from '@/lib/auth';
 import connectDB from '@/lib/mongodb';
 import SystemSetting from '@/models/SystemSetting';
 import { resolveUserIdQuery, normalizeUserId } from '@/lib/deployUserQuery';
+import { logger } from '@/lib/logger';
 
 // Store active SSE connections
 const sseClients = new Map();
@@ -19,7 +20,7 @@ export async function GET(request) {
   const { searchParams } = new URL(request.url);
   const projectId = searchParams.get('project') || 'default';
 
-  console.log(`[deploymentSSE] New client connected for project: ${projectId}`);
+  logger.info(`[deploymentSSE] New client connected for project: ${projectId}`);
 
   // Set up SSE response
   const encoder = new TextEncoder();
@@ -53,7 +54,7 @@ export async function GET(request) {
           controller.enqueue(encoder.encode(message));
         }
       } catch (err) {
-        console.error('[deploymentSSE] Failed to send initial status:', err.message);
+        logger.error('[deploymentSSE] Failed to send initial status:', err.message);
       }
 
       // Handle client disconnect
@@ -67,7 +68,7 @@ export async function GET(request) {
         } catch (e) {
           // Ignore if already closed/aborted
         }
-        console.log(`[deploymentSSE] Client disconnected: ${clientId}`);
+        logger.info(`[deploymentSSE] Client disconnected: ${clientId}`);
       });
     }
   });
@@ -112,12 +113,12 @@ export async function broadcastDeploymentStatus(projectId = 'default') {
       try {
         clientObj.controller.enqueue(encoded);
       } catch (err) {
-        console.error(`[deploymentSSE] Failed to send to client ${clientObj.id}:`, err.message);
+        logger.error(`[deploymentSSE] Failed to send to client ${clientObj.id}:`, err.message);
       }
     });
 
-    console.log(`[deploymentSSE] Broadcast to ${clients.length} clients for project: ${projectId}`);
+    logger.info(`[deploymentSSE] Broadcast to ${clients.length} clients for project: ${projectId}`);
   } catch (err) {
-    console.error('[deploymentSSE] Broadcast error:', err.message);
+    logger.error('[deploymentSSE] Broadcast error:', err.message);
   }
 }

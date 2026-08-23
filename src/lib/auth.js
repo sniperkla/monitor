@@ -3,6 +3,7 @@ import CredentialsProvider from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
 import connectDB from "./mongodb.js";
 import User from "../models/User.js";
+import { logger } from '@/lib/logger';
 
 export const authOptions = {
   providers: [
@@ -100,12 +101,12 @@ export const authOptions = {
               (!dbUser?.supporter?.expiresAt || new Date(dbUser.supporter.expiresAt).getTime() > Date.now()));
           user.settings = dbUser?.settings || null;
 
-          console.log(dbUser?.createdAt && dbUser?.updatedAt && dbUser.createdAt.getTime?.() === dbUser.updatedAt.getTime?.()
+          logger.info(dbUser?.createdAt && dbUser?.updatedAt && dbUser.createdAt.getTime?.() === dbUser.updatedAt.getTime?.()
             ? "🆕 New User created in DB Center:"
             : "✅ User profile synced:", user.email);
           return true;
         } catch (error) {
-          console.error("❌ Error in signIn callback:", error);
+          logger.error("❌ Error in signIn callback:", error);
           return false;
         }
       }
@@ -139,7 +140,7 @@ export const authOptions = {
                   (!dbUser.supporter?.expiresAt || new Date(dbUser.supporter.expiresAt).getTime() > Date.now()));
             }
           } catch (e) {
-            console.error("JWT callback DB error:", e);
+            logger.error("JWT callback DB error:", e);
           }
         }
       }

@@ -4,6 +4,7 @@ import { authOptions } from '@/lib/auth';
 import connectDB from '@/lib/mongodb';
 import SystemSetting from '@/models/SystemSetting';
 import { resolveUserIdQuery, normalizeUserId } from '@/lib/deployUserQuery';
+import { logger } from '@/lib/logger';
 
 // POST /api/deploy/bitbucket/disconnect?project=projectId
 export async function POST(request) {
@@ -36,7 +37,7 @@ export async function POST(request) {
 
     return NextResponse.json({ success: true, message: 'Disconnected Bitbucket for project' });
   } catch (error) {
-    console.error('[deploy/bitbucket/disconnect] error:', error.message);
+    logger.error('[deploy/bitbucket/disconnect] error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import connectDB from '@/lib/mongodb';
 import AiUsage from '@/models/AiUsage';
+import { logger } from '@/lib/logger';
 
 export async function POST(req) {
   try {
@@ -46,7 +47,7 @@ export async function POST(req) {
       modified: res.modifiedCount ?? res.nModified,
     });
   } catch (error) {
-    console.error('Reset AI usage error:', error);
+    logger.error('Reset AI usage error:', error);
     return NextResponse.json({ success: false, error: 'Internal Server Error' }, { status: 500 });
   }
 }

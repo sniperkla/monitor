@@ -7,6 +7,7 @@ import { getPooledConnection, buildMongoUri } from '@/lib/dbPool';
 import { decrypt } from '@/utils/encryption';
 import { checkRateLimit, checkMemory, getConcurrencyLimiter, LIMITS } from '@/lib/serverGuard';
 import { attachRequestUserId, isRelayConnectionError } from '@/lib/requestUser';
+import { logger } from '@/lib/logger';
 
 // Validates identifier (table/column name) to prevent SQL injection.
 // Only allows alphanumeric characters, underscores, and dots (for schema.table).
@@ -210,7 +211,7 @@ export async function POST(request, { params }) {
       return NextResponse.json({ success: true, data: result });
     }
   } catch (error) {
-    console.error('Query execution error:', error);
+    logger.error('Query execution error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

@@ -12,6 +12,7 @@ import { broadcastDeploymentStatus } from '@/app/api/deploy/sse/route';
 import { setRunning, clearRunning, killRunning, getRunning, tryAcquireStartLock, releaseStartLock, enqueueDeployment } from '@/lib/deployProcesses';
 import OpenAI from 'openai';
 import { resolveUserIdQuery, normalizeUserId } from '@/lib/deployUserQuery';
+import { logger } from '@/lib/logger';
 
 // Simple per-project rate limiter for deployment triggers
 const triggerRateLimit = new Map();
@@ -74,7 +75,7 @@ async function updateDeployStatus(projectId, status, logText, cancelRequested = 
     );
     await broadcastDeploymentStatus(projectId);
   } catch (err) {
-    console.error('Failed to update deploy status in DB:', err.message);
+    logger.error('Failed to update deploy status in DB:', err.message);
   }
 }
 
@@ -283,7 +284,7 @@ CRITICAL FORMAT RULES:
       }
     }
   } catch (aiErr) {
-    console.warn('[Telegram Notification] AI error extraction failed, using legacy mode fallback:', aiErr.message);
+    logger.warn('[Telegram Notification] AI error extraction failed, using legacy mode fallback:', aiErr.message);
   }
 
   // 2. Fallback to Legacy Mode
@@ -383,10 +384,10 @@ export async function sendTelegramNotification(config, status, extra = {}) {
         });
         if (!response.ok) {
           const errText = await response.text();
-          console.error(`[Telegram] Error sending to chat ${cid}: ${errText}`);
+          logger.error(`[Telegram] Error sending to chat ${cid}: ${errText}`);
         }
       } catch (err) {
-        console.error(`[Telegram] Failed to send notification to chat ${cid}:`, err.message);
+        logger.error(`[Telegram] Failed to send notification to chat ${cid}:`, err.message);
       }
     })
   );
@@ -583,7 +584,7 @@ export async function runDeployment(config, runMeta = {}) {
   // It does NOT affect actual Docker containers or Swarm services.
   try {
     if (getRunning(projectId)) {
-      console.log(`[deploy] ⚠️  Killing stale in-memory process for project "${projectId}" before starting new run.`);
+      logger.info(`[deploy] ⚠️  Killing stale in-memory process for project "${projectId}" before starting new run.`);
       killRunning(projectId);
     }
   } catch (_) {}
@@ -666,12 +667,12 @@ export async function runDeployment(config, runMeta = {}) {
               logText: status !== 'running' ? finalLog : undefined
             });
           } catch (err) {
-            console.error('[Telegram] error:', err.message);
+            logger.error('[Telegram] error:', err.message);
           }
         }
         break; // success — exit retry loop
       } catch (dbErr) {
-        console.error(`Failed to update deploy status in DB (attempt ${attempt}/${maxAttempts}):`, dbErr.message);
+        logger.error(`Failed to update deploy status in DB (attempt ${attempt}/${maxAttempts}):`, dbErr.message);
         if (attempt < maxAttempts) {
           await new Promise(r => setTimeout(r, 2000 * attempt)); // 2s, 4s backoff
         }
@@ -858,7 +859,7 @@ export async function runDeployment(config, runMeta = {}) {
     try {
       setRunning(projectId, { type: 'local', proc: childProcess });
     } catch (e) {
-      console.warn('[deploy] Failed to register running process:', e.message);
+      logger.warn('[deploy] Failed to register running process:', e.message);
     }
 
     // Watchdog to avoid indefinitely hanging processes (default 10 minutes)
@@ -869,7 +870,7 @@ export async function runDeployment(config, runMeta = {}) {
       try {
         await updateStatus('failed', logOutput);
       } catch (e) {
-        console.error('[deploy] Failed to update status on timeout:', e.message);
+        logger.error('[deploy] Failed to update status on timeout:', e.message);
       }
       try {
         // Kill the whole process group
@@ -923,7 +924,7 @@ export async function runDeployment(config, runMeta = {}) {
       
       // If connection data wasn't cached, try to fetch it fresh from main database
       if (!sshConnData || !sshConnData.host) {
-        console.log(`[deploy] SSH connection data not cached, attempting fresh lookup for ID: ${connectionId}`);
+        logger.info(`[deploy] SSH connection data not cached, attempting fresh lookup for ID: ${connectionId}`);
         try {
           const db = await connectDB(process.env.MONGODB_URI, true);
           const repo = new ConnectionRepository(db);
@@ -939,7 +940,7 @@ export async function runDeployment(config, runMeta = {}) {
               privateKey: connection.privateKey || '',
               passphrase: connection.passphrase || ''
             };
-            console.log(`[deploy] Successfully fetched SSH connection from main database`);
+            logger.info(`[deploy] Successfully fetched SSH connection from main database`);
           } else {
             throw new Error('Connection not found in main database');
           }
@@ -1042,7 +1043,7 @@ export async function runDeployment(config, runMeta = {}) {
       try {
         setRunning(projectId, { type: 'ssh', conn });
       } catch (e) {
-        console.warn('[deploy] Failed to register SSH connection:', e.message);
+        logger.warn('[deploy] Failed to register SSH connection:', e.message);
       }
 
       // ── SSH connection lost (server restart / network drop) ───────────────
@@ -1391,7 +1392,7 @@ fi
                   try {
                     await updateStatus('failed', logOutput);
                   } catch (e) {
-                    console.error('[deploy] Failed to update status on timeout:', e.message);
+                    logger.error('[deploy] Failed to update status on timeout:', e.message);
                   }
                   // Kill tmux session + cleanup
                   try { conn.exec(`tmux kill-session -t ${tmuxSession} 2>/dev/null; rm -f /tmp/deploy_${tmuxSession}.log /tmp/deploy_tmux_${projectId}.sh; true`, () => {}); } catch {}
@@ -1509,7 +1510,7 @@ export async function POST(request) {
     try { if (bodyText) body = JSON.parse(bodyText); } catch (_) {}
     const { deployCommand: bodyDeployCmd } = body;
 
-    console.log(`[webhook] Received POST request for project: ${projectId}`);
+    logger.info(`[webhook] Received POST request for project: ${projectId}`);
 
     // 1. Check for manual trigger (requires dashboard session)
     const session = await getServerSession(authOptions);
@@ -1544,7 +1545,7 @@ export async function POST(request) {
       projectId = dbKey === 'auto_deploy_config' ? 'default' : dbKey.replace('auto_deploy_config_', '');
     }
 
-    console.log(`[webhook] Config found:`, config ? {
+    logger.info(`[webhook] Config found:`, config ? {
       enabled: config.enabled,
       branch: config.branch,
       targetType: config.targetType,
@@ -1552,31 +1553,31 @@ export async function POST(request) {
     } : 'NO CONFIG');
 
     if (!config || (!config.enabled && !isManual)) {
-      console.log(`[webhook] Deployment skipped - config missing or disabled`);
+      logger.info(`[webhook] Deployment skipped - config missing or disabled`);
       return NextResponse.json({ success: false, error: `Auto-deployment for project "${projectId}" is disabled or not configured` }, { status: 400 });
     }
 
     if (!config.deployCommand?.trim()) {
-      console.log(`[webhook] ❌ No deployment command set!`);
+      logger.info(`[webhook] ❌ No deployment command set!`);
       return NextResponse.json({ success: false, error: 'Deployment command is not configured' }, { status: 400 });
     }
 
     if (config.targetType === 'ssh') {
       const connectionId = String(config.connectionId || '').trim();
       if (!connectionId) {
-        console.log(`[webhook] ❌ SSH target configured but no connection selected`);
+        logger.info(`[webhook] ❌ SSH target configured but no connection selected`);
         return NextResponse.json({ success: false, error: 'SSH deployment is configured but no SSH connection is selected. Please update deployment settings.' }, { status: 400 });
       }
 
       const hasCachedConnection = config.sshConnectionData && config.sshConnectionData.host;
       if (!hasCachedConnection) {
-        console.log(`[webhook] SSH connection data not cached in project config, verifying in DB...`);
+        logger.info(`[webhook] SSH connection data not cached in project config, verifying in DB...`);
         const db = await connectDB(isManual ? null : process.env.MONGODB_URI, !isManual);
         const repo = new ConnectionRepository(db);
         await repo.init();
         const connection = await repo.findById(connectionId);
         if (!connection) {
-          console.log(`[webhook] ❌ SSH connection ID ${connectionId} not found`);
+          logger.info(`[webhook] ❌ SSH connection ID ${connectionId} not found`);
           return NextResponse.json({ success: false, error: `SSH connection with ID ${connectionId} configured for project "${projectId}" does not exist. Please select a valid SSH connection.` }, { status: 400 });
         }
       }
@@ -1594,9 +1595,9 @@ export async function POST(request) {
 
       if (!activeProcess || isStaleByTime) {
         if (isStaleByTime) {
-          console.log(`[webhook] Deployment for "${projectId}" has been running for >${timeoutMs/1000}s — treating as stale and resetting.`);
+          logger.info(`[webhook] Deployment for "${projectId}" has been running for >${timeoutMs/1000}s — treating as stale and resetting.`);
         } else {
-          console.log(`[webhook] Stale running state detected for project: ${projectId}. Resetting status and allowing new deployment.`);
+          logger.info(`[webhook] Stale running state detected for project: ${projectId}. Resetting status and allowing new deployment.`);
         }
         await SystemSetting.findOneAndUpdate(
           { key: dbKey },
@@ -1609,7 +1610,7 @@ export async function POST(request) {
           }
         );
       } else {
-        console.log(`[webhook] Deployment already running for project: ${projectId} - rejecting new trigger`);
+        logger.info(`[webhook] Deployment already running for project: ${projectId} - rejecting new trigger`);
         return NextResponse.json({ success: false, error: 'A deployment is already running for this project' }, { status: 409 });
       }
     }
@@ -1625,11 +1626,11 @@ export async function POST(request) {
 
       // Handle ping events
       if (githubEvent === 'ping') {
-        console.log(`[webhook] Received GitHub ping`);
+        logger.info(`[webhook] Received GitHub ping`);
         return NextResponse.json({ success: true, message: 'GitHub Ping received successfully' });
       }
       if (bitbucketEvent === 'diagnostics:ping') {
-        console.log(`[webhook] Received Bitbucket ping`);
+        logger.info(`[webhook] Received Bitbucket ping`);
         return NextResponse.json({ success: true, message: 'Bitbucket Ping received successfully' });
       }
 
@@ -1641,7 +1642,7 @@ export async function POST(request) {
           // GitHub uses x-hub-signature-256, Bitbucket uses x-hub-signature
           const signatureHeader = request.headers.get('x-hub-signature-256') || request.headers.get('x-hub-signature');
           if (!signatureHeader || (!verifySignature(rawBodyText, config.secret, signatureHeader) && !verifySignature(bodyText, config.secret, signatureHeader))) {
-            console.log(`[webhook] Signature verification failed`);
+            logger.info(`[webhook] Signature verification failed`);
             await updateDeployStatus(
               projectId,
               'failed',
@@ -1711,15 +1712,15 @@ export async function POST(request) {
                 body: JSON.stringify({ chat_id: config.telegramChatId, text, parse_mode: 'HTML' })
               });
             } catch (tgErr) {
-              console.warn(`[webhook] Telegram branch-mismatch warning failed:`, tgErr.message);
+              logger.warn(`[webhook] Telegram branch-mismatch warning failed:`, tgErr.message);
             }
           };
 
           if (pushRef) {
-            console.log(`[webhook] Push ref: ${pushRef}${expectedRef ? `, expected: ${expectedRef}` : ', no branch filter configured'}`);
+            logger.info(`[webhook] Push ref: ${pushRef}${expectedRef ? `, expected: ${expectedRef}` : ', no branch filter configured'}`);
             if (expectedRef && pushRef !== expectedRef) {
               const pushedBranch = pushRef.replace('refs/heads/', '');
-              console.log(`[webhook] Branch mismatch (${pushRef} vs ${expectedRef}) - skipping deployment without updating status`);
+              logger.info(`[webhook] Branch mismatch (${pushRef} vs ${expectedRef}) - skipping deployment without updating status`);
               await sendBranchMismatchWarning(pushedBranch);
               return NextResponse.json({
                 success: true,
@@ -1728,7 +1729,7 @@ export async function POST(request) {
             }
           } else if (expectedRef) {
             // Could not determine the pushed branch from the payload — skip to be safe
-            console.log(`[webhook] Could not extract push ref from payload but branch filter is set (${expectedRef}) — skipping deployment`);
+            logger.info(`[webhook] Could not extract push ref from payload but branch filter is set (${expectedRef}) — skipping deployment`);
             await sendBranchMismatchWarning('(unknown)');
             return NextResponse.json({
               success: true,
@@ -1736,7 +1737,7 @@ export async function POST(request) {
             });
           }
         } catch (e) {
-          console.log(`[webhook] Warning: Could not parse payload:`, e.message);
+          logger.info(`[webhook] Warning: Could not parse payload:`, e.message);
           await updateDeployStatus(
             projectId,
             'failed',
@@ -1752,14 +1753,14 @@ export async function POST(request) {
     // Rate limit check
     const rateCheck = checkTriggerRateLimit(projectId);
     if (!rateCheck.allowed) {
-      console.log(`[webhook] Rate limit exceeded for project: ${projectId}`);
+      logger.info(`[webhook] Rate limit exceeded for project: ${projectId}`);
       return NextResponse.json({ success: false, error: `Rate limit exceeded. Try again in ${Math.ceil(rateCheck.resetIn / 1000)}s.` }, { status: 429 });
     }
 
     // Acquire per-project start lock to prevent race conditions
     // If a deploy is already running, this will queue the new one instead of rejecting.
     // The queue ensures rapid pushes are serialized, not dropped.
-    console.log(`[webhook] ✅ Triggering deployment for project: ${projectId}`);
+    logger.info(`[webhook] ✅ Triggering deployment for project: ${projectId}`);
 
     // Parse push payload for rich Telegram notifications (supports GitHub and Bitbucket)
     let gitInfo = null;
@@ -1820,7 +1821,7 @@ export async function POST(request) {
         commitSha
       });
     }).catch(err => {
-      console.error('[webhook] Queued deployment error:', err.message);
+      logger.error('[webhook] Queued deployment error:', err.message);
     });
 
     return NextResponse.json({
@@ -1829,7 +1830,7 @@ export async function POST(request) {
     });
 
   } catch (error) {
-    console.error('[deploy/webhook] POST error:', error.message);
+    logger.error('[deploy/webhook] POST error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

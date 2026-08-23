@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { getSshConfig, sftpTransfer } from '../_ssh';
+import { logger } from '@/lib/logger';
 
 // In-memory job store: transferId → { status, transferred, totalSize, percent, error, controller }
 const transferJobs = new Map();
@@ -86,7 +87,7 @@ export async function POST(request) {
 
     return NextResponse.json({ success: true, transferId });
   } catch (error) {
-    console.error('[server-backup/transfer] POST error:', error.message);
+    logger.error('[server-backup/transfer] POST error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

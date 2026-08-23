@@ -5,6 +5,7 @@ import { checkRateLimit } from '@/lib/serverGuard';
 import connectDB from '@/lib/mongodb';
 import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import { decryptWithMetadata, encryptWithPassword } from '@/utils/encryption';
+import { logger } from '@/lib/logger';
 
 /**
  * GET /api/connections/export?mode=encrypted|plain&password=...
@@ -38,7 +39,7 @@ export async function GET(request) {
       if (!value) return null;
       const result = decryptWithMetadata(value);
       if (!result.success) {
-        console.warn('⚠️ Export: could not decrypt a credential field — it will be null in the export.');
+        logger.warn('⚠️ Export: could not decrypt a credential field — it will be null in the export.');
         return null;
       }
       return result.text;
@@ -98,7 +99,7 @@ export async function GET(request) {
       _verify: password ? encryptWithPassword('__ok__', password) : null,
     });
   } catch (error) {
-    console.error('Export Error:', error);
+    logger.error('Export Error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

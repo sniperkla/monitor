@@ -1,5 +1,6 @@
 import connectDB, { getCenterUri } from './mongodb.js';
 import SystemSetting from '../models/SystemSetting.js';
+import { logger } from '@/lib/logger';
 
 // Simple in-memory registry of running deployment processes per project
 const runningMap = new Map();
@@ -120,7 +121,7 @@ export async function resetAllState() {
   try {
     const mongoUri = process.env.MONGODB_URI || getCenterUri();
     if (!mongoUri) {
-      console.warn('[deployProcesses] MongoDB URI not available for startup reset');
+      logger.warn('[deployProcesses] MongoDB URI not available for startup reset');
       return;
     }
     await connectDB(mongoUri, true);
@@ -142,7 +143,7 @@ export async function resetAllState() {
 
         if (config.serverRestarted && config.targetType === 'ssh') {
           // SSH deploy: server was gracefully restarted — attempt to reconnect to tmux session
-          console.log(`🔄 [deployProcesses] SSH deploy "${projectId}" marked for reconnection. Attempting...`);
+          logger.info(`🔄 [deployProcesses] SSH deploy "${projectId}" marked for reconnection. Attempting...`);
           // Clear the flag
           await SystemSetting.findOneAndUpdate(
             { key: setting.key },
@@ -150,11 +151,11 @@ export async function resetAllState() {
           );
           // Attempt reconnect in background (non-blocking)
           attemptTmuxReconnect(config, projectId, setting.key).catch(err => {
-            console.error(`[deployProcesses] Reconnect failed for "${projectId}":`, err.message);
+            logger.error(`[deployProcesses] Reconnect failed for "${projectId}":`, err.message);
           });
         } else {
           // Local deploy or crash without graceful shutdown — mark as failed
-          console.log(`🧹 [deployProcesses] Stale running deploy "${projectId}". Resetting to failed...`);
+          logger.info(`🧹 [deployProcesses] Stale running deploy "${projectId}". Resetting to failed...`);
           await SystemSetting.findOneAndUpdate(
             { key: setting.key },
             {
@@ -169,7 +170,7 @@ export async function resetAllState() {
       }
     }
   } catch (err) {
-    console.error('[deployProcesses] Failed to reset stale DB deployment states on startup:', err.message);
+    logger.error('[deployProcesses] Failed to reset stale DB deployment states on startup:', err.message);
   }
 }
 
@@ -192,7 +193,7 @@ async function attemptTmuxReconnect(config, projectId, dbKey) {
     await repo.init();
     const connection = await repo.findById(config.connectionId);
     if (!connection) {
-      console.error(`[deployReconnect] SSH connection ${config.connectionId} not found for project "${projectId}"`);
+      logger.error(`[deployReconnect] SSH connection ${config.connectionId} not found for project "${projectId}"`);
       const failLog = (config.lastDeployLog || '') + `\n[${new Date().toISOString()}] ❌ Could not reconnect — SSH connection not found.\n`;
       await updateDeployLog(dbKey, failLog, 'failed', config, startedAt);
       await broadcastDeploymentStatus(projectId);
@@ -391,11 +392,11 @@ async function updateDeployLog(dbKey, logText, status, config, startedAt) {
         const duration = startedAt ? Math.round((Date.now() - startedAt.getTime()) / 1000) : undefined;
         await sendTelegramNotification(config, status, { duration, logText });
       } catch (err) {
-        console.error('[deployReconnect] Failed to send Telegram notification:', err.message);
+        logger.error('[deployReconnect] Failed to send Telegram notification:', err.message);
       }
     }
   } catch (err) {
-    console.error('[deployReconnect] Failed to update deploy log:', err.message);
+    logger.error('[deployReconnect] Failed to update deploy log:', err.message);
   }
 }
 

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
+import { logger } from '@/lib/logger';
 
 function quote(str) {
   const s = String(str);
@@ -92,7 +93,7 @@ export async function GET(req) {
     });
 
   } catch (error) {
-    console.error('[rclone/browse] error:', error.message);
+    logger.error('[rclone/browse] error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

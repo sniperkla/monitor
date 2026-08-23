@@ -5,6 +5,7 @@ import connectDB from '@/lib/mongodb';
 import SystemSetting from '@/models/SystemSetting';
 import { decrypt } from '@/utils/encryption';
 import { resolveUserIdQuery, normalizeUserId } from '@/lib/deployUserQuery';
+import { logger } from '@/lib/logger';
 
 function normalizeRepoParam(value) {
   if (!value) return '';
@@ -56,7 +57,7 @@ export async function GET(request) {
           const p = decrypt(cfg.bitbucketAppPassword);
           credentials = Buffer.from(`${u}:${p}`).toString('base64');
         } catch (err) {
-          console.warn('[deploy/bitbucket/commits] failed to decrypt credentials', err.message);
+          logger.warn('[deploy/bitbucket/commits] failed to decrypt credentials', err.message);
         }
       }
     }
@@ -88,7 +89,7 @@ export async function GET(request) {
 
     return NextResponse.json({ success: true, commits });
   } catch (error) {
-    console.error('[deploy/bitbucket/commits] GET error:', error.message);
+    logger.error('[deploy/bitbucket/commits] GET error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

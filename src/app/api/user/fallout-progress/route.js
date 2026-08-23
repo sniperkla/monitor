@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import connectDB from '@/lib/mongodb';
 import GameProgress from '@/models/GameProgress';
+import { logger } from '@/lib/logger';
 
 const DEFAULT_PROGRESS = {
   highestLevelReached: 1,
@@ -43,7 +44,7 @@ export async function GET() {
       }
     });
   } catch (error) {
-    console.error('[fallout-progress] GET error:', error);
+    logger.error('[fallout-progress] GET error:', error);
     return NextResponse.json({ success: false, error: 'Internal Server Error' }, { status: 500 });
   }
 }
@@ -93,7 +94,7 @@ export async function POST(request) {
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    console.error('[fallout-progress] POST error:', error);
+    logger.error('[fallout-progress] POST error:', error);
     return NextResponse.json({ success: false, error: 'Internal Server Error' }, { status: 500 });
   }
 }

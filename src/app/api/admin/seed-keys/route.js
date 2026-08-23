@@ -5,6 +5,7 @@ import connectDB from '@/lib/mongodb';
 import SystemSetting from '@/models/SystemSetting';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
+import { logger } from '@/lib/logger';
 
 export async function GET(req) {
   try {
@@ -66,7 +67,7 @@ export async function GET(req) {
       keys: existingKeys.map(k => k.substring(0, 8) + '...') 
     });
   } catch (err) {
-    console.error('Error seeding keys:', err);
+    logger.error('Error seeding keys:', err);
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }
 }

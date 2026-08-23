@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import mysql from 'mysql2/promise';
 import { Client } from 'pg';
 import { getConnectionModel } from '@/models/Connection';
+import { logger } from '@/lib/logger';
 
 function mapSqlRow(r) {
   return {
@@ -56,7 +57,7 @@ export async function readConnectionsFromSource(sourceUri) {
       const docs = await model.find({}).lean();
       return docs.map(d => ({ ...d, _id: d._id?.toString() }));
     } catch (e) {
-      console.error('Migration: MongoDB read error:', e.message);
+      logger.error('Migration: MongoDB read error:', e.message);
       return [];
     } finally {
       if (conn) try { await conn.close(); } catch (_) {}
@@ -73,7 +74,7 @@ export async function readConnectionsFromSource(sourceUri) {
       const [rows] = await pool.execute('SELECT * FROM connections');
       return rows.map(r => mapSqlRow(r));
     } catch (e) {
-      console.error('Migration: MySQL read error:', e.message);
+      logger.error('Migration: MySQL read error:', e.message);
       return [];
     } finally {
       if (pool) try { await pool.end(); } catch (_) {}
@@ -91,7 +92,7 @@ export async function readConnectionsFromSource(sourceUri) {
       const res = await client.query('SELECT * FROM connections');
       return res.rows.map(r => mapSqlRow(r));
     } catch (e) {
-      console.error('Migration: PostgreSQL read error:', e.message);
+      logger.error('Migration: PostgreSQL read error:', e.message);
       return [];
     } finally {
       if (client) try { await client.end(); } catch (_) {}
@@ -161,7 +162,7 @@ export async function writeConnectionsToTarget(targetUri, connections) {
         imported++;
       }
     } catch (e) {
-      console.error('Migration: MongoDB write error:', e.message);
+      logger.error('Migration: MongoDB write error:', e.message);
     } finally {
       if (conn) try { await conn.close(); } catch (_) {}
     }
@@ -224,7 +225,7 @@ export async function writeConnectionsToTarget(targetUri, connections) {
         imported++;
       }
     } catch (e) {
-      console.error('Migration: MySQL write error:', e.message);
+      logger.error('Migration: MySQL write error:', e.message);
     } finally {
       if (pool) try { await pool.end(); } catch (_) {}
     }
@@ -288,7 +289,7 @@ export async function writeConnectionsToTarget(targetUri, connections) {
         imported++;
       }
     } catch (e) {
-      console.error('Migration: PostgreSQL write error:', e.message);
+      logger.error('Migration: PostgreSQL write error:', e.message);
     } finally {
       if (client) try { await client.end(); } catch (_) {}
     }
@@ -306,17 +307,17 @@ export async function migrateConnections(sourceUri, targetUri) {
     return { success: true, migrated: 0, skipped: 0, total: 0 };
   }
 
-  console.log(`🔄 Migration: reading from ${sourceUri.substring(0, 30)}...`);
+  logger.info(`🔄 Migration: reading from ${sourceUri.substring(0, 30)}...`);
   const connections = await readConnectionsFromSource(sourceUri);
-  console.log(`📦 Migration: found ${connections.length} connections in source`);
+  logger.info(`📦 Migration: found ${connections.length} connections in source`);
 
   if (connections.length === 0) {
     return { success: true, migrated: 0, skipped: 0, total: 0 };
   }
 
-  console.log(`📥 Migration: writing to ${targetUri.substring(0, 30)}...`);
+  logger.info(`📥 Migration: writing to ${targetUri.substring(0, 30)}...`);
   const { imported, skipped } = await writeConnectionsToTarget(targetUri, connections);
-  console.log(`✅ Migration complete: ${imported} imported, ${skipped} skipped`);
+  logger.info(`✅ Migration complete: ${imported} imported, ${skipped} skipped`);
 
   return {
     success: true,

@@ -90,6 +90,7 @@ export function getConcurrencyLimiter(operation, maxConcurrent = 5) {
 
 
 import os from 'os';
+import { logger } from '@/lib/logger';
 
 /**
  * Check if the server has enough free memory to handle a heavy request.
@@ -119,7 +120,7 @@ export function checkMemory(minFreeMB = 512) {
   const safe = sysFreeMB > threshold && rssMB < rssLimitMB;
 
   if (!safe) {
-    console.warn(`🛡️ Memory Guard Warning: RSS=${rssMB}MB, SysFree=${sysFreeMB}MB, Threshold=${threshold}MB`);
+    logger.warn(`🛡️ Memory Guard Warning: RSS=${rssMB}MB, SysFree=${sysFreeMB}MB, Threshold=${threshold}MB`);
     // In development mode, we only WARN. We don't block the request.
     // This prevents the 503 error from stopping your workflow.
     if (isDev) return { safe: true, warning: true, rssMB, sysFreeMB };

@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { getSshConfig, execCommand } from '../_ssh';
 import crypto from 'crypto';
+import { logger } from '@/lib/logger';
 
 function buildBackupCommand(jobId, type, config) {
   const logFile = `/tmp/backup_${jobId}.log`;
@@ -148,7 +149,7 @@ export async function POST(request) {
       pid: result.stdout?.match(/PID=(\d+)/)?.[1] || null
     });
   } catch (error) {
-    console.error('[server-backup/create] error:', error.message);
+    logger.error('[server-backup/create] error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

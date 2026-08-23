@@ -1,3 +1,4 @@
+import { logger } from '@/lib/logger';
 /**
  * webrtc-relay.js — Browser-side WebRTC relay peer
  *
@@ -76,10 +77,10 @@ export async function createRelayPeer({ socket, relayConnId }) {
     if (connId !== relayConnId || !sdp || !sdp.type) return;
     try {
       pc.setRemoteDescription(new RTCSessionDescription(sdp)).catch(err => {
-        console.error('[WebRTC] setRemoteDescription error:', err);
+        logger.error('[WebRTC] setRemoteDescription error:', err);
       });
     } catch (e) {
-      console.error('[WebRTC] Invalid RTCSessionDescription:', e);
+      logger.error('[WebRTC] Invalid RTCSessionDescription:', e);
     }
   };
   socket.on('webrtc:answer', onAnswer);
@@ -143,7 +144,7 @@ function buildPeer(pc, channels, relayConnId) {
       const msg = JSON.parse(evt.data);
       for (const handler of controlListeners) handler(msg);
     } catch {
-      console.warn('[WebRTC] Non-JSON control message:', evt.data);
+      logger.warn('[WebRTC] Non-JSON control message:', evt.data);
     }
   };
 
@@ -188,7 +189,7 @@ function buildPeer(pc, channels, relayConnId) {
         return true;
       } catch (e) {
         // RTCDataChannel throws if send queue is full or channel is closing
-        console.warn('[WebRTC] sendFile failed:', e?.message);
+        logger.warn('[WebRTC] sendFile failed:', e?.message);
         return false;
       }
     },
@@ -340,7 +341,7 @@ export async function streamTarUpload(peer, connId, entries, destPath, archiveFi
   if (signal?.aborted) throw new DOMException('Upload cancelled', 'AbortError');
 
   const totalTarSize = calculateTarTotalSize(entries);
-  console.log(`[WebRTC Tar Upload] Starting on-the-fly TAR stream for "${archiveFilename}": ${entries.length} files, ${totalTarSize} bytes`);
+  logger.info(`[WebRTC Tar Upload] Starting on-the-fly TAR stream for "${archiveFilename}": ${entries.length} files, ${totalTarSize} bytes`);
 
   // Tell relay to open write stream for the tar archive
   peer.sendControl({
@@ -472,7 +473,7 @@ export async function streamTarUpload(peer, connId, entries, destPath, archiveFi
           sliceBuf = await file.slice(fileOffset, sliceEnd).arrayBuffer();
         } catch (readErr) {
           if (entry && readErr.name === 'NotReadableError') {
-            console.warn(`[WebRTC Tar Upload] NotReadableError at offset ${fileOffset} for "${relativePath}" — re-fetching handle`);
+            logger.warn(`[WebRTC Tar Upload] NotReadableError at offset ${fileOffset} for "${relativePath}" — re-fetching handle`);
             file = await new Promise((res, rej) => entry.file(res, rej));
             sliceBuf = await file.slice(fileOffset, sliceEnd).arrayBuffer();
           } else {
@@ -506,12 +507,12 @@ export async function streamTarUpload(peer, connId, entries, destPath, archiveFi
     await writeToBuffer(new Uint8Array(1024));
     await flushBuffer();
 
-    console.log(`[WebRTC Tar Upload] Sent all entries: ${archiveFilename}, total ${sentBytes}/${totalTarSize} bytes`);
+    logger.info(`[WebRTC Tar Upload] Sent all entries: ${archiveFilename}, total ${sentBytes}/${totalTarSize} bytes`);
     
     // Notify UI that all bytes are transmitted and server is finalizing write stream
     onProgress?.(totalTarSize, totalTarSize, { finalizing: true, status: 'Finalizing upload & writing to server disk...' });
   } catch (err) {
-    console.error(`[WebRTC Tar Upload] Error:`, err);
+    logger.error(`[WebRTC Tar Upload] Error:`, err);
     unsubProgress?.();
     throw err;
   }
@@ -621,7 +622,7 @@ export async function streamUpload(peer, connId, file, destPath, {
   });
 
   const fileView = await fileReadPromise;
-  console.log(`[WebRTC Upload] Start: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB, mode: ${fileView ? 'preloaded' : 'streaming'})`);
+  logger.info(`[WebRTC Upload] Start: ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB, mode: ${fileView ? 'preloaded' : 'streaming'})`);
 
   let offset = startOffset;
   let lastProgressMs = 0;
@@ -633,7 +634,7 @@ export async function streamUpload(peer, connId, file, destPath, {
       if (signal?.aborted) throw new DOMException('Upload cancelled', 'AbortError');
 
       if (!fileDc || fileDc.readyState !== 'open') {
-        console.error(`[WebRTC Upload] DataChannel closed at offset ${offset}/${file.size}`);
+        logger.error(`[WebRTC Upload] DataChannel closed at offset ${offset}/${file.size}`);
         throw new Error('RTCDataChannel closed during upload');
       }
 
@@ -671,7 +672,7 @@ export async function streamUpload(peer, connId, file, destPath, {
 
       // Throttled debug progress logging
       if (chunkCount % 500 === 0 || offset === file.size) {
-        console.log(`[WebRTC Upload] Progress: ${file.name} - ${offset}/${file.size} (${(offset / file.size * 100).toFixed(1)}%)`);
+        logger.info(`[WebRTC Upload] Progress: ${file.name} - ${offset}/${file.size} (${(offset / file.size * 100).toFixed(1)}%)`);
       }
 
       // Client-side progress: throttle to 4fps (250ms), capped at 95%
@@ -682,15 +683,15 @@ export async function streamUpload(peer, connId, file, destPath, {
         if (clientCapped > relayHighWater) onProgress?.(clientCapped, file.size);
       }
     }
-    console.log(`[WebRTC Upload] Sent all chunks: ${file.name}, ${chunkCount} chunks, ${offset} bytes`);
+    logger.info(`[WebRTC Upload] Sent all chunks: ${file.name}, ${chunkCount} chunks, ${offset} bytes`);
     
     // Verify upload completeness
     if (offset !== file.size) {
-      console.error(`❌ [WebRTC Upload] SIZE MISMATCH: sent ${offset} bytes but file is ${file.size} bytes!`);
+      logger.error(`❌ [WebRTC Upload] SIZE MISMATCH: sent ${offset} bytes but file is ${file.size} bytes!`);
       throw new Error(`Upload incomplete: sent ${offset}/${file.size} bytes`);
     }
   } catch (err) {
-    console.error(`[WebRTC Upload] Error at offset ${offset}/${file.size}:`, err);
+    logger.error(`[WebRTC Upload] Error at offset ${offset}/${file.size}:`, err);
     unsubProgress?.();
     throw err;
   }

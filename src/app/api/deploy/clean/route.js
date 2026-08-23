@@ -5,6 +5,7 @@ import connectDB from '@/lib/mongodb';
 import SystemSetting from '@/models/SystemSetting';
 import { killRunning, getAllRunning, clearRunning } from '@/lib/deployProcesses';
 import { resolveUserIdQuery, normalizeUserId } from '@/lib/deployUserQuery';
+import { logger } from '@/lib/logger';
 
 /**
  * POST /api/deploy/clean
@@ -77,7 +78,7 @@ export async function POST(request) {
       cleaned
     });
   } catch (error) {
-    console.error('[deploy/clean] Error:', error.message);
+    logger.error('[deploy/clean] Error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

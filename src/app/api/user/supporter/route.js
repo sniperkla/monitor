@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { getSupporterStatus } from '@/utils/supporter';
+import { logger } from '@/lib/logger';
 
 export const dynamic = 'force-dynamic';
 
@@ -25,7 +26,7 @@ export async function GET() {
       features: ['local-relay', 'turbo-speed', 'auto-cool', 'cross-server-transfer', 'ai-assistant'],
     });
   } catch (error) {
-    console.error('Supporter status API error:', error);
+    logger.error('Supporter status API error:', error);
     return NextResponse.json({ success: false, error: 'Internal Server Error' }, { status: 500 });
   }
 }

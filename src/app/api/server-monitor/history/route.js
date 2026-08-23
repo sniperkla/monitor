@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import connectMongo from '@/lib/mongodb';
 import MetricsHistory from '@/models/MetricsHistory';
+import { logger } from '@/lib/logger';
 
 // ── POST /api/server-monitor/history ─────────────────────────────────────────
 // Record one or a batch of metrics snapshots.
@@ -50,7 +51,7 @@ export async function POST(req) {
 
     return NextResponse.json({ ok: true });
   } catch (err) {
-    console.error('[metrics-history POST]', err);
+    logger.error('[metrics-history POST]', err);
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
 }
@@ -143,7 +144,7 @@ export async function GET(req) {
       }
     );
   } catch (err) {
-    console.error('[metrics-history GET]', err);
+    logger.error('[metrics-history GET]', err);
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
 }

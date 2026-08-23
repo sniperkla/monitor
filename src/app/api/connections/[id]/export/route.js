@@ -10,6 +10,7 @@ import {
   withTimeout, 
   LIMITS 
 } from '@/lib/serverGuard';
+import { logger } from '@/lib/logger';
 
 function validateIdentifier(name) {
   if (typeof name !== 'string' || name.length === 0 || name.length > 128) return false;
@@ -143,7 +144,7 @@ export async function POST(request, { params }) {
       // Memory safety check during pagination  
       const midCheck = checkMemory(128);
       if (!midCheck.safe) {
-        console.warn(`⚠️ Export aborted mid-stream: memory low (${midCheck.rssMB}MB RSS)`);
+        logger.warn(`⚠️ Export aborted mid-stream: memory low (${midCheck.rssMB}MB RSS)`);
         break; // Return what we have so far
       }
     }
@@ -162,7 +163,7 @@ export async function POST(request, { params }) {
     });
 
   } catch (error) {
-    console.error('Export error:', error);
+    logger.error('Export error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   } finally {
     limiter.release();

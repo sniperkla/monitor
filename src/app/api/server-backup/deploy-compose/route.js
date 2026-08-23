@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { getSshConfig, execCommand } from '../_ssh';
 import crypto from 'crypto';
+import { logger } from '@/lib/logger';
 
 export async function POST(request) {
   try {
@@ -21,7 +22,7 @@ export async function POST(request) {
     const targetSshConfig = await getSshConfig(targetConnectionId);
 
     // 1. Read the compose file from source server
-    console.log(`[deploy-compose] Reading compose file from source: ${composeFilePath}`);
+    logger.info(`[deploy-compose] Reading compose file from source: ${composeFilePath}`);
     const readResult = await execCommand(sourceSshConfig, `cat '${composeFilePath}'`);
 
     if (readResult.code !== 0) {
@@ -389,7 +390,7 @@ echo "---END---"
     });
 
   } catch (error) {
-    console.error('[deploy-compose] error:', error.message);
+    logger.error('[deploy-compose] error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

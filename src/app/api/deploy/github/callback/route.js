@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import connectDB from '@/lib/mongodb';
 import SystemSetting from '@/models/SystemSetting';
 import { encrypt } from '@/utils/encryption';
+import { logger } from '@/lib/logger';
 
 // GET /api/deploy/github/callback?code=...&state=...
 export async function GET(request) {
@@ -64,7 +65,7 @@ export async function GET(request) {
     const redirectTo = (process.env.NEXTAUTH_URL || (request.headers.get('origin') || '')) + '/?tab=deployment';
     return NextResponse.redirect(redirectTo);
   } catch (error) {
-    console.error('[deploy/github/callback] error:', error.message);
+    logger.error('[deploy/github/callback] error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

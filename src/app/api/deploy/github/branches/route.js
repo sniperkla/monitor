@@ -5,6 +5,7 @@ import connectDB from '@/lib/mongodb';
 import SystemSetting from '@/models/SystemSetting';
 import { decrypt } from '@/utils/encryption';
 import { resolveUserIdQuery, normalizeUserId } from '@/lib/deployUserQuery';
+import { logger } from '@/lib/logger';
 
 function normalizeRepoParam(value) {
   if (!value) return '';
@@ -60,7 +61,7 @@ export async function GET(request) {
             token = null;
           }
         } catch (err) {
-          console.warn('[deploy/github/branches] failed to decrypt githubToken — proceeding without auth:', err.message);
+          logger.warn('[deploy/github/branches] failed to decrypt githubToken — proceeding without auth:', err.message);
           token = null;
         }
       }
@@ -93,7 +94,7 @@ export async function GET(request) {
 
     return NextResponse.json({ success: true, branches });
   } catch (error) {
-    console.error('[deploy/github/branches] GET error:', error.message);
+    logger.error('[deploy/github/branches] GET error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

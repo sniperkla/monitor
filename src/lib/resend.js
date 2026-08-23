@@ -1,8 +1,9 @@
 import { Resend } from 'resend';
+import { logger } from '@/lib/logger';
 
 const getResendClient = () => {
   if (!process.env.RESEND_API_KEY) {
-    console.warn('[Resend] RESEND_API_KEY environment variable is not defined.');
+    logger.warn('[Resend] RESEND_API_KEY environment variable is not defined.');
   }
   return new Resend(process.env.RESEND_API_KEY);
 };

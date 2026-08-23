@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
+import { logger } from '@/lib/logger';
 
 function quote(str) {
   return `'${String(str).replace(/'/g, `'\\''`)}'`;
@@ -109,7 +110,7 @@ export async function POST(req) {
     }, { status: 500 });
 
   } catch (err) {
-    console.error('[rclone/oauth/save-token] error:', err.message);
+    logger.error('[rclone/oauth/save-token] error:', err.message);
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }
 }

@@ -10,6 +10,7 @@ import { checkAndTrackAiUsage } from '@/utils/aiLimiter';
 import { canUseServerAi, aiSupporterRequiredResponse } from '@/utils/supporter';
 import { readdir, readFile } from 'fs/promises';
 import { join } from 'path';
+import { logger } from '@/lib/logger';
 
 // Truncate skill content to save tokens (keep most important parts)
 const truncateSkill = (content, maxChars = 3000) => {
@@ -83,7 +84,7 @@ async function loadSkills() {
         if (keywords.length === 0) keywords = [name.toLowerCase().replace(/-/g, ' ')];
         skills.push({ name, description, content: truncateSkill(content, MAX_SKILL_CHARS), source: 'custom', keywords, primaryKeywords });
       } catch (e) {
-        console.warn(`Failed to load skill ${file}:`, e.message);
+        logger.warn(`Failed to load skill ${file}:`, e.message);
       }
     }
   } catch (e) {
@@ -249,7 +250,7 @@ async function handleSshMemoryExtraction(userId, host, answer, goal = '') {
         const parsed = JSON.parse(factMatch[1].trim());
         Object.assign(facts, parsed);
       } catch (e) {
-        console.warn('[SSH Memory] Failed to parse <fact> JSON:', e.message);
+        logger.warn('[SSH Memory] Failed to parse <fact> JSON:', e.message);
       }
     }
 
@@ -265,7 +266,7 @@ async function handleSshMemoryExtraction(userId, host, answer, goal = '') {
           });
         }
       } catch (e) {
-        console.warn('[SSH Memory] Failed to parse <reminder> JSON:', e.message);
+        logger.warn('[SSH Memory] Failed to parse <reminder> JSON:', e.message);
       }
     }
 
@@ -321,7 +322,7 @@ async function handleSshMemoryExtraction(userId, host, answer, goal = '') {
 
     return true;
   } catch (err) {
-    console.error('[SSH Memory] Extraction failed:', err);
+    logger.error('[SSH Memory] Extraction failed:', err);
     return false;
   }
 }
@@ -402,7 +403,7 @@ export async function POST(req) {
         aiConfig = { ...aiConfig, ...configSetting.value };
       }
     } catch (e) {
-      console.error('Error fetching AI settings from DB:', e);
+      logger.error('Error fetching AI settings from DB:', e);
     }
     
     // Override with user selection if provided
@@ -443,8 +444,8 @@ export async function POST(req) {
     };
     
     // Log skill status for debugging
-    console.log('[Skills] Available:', skillStatusInfo.availableSkills.map(s => `${s.name}(${s.source})`).join(', ') || 'none');
-    console.log('[Skills] Matched:', skillStatusInfo.matchedSkills.map(s => s.name).join(', ') || 'none');
+    logger.info('[Skills] Available:', skillStatusInfo.availableSkills.map(s => `${s.name}(${s.source})`).join(', ') || 'none');
+    logger.info('[Skills] Matched:', skillStatusInfo.matchedSkills.map(s => s.name).join(', ') || 'none');
     
     const skillBlock = matchedSkills.length > 0
       ? `\n📚 LOADED SKILLS (${matchedSkills.length} matched from ${allSkills.length} available):\n${matchedSkills.map(s => `--- ${s.name} [${s.source}] ---\n${s.content}`).join('\n\n')}\n`
@@ -573,7 +574,7 @@ ${memoryDoc.notes?.length ? `NOTES:\n${memoryDoc.notes.slice(0, 3).map(n => `- $
         }
       }
     } catch (e) {
-      console.warn('[SSH Memory] Load failed:', e.message);
+      logger.warn('[SSH Memory] Load failed:', e.message);
     }
 
     // ── AGENTIC CORE LOGIC (shared between modes) ────────────────────────────
@@ -736,14 +737,14 @@ Now output the <diff> needed to complete the request.`;
 
         if (!res.ok) {
           const errBody = await res.text().catch(() => '');
-          console.warn('[AI retry missing diff] Retry request failed:', res.status, errBody.slice(0, 200), extraInfo);
+          logger.warn('[AI retry missing diff] Retry request failed:', res.status, errBody.slice(0, 200), extraInfo);
           return null;
         }
         const out = await res.json();
         const retryAnswer = out?.choices?.[0]?.message?.content || '';
         return retryAnswer ? String(retryAnswer) : null;
       } catch (e) {
-        console.warn('[AI retry missing diff] Retry failed:', e?.message || e, extraInfo);
+        logger.warn('[AI retry missing diff] Retry failed:', e?.message || e, extraInfo);
         return null;
       }
     };
@@ -904,7 +905,7 @@ Now output the <diff> needed to complete the request.`;
                   });
                 }
               } catch (dbErr) {
-                console.error('Failed to save AI history:', dbErr);
+                logger.error('Failed to save AI history:', dbErr);
               }
 
               try {
@@ -931,7 +932,7 @@ Now output the <diff> needed to complete the request.`;
                   }
                 }
               } catch (err) {
-                console.error('[SSH Memory] Streaming done handling failed:', err);
+                logger.error('[SSH Memory] Streaming done handling failed:', err);
               }
 
               controller.enqueue(encoder.encode(`event: final\ndata: ${JSON.stringify({ success: true, answer: full, usedModel: usedModel, usage: usageInfo })}\n\n`));
@@ -951,7 +952,7 @@ Now output the <diff> needed to complete the request.`;
           },
         });
       } catch (err) {
-        console.error('Streaming request failed, falling back:', err);
+        logger.error('Streaming request failed, falling back:', err);
       }
     }
 
@@ -1040,7 +1041,7 @@ Now output the <diff> needed to complete the request.`;
 
                     break;
                 } else if (response.status === 429) {
-                    console.warn(`AI Rate limit hit on key index ${tryIndex} for model ${currentModel}. Rotating...`);
+                    logger.warn(`AI Rate limit hit on key index ${tryIndex} for model ${currentModel}. Rotating...`);
                 } else {
                     const errBody = await response.text().catch(() => '');
                     const prefix = String(apiKey || '').slice(0, 10);
@@ -1053,14 +1054,14 @@ Now output the <diff> needed to complete the request.`;
         }
         
         if (successfulIndex !== -1) break;
-        console.warn(`All keys failed for model ${currentModel}. Trying next fallback...`);
+        logger.warn(`All keys failed for model ${currentModel}. Trying next fallback...`);
     }
 
     if (successfulIndex !== -1) {
         if (apiKeys.length > 1 && successfulIndex !== 999) {
              const nextIndex = (successfulIndex + 1) % apiKeys.length;
              settingsRepo.update({ key: 'ai_api_keys' }, { 'value.currentIndex': nextIndex })
-               .catch(e => console.error('Failed to update API key rotation index', e));
+               .catch(e => logger.error('Failed to update API key rotation index', e));
         }
         
         let usageInfo = null;
@@ -1100,7 +1101,7 @@ Now output the <diff> needed to complete the request.`;
               });
             }
           } catch (dbErr) {
-            console.error('Failed to save AI history:', dbErr);
+            logger.error('Failed to save AI history:', dbErr);
           }
 
           // SSH Memory extraction
@@ -1114,7 +1115,7 @@ Now output the <diff> needed to complete the request.`;
     // If we are here, we failed
     return NextResponse.json({ success: false, error: lastError?.message || 'AI Rate limit exceeded on all keys.' }, { status: 429 });
   } catch (error) {
-    console.error('SSH AI Help Error:', error);
+    logger.error('SSH AI Help Error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

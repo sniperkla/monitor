@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import connectDB from '@/lib/mongodb';
 import { getChatHistoryModel } from '@/models/ChatHistory';
+import { logger } from '@/lib/logger';
 
 export async function GET(req, { params }) {
   try {
@@ -26,7 +27,7 @@ export async function GET(req, { params }) {
       
     return NextResponse.json({ success: true, data: history });
   } catch (error) {
-    console.error('Failed to fetch chat history:', error);
+    logger.error('Failed to fetch chat history:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }
@@ -49,7 +50,7 @@ export async function DELETE(req, { params }) {
       
     return NextResponse.json({ success: true });
   } catch (error) {
-    console.error('Failed to delete chat history:', error);
+    logger.error('Failed to delete chat history:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { getSshConfig, execCommand } from '../_ssh';
+import { logger } from '@/lib/logger';
 
 export async function GET(request) {
   try {
@@ -25,7 +26,7 @@ export async function GET(request) {
 
     return NextResponse.json({ success: true, files });
   } catch (error) {
-    console.error('[server-backup/jobs] error:', error.message);
+    logger.error('[server-backup/jobs] error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }
@@ -50,7 +51,7 @@ export async function DELETE(request) {
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    console.error('[server-backup/jobs DELETE] error:', error.message);
+    logger.error('[server-backup/jobs DELETE] error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

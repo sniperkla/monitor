@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import connectDB from '@/lib/mongodb';
 import { getChatHistoryModel } from '@/models/ChatHistory';
+import { logger } from '@/lib/logger';
 
 // GET all chat history for the user
 export async function GET(req) {
@@ -25,7 +26,7 @@ export async function GET(req) {
       
     return NextResponse.json({ success: true, data: histories });
   } catch (error) {
-    console.error('Failed to fetch chat history:', error);
+    logger.error('Failed to fetch chat history:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }
@@ -73,7 +74,7 @@ export async function POST(req) {
     
     return NextResponse.json({ success: true, data: history });
   } catch (error) {
-    console.error('Failed to save chat history:', error);
+    logger.error('Failed to save chat history:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

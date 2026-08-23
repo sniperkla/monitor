@@ -17,7 +17,7 @@ import {
   Loader2, AlertCircle, CheckCircle2, XCircle, X, Minus, Maximize2, Wifi,
   Sparkles, Copy, CornerDownLeft, ShieldAlert, Settings2, Clock, RefreshCw,
   ListChecks, Trophy, Search, Languages, Lock, Brain, ChevronDown, ChevronUp,
-  AtSign, Folder, File as FileIconAi, Container, Zap, Mouse
+  AtSign, Folder, File as FileIconAi, Container, Zap, Mouse, SquareArrowOutUpRight
 } from 'lucide-react';
 import { diff_match_patch } from 'diff-match-patch';
 
@@ -2757,7 +2757,7 @@ logstash:
                     <div key={li} className="flex flex-col w-full border-y border-white/[0.04]">
                       <div className="flex items-center gap-2 px-3 py-1.5 bg-[#111122]/60 text-[var(--text-muted)] opacity-50 text-[10px] select-none min-w-fit">
                         <span>···</span>
-                        <span className="italic">{entry.count} lines hidden — Use "Show Unchanged" in header for full view</span>
+                        <span className="italic">{entry.count} lines hidden — Use &quot;Show Unchanged&quot; in header for full view</span>
                       </div>
                     </div>
                   );
@@ -7744,7 +7744,7 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                            {aiAnswer.thought && aiAnswer.thought.trim().length > 0 && (
                              <div className="p-2.5 rounded-lg border border-black/20 bg-black/20 overflow-hidden opacity-70 hover:opacity-100 transition-opacity">
                                <div className="text-[10px] font-medium leading-relaxed italic text-[var(--text-muted)]">
-                                 "{autoTranslate && aiTranslations.thought ? aiTranslations.thought : (translatingAiText.thought ? '...' : aiAnswer.thought)}"
+                                 &quot;{autoTranslate && aiTranslations.thought ? aiTranslations.thought : (translatingAiText.thought ? '...' : aiAnswer.thought)}&quot;
                                </div>
                              </div>
                            )}
@@ -8370,7 +8370,7 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                        {/* Final Explanation - Only show if it provides actual info */}
                        {aiDoneSummary.explain && aiDoneSummary.explain.trim().length > 5 && (
                          <div className="w-full rounded-xl border border-white/5 bg-white/5 px-3 py-2.5 text-[11px] leading-relaxed text-zinc-300 italic mb-4 text-left">
-                           "{aiDoneSummary.explain}"
+                           &quot;{aiDoneSummary.explain}&quot;
                          </div>
                        )}
 

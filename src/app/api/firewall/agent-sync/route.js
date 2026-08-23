@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import connectMongo from '@/lib/mongodb';
 import FirewallHistory from '@/models/FirewallHistory';
+import { logger } from '@/lib/logger';
 
 /**
  * POST /api/firewall/agent-sync
@@ -51,7 +52,7 @@ export async function POST(request) {
 
     return NextResponse.json({ success: true, count: docs.length });
   } catch (error) {
-    console.error('[firewall agent-sync]', error.message);
+    logger.error('[firewall agent-sync]', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

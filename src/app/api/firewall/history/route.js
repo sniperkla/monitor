@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import connectMongo from '@/lib/mongodb';
 import FirewallHistory from '@/models/FirewallHistory';
+import { logger } from '@/lib/logger';
 
 /**
  * GET /api/firewall/history?connectionId=<id>&limit=<n>
@@ -37,7 +38,7 @@ export async function GET(request) {
 
     return NextResponse.json({ success: true, samples });
   } catch (error) {
-    console.error('[firewall history]', error.message);
+    logger.error('[firewall history]', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

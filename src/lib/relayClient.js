@@ -9,6 +9,7 @@
  */
 
 import { io } from 'socket.io-client';
+import { logger } from '@/lib/logger';
 
 export class RelayClient {
   constructor(options = {}) {
@@ -30,24 +31,24 @@ export class RelayClient {
       });
 
       this.socket.on('connect', () => {
-        console.log('[relay-client] Connected to /relay');
+        logger.info('[relay-client] Connected to /relay');
         resolve();
       });
 
       this.socket.on('connect_error', (err) => {
-        console.error('[relay-client] Connection error:', err.message);
+        logger.error('[relay-client] Connection error:', err.message);
         reject(err);
       });
 
       this.socket.on('relay:connected', (opts) => {
-        console.log('[relay-client] Received relay:connected from server:', opts);
+        logger.info('[relay-client] Received relay:connected from server:', opts);
         this.connected = true;
         this._emit('connected', opts);
-        console.log('[relay-client] Emitted connected event to handlers');
+        logger.info('[relay-client] Emitted connected event to handlers');
       });
 
       this.socket.on('relay:data', (data) => {
-        console.log('[relay-client] Received relay:data, length:', typeof data === 'string' ? data.length : 'buffer');
+        logger.info('[relay-client] Received relay:data, length:', typeof data === 'string' ? data.length : 'buffer');
         this._emit('data', data);
       });
 
@@ -76,7 +77,7 @@ export class RelayClient {
    */
   requestConnection(connectionData, cols, rows, resuming = false) {
     if (!this.socket) throw new Error('Not connected');
-    console.log('[relay-client] Emitting relay:connect:', {
+    logger.info('[relay-client] Emitting relay:connect:', {
       connectionId: connectionData._id,
       host: connectionData.host,
       port: connectionData.port,
@@ -92,7 +93,7 @@ export class RelayClient {
       rows,
       resuming,
     });
-    console.log('[relay-client] relay:connect emitted');
+    logger.info('[relay-client] relay:connect emitted');
   }
 
   /**

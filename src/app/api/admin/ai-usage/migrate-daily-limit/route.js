@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import connectDB from '@/lib/mongodb';
 import SystemSetting from '@/models/SystemSetting';
+import { logger } from '@/lib/logger';
 
 export async function POST(req) {
   try {
@@ -54,7 +55,7 @@ export async function POST(req) {
         : 'AI daily limit already exists. Usage is tracked per-user in the AiUsage collection.',
     });
   } catch (error) {
-    console.error('Migrate AI dailyLimit error:', error);
+    logger.error('Migrate AI dailyLimit error:', error);
     return NextResponse.json({ success: false, error: 'Internal Server Error' }, { status: 500 });
   }
 }

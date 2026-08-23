@@ -5,6 +5,7 @@ import connectDB from '@/lib/mongodb';
 import { getPooledConnection } from '@/lib/dbPool';
 import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import { MongoClient } from 'mongodb';
+import { logger } from '@/lib/logger';
 
 // Helper to get raw mongo client for a given connection ID or URI
 async function getClientForConn(connectionId, customUri) {
@@ -75,7 +76,7 @@ export async function GET(request) {
 
         return NextResponse.json({ success: true, instances });
       } catch (discErr) {
-        console.error('Discover instances error:', discErr);
+        logger.error('Discover instances error:', discErr);
         return NextResponse.json({ success: false, error: discErr.message }, { status: 500 });
       }
     }
@@ -129,7 +130,7 @@ export async function GET(request) {
     }
 
   } catch (error) {
-    console.error('Replica Set GET error:', error);
+    logger.error('Replica Set GET error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }
@@ -309,7 +310,7 @@ export async function POST(request) {
     }
 
   } catch (error) {
-    console.error('Replica Set POST error:', error);
+    logger.error('Replica Set POST error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

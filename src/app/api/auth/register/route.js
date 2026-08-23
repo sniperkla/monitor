@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import connectDB from '@/lib/mongodb';
 import User from '@/models/User';
 import { sendVerificationEmail } from '@/lib/resend';
+import { logger } from '@/lib/logger';
 
 export async function POST(request) {
   try {
@@ -59,14 +60,14 @@ export async function POST(request) {
       },
     });
 
-    console.log(`🆕 New user registered via Credentials: ${cleanEmail}`);
+    logger.info(`🆕 New user registered via Credentials: ${cleanEmail}`);
 
     // Send confirmation email via Resend
     try {
       await sendVerificationEmail({ to: cleanEmail, code: verifyCode });
-      console.log(`[Resend] Verification email sent to ${cleanEmail}`);
+      logger.info(`[Resend] Verification email sent to ${cleanEmail}`);
     } catch (resendErr) {
-      console.error('[Resend] Failed to send verification email:', resendErr.message);
+      logger.error('[Resend] Failed to send verification email:', resendErr.message);
     }
 
     return NextResponse.json({
@@ -77,7 +78,7 @@ export async function POST(request) {
       email: cleanEmail,
     });
   } catch (error) {
-    console.error('❌ Registration error:', error);
+    logger.error('❌ Registration error:', error);
     return NextResponse.json(
       { success: false, error: error.message || 'Server error during registration' },
       { status: 500 }

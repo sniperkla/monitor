@@ -7,6 +7,7 @@ import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import { decrypt } from '@/utils/encryption';
 import { Client } from 'ssh2';
 import { resolveUserIdQuery, normalizeUserId } from '@/lib/deployUserQuery';
+import { logger } from '@/lib/logger';
 
 // POST /api/deploy/webhook-test?project=<projectId>
 // Runs independent checks and returns structured results
@@ -231,7 +232,7 @@ export async function POST(request) {
 
     return NextResponse.json({ success: true, allPassed, checks });
   } catch (error) {
-    console.error('[deploy/webhook-test] Error:', error.message);
+    logger.error('[deploy/webhook-test] Error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

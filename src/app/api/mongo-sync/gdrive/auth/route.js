@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import connectDB from '@/lib/mongodb';
 import { SystemSettingRepository } from '@/lib/repositories/SystemSettingRepository';
+import { logger } from '@/lib/logger';
 
 export async function GET(request) {
   try {
@@ -63,7 +64,7 @@ export async function GET(request) {
     return NextResponse.redirect(authUrl);
 
   } catch (error) {
-    console.error('Google Drive Auth redirect error:', error);
+    logger.error('Google Drive Auth redirect error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

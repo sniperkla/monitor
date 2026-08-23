@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
+import { logger } from '@/lib/logger';
 
 const WINDOW_MS = 5 * 60 * 1000;
 const MAX_AGE_MS = 31 * 24 * 60 * 60 * 1000;
@@ -38,7 +39,7 @@ export async function POST(request) {
       error: result.code !== 0 && !output.trim() ? (result.stderr || 'Unable to read server logs') : null,
     });
   } catch (error) {
-    console.error('[server-monitor/logs] POST error:', error);
+    logger.error('[server-monitor/logs] POST error:', error);
     return NextResponse.json({ success: false, error: error.message || 'Unable to read server logs' }, { status: 500 });
   }
 }

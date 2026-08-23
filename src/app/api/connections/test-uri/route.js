@@ -5,6 +5,7 @@ import { Client } from 'pg';
 import { checkRateLimit } from '@/lib/serverGuard';
 import { getActiveRelayInfo } from '@/lib/mongodb';
 import { rewriteUriForTunnel, normalizeRelayDatabaseUri } from '@/lib/sshTunnel';
+import { logger } from '@/lib/logger';
 
 /**
  * POST - Test a raw database URI connection
@@ -53,7 +54,7 @@ export async function POST(request) {
       if (relayInfo) {
         effectiveUri = rewriteUriForTunnel(normalizedUri, relayInfo.port);
         usedRelay = true;
-        console.log(`🔗 [test-uri] Relay active: ${normalizedUri} → ${effectiveUri}`);
+        logger.info(`🔗 [test-uri] Relay active: ${normalizedUri} → ${effectiveUri}`);
       } else if (process.env.NODE_ENV !== 'development') {
         return NextResponse.json({
           success: false,
@@ -78,7 +79,7 @@ export async function POST(request) {
     }, { status: 400 });
 
   } catch (error) {
-    console.error('Test URI Error:', error);
+    logger.error('Test URI Error:', error);
     return NextResponse.json({ 
       success: false, 
       error: error.message || 'Connection test failed' 

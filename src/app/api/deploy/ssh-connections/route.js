@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import connectDB from '@/lib/mongodb';
 import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
+import { logger } from '@/lib/logger';
 
 /**
  * GET /api/deploy/ssh-connections
@@ -69,7 +70,7 @@ export async function GET(request) {
       relayHint
     });
   } catch (error) {
-    console.error('[deploy/ssh-connections] Error:', error.message);
+    logger.error('[deploy/ssh-connections] Error:', error.message);
     return NextResponse.json(
       { success: false, error: error.message },
       { status: 500 }
