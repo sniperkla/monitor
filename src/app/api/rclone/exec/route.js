@@ -20,6 +20,12 @@ export async function POST(req) {
     if (!connectionId || !source || !target) {
       return NextResponse.json({ success: false, error: 'connectionId, source, and target are required' }, { status: 400 });
     }
+    // Security: action is interpolated into a remote shell command - restrict it
+    // to supported verbs so it can never be used for command injection.
+    const ALLOWED_ACTIONS = ['sync', 'copy', 'move', 'check'];
+    if (!ALLOWED_ACTIONS.includes(action)) {
+      return NextResponse.json({ success: false, error: 'action must be one of: sync, copy, move, check' }, { status: 400 });
+    }
 
     const sshMode = req.headers.get('x-ssh-mode');
     const preferredRelay = req.headers.get('x-preferred-relay');

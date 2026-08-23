@@ -1,6 +1,36 @@
 import { NextResponse } from "next/server";
 import { withAuth } from "next-auth/middleware";
 
+// AI training / scraping bots — blocked hard at the edge (403).
+// These bots often ignore robots.txt, so we enforce it in code as well.
+const AI_BOT_PATTERNS = [
+  "GPTBot",
+  "OAI-SearchBot",
+  "ChatGPT-User",
+  "ClaudeBot",
+  "Claude-Web",
+  "anthropic-ai",
+  "Google-Extended",
+  "CCBot",
+  "Bytespider",
+  "PerplexityBot",
+  "Perplexity-User",
+  "Amazonbot",
+  "Applebot-Extended",
+  "cohere-ai",
+  "Meta-ExternalAgent",
+  "Meta-ExternalFetcher",
+  "Diffbot",
+  "ImagesiftBot",
+  "YouBot",
+];
+
+function isAiBot(userAgent) {
+  if (!userAgent) return false;
+  const ua = userAgent.toLowerCase();
+  return AI_BOT_PATTERNS.some((bot) => ua.includes(bot.toLowerCase()));
+}
+
 export const proxy = withAuth({
   callbacks: {
     authorized: ({ token, req }) => {
@@ -18,7 +48,13 @@ export const proxy = withAuth({
   },
 });
 
-export default proxy;
+export default function wrappedProxy(req) {
+  // Hard-block known AI scrapers before anything else runs.
+  if (isAiBot(req.headers.get("user-agent"))) {
+    return new NextResponse("Forbidden", { status: 403 });
+  }
+  return proxy(req);
+}
 
 export const config = {
   matcher: [

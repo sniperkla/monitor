@@ -1,3 +1,5 @@
+'use client';
+
 import { logger } from '@/lib/logger';
 /**
  * webrtc-relay.js — Browser-side WebRTC relay peer
@@ -16,7 +18,6 @@ import { logger } from '@/lib/logger';
  * rejects and the caller should fall back to WebSocket relay.
  */
 
-'use client';
 
 const ICE_SERVERS = [
   { urls: 'stun:stun.l.google.com:19302' },
