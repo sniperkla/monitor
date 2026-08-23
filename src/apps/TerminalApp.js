@@ -238,7 +238,15 @@ export default function TerminalApp({ onEditConnection, initialConnection, initi
               />
             </button>
           ))}
-          
+
+          {/* New Terminal (+) button — opens the connection picker to spawn another session */}
+          <button
+            onClick={() => setIsSelecting(true)}
+            title="New Terminal"
+            className="flex items-center justify-center w-7 h-7 mt-2 mb-0.5 shrink-0 rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors"
+          >
+            <Plus size={14} />
+          </button>
         </div>
       </div>
 

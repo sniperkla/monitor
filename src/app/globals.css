@@ -2370,3 +2370,76 @@ body {
     filter: brightness(1.3) drop-shadow(0 0 20px currentColor); 
   }
 }
+
+/* ══════════════════════════════════════════════════════════
+   Mobile UX Polish (2026-08-23)
+   ══════════════════════════════════════════════════════════ */
+@media (max-width: 768px) {
+  /* No horizontal panning / rubber-banding sideways */
+  html, body {
+    overflow-x: hidden;
+    overscroll-behavior-x: none;
+  }
+
+  /* Maximized windows truly fill the viewport on phones */
+  .window-container.maximized,
+  .react-rnd.window-maximized {
+    width: 100vw !important;
+    height: calc(100vh - var(--taskbar-size, 48px)) !important;
+    top: 0 !important;
+    left: 0 !important;
+    border-radius: 0 !important;
+  }
+
+  /* Respect iPhone notch / home indicator */
+  .taskbar {
+    padding-bottom: env(safe-area-inset-bottom, 0px) !important;
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+  }
+  .sidebar {
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+
+  /* Kill text selection flash while touch-dragging windows */
+  .react-rnd, .title-bar {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+
+  /* Disable double-tap zoom delay on controls */
+  button, a, [role="button"], .taskbar button {
+    touch-action: manipulation;
+  }
+
+  /* Modals & dropdowns never exceed screen width */
+  .modal-container, [class*="Modal"] {
+    max-width: calc(100vw - 24px) !important;
+  }
+
+  /* Long code/paths wrap instead of overflowing */
+  pre, code {
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+}
+
+/* Landscape phones: shorter taskbar so apps keep vertical space */
+@media (max-width: 926px) and (orientation: landscape) and (max-height: 500px) {
+  :root { --taskbar-size: 40px; }
+}
+
+/* Any app's content area scrolls vertically inside its mobile window */
+@media (max-width: 768px) {
+  .window-container > div:not(.title-bar):not([data-window-id]) {
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    min-height: 0;
+  }
+  /* Split-pane apps (files, terminal+sidebar) stack their panes' scrollbars */
+  .window-container [class*="flex"] {
+    min-width: 0;
+    min-height: 0;
+  }
+}

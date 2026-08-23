@@ -70,6 +70,8 @@ export default function FileManager({
   connection, 
   connectionName,
   isSplit = false,
+  // Only the active split pane may respond to global keyboard/paste events
+  isActivePane = true,
   initialPath = '.',
   onClosePane,
   onSplit,
@@ -3039,6 +3041,8 @@ export default function FileManager({
   // System Copy-Paste Support
   useEffect(() => {
     const handleSystemPaste = async (e) => {
+      // Split-pane fix: inactive panes must never react to global Ctrl+V
+      if (isSplit && !isActivePane) return;
       // Only handle paste if something else isn't focused (inputs/textareas)
       if (document.activeElement.tagName === 'INPUT' || 
           (document.activeElement.tagName === 'TEXTAREA' && !document.activeElement.closest('.FileManager'))) {
@@ -3569,6 +3573,9 @@ export default function FileManager({
       ) {
         return;
       }
+
+      // Split-pane fix: shortcuts apply to the focused pane only
+      if (isSplit && !isActivePane) return;
 
       const isModKey = e.ctrlKey || e.metaKey;
 

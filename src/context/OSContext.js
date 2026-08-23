@@ -152,14 +152,27 @@ function osReducer(state, action) {
       const defaultX = 100 + cascadeOffset;
       const defaultY = 40 + cascadeOffset;
 
-      const newWindow = { 
-        ...action.payload, 
-        x: action.payload.x ?? defaultX, 
-        y: action.payload.y ?? defaultY,
-        width: action.payload.width ?? 800,
-        height: action.payload.height ?? 600,
-        isMinimized: false, 
-        isMaximized: false, 
+            // Mobile: open windows fullscreen; desktop: cascade but never exceed viewport
+      const vw = typeof window !== 'undefined' ? window.innerWidth : 1280;
+      const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
+      const isMobileViewport = vw < 768;
+
+      // Per-app fitted size: honor explicit width/height, then initialWidth/initialHeight
+      // (passed by DESKTOP_ICONS / openWindow callers), then sane defaults.
+      // This makes every app open at its designed minimum size that fits its
+      // content — never fullscreen, never a broken 800x600 squeeze.
+      const initW = action.payload.width ?? action.payload.initialWidth ?? 800;
+      const initH = action.payload.height ?? action.payload.initialHeight ?? 600;
+
+      const newWindow = {
+        ...action.payload,
+        x: isMobileViewport ? 0 : (action.payload.x ?? Math.min(defaultX, Math.max(0, vw - 320))),
+        y: isMobileViewport ? 0 : (action.payload.y ?? defaultY),
+        width: isMobileViewport ? vw : Math.min(initW, vw - 20),
+        height: isMobileViewport ? vh - 60 : Math.min(initH, vh - 80),
+        isMinimized: false,
+        // On phones/tablets every app opens fullscreen - floating windows are unusable
+        isMaximized: isMobileViewport ? true : !!action.payload.isMaximized,
         zIndex: nextZIndex
       };
 

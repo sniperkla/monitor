@@ -308,6 +308,7 @@ function LayoutRenderer({ layout, activePaneId, onFocusPane, onClosePane, onSpli
     return (
       <div
         className="tmux-pane-wrapper"
+        data-pane-id={layout.id}
         style={{
           flex: 1,
           position: 'relative',
@@ -322,6 +323,10 @@ function LayoutRenderer({ layout, activePaneId, onFocusPane, onClosePane, onSpli
         onClick={(e) => {
           e.stopPropagation();
           onFocusPane(layout.id);
+          // Split-pane focus fix: move real DOM focus into THIS pane terminal,
+          // otherwise keystrokes keep going to whichever xterm held focus before.
+          const ta = e.currentTarget.querySelector('.xterm-helper-textarea');
+          if (ta) ta.focus({ preventScroll: true });
         }}
       >
         {/* Pane toolbar */}
@@ -547,6 +552,11 @@ export default function TmuxLayout({ windowId = 'default', isTmuxMode = false })
 
   const handleFocusPane = useCallback((id) => {
     updateActiveWindow(win => ({ ...win, activePaneId: id }));
+    // Split-pane focus fix: after active pane changes, move DOM focus to its terminal
+    setTimeout(() => {
+      const el = document.querySelector(`[data-pane-id="${id}"] .xterm-helper-textarea`);
+      if (el) el.focus({ preventScroll: true });
+    }, 0);
   }, [updateActiveWindow]);
 
   const handleSplitPane = useCallback((targetId, direction) => {

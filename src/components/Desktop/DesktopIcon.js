@@ -1047,10 +1047,10 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
       >
         <div className={`${sizes.iconBox} ${state.theme === 'retro' || state.theme === 'fallout' || state.theme === 'cyberpunk' ? '' : styleClass} rounded-[22%] flex items-center justify-center overflow-hidden relative`}>
           {(() => {
-            const InnerIcon = () => (
-              <AppIcon id={id} size={sizes.icon} theme={state.theme} iconStyle={state.iconStyle} isDesktop={true} />
-            );
-
+            // NOTE: Do NOT define InnerIcon as a component function here.
+            // A new component type on every render forces React to unmount/remount
+            // the icon subtree, which restarts all CSS animations on every
+            // desktop click (any osState change triggers a re-render).
             if (isArmed) {
               return (
                 <>
@@ -1060,14 +1060,14 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
                       className="absolute inset-0 flex items-center justify-center"
                       style={{ animation: `fallout-slice-tear-${slice} 2.5s ease-in forwards` }}
                     >
-                      <InnerIcon />
+                      <AppIcon id={id} size={sizes.icon} theme={state.theme} iconStyle={state.iconStyle} isDesktop={true} />
                     </div>
                   ))}
                 </>
               );
             }
 
-            return <InnerIcon />;
+            return <AppIcon id={id} size={sizes.icon} theme={state.theme} iconStyle={state.iconStyle} isDesktop={true} />;
           })()}
         </div>
       </div>
