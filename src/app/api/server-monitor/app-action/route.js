@@ -3,6 +3,14 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
 import { logger } from '@/lib/logger';
+import { checkRateLimit, withTimeout } from '@/lib/serverGuard';
+
+// Cap command output returned to the client so a runaway command can't
+// balloon the HTTP response or the browser's memory.
+const MAX_OUTPUT_CHARS = 64 * 1024;
+
+// Actions that change server state get stricter rate limits than read-only ones.
+const MUTATING_ACTIONS = new Set(['start', 'stop', 'restart', 'enable', 'disable', 'update', 'uninstall', 'install-version']);
 
 /**
  * Map app names to their service names
@@ -21,8 +29,22 @@ const SERVICE_MAP = {
 /**
  * Generate command based on action
  */
+// Only safe package/service name characters are allowed. This is the last line of
+// defense against shell injection: appName comes from the request body and would
+// otherwise be interpolated directly into `sudo systemctl ...` / `apt-get install ...`.
+function sanitizeServiceName(appName) {
+  const raw = SERVICE_MAP[String(appName || '').toLowerCase()] || String(appName || '').toLowerCase();
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._+-]*$/.test(raw)) {
+    return null;
+  }
+  return raw;
+}
+
 function getActionCommand(appName, action, version) {
-  const serviceName = SERVICE_MAP[appName.toLowerCase()] || appName.toLowerCase();
+  const serviceName = sanitizeServiceName(appName);
+  if (!serviceName) {
+    throw new Error(`Invalid app name: ${appName}`);
+  }
   
   // Try systemctl first, then fall back to service command
   const systemctlCmd = `sudo systemctl ${action} ${serviceName} 2>&1 || systemctl ${action} ${serviceName} 2>&1`;
@@ -203,7 +225,12 @@ export async function POST(request) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    const body = await request.json();
+    let body;
+    try {
+      body = await request.json();
+    } catch (_) {
+      return NextResponse.json({ success: false, error: 'Invalid JSON body' }, { status: 400 });
+    }
     const { connectionId, appName, action } = body;
     const version = typeof body.version === 'string' ? body.version.trim() : '';
 
@@ -223,6 +250,18 @@ export async function POST(request) {
       );
     }
 
+    // Rate limit destructive/state-changing actions per user+connection to prevent abuse
+    if (MUTATING_ACTIONS.has(action)) {
+      const rateKey = `app-action:${session.user?.id || session.user?.sub || 'anon'}:${connectionId}`;
+      const rl = checkRateLimit(rateKey, 20); // max 20 mutations/min per user per server
+      if (!rl.allowed) {
+        return NextResponse.json(
+          { success: false, error: `Too many requests. Retry in ${Math.ceil(rl.resetIn / 1000)}s` },
+          { status: 429, headers: { 'Retry-After': String(Math.ceil(rl.resetIn / 1000)) } }
+        );
+      }
+    }
+
     // Version must be a safe package-version token (blocks shell injection via version strings)
     if (action === 'install-version') {
       if (!version) {
@@ -239,7 +278,10 @@ export async function POST(request) {
     
     logger.info(`[server-monitor/app-action] Executing ${action} for ${appName}`);
     
-    const result = await execCommand(sshConfig, command);
+    // Package operations can legitimately take minutes; everything else should finish fast.
+    // The timeout prevents hung SSH sessions from pinning API requests indefinitely.
+    const timeoutMs = ['update', 'install-version', 'uninstall'].includes(action) ? 300_000 : 60_000;
+    const result = await withTimeout(() => execCommand(sshConfig, command), timeoutMs);
 
     logger.info(`[server-monitor/app-action] Result:`, {
       code: result.code,
@@ -248,7 +290,7 @@ export async function POST(request) {
     });
 
     // Consider success if exit code is 0 or if stdout contains success indicators
-    const output = (result.stdout || '') + (result.stderr || '');
+    const output = ((result.stdout || '') + (result.stderr || '')).slice(0, MAX_OUTPUT_CHARS);
     const success = result.code === 0 || 
                    output.includes('Started') || 
                    output.includes('Stopped') ||
@@ -299,6 +341,11 @@ export async function POST(request) {
 
   } catch (error) {
     logger.error('[server-monitor/app-action] error:', error.message);
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    // Known client-facing validation errors return 400; anything else is a server fault.
+    const isClientError = /^Invalid app name:/.test(error.message || '');
+    return NextResponse.json(
+      { success: false, error: isClientError ? error.message : 'Failed to execute action on remote server' },
+      { status: isClientError ? 400 : 500 }
+    );
   }
 }
