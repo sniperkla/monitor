@@ -90,7 +90,7 @@ export function getConcurrencyLimiter(operation, maxConcurrent = 5) {
 
 
 import os from 'os';
-import { logger } from '@/lib/logger';
+import { logger } from './logger.js';
 
 /**
  * Check if the server has enough free memory to handle a heavy request.

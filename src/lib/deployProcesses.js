@@ -1,6 +1,6 @@
 import connectDB, { getCenterUri } from './mongodb.js';
 import SystemSetting from '../models/SystemSetting.js';
-import { logger } from '@/lib/logger';
+import { logger } from './logger.js';
 
 // Simple in-memory registry of running deployment processes per project
 const runningMap = new Map();

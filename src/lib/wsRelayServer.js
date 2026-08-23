@@ -1,4 +1,9 @@
-import { logger } from '@/lib/logger';
+import { logger } from './logger.js';
+// This file is loaded directly by Node (outside Next.js) where package.json has no
+// "type": "module", so it gets reparsed as ESM due to the import above. Bare `require`
+// would then resolve against process.cwd() instead of this file — bind it to this file.
+import { createRequire as _createRequire } from 'module';
+const require = _createRequire(import.meta.url);
 /**
  * WebSocket-to-TCP Relay Server (Lightweight SSH Mode)
  *
@@ -1117,4 +1122,9 @@ class WsTcpRelay {
   }
 }
 
-module.exports = { WsTcpRelay };
+// Dual-mode export: works whether this file is loaded as CJS (require) or
+// reparsed as ESM (import) by plain Node outside Next.js.
+if (typeof module !== 'undefined' && typeof module.exports === 'object') {
+  module.exports = { WsTcpRelay };
+}
+export { WsTcpRelay };

@@ -4486,6 +4486,36 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
       socket.emit('agent:list:result', agents);
     });
 
+    // Explicit client-requested SSH disconnect (e.g. terminal tab closed).
+    // Without this handler the session fell into the 90s pending-reattach pool,
+    // so the next connect reattached to the old shell ("✓ Reconnected to
+    // session") with an extra prompt — looking like a duplicated connection.
+    socket.on('ssh:disconnect', async () => {
+      const session = activeSessions.get(socket.id);
+      if (!session) return;
+      console.log(`[SSH] Explicit disconnect requested for ${session.connectionId} (socket ${socket.id})`);
+      session._explicitDisconnect = true;
+      // Drop any pending reattach entry for this connection so the next
+      // connect starts a brand-new session instead of reattaching.
+      try {
+        const pendingKey = getPendingSessionKey(
+          session.connectionId,
+          session.useShell ?? true,
+          session.dockerContainerId,
+          session.relayMode ?? false
+        );
+        const pending = pendingSessions.get(pendingKey);
+        if (pending) {
+          clearTimeout(pending.cleanupTimer);
+          pendingSessions.delete(pendingKey);
+          await forceCleanupSession(pending);
+        }
+      } catch (err) {
+        console.warn('[SSH] Error clearing pending session on explicit disconnect:', err.message);
+      }
+      await cleanupSession(socket.id);
+    });
+
     socket.on('disconnect', () => {
       // Stop any active telemetry streams for this disconnecting socket
       if (global.__monitorAgents) {

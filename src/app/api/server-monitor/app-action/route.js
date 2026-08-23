@@ -21,7 +21,7 @@ const SERVICE_MAP = {
 /**
  * Generate command based on action
  */
-function getActionCommand(appName, action) {
+function getActionCommand(appName, action, version) {
   const serviceName = SERVICE_MAP[appName.toLowerCase()] || appName.toLowerCase();
   
   // Try systemctl first, then fall back to service command
@@ -69,25 +69,109 @@ function getActionCommand(appName, action) {
         fi
       `;
       
-    case 'update':
-      // Package manager agnostic update
+    case 'check-update':
+      // Report whether an update is available for this package.
+      // Prints UPDATE_AVAILABLE, UP_TO_DATE or UNKNOWN (single token, easy to parse).
       return `
+        PKG="${serviceName}"
         if command -v apt-get >/dev/null 2>&1; then
-          sudo apt-get update && sudo apt-get install --only-upgrade ${serviceName} -y 2>&1
-        elif command -v yum >/dev/null 2>&1; then
-          sudo yum update ${serviceName} -y 2>&1
+          sudo apt-get update -qq >/dev/null 2>&1 || true
+          if apt-get -s install --only-upgrade "$PKG" 2>/dev/null | grep -q '^Inst '; then
+            echo "UPDATE_AVAILABLE"
+          else
+            echo "UP_TO_DATE"
+          fi
         elif command -v dnf >/dev/null 2>&1; then
-          sudo dnf update ${serviceName} -y 2>&1
+          sudo dnf -q check-update "$PKG" >/dev/null 2>&1
+          RC=$?
+          if [ $RC -eq 100 ]; then echo "UPDATE_AVAILABLE"
+          elif [ $RC -eq 0 ]; then echo "UP_TO_DATE"
+          else echo "UNKNOWN"
+          fi
+        elif command -v yum >/dev/null 2>&1; then
+          sudo yum -q check-update "$PKG" >/dev/null 2>&1
+          RC=$?
+          if [ $RC -eq 100 ]; then echo "UPDATE_AVAILABLE"
+          elif [ $RC -eq 0 ]; then echo "UP_TO_DATE"
+          else echo "UNKNOWN"
+          fi
         elif command -v pacman >/dev/null 2>&1; then
-          sudo pacman -Syu ${serviceName} --noconfirm 2>&1
+          if pacman -Qu "$PKG" >/dev/null 2>&1; then echo "UPDATE_AVAILABLE"; else echo "UP_TO_DATE"; fi
         elif command -v brew >/dev/null 2>&1; then
-          brew upgrade ${serviceName} 2>&1
+          if brew outdated --quiet "$PKG" 2>/dev/null | grep -q .; then echo "UPDATE_AVAILABLE"; else echo "UP_TO_DATE"; fi
+        else
+          echo "UNKNOWN"
+        fi
+      `;
+
+    case 'update':
+      // Package manager agnostic update — quiet mode so informational lines
+      // like dnf's "Last metadata expiration check ..." never surface as errors.
+      return `
+        OUT=""
+        if command -v apt-get >/dev/null 2>&1; then
+          sudo apt-get update -qq >/dev/null 2>&1 || true
+          OUT=$(sudo DEBIAN_FRONTEND=noninteractive apt-get install --only-upgrade ${serviceName} -y 2>&1)
+        elif command -v dnf >/dev/null 2>&1; then
+          OUT=$(sudo dnf -q -y update ${serviceName} 2>&1)
+        elif command -v yum >/dev/null 2>&1; then
+          OUT=$(sudo yum -q -y update ${serviceName} 2>&1)
+        elif command -v pacman >/dev/null 2>&1; then
+          OUT=$(sudo pacman -Syu ${serviceName} --noconfirm --quiet 2>&1)
+        elif command -v brew >/dev/null 2>&1; then
+          OUT=$(brew upgrade ${serviceName} 2>&1)
         else
           echo "No supported package manager found"
           exit 1
         fi
+        echo "$OUT"
+        # "Already latest version" outcomes are successes, not failures
+        if echo "$OUT" | grep -qiE "already the newest version|0 upgraded|Nothing to do|[Nn]o packages marked|does not have any installation candidate|[Nn]o match for argument"; then
+          exit 0
+        fi
       `;
       
+    case 'list-versions':
+      // List installable package versions across distros.
+      // Prints one version token per line (no headers) so the UI can render a picker.
+      return `
+        PKG="${serviceName}"
+        if command -v apt-get >/dev/null 2>&1; then
+          sudo apt-get update -qq >/dev/null 2>&1 || true
+          apt-cache madison "$PKG" 2>/dev/null | awk '{print $3}' | awk '!seen[$0]++' | head -40
+        elif command -v dnf >/dev/null 2>&1; then
+          dnf --showduplicates list "$PKG" 2>/dev/null | grep "^${serviceName}\\." | awk '{print $2}' | awk '!seen[$0]++' | tail -40
+        elif command -v yum >/dev/null 2>&1; then
+          yum --showduplicates list "$PKG" 2>/dev/null | grep "^${serviceName}\\." | awk '{print $2}' | awk '!seen[$0]++' | tail -40
+        elif command -v apk >/dev/null 2>&1; then
+          apk search -v "$PKG" 2>/dev/null | sed "s/^${serviceName}-//" | awk '!seen[$0]++' | head -40
+        elif command -v brew >/dev/null 2>&1; then
+          brew info --json=v2 "$PKG" 2>/dev/null | tr ',' '\\n' | grep '"version"' | head -5 || echo "__UNSUPPORTED__"
+        else
+          echo "__UNSUPPORTED__"
+        fi
+      `;
+
+    case 'install-version':
+      // Install or downgrade to an exact package version.
+      // NOTE: `version` is validated server-side before this command is built.
+      return `
+        PKG="${serviceName}"
+        VER="${version}"
+        if command -v apt-get >/dev/null 2>&1; then
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-downgrades "$PKG=$VER" 2>&1
+        elif command -v dnf >/dev/null 2>&1; then
+          sudo dnf install -y --allowerasing "$PKG-$VER" 2>&1 || sudo dnf downgrade -y "$PKG-$VER" 2>&1
+        elif command -v yum >/dev/null 2>&1; then
+          sudo yum install -y "$PKG-$VER" 2>&1 || sudo yum downgrade -y "$PKG-$VER" 2>&1
+        elif command -v apk >/dev/null 2>&1; then
+          sudo apk add "$PKG=$VER" 2>&1
+        else
+          echo "Exact version pinning is not supported by this system's package manager"
+          exit 1
+        fi
+      `;
+
     case 'uninstall':
       // Package manager agnostic uninstall
       return `
@@ -121,6 +205,7 @@ export async function POST(request) {
 
     const body = await request.json();
     const { connectionId, appName, action } = body;
+    const version = typeof body.version === 'string' ? body.version.trim() : '';
 
     if (!connectionId || !appName || !action) {
       return NextResponse.json(
@@ -130,7 +215,7 @@ export async function POST(request) {
     }
 
     // Validate action
-    const validActions = ['start', 'stop', 'restart', 'status', 'enable', 'disable', 'update', 'uninstall'];
+    const validActions = ['start', 'stop', 'restart', 'status', 'enable', 'disable', 'update', 'uninstall', 'check-update', 'list-versions', 'install-version'];
     if (!validActions.includes(action)) {
       return NextResponse.json(
         { success: false, error: `Invalid action. Must be one of: ${validActions.join(', ')}` },
@@ -138,9 +223,19 @@ export async function POST(request) {
       );
     }
 
+    // Version must be a safe package-version token (blocks shell injection via version strings)
+    if (action === 'install-version') {
+      if (!version) {
+        return NextResponse.json({ success: false, error: 'Missing required field: version' }, { status: 400 });
+      }
+      if (!/^[A-Za-z0-9][A-Za-z0-9._~:+-]*$/.test(version)) {
+        return NextResponse.json({ success: false, error: `Invalid version format: ${version}` }, { status: 400 });
+      }
+    }
+
     // Get SSH config and execute command
     const sshConfig = await getSshConfig(connectionId);
-    const command = getActionCommand(appName, action);
+    const command = getActionCommand(appName, action, version);
     
     logger.info(`[server-monitor/app-action] Executing ${action} for ${appName}`);
     
@@ -167,6 +262,32 @@ export async function POST(request) {
       output: output.trim(),
       exitCode: result.code
     };
+
+    // Structured answer for the check-update action
+    if (action === 'check-update') {
+      const verdict = output.trim().split('\n').map(l => l.trim()).find(l => ['UPDATE_AVAILABLE', 'UP_TO_DATE', 'UNKNOWN'].includes(l)) || 'UNKNOWN';
+      responseBody.success = true;
+      responseBody.updateAvailable = verdict === 'UPDATE_AVAILABLE';
+      responseBody.verdict = verdict;
+    }
+
+    // Structured answer for list-versions: array of version tokens
+    if (action === 'list-versions') {
+      const lines = output.trim().split('\n').map(l => l.trim()).filter(Boolean);
+      if (lines.includes('__UNSUPPORTED__')) {
+        responseBody.success = false;
+        responseBody.error = 'Version listing is not supported by this system\'s package manager';
+        responseBody.versions = [];
+      } else {
+        responseBody.success = true;
+        responseBody.versions = [...new Set(lines)].slice(0, 40);
+      }
+    }
+
+    // Tag install-version responses with the requested version for the UI
+    if (action === 'install-version') {
+      responseBody.version = version;
+    }
 
     if (!success) {
       // Provide a readable error from the command output so the UI never shows "undefined"

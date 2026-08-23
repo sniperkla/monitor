@@ -7,7 +7,7 @@
  */
 import net from 'net';
 import { Client as SshClient } from 'ssh2';
-import { logger } from '@/lib/logger';
+import { logger } from './logger.js';
 
 // Global tunnel pool — survives hot-reloads in dev
 const tunnelPool = global.__sshTunnelPool || (global.__sshTunnelPool = new Map());

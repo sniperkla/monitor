@@ -11,7 +11,7 @@ import {
   normalizeRelayDatabaseUri,
 } from './sshTunnel.js';
 import { Pool as PgPool } from 'pg';
-import { logger } from '@/lib/logger';
+import { logger } from './logger.js';
 
 /**
  * Global is used here to maintain a cached connection across hot reloads

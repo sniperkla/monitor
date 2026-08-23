@@ -496,6 +496,7 @@ function ScrollableChartCard({
   return (
     <div 
       ref={cardRef}
+      style={{ order: isExpanded ? -1 : 0 }}
       className={`bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl p-4 shadow-sm flex flex-col relative group transition-all duration-200 ${
         isExpanded ? 'col-span-1 lg:col-span-2 shadow-xl ring-1 ring-indigo-500/40' : ''
       }`}
@@ -3463,16 +3464,53 @@ function InfoItem({ label, value, icon }) {
   );
 }
 
-function AppActionButtons({ app, actionLoading, onAction, canControlService }) {
+function AppActionButtons({ app, actionLoading, onAction, canControlService, updateStatus }) {
+  const { apiFetch } = useApp();
   const [confirmUninstall, setConfirmUninstall] = useState(false);
   const [activeAction, setActiveAction] = useState(null);
+  // Version picker state
+  const [showVersions, setShowVersions] = useState(false);
+  const [versions, setVersions] = useState([]);
+  const [loadingVersions, setLoadingVersions] = useState(false);
+  const versionsRef = useRef(null);
 
-  const handleAction = async (action) => {
+  const handleAction = async (action, version) => {
     setActiveAction(action);
-    await onAction(action);
+    await onAction(action, version);
     setActiveAction(null);
     if (action === 'uninstall') setConfirmUninstall(false);
+    if (action === 'install-version') setShowVersions(false);
   };
+
+  // Fetch installable versions from the server's package manager
+  const loadVersions = async () => {
+    setShowVersions(prev => !prev);
+    if (showVersions || versions.length > 0) return;
+    setLoadingVersions(true);
+    try {
+      const response = await apiFetch('/api/server-monitor/app-action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ connectionId: app.connectionId, appName: app.name, action: 'list-versions' })
+      });
+      const data = await response.json();
+      setVersions(Array.isArray(data?.versions) ? data.versions : []);
+    } catch (_) {
+      setVersions([]);
+    } finally {
+      setLoadingVersions(false);
+    }
+  };
+
+  // Close the version popover when clicking outside
+  useEffect(() => {
+    if (!showVersions) return;
+    const handleClick = (e) => {
+      if (versionsRef.current && !versionsRef.current.contains(e.target)) setShowVersions(false);
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [showVersions]);
 
   const isLoading = (action) => actionLoading && activeAction === action;
 
@@ -3511,20 +3549,85 @@ function AppActionButtons({ app, actionLoading, onAction, canControlService }) {
       )}
 
       {/* Package Management Row — all installed apps */}
-      <div className="flex flex-wrap gap-1 pt-1 border-t border-[var(--border-color)]/30">
-        <button
-          onClick={() => handleAction('update')}
-          disabled={actionLoading}
-          title={`Update ${app.name} to latest version via package manager`}
-          className="flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/20 rounded transition-colors disabled:opacity-50"
-        >
-          {isLoading('update') ? (
-            <RefreshCw size={9} className="animate-spin" />
-          ) : (
-            <Zap size={9} />
+      <div className="flex flex-wrap items-center gap-1 pt-1 border-t border-[var(--border-color)]/30">
+        {updateStatus === 'up-to-date' ? (
+          <span
+            title={`${app.name} is already at the latest version`}
+            className="flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded"
+          >
+            <CheckCircle2 size={9} />
+            Up to date
+          </span>
+        ) : (
+          <button
+            onClick={() => handleAction('update')}
+            disabled={actionLoading}
+            title={`Update ${app.name} to latest version via package manager`}
+            className={`flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium rounded transition-colors disabled:opacity-50 ${
+              updateStatus === 'available'
+                ? 'bg-amber-500/15 hover:bg-amber-500/25 text-amber-400 border border-amber-500/30'
+                : 'bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/20'
+            }`}
+          >
+            {isLoading('update') ? (
+              <RefreshCw size={9} className="animate-spin" />
+            ) : (
+              <Zap size={9} />
+            )}
+            {isLoading('update') ? 'Updating...' : updateStatus === 'available' ? 'Update Available' : 'Update'}
+          </button>
+        )}
+
+        {/* Version picker — install/switch to any available package version */}
+        <div className="relative" ref={versionsRef}>
+          <button
+            onClick={loadVersions}
+            disabled={actionLoading}
+            title={`Browse installable versions of ${app.name}`}
+            className="flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium bg-[var(--bg-primary)] hover:bg-[var(--bg-card-hover)] text-[var(--text-muted)] hover:text-[var(--text-primary)] border border-[var(--border-color)] rounded transition-colors disabled:opacity-50"
+          >
+            <History size={9} />
+            Version
+            <ChevronDown size={8} className={`transition-transform ${showVersions ? 'rotate-180' : ''}`} />
+          </button>
+
+          {showVersions && (
+            <div className="absolute top-full left-0 mt-1 w-52 max-h-44 overflow-y-auto bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-lg shadow-2xl z-[9999] divide-y divide-[var(--border-color)]/60 custom-scrollbar">
+              <div className="px-2 py-1 text-[9px] uppercase tracking-wider text-[var(--text-muted)] font-bold sticky top-0 bg-[var(--bg-secondary)]">
+                Install a specific version
+              </div>
+              {loadingVersions ? (
+                <div className="flex items-center gap-1.5 px-2 py-2 text-[10px] text-indigo-400">
+                  <RefreshCw size={10} className="animate-spin" /> Loading versions...
+                </div>
+              ) : versions.length === 0 ? (
+                <div className="px-2 py-2 text-[10px] text-[var(--text-muted)]">
+                  No versions listed by this package manager.
+                </div>
+              ) : (
+                versions.map(v => {
+                  const isCurrent = app.version && String(app.version).includes(String(v).split('-')[0]);
+                  return (
+                    <button
+                      key={v}
+                      onClick={() => handleAction('install-version', v)}
+                      disabled={actionLoading}
+                      title={`Install ${app.name} ${v}`}
+                      className={`w-full px-2 py-1.5 text-left text-[10px] font-mono flex items-center justify-between gap-2 transition-colors disabled:opacity-50 ${
+                        isCurrent
+                          ? 'bg-emerald-500/10 text-emerald-400'
+                          : 'hover:bg-indigo-500/15 text-[var(--text-primary)]'
+                      }`}
+                    >
+                      <span className="truncate">{v}</span>
+                      {isCurrent && <CheckCircle2 size={10} className="shrink-0" />}
+                    </button>
+                  );
+                })
+              )}
+            </div>
           )}
-          {isLoading('update') ? 'Updating...' : 'Update'}
-        </button>
+        </div>
 
         {confirmUninstall ? (
           <div className="flex items-center gap-1">
@@ -3564,6 +3667,31 @@ function AppCard({ app, onRefresh }) {
   const { apiFetch } = useApp();
   const [actionLoading, setActionLoading] = useState(false);
   const [actionResult, setActionResult] = useState(null);
+  // 'unknown' | 'checking' | 'up-to-date' | 'available'
+  const [updateStatus, setUpdateStatus] = useState('unknown');
+
+  // Check whether a package update is available so we can hide the Update button
+  const checkForUpdates = useCallback(async () => {
+    if (!app.installed || !app.connectionId) return;
+    try {
+      const response = await apiFetch('/api/server-monitor/app-action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ connectionId: app.connectionId, appName: app.name, action: 'check-update' })
+      });
+      const data = await response.json();
+      if (data?.verdict === 'UP_TO_DATE') setUpdateStatus('up-to-date');
+      else if (data?.verdict === 'UPDATE_AVAILABLE') setUpdateStatus('available');
+      else setUpdateStatus('unknown');
+    } catch (_) {
+      setUpdateStatus('unknown');
+    }
+  }, [apiFetch, app.installed, app.connectionId, app.name]);
+
+  useEffect(() => {
+    setUpdateStatus(app.installed ? 'checking' : 'unknown');
+    if (app.installed) checkForUpdates();
+  }, [app.installed, checkForUpdates]);
   
   const iconMap = {
     docker: Box,
@@ -3575,7 +3703,7 @@ function AppCard({ app, onRefresh }) {
   
   const Icon = iconMap[app.name?.toLowerCase()] || Package;
   
-  const handleAction = async (action) => {
+  const handleAction = async (action, version) => {
     setActionLoading(true);
     setActionResult(null);
     
@@ -3586,13 +3714,19 @@ function AppCard({ app, onRefresh }) {
         body: JSON.stringify({
           connectionId: app.connectionId,
           appName: app.name,
-          action: action
+          action,
+          ...(version ? { version } : {})
         })
       });
       
       const data = await response.json();
       setActionResult(data);
       
+      // Re-check update availability after a successful update/uninstall/version switch
+      if (data.success && ['update', 'uninstall', 'install-version'].includes(action)) {
+        setTimeout(checkForUpdates, 2000);
+      }
+
       // In-place refresh after action without full window.location.reload()
       if (data.success && onRefresh) {
         setTimeout(() => onRefresh(), 1500);
@@ -3655,18 +3789,29 @@ function AppCard({ app, onRefresh }) {
               actionLoading={actionLoading}
               onAction={handleAction}
               canControlService={canControlService}
+              updateStatus={updateStatus}
             />
           )}
           
           {/* Action result message */}
           {actionResult && (
             <div
-              className={`mt-1.5 text-[10px] ${actionResult.success ? 'text-emerald-400' : 'text-red-400'}`}
-              title={actionResult.output || actionResult.error}
+              className={`mt-1.5 flex items-start gap-1 p-1.5 rounded-md border text-[10px] leading-snug ${
+                actionResult.success
+                  ? 'bg-emerald-500/5 border-emerald-500/20 text-emerald-400'
+                  : 'bg-red-500/5 border-red-500/20 text-red-400'
+              }`}
             >
-              {actionResult.success
-                ? `✓ ${actionResult.action ? actionResult.action.charAt(0).toUpperCase() + actionResult.action.slice(1) : 'Action'} successful`
-                : `✗ ${actionResult.error || actionResult.output?.split('\n').find(l => l.trim()) || 'Action failed'}`}
+              {actionResult.success ? (
+                <CheckCircle2 size={11} className="shrink-0 mt-0.5" />
+              ) : (
+                <AlertCircle size={11} className="shrink-0 mt-0.5" />
+              )}
+              <span className="min-w-0 break-words" title={actionResult.output || actionResult.error}>
+                {actionResult.success
+                  ? `${actionResult.action ? actionResult.action.charAt(0).toUpperCase() + actionResult.action.slice(1) : 'Action'} completed successfully`
+                  : (actionResult.error || actionResult.output?.split('\n').find(l => l.trim()) || 'Action failed')}
+              </span>
             </div>
           )}
         </div>

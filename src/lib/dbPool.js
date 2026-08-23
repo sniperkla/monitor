@@ -21,7 +21,7 @@ import { Client as SshClient } from 'ssh2';
 import { decrypt } from '../utils/encryption.js';
 import { resolveLocalhostViaRelay } from './sshTunnel.js';
 import { headers } from 'next/headers.js';
-import { logger } from '@/lib/logger';
+import { logger } from './logger.js';
 
 
 // Global pool (survives hot reloads in dev)
