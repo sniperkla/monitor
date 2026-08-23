@@ -1,6 +1,8 @@
-import { NextResponse } from 'next/server';
+import 
+ { NextResponse } from 'next/server';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
 import { logger } from '@/lib/logger';
+import { auditLog } from '@/lib/auditLog';
 
 function quote(str) {
   return `'${String(str).replace(/'/g, `'\\''`)}'`;

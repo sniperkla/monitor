@@ -4,6 +4,7 @@ import bcrypt from "bcryptjs";
 import connectDB from "./mongodb.js";
 import User from "../models/User.js";
 import { logger } from '@/lib/logger';
+import { checkLoginAllowed, recordLoginFailure, recordLoginSuccess } from '@/lib/loginRateLimit';
 
 export const authOptions = {
   providers: [
@@ -20,23 +21,36 @@ export const authOptions = {
         email: { label: "Email", type: "email" },
         password: { label: "Password", type: "password" }
       },
-      async authorize(credentials) {
+      async authorize(credentials, req) {
         if (!credentials?.email || !credentials?.password) {
           throw new Error("Email and password are required");
         }
 
         const cleanEmail = String(credentials.email).trim().toLowerCase();
+        const ip =
+          req?.headers?.get('x-forwarded-for')?.split(',')[0]?.trim() ||
+          req?.headers?.get('x-real-ip') ||
+          'unknown';
+        const gate = checkLoginAllowed({ email: cleanEmail, ip });
+        if (!gate.allowed) {
+          throw new Error(
+            `Too many failed login attempts. Try again in ${Math.ceil(gate.retryAfterSec / 60)} minutes.`
+          );
+        }
         await connectDB(process.env.MONGODB_URI, true);
 
         const dbUser = await User.findOne({ email: cleanEmail }).select('+password').lean();
         if (!dbUser || !dbUser.password) {
+          recordLoginFailure({ email: cleanEmail, ip });
           throw new Error("Invalid email or password");
         }
 
         const isValid = await bcrypt.compare(credentials.password, dbUser.password);
         if (!isValid) {
+          recordLoginFailure({ email: cleanEmail, ip });
           throw new Error("Invalid email or password");
         }
+        recordLoginSuccess({ email: cleanEmail });
 
         const isAdminEmail = !!process.env.ADMIN_EMAIL && dbUser.email === process.env.ADMIN_EMAIL;
 
@@ -176,5 +190,7 @@ export const authOptions = {
   session: {
     strategy: "jwt",
   },
-  secret: process.env.NEXTAUTH_SECRET || process.env.ENCRYPTION_KEY || 'b5caf31cfa8c03a8ac8350f76e35eee30ed4e1d57f25596f900a558e6c98c04e',
+  // No hardcoded fallback: a predictable secret would let attackers forge session JWTs.
+  // Fail fast at startup if NEXTAUTH_SECRET is not configured.
+  secret: process.env.NEXTAUTH_SECRET || process.env.ENCRYPTION_KEY,
 };

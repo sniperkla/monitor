@@ -1,5 +1,7 @@
-import { NextResponse } from 'next/server';
+import 
+ { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
+import { auditLog } from '@/lib/auditLog';
 import { authOptions } from '@/lib/auth';
 import crypto from 'crypto';
 import connectDB from '@/lib/mongodb';

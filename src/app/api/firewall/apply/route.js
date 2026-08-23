@@ -1,6 +1,8 @@
-import { NextResponse } from 'next/server';
+import 
+ { NextResponse } from 'next/server';
 import { isIP } from 'node:net';
 import { getServerSession } from 'next-auth/next';
+import { auditLog } from '@/lib/auditLog';
 import { authOptions } from '@/lib/auth';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
 import { getConflictingEntries, normalizeEntry, remoteClientIps, MAX_BLOCKLIST_ENTRIES, sanitizeManualEntries, buildManualSetCommands, buildDropRuleCommands, buildSnapshotSaveCommands, buildRestoreServiceExec, buildAllowlistCommands, buildAllowlistRestoreFragment, buildLastResortCommands } from '@/lib/firewallBlocklist';
