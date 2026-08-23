@@ -4391,7 +4391,7 @@ logstash:
           setAiHasOpenedOnce(true);
           return null;
         }
-        throw new Error(data.error || 'AI request failed');
+        throw new Error(data.message || data.error || 'AI request failed');
       }
       setLastAiUpdate(Date.now());
       
@@ -5670,7 +5670,7 @@ ${isExecutionGoal ? '⚡ EXECUTION: run commands directly.\n' : ''}${scoutFirstR
           setAiError(null);
           return;
         }
-        throw new Error(data.error || 'AI request failed');
+        throw new Error(data.message || data.error || 'AI request failed');
       }
 
       apiRetryCountRef.current = 0; // Reset on success

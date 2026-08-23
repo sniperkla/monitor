@@ -7,6 +7,8 @@ import SystemSetting from '@/models/SystemSetting';
 import AiHistory from '@/models/AiHistory';
 import { checkAndTrackAiUsage } from '@/utils/aiLimiter';
 import { checkRateLimit } from '@/lib/serverGuard';
+import { canUseServerAi, aiSupporterRequiredResponse } from '@/utils/supporter';
+
 
 export async function POST(req) {
   try {
@@ -18,6 +20,13 @@ export async function POST(req) {
     }
 
     const { message, guideContext, language = 'en', model, prefs } = await req.json();
+
+    // AI is a supporter feature - server-funded AI requires membership.
+    // Users bringing their own API key (manual mode) are always allowed.
+    const usingOwnKey = model === 'manual' && !!prefs?.aiApiKey;
+    if (!(await canUseServerAi(session.user.email, usingOwnKey))) {
+      return aiSupporterRequiredResponse();
+    }
 
     // Rate limiting (per-IP)
     const clientIP = req.headers.get('x-forwarded-for') || 'unknown';

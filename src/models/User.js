@@ -105,6 +105,25 @@ const UserSchema = new mongoose.Schema({
     }
   },
 
+  // === SUPPORTER (Ko-fi membership — unlocks Local Relay + speed profiles) ===
+  // Granted manually by an admin or via activation code. Lazy expiry — no sweeper needed.
+  supporter: {
+    status: { type: Boolean, default: false },
+    expiresAt: { type: Date, default: null }, // null = no expiry set yet
+    source: { type: String, enum: ['admin', 'code', 'kofi'], default: 'admin' },
+    grantedAt: { type: Date, default: null },
+    grantedBy: { type: String, default: '' }, // admin email
+    note: { type: String, default: '' },
+    // Access request submitted by the user after subscribing on Ko-fi
+    request: {
+      kofiName: { type: String, default: '' },
+      kofiEmail: { type: String, default: '' },
+      note: { type: String, default: '' },
+      requestedAt: { type: Date, default: null },
+      status: { type: String, enum: ['pending', 'granted', 'dismissed'], default: 'pending' },
+    },
+  },
+
   // === SYNCED CONNECTIONS (Zero-Knowledge Encrypted) ===
   // Encrypted client-side with the vault master password.
   // The server NEVER sees plaintext connection data.

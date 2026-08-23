@@ -1,0 +1,60 @@
+/**
+ * One-off patch: gate AI routes behind supporter membership.
+ * Safe to re-run - skips files already patched.
+ */
+const fs = require('fs');
+const NL = String.fromCharCode(10);
+
+function patch(p, edits) {
+  let s = fs.readFileSync(p, 'utf8');
+  if (s.includes('canUseServerAi')) { console.log('SKIP (already patched):', p); return; }
+  for (const [anchor, replacement] of edits) {
+    if (!s.includes(anchor)) {
+      console.error('ANCHOR NOT FOUND in', p, ':', JSON.stringify(anchor.slice(0, 80)));
+      process.exit(1);
+    }
+    s = s.replace(anchor, replacement);
+  }
+  fs.writeFileSync(p, s);
+  console.log('patched OK:', p);
+}
+
+const IMP = "import { canUseServerAi, aiSupporterRequiredResponse } from '@/utils/supporter';" + NL;
+
+const GATE_OWN_KEY = [
+  '    // AI is a supporter feature - server-funded AI requires membership.',
+  '    // Users bringing their own API key (manual mode) are always allowed.',
+  "    const usingOwnKey = model === 'manual' && !!prefs?.aiApiKey;",
+  '    if (!(await canUseServerAi(session.user.email, usingOwnKey))) {',
+  '      return aiSupporterRequiredResponse();',
+  '    }',
+  '',
+].join(NL);
+
+// 1. wiki/chat
+patch('src/app/api/wiki/chat/route.js', [
+  ["import { checkRateLimit } from '@/lib/serverGuard';",
+   "import { checkRateLimit } from '@/lib/serverGuard';" + NL + IMP],
+  ["    const { message, guideContext, language = 'en', model, prefs } = await req.json();" + NL,
+   "    const { message, guideContext, language = 'en', model, prefs } = await req.json();" + NL + NL + GATE_OWN_KEY],
+]);
+
+// 2. connections/[id]/ai-query
+patch('src/app/api/connections/[id]/ai-query/route.js', [
+  ["import { checkAndTrackAiUsage } from '@/utils/aiLimiter';",
+   "import { checkAndTrackAiUsage } from '@/utils/aiLimiter';" + NL + IMP],
+  ['    const { prompt, schemaName, sampleData, history, provider, model, prefs } = await request.json();' + NL,
+   '    const { prompt, schemaName, sampleData, history, provider, model, prefs } = await request.json();' + NL + NL + GATE_OWN_KEY],
+]);
+
+// 3. deploy/ai-analyze (own key comes from the request body)
+patch('src/app/api/deploy/ai-analyze/route.js', [
+  ["import { resolveUserIdQuery, normalizeUserId } from '@/lib/deployUserQuery';",
+   "import { resolveUserIdQuery, normalizeUserId } from '@/lib/deployUserQuery';" + NL + IMP],
+  ['    const { targetType, connectionId, projectPath, deployCommand: inputDeployCommand, aiModel, aiCustomModel, aiEndpoint: aiEndpointBody, aiApiKey: aiApiKeyBody } = await request.json();' + NL,
+   '    const { targetType, connectionId, projectPath, deployCommand: inputDeployCommand, aiModel, aiCustomModel, aiEndpoint: aiEndpointBody, aiApiKey: aiApiKeyBody } = await request.json();' + NL + NL
+   + '    // AI analysis is a supporter feature unless the user supplies their own API key.' + NL
+   + '    if (!aiApiKeyBody && !(await canUseServerAi(session.user.email))) {' + NL
+   + '      return aiSupporterRequiredResponse();' + NL
+   + '    }' + NL],
+]);

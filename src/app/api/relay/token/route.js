@@ -1,10 +1,14 @@
 import { getToken } from 'next-auth/jwt';
 import { randomUUID } from 'crypto';
+import { getSupporterStatus, supporterRequiredResponse } from '@/utils/supporter';
 
 const TOKEN_TTL = 365 * 24 * 60 * 60 * 1000; // 1 year — relay is a permanent background service
 
 /**
  * POST /api/relay/token — generate a relay token for the current user
+ * Body (optional): { scope: 'relay' | 'agent' }
+ *   - 'relay' (Local Relay) requires an active supporter membership
+ *   - 'agent' (monitor agent) is free and the default for backward compatibility
  */
 export async function POST(request) {
   try {
@@ -13,6 +17,14 @@ export async function POST(request) {
       return Response.json({ error: 'Unauthorized' }, { status: 401 });
     }
     const userId = token.sub;
+
+    const body = await request.json().catch(() => ({}));
+    const scope = body.scope === 'relay' ? 'relay' : 'agent';
+
+    if (scope === 'relay') {
+      const status = await getSupporterStatus(token.email);
+      if (!status.isSupporter) return supporterRequiredResponse('relay');
+    }
 
     global.__relayTokens = global.__relayTokens || new Map();
 
@@ -26,6 +38,8 @@ export async function POST(request) {
     const relayToken = randomUUID();
     global.__relayTokens.set(relayToken, {
       userId,
+      email: token.email || null, // lets the /relay-ws supporter gate resolve the account
+      scope,
       expiresAt: Date.now() + TOKEN_TTL,
     });
 
@@ -49,6 +63,13 @@ export async function GET(request) {
     const userId = token.sub;
     const userRelays = global.__activeRelays?.get(userId);
 
+    // Piggyback supporter status on this poll so the UI never needs extra requests
+    let supporter = { isSupporter: false, expiresAt: null };
+    try {
+      const status = await getSupporterStatus(token.email);
+      supporter = { isSupporter: status.isSupporter, expiresAt: status.expiresAt };
+    } catch (_) {}
+
     if (userRelays instanceof Map) {
       const relays = [];
       for (const [relayId, relay] of userRelays) {
@@ -60,7 +81,7 @@ export async function GET(request) {
           relayName: relay.relayName || relayId,
         });
       }
-      return Response.json({ success: true, connected: relays.length > 0, relays });
+      return Response.json({ success: true, connected: relays.length > 0, relays, supporter });
     }
 
     const relay = userRelays;
@@ -68,6 +89,7 @@ export async function GET(request) {
       success: true,
       connected: !!relay,
       relays: relay ? [{ relayId: relay.relayName || 'default', connected: true, localPort: relay.localPort, capabilities: relay.capabilities || { ssh: false, sftp: false, docker: false }, relayName: relay.relayName || 'default' }] : [],
+      supporter,
     });
   } catch (err) {
     return Response.json({ error: err.message }, { status: 500 });

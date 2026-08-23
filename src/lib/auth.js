@@ -39,6 +39,10 @@ export const authOptions = {
 
         const isAdminEmail = !!process.env.ADMIN_EMAIL && dbUser.email === process.env.ADMIN_EMAIL;
 
+        const supporterActive = dbUser.role === 'admin' ||
+          !!(dbUser.supporter?.status &&
+            (!dbUser.supporter?.expiresAt || new Date(dbUser.supporter.expiresAt).getTime() > Date.now()));
+
         return {
           id: dbUser._id.toString(),
           name: dbUser.name,
@@ -46,6 +50,7 @@ export const authOptions = {
           image: dbUser.image || null,
           role: dbUser.role || (isAdminEmail ? 'admin' : 'user'),
           vaultConfigured: !!dbUser.vault?.isConfigured,
+          isSupporter: supporterActive,
         };
       }
     }),
@@ -90,6 +95,9 @@ export const authOptions = {
           user.dbId = dbUser?._id?.toString?.() || null;
           user.role = dbUser?.role || (isAdminEmail ? 'admin' : 'user');
           user.vaultConfigured = !!dbUser?.vault?.isConfigured;
+          user.isSupporter = dbUser?.role === 'admin' ||
+            !!(dbUser?.supporter?.status &&
+              (!dbUser?.supporter?.expiresAt || new Date(dbUser.supporter.expiresAt).getTime() > Date.now()));
           user.settings = dbUser?.settings || null;
 
           console.log(dbUser?.createdAt && dbUser?.updatedAt && dbUser.createdAt.getTime?.() === dbUser.updatedAt.getTime?.()
@@ -116,6 +124,7 @@ export const authOptions = {
           token.dbId = user.dbId;
           token.role = user.role || 'user';
           token.vaultConfigured = !!user.vaultConfigured;
+          token.isSupporter = !!user.isSupporter;
           // IMPORTANT: Do not store user.settings in JWT to prevent HTTP 431 Error (Header Fields Too Large)
         } else {
           try {
@@ -125,6 +134,9 @@ export const authOptions = {
               token.dbId = dbUser._id.toString();
               token.role = dbUser.role || 'user';
               token.vaultConfigured = dbUser.vault?.isConfigured || false;
+              token.isSupporter = dbUser.role === 'admin' ||
+                !!(dbUser.supporter?.status &&
+                  (!dbUser.supporter?.expiresAt || new Date(dbUser.supporter.expiresAt).getTime() > Date.now()));
             }
           } catch (e) {
             console.error("JWT callback DB error:", e);
@@ -142,6 +154,8 @@ export const authOptions = {
       session.user.id             = token.dbId || token.sub;
       session.user.role           = token.role || 'user';
       session.user.vaultConfigured = token.vaultConfigured || false;
+      // Sign-in-time hint only — server-side guards always re-check the DB.
+      session.user.isSupporter    = token.isSupporter || false;
       // Do not spread settings here either
       return session;
     },

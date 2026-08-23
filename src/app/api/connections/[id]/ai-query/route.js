@@ -6,6 +6,8 @@ import SystemSetting from '@/models/SystemSetting';
 import AiHistory from '@/models/AiHistory';
 import { checkRateLimit } from '@/lib/serverGuard';
 import { checkAndTrackAiUsage } from '@/utils/aiLimiter';
+import { canUseServerAi, aiSupporterRequiredResponse } from '@/utils/supporter';
+
 
 const stripAiQueryEnvelope = (text = '') => {
   const raw = String(text || '');
@@ -174,6 +176,13 @@ export async function POST(request, { params }) {
 
     const { id } = await params;
     const { prompt, schemaName, sampleData, history, provider, model, prefs } = await request.json();
+
+    // AI is a supporter feature - server-funded AI requires membership.
+    // Users bringing their own API key (manual mode) are always allowed.
+    const usingOwnKey = model === 'manual' && !!prefs?.aiApiKey;
+    if (!(await canUseServerAi(session.user.email, usingOwnKey))) {
+      return aiSupporterRequiredResponse();
+    }
 
     if (!prompt) {
       return NextResponse.json({ success: false, error: 'Prompt is required' }, { status: 400 });

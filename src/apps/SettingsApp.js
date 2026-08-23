@@ -12,13 +12,13 @@ function safeStringify(obj) {
     return value;
   });
 }
-import { 
-  Palette, Image as ImageIcon, Monitor, Layout, Bell, Shield, Info, 
+import {
+  Palette, Image as ImageIcon, Monitor, Layout, Bell, Shield, Info,
   Database, CheckCircle, AlertCircle, RefreshCw, Zap, Wifi, WifiOff, Server, Box, Package,
   Loader, Trash2, Lock, Unlock, Key, Mail, Code, Volume2, Sun, Moon, Cpu,
   Search, Terminal, Network, Download, Copy, X, CheckCheck, Sparkles,
   GitBranch, GitCommit, ChevronDown, Settings, Send, Music, ChevronRight, LogOut, Check,
-  RotateCcw, Menu
+  RotateCcw, Menu, Coffee
 } from 'lucide-react';
 import { useOS } from '@/context/OSContext';
 import { useApp } from '@/context/AppContext';
@@ -26,6 +26,9 @@ import { useVault } from '@/context/VaultContext';
 import { useSession, signIn, signOut } from 'next-auth/react';
 import { useTranslation } from 'react-i18next';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import { useSupporter } from '@/hooks/useSupporter';
+import SupporterModal from '@/components/common/SupporterModal';
+import SupportersAdminPanel from '@/components/common/SupportersAdminPanel';
 
 import { motion, AnimatePresence } from 'framer-motion';
 import ShortcutInput from '@/components/Desktop/ShortcutInput';
@@ -145,6 +148,9 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
   const [activeTab, setActiveTabState] = useState(initialTab || propActiveTab || (deploymentOnly ? 'deployment' : 'appearance'));
   const { data: session } = useSession();
   const { t, i18n } = useTranslation();
+  const { isSupporter } = useSupporter({ refreshOnFocus: true });
+  const [supporterModalOpen, setSupporterModalOpen] = useState(false);
+  const isAdminUser = session?.user?.role === 'admin';
   const { state: osState, updateWindowProps, setWallpaper, setGlassmorphism, setGlassIntensity, setIconSize, setBrightness, setNotifications, setTheme, setTaskbarPosition, setWindowLayout, addCustomWallpaper, removeCustomWallpaper, saveSettings, addNotification, showConfirm, setKeyboardShortcuts, setTerminalSettings } = useOS();
 
   const setActiveTab = (tab) => {
@@ -1189,9 +1195,17 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
     }
   }, [relayModalOpen, relayWaiting, relayInstallSuccess]);
 
+  // Non-supporters never enter the relay install wizard — show the supporter modal instead
+  useEffect(() => {
+    if (relayModalOpen && session && !isSupporter) {
+      setRelayModalOpen(false);
+      setSupporterModalOpen(true);
+    }
+  }, [relayModalOpen, session, isSupporter]);
+
   // Auto-generate token when relay wizard is opened and no token yet
   useEffect(() => {
-    if (relayModalOpen && !relayToken && !relayLoading) {
+    if (relayModalOpen && isSupporter && !relayToken && !relayLoading) {
       handleGenerateRelayToken();
       // Snapshot currently-connected relays so new ones can be detected
       setExistingRelayIds(new Set(relays.map(r => r.relayId || r.relayName)));
@@ -1201,7 +1215,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
       setRelayInstallSuccess(false);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [relayModalOpen]);
+  }, [relayModalOpen, isSupporter]);
 
   // Show success screen when a new relay connects during install wizard
   useEffect(() => {
@@ -1228,8 +1242,18 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
     setRelayLoading(true);
     let success = false;
     try {
-      const res = await fetch('/api/relay/token', { method: 'POST', credentials: 'include' });
+      const res = await fetch('/api/relay/token', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scope: 'relay' }),
+      });
       const data = await res.json();
+      if (res.status === 403 && data.error === 'SUPPORTER_REQUIRED') {
+        setSupporterModalOpen(true);
+        addNotification({ title: t('supporter.requiredTitle', 'Supporter Required'), message: t('supporter.requiredMsg', 'Local Relay is a supporter feature.'), type: 'info' });
+        return false;
+      }
       if (data.success) {
         setRelayToken(data.token);
         try { addNotification({ title: 'Token Created', message: 'Your relay token has been generated.', type: 'success' }); } catch (_) {}
@@ -1569,6 +1593,8 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
             { id: 'database', label: t('settings.databaseTitle'), icon: Database, color: 'text-purple-400', bg: 'bg-purple-500/10', requireLogin: true },
             { id: 'privacy', label: t('settings_ui.privacy.title'), icon: Shield, color: 'text-emerald-400', bg: 'bg-emerald-500/10' },
             { id: 'keyboard', label: t('settings_ui.keyboard.title') || 'Shortcuts', icon: Key, color: 'text-rose-400', bg: 'bg-rose-500/10' },
+            { id: 'supporter', label: t('supporter.unlockBtn', 'Supporter'), icon: Coffee, color: 'text-pink-300', bg: 'bg-pink-500/20', openModal: true, highlight: true },
+            ...(isAdminUser ? [{ id: 'supporters', label: t('supporter.adminTitle', 'Supporters'), icon: Coffee, color: 'text-pink-400', bg: 'bg-pink-500/10' }] : []),
             { id: 'about', label: t('common.about'), icon: Info, color: 'text-[var(--text-muted)]', bg: 'bg-[var(--bg-tertiary)]' },
           ].map(tab => {
             const isDisabled = tab.requireLogin && !session;
@@ -1577,15 +1603,21 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
               <button
                 key={tab.id}
                 onClick={() => {
-                  if (!isDisabled) {
-                    setActiveTab(tab.id);
+                  if (isDisabled) return;
+                  if (tab.openModal) {
+                    setSupporterModalOpen(true);
                     setIsSidebarOpen(false);
+                    return;
                   }
+                  setActiveTab(tab.id);
+                  setIsSidebarOpen(false);
                 }}
                 disabled={isDisabled}
                 className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all duration-150 relative ${
                   isActive
                     ? 'bg-[var(--glow-indigo)] text-[var(--accent-indigo)] font-semibold'
+                    : tab.highlight
+                    ? 'text-pink-300 font-semibold bg-gradient-to-r from-pink-500/15 to-transparent border border-pink-500/30 shadow-[0_0_18px_-4px_rgba(236,72,153,0.45)] hover:from-pink-500/25'
                     : isDisabled
                     ? 'text-[var(--text-muted)] cursor-not-allowed opacity-40'
                     : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]'
@@ -1594,10 +1626,19 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                 {isActive && (
                   <div className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-r-full bg-indigo-500" />
                 )}
-                <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${isActive ? tab.bg : 'bg-transparent'}`}>
-                  <tab.icon size={15} className={isActive ? tab.color : ''} />
+                <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${isActive || tab.highlight ? tab.bg : 'bg-transparent'}`}>
+                  <tab.icon size={15} className={`${isActive || tab.highlight ? tab.color : ''} ${tab.highlight && !isSupporter ? 'animate-pulse' : ''}`} />
                 </div>
                 <span className="text-[13px] truncate">{tab.label}</span>
+                {tab.openModal && isSupporter && (
+                  <span className="ml-auto flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[8px] font-bold uppercase tracking-wider bg-emerald-500/15 text-emerald-400 border border-emerald-500/25">
+                    <span className="w-1 h-1 rounded-full bg-emerald-400 animate-pulse" />
+                    {t('supporter.activeBadge', 'Active')}
+                  </span>
+                )}
+                {tab.highlight && !isSupporter && (
+                  <span className="ml-auto px-1.5 py-0.5 rounded-full text-[8px] font-extrabold uppercase tracking-wider bg-gradient-to-r from-pink-500 to-rose-500 text-white shadow-sm">PRO</span>
+                )}
                 {isDisabled && (
                   <span className="ml-auto text-[8px] font-bold text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded">{t('vault.loginBtn').toUpperCase()}</span>
                 )}
@@ -2230,13 +2271,23 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                             </span>
                           </div>
                           <p className="text-[10px] text-[var(--text-muted)] mt-0.5 truncate">
-                            {relayConnected
+                            {!isSupporter && !relayConnected
+                              ? t('supporter.relayLockedDesc', 'Supporter feature — unlock Local Relay + TURBO speeds')
+                              : relayConnected
                               ? 'Relay agent ready — local databases accessible'
                               : 'Access local databases from your machine via secure relay'}
                           </p>
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
-                          {!relayToken ? (
+                          {!isSupporter ? (
+                            <button
+                              onClick={() => setSupporterModalOpen(true)}
+                              className="px-3 py-1.5 rounded-xl text-[11px] font-bold transition-all flex items-center gap-1.5 bg-pink-500 hover:bg-pink-600 text-white shadow-md shadow-pink-500/20"
+                              title={t('supporter.unlockHint', 'Local Relay + TURBO speeds are supporter features')}
+                            >
+                              <Lock size={11} /> {t('supporter.unlockBtn', 'Supporter')}
+                            </button>
+                          ) : !relayToken ? (
                             <button
                               onClick={async () => {
                                 setExistingRelayIds(new Set(relays.map(r => r.relayId || r.relayName)));
@@ -2575,6 +2626,12 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                 </div>
               </SettingsCard>
             </section>
+          </div>
+        )}
+
+        {activeTab === 'supporters' && isAdminUser && (
+          <div className="max-w-3xl mx-auto animate-in zoom-in-95 duration-300">
+            <SupportersAdminPanel />
           </div>
         )}
 
@@ -4187,6 +4244,14 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
 
       {/* ── One-Click Relay Installer Modal ─────────────────────────── */}
       <AnimatePresence>
+        <SupporterModal
+          open={supporterModalOpen}
+          onClose={() => setSupporterModalOpen(false)}
+          onGranted={() => {
+            try { addNotification({ title: t('supporter.welcomeTitle', 'Welcome, Supporter!'), message: t('supporter.welcomeMsg', 'Local Relay and TURBO speeds are now unlocked.'), type: 'success' }); } catch (_) {}
+          }}
+        />
+
         {relayModalOpen && (
           <motion.div
             key="relay-wizard-modal"
@@ -4263,7 +4328,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                         <p className="font-semibold text-[var(--text-secondary)]">What is the Relay Agent?</p>
                         <p>A small background service you run on <strong className="text-[var(--text-primary)]">your own computer</strong>. It creates a secure tunnel so this dashboard can reach services on <code className="text-amber-300">localhost</code>.</p>
                         <div className="flex flex-col gap-1 pt-1">
-                          <span className="text-emerald-400/90">✓ Only needed for localhost/127.0.0.1 — remote servers don't need it</span>
+                          <span className="text-emerald-400/90">✓ Only needed for localhost/127.0.0.1 — remote servers don&apos;t need it</span>
                           <span className="text-emerald-400/90">✓ Nothing stored on our servers — fully end-to-end encrypted</span>
                           <span className="text-blue-400/80">✓ Install on your desktop machine, not the server</span>
                         </div>

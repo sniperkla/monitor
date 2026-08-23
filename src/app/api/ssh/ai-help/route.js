@@ -7,6 +7,7 @@ import { SystemSettingRepository } from '@/lib/repositories/SystemSettingReposit
 import { AiHistoryRepository } from '@/lib/repositories/AiHistoryRepository';
 import { SshMemoryRepository } from '@/lib/repositories/SshMemoryRepository';
 import { checkAndTrackAiUsage } from '@/utils/aiLimiter';
+import { canUseServerAi, aiSupporterRequiredResponse } from '@/utils/supporter';
 import { readdir, readFile } from 'fs/promises';
 import { join } from 'path';
 
@@ -343,6 +344,13 @@ export async function POST(req) {
 
     if (!prompt || !String(prompt).trim()) {
       return NextResponse.json({ success: false, error: 'Prompt is required' }, { status: 400 });
+    }
+
+    // AI is a supporter feature - server-funded AI requires membership.
+    // Users bringing their own API key (manual mode) are always allowed.
+    const usingOwnKey = model === 'manual' && !!prefs?.aiApiKey;
+    if (!(await canUseServerAi(session.user.email, usingOwnKey))) {
+      return aiSupporterRequiredResponse();
     }
 
     // Check AI token limit (include context for accurate estimate)

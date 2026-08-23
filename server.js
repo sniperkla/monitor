@@ -3065,7 +3065,15 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           });
 
           // Cross-Server File Transfer
-          socket.on('sftp:cross_server_transfer', ({ srcConnId, srcPath, destPath, action, overwrite = false }) => {
+          socket.on('sftp:cross_server_transfer', async ({ srcConnId, srcPath, destPath, action, overwrite = false }) => {
+            // Supporter gate - cross-server transfer is a supporter feature on
+            // the direct path (relay mode is already gated at connection time).
+            let __allowed = true;
+            try { __allowed = await isRelaySupporter({ userId: socket.user?.sub || socket.user?.dbId, email: socket.user?.email }); } catch (_) {}
+            if (!__allowed) {
+              console.log(`🔒 [${socket.id}] Cross Transfer blocked: supporter required`);
+              return emitSftpError('Cross-server transfer is a supporter feature.', 'Cross Transfer');
+            }
             console.log(`🌐 [${socket.id}] CROSS-SERVER: ${srcConnId}:${srcPath} -> CurrentServer:${destPath}`);
             
             // Improved lookup to handle Docker-prefixed IDs
@@ -4875,6 +4883,54 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           return;
         }
 
+        // Supporter gate — Local Relay is a supporter feature. Checked on every
+        // (re)connect so revoked/expired supporters' auto-restarting agents get 4003.
+        isRelaySupporter(entry)
+          .then((allowed) => {
+            if (!allowed) {
+              try { ws.send(JSON.stringify({ type: 'error', code: 'SUPPORTER_REQUIRED', message: 'Supporter membership required for Local Relay' })); } catch (_) {}
+              try { ws.close(4003, 'Supporter required'); } catch (_) {}
+              console.log(`🔗 [Relay] Rejected ${entry.email || entry.userId}: supporter required`);
+              return;
+            }
+            setupRelayConnection(ws, entry);
+          })
+          .catch((err) => {
+            // DB hiccup — fail open; boot already requires a working DB so this is rare
+            console.warn('⚠️  [Relay] Supporter check failed, allowing connection:', err.message);
+            setupRelayConnection(ws, entry);
+          });
+      });
+
+      // Supporter lookup with a 5-minute TTL cache (mirrors src/utils/supporter.js).
+      // server.js is CommonJS on its own mongoose connection, so query the users
+      // collection directly instead of importing the ESM helper.
+      const RELAY_SUPPORTER_TTL_MS = 5 * 60 * 1000;
+      global.__relaySupporterCache = new Map(); // key → { value, at }
+      async function isRelaySupporter(entry) {
+        const userId = entry.userId;
+        const email = entry.email ? String(entry.email).trim().toLowerCase() : null;
+        const key = email || `id:${userId}`;
+        const hit = global.__relaySupporterCache.get(key);
+        if (hit && Date.now() - hit.at < RELAY_SUPPORTER_TTL_MS) return hit.value;
+
+        if (mongoose.connection.readyState !== 1) return true; // DB not ready — fail open
+        const or = [];
+        if (email) or.push({ email: String(entry.email) }, { email });
+        if (userId && /^[a-f\d]{24}$/i.test(userId)) or.push({ _id: new mongoose.Types.ObjectId(userId) });
+        if (userId) or.push({ googleId: userId });
+        const users = mongoose.connection.collection('users');
+        const doc = await users.findOne({ $or: or }, { projection: { role: 1, 'supporter.status': 1, 'supporter.expiresAt': 1 } });
+        const value = !!doc && (
+          doc.role === 'admin' ||
+          !!(doc.supporter && doc.supporter.status &&
+            (!doc.supporter.expiresAt || new Date(doc.supporter.expiresAt).getTime() > Date.now()))
+        );
+        global.__relaySupporterCache.set(key, { value, at: Date.now() });
+        return value;
+      }
+
+      function setupRelayConnection(ws, entry) {
         const { userId } = entry;
         const tcpSockets = new Map(); // connId → tcp socket (MongoDB driver side)
         ws.__tcpSockets = tcpSockets;
@@ -5133,7 +5189,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
         });
 
         ws.on('error', () => {});
-      });
+      }
 
       console.log('🔗 Local Relay Agent: ready (/relay-ws)');
     }

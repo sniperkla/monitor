@@ -9,6 +9,8 @@ import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import { decrypt } from '@/utils/encryption';
 import OpenAI from 'openai';
 import { resolveUserIdQuery, normalizeUserId } from '@/lib/deployUserQuery';
+import { canUseServerAi, aiSupporterRequiredResponse } from '@/utils/supporter';
+
 
 // Supported model options
 const FALLBACK_MODEL = 'llama-3.3-70b-versatile';
@@ -28,6 +30,11 @@ export async function POST(request) {
     const dbKey = projectId === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${projectId}`;
 
     const { targetType, connectionId, projectPath, deployCommand: inputDeployCommand, aiModel, aiCustomModel, aiEndpoint: aiEndpointBody, aiApiKey: aiApiKeyBody } = await request.json();
+
+    // AI analysis is a supporter feature unless the user supplies their own API key.
+    if (!aiApiKeyBody && !(await canUseServerAi(session.user.email))) {
+      return aiSupporterRequiredResponse();
+    }
 
     if (!targetType) {
       return NextResponse.json({ success: false, error: 'Target type is required' }, { status: 400 });

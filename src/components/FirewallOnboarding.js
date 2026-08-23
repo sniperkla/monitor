@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import {
   X, ChevronRight, ChevronLeft, Sparkles,
@@ -104,14 +105,22 @@ const STEPS = [
 ];
 
 function FloatingParticles({ color, count = 20 }) {
-  const particles = Array.from({ length: count }, (_, i) => ({
-    id: i,
-    x: Math.random() * 100,
-    y: Math.random() * 100,
-    size: Math.random() * 4 + 2,
-    duration: Math.random() * 20 + 10,
-    delay: Math.random() * 5,
-  }));
+  // Deterministic seeded PRNG keeps render pure (stable across re-renders)
+  const particles = useMemo(() => {
+    // Stateless hash-based PRNG: deterministic and pure (no reassignment)
+    const rand = (i) => {
+      const x = Math.sin(i * 127.1 + 311.7) * 43758.5453;
+      return x - Math.floor(x);
+    };
+    return Array.from({ length: count }, (_, i) => ({
+      id: i,
+      x: rand(i + 1) * 100,
+      y: rand(i + 2) * 100,
+      size: rand(i + 3) * 4 + 2,
+      duration: rand(i + 4) * 20 + 10,
+      delay: rand(i + 5) * 5,
+    }));
+  }, [count]);
   return (
     <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', pointerEvents: 'none', zIndex: 1 }}>
       {particles.map(p => (
@@ -155,9 +164,9 @@ function ProgressRing({ progress, color, size = 44, strokeWidth = 3 }) {
 }
 
 function useSpotlightRect(target) {
-  const [rect, setRect] = useState(null);
+  const [measured, setMeasured] = useState(null);
   useEffect(() => {
-    if (!target) { setRect(null); return; }
+    if (!target) return;
     let scrolled = false; // scrollIntoView once per step — repeating it restarts the smooth scroll
     const measure = () => {
       const el = document.querySelector(`[data-onboarding="${target}"]`);
@@ -168,16 +177,16 @@ function useSpotlightRect(target) {
           scrolled = true;
           el.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }
-        setRect({ top: r.top, left: r.left, width: r.width, height: r.height });
+        setMeasured({ top: r.top, left: r.left, width: r.width, height: r.height });
       }
-      else { scrolled = false; setRect(null); }
+      else { scrolled = false; setMeasured(null); }
     };
     const raf = requestAnimationFrame(() => { setTimeout(measure, 50); });
     const id = setInterval(measure, 150);
     window.addEventListener('resize', measure);
     return () => { cancelAnimationFrame(raf); clearInterval(id); window.removeEventListener('resize', measure); };
   }, [target]);
-  return rect;
+  return target ? measured : null;
 }
 
 function ImmersiveCenterPanel({ step, meta, total, contentStep, contentTotal, onNext, onPrev, onDismiss, show }) {
@@ -489,7 +498,9 @@ export default function FirewallOnboarding({ onComplete }) {
 
   if (!isVisible) return null;
 
-  return (
+  // Portal to document.body: guarantees true full-screen coverage
+  // regardless of transformed ancestors inside the app window.
+  return createPortal(
     <>
       {!spotlightRect && (
         <div style={{
@@ -530,7 +541,8 @@ export default function FirewallOnboarding({ onComplete }) {
           50% { transform: scale(1.1); opacity: 0.8; }
         }
       `}</style>
-    </>
+    </>,
+    document.body
   );
 }
 
