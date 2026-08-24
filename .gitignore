@@ -41,3 +41,4 @@ db-config.json
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+RECOVERY_CODE.txt
