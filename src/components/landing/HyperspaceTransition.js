@@ -45,7 +45,8 @@ export function HyperspaceTransition({ onComplete }) {
 
   useEffect(() => {
     // Spawn stars in a cylinder around the viewer for tunnel effect
-    starsRef.current = Array.from({ length: 500 }, () => {
+    // (320 is plenty — trails + 'lighter' compositing make the field look dense)
+    starsRef.current = Array.from({ length: 320 }, () => {
       const angle = Math.random() * Math.PI * 2;
       const radius = 50 + Math.random() * 600;
       return {
@@ -75,7 +76,10 @@ export function HyperspaceTransition({ onComplete }) {
     const ctx = canvas.getContext('2d');
 
     const handleResize = () => {
-      const dpr = window.devicePixelRatio || 1;
+      // Cap DPR at 1.25 — the warp is fast-moving abstract motion; the extra
+      // pixels of a 2x/3x retina backing store quadruple GPU fill cost for
+      // zero perceived benefit.
+      const dpr = Math.min(window.devicePixelRatio || 1, 1.25);
       const w = window.innerWidth;
       const h = window.innerHeight;
       canvas.width = w * dpr;
@@ -90,9 +94,10 @@ export function HyperspaceTransition({ onComplete }) {
         rainRef.current.drops = Array.from({ length: rainRef.current.cols }, () => Math.random() * -100);
       }
 
-      // ── Fix 1: Resize grain offscreen canvas ──
-      const gW = Math.ceil(w / 2);
-      const gH = Math.ceil(h / 2);
+      // ── Resize grain offscreen canvas (quarter-res — grain is noise, it
+      // scales up invisibly and cuts the per-update buffer 4x vs half-res) ──
+      const gW = Math.max(1, Math.ceil(w / 4));
+      const gH = Math.max(1, Math.ceil(h / 4));
       if (!grainCanvasRef.current) {
         grainCanvasRef.current = document.createElement('canvas');
       }
@@ -158,7 +163,12 @@ export function HyperspaceTransition({ onComplete }) {
 
       // ── Clear ──
       try {
-      ctx.fillStyle = '#01020a';
+      // Motion-blur trails during cruise/exit: a translucent clear instead of a
+      // hard one leaves faint star streaks that read as real motion smear — and
+      // it is CHEAPER than drawing longer tails. Nebula alpha is compensated
+      // below so the residual glow doesn't blow out.
+      const trail = phase === 2 || phase === 3;
+      ctx.fillStyle = trail ? 'rgba(1, 2, 10, 0.55)' : '#01020a';
       ctx.fillRect(0, 0, w, h);
 
       // ── Mouse-look parallax & High-Speed Warp Shake ──
@@ -178,26 +188,36 @@ export function HyperspaceTransition({ onComplete }) {
       ctx.save();
       ctx.translate(parallaxX + shakeX, parallaxY + shakeY);
 
-      // ── Fix 3: Nebula — only redraw offscreen canvas every ~200ms (t changes by ~0.057) ──
-      const nebulaDirty = Math.abs(t - nebulaLastTRef.current) > 0.05 || nebulaLastTRef.current < 0;
+      // ── Camera roll: subtle banked turn while at speed — sells the feeling
+      // of a vessel carving through space. Costs one ctx.rotate.
+      if (phase >= 1 && phase <= 3) {
+        ctx.rotate(Math.sin(t * 2.2) * 0.01 * Math.min(1, speed / 65));
+      }
+
+      // ── Nebula — offscreen redraw throttled to ~every 350ms; 4 blobs instead
+      // of 6, and alpha compensated for trail-mode residual glow ──
+      const nebulaDirty = Math.abs(t - nebulaLastTRef.current) > (trail ? 0.02 : 0.09) || nebulaLastTRef.current < 0;
       if (nebulaDirty && nebulaCtxRef.current) {
         const nc = nebulaCtxRef.current;
         nc.clearRect(0, 0, w, h);
         nc.globalCompositeOperation = 'screen';
-        for (let i = 0; i < 6; i++) {
-          const angle = i * (Math.PI / 3) + t * 0.15;
+        const nebFade = trail ? 0.55 : 1; // counteract translucent-clear stacking
+        for (let i = 0; i < 4; i++) {
+          const angle = i * (Math.PI / 2) + t * 0.15;
           const radius = 300 + (1 - t * 0.4) * 150;
           const dist = (1 - t * 0.25) * 140 + 30;
           const nX = cx + Math.cos(angle) * dist;
           const nY = cy + Math.sin(angle) * dist;
-          const alpha = 0.08 * (phase < 3 ? 1 : (1 - easedExit));
+          const alpha = 0.08 * (phase < 3 ? 1 : (1 - easedExit)) * nebFade;
           const hue = i * 50 + 200;
           const grad = nc.createRadialGradient(nX, nY, 0, nX, nY, radius);
           grad.addColorStop(0, `hsla(${hue}, 80%, 45%, ${alpha})`);
           grad.addColorStop(0.4, `hsla(${hue}, 60%, 30%, ${alpha * 0.4})`);
           grad.addColorStop(1, 'transparent');
           nc.fillStyle = grad;
-          nc.fillRect(0, 0, w, h);
+          // Fill only the blob's bounding box, not the whole canvas —
+          // a fullscreen fillRect per blob was the single biggest fill cost.
+          nc.fillRect(nX - radius, nY - radius, radius * 2, radius * 2);
         }
         nc.globalCompositeOperation = 'source-over';
         nebulaLastTRef.current = t;
@@ -208,32 +228,32 @@ export function HyperspaceTransition({ onComplete }) {
         ctx.globalCompositeOperation = 'source-over';
       }
 
-      // ── Matrix Rain (Fix 2: removed shadowBlur) ──
+      // ── Matrix Rain — updated at ~30fps (every 2nd frame) with doubled
+      // fall speed; fillText across all columns is the top CPU cost here ──
       if (rainRef.current) {
         const rain = rainRef.current;
         rain.frame++;
         const rainAlpha = phase < 3 ? 1 : Math.max(0, 1 - easedExit);
-        if (rainAlpha > 0.01) {
+        if (rainAlpha > 0.01 && rain.frame % 2 === 0) {
           ctx.font = `${rain.fontSize}px monospace`;
           ctx.shadowBlur = 0; // ensure no stale shadow state
           for (let i = 0; i < rain.cols; i++) {
-            const char = rain.chars[Math.floor(Math.random() * rain.chars.length)];
+            const char = rain.chars[(i * 31 + rain.frame * 7) % rain.chars.length];
             const x = i * rain.fontSize;
             const y = rain.drops[i] * rain.fontSize;
 
-            const brightness = Math.random();
+            const brightness = (i * 2654435761 + rain.frame * 97) % 100 / 100; // cheap deterministic pseudo-random
             if (brightness > 0.92) {
-              // Fix 2: was shadowBlur=14, now just a brighter color — no GPU blur cost
               ctx.fillStyle = `rgba(220, 255, 220, ${0.9 * rainAlpha})`;
             } else if (brightness > 0.6) {
-              ctx.fillStyle = `rgba(80, 255, 80, ${(0.25 + Math.random() * 0.3) * rainAlpha})`;
+              ctx.fillStyle = `rgba(80, 255, 80, ${(0.25 + brightness * 0.3) * rainAlpha})`;
             } else {
-              ctx.fillStyle = `rgba(34, 197, 94, ${(0.12 + Math.random() * 0.18) * rainAlpha})`;
+              ctx.fillStyle = `rgba(34, 197, 94, ${(0.12 + brightness * 0.18) * rainAlpha})`;
             }
             ctx.fillText(char, x, y);
 
-            if (y > h && Math.random() > 0.97) rain.drops[i] = 0;
-            rain.drops[i] += 0.2 + Math.random() * 0.25;
+            if (y > h && ((i + rain.frame) % 7 === 0)) rain.drops[i] = 0;
+            rain.drops[i] += 0.4 + (i % 5) * 0.1; // doubled (compensates 30fps)
           }
         }
       }
@@ -266,6 +286,10 @@ export function HyperspaceTransition({ onComplete }) {
         const lineWidth = Math.max(0.3, star.r * scale * 1.2);
 
         let hue = star.hue;
+        // Matrix ignition — stars ignite emerald during charge, cool to their
+        // native blue/purple across engage so cruise arrives fully "cooled"
+        const greenMix = phase === 0 ? 1 : phase === 1 ? 1 - easedEngage : 0;
+        if (greenMix > 0) hue = hue + (145 - hue) * greenMix;
         if (phase === 2) hue += easedCruise * 25;
         if (phase === 3) hue += 40 + easedExit * 70;
         if (phase === 4) hue = 50 + easedArrival * 20;
@@ -289,6 +313,31 @@ export function HyperspaceTransition({ onComplete }) {
         : phase === 3 ? 0.7 + easedExit * 0.3
         : 1 - easedArrival;
       if (glowI > 0.01) {
+        // Emerald ignition halo — strongest during charge/engage, gone by cruise
+        // (color-matches the boot glitch so the handoff reads as one event)
+        const gm = phase === 0 ? 1 : phase === 1 ? 1 - easedEngage : 0;
+        if (gm > 0.01) {
+          const haloR = 120 + speed * 2;
+          const gGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, haloR);
+          gGrad.addColorStop(0, `rgba(134, 239, 172, ${glowI * 0.35 * gm})`);
+          gGrad.addColorStop(0.2, `rgba(52, 211, 153, ${glowI * 0.16 * gm})`);
+          gGrad.addColorStop(0.5, `rgba(34, 197, 94, ${glowI * 0.06 * gm})`);
+          gGrad.addColorStop(1, 'transparent');
+          ctx.fillStyle = gGrad;
+          ctx.beginPath();
+          ctx.arc(cx, cy, haloR, 0, Math.PI * 2);
+          ctx.fill();
+
+          const coreR = 15 + speed * 0.5;
+          const gcGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreR);
+          gcGrad.addColorStop(0, `rgba(240, 255, 245, ${glowI * 0.6 * gm})`);
+          gcGrad.addColorStop(0.5, `rgba(167, 243, 208, ${glowI * 0.2 * gm})`);
+          gcGrad.addColorStop(1, 'transparent');
+          ctx.fillStyle = gcGrad;
+          ctx.beginPath();
+          ctx.arc(cx, cy, coreR, 0, Math.PI * 2);
+          ctx.fill();
+        }
         const haloR = 120 + speed * 2;
         const haloGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, haloR);
         haloGrad.addColorStop(0, `rgba(220, 235, 255, ${glowI * 0.3})`);
@@ -311,11 +360,11 @@ export function HyperspaceTransition({ onComplete }) {
         ctx.fill();
       }
 
-      // ── Lens flare streaks (cruise & exit) ──
+      // ── Lens flare streaks (cruise & exit) — 2 streaks, cached gradient stops ──
       if (phase >= 2 && phase < 4) {
         const flareI = phase === 2 ? easedCruise * 0.3 : (1 - easedExit) * 0.3;
         ctx.globalCompositeOperation = 'lighter';
-        for (let i = 0; i < 4; i++) {
+        for (let i = 0; i < 2; i++) {
           const fAngle = (i / 4) * Math.PI + t * 0.5;
           const fLen = 80 + speed * 2;
           const fX = cx + Math.cos(fAngle) * fLen;
@@ -334,10 +383,14 @@ export function HyperspaceTransition({ onComplete }) {
         ctx.globalCompositeOperation = 'source-over';
       }
 
-      // ── Engage flash ──
+      // ── Engage flash — starts matrix-green (continuing the boot glitch energy),
+      // cools to indigo across the flash ──
       if (t > 0.08 && t < 0.16) {
         const flashA = Math.sin(((t - 0.08) / 0.08) * Math.PI) * 0.2;
-        ctx.fillStyle = `rgba(165, 180, 252, ${flashA})`;
+        const fk = (t - 0.08) / 0.08;
+        ctx.fillStyle = `rgba(110, 231, 183, ${flashA * (1 - fk)})`;
+        ctx.fillRect(0, 0, w, h);
+        ctx.fillStyle = `rgba(165, 180, 252, ${flashA * fk})`;
         ctx.fillRect(0, 0, w, h);
       }
 
@@ -383,17 +436,19 @@ export function HyperspaceTransition({ onComplete }) {
       ctx.fillStyle = vigGradRef.current;
       ctx.fillRect(0, 0, w, h);
 
-      // ── Fix 1: Film grain — throttle to ~10fps, reuse offscreen canvas ──
+      // ── Film grain — quarter-res offscreen, ~7fps update, skipped during
+      // flash/whiteout phases where grain is invisible anyway ──
+      const grainVisible = phase < 3 || easedExit < 0.9;
       grainFrameRef.current++;
-      const GRAIN_INTERVAL = 6; // update grain every 6 frames (~10fps at 60fps)
-      if (grainFrameRef.current % GRAIN_INTERVAL === 0 && grainCtxRef.current && grainCanvasRef.current) {
+      const GRAIN_INTERVAL = 9; // ~7fps at 60fps — film grain reads fine at low fps
+      if (grainVisible && grainFrameRef.current % GRAIN_INTERVAL === 0 && grainCtxRef.current && grainCanvasRef.current) {
         const gc = grainCtxRef.current;
         const gW = grainCanvasRef.current.width;
         const gH = grainCanvasRef.current.height;
         const grainData = gc.createImageData(gW, gH);
         const grainBuf = grainData.data;
         for (let i = 0; i < grainBuf.length; i += 4) {
-          if (Math.random() < 0.06) {
+          if (Math.random() < 0.04) {
             const v = Math.random() * 200;
             grainBuf[i] = v;
             grainBuf[i + 1] = v;
@@ -404,7 +459,7 @@ export function HyperspaceTransition({ onComplete }) {
         gc.putImageData(grainData, 0, 0);
       }
       // Always draw the last grain frame (reuses the cached canvas)
-      if (grainCanvasRef.current && grainCtxRef.current) {
+      if (grainVisible && grainCanvasRef.current && grainCtxRef.current) {
         try {
           ctx.drawImage(grainCanvasRef.current, 0, 0, w, h);
         } catch (e) {
@@ -439,6 +494,14 @@ export function HyperspaceTransition({ onComplete }) {
         } else {
           termEl.style.opacity = 0;
         }
+      }
+
+      // ── Red-shifted exit: as the vessel decelerates the starfield "cools"
+      // from blue-shift to a warm sodium glow — sells dropping out of FTL ──
+      if (phase === 3 && easedExit > 0.35) {
+        const warmA = ((easedExit - 0.35) / 0.65) * 0.10;
+        ctx.fillStyle = `rgba(255, 170, 90, ${warmA})`;
+        ctx.fillRect(0, 0, w, h);
       }
 
       // Restore parallax transform
@@ -476,7 +539,7 @@ export function HyperspaceTransition({ onComplete }) {
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      transition={{ duration: 0.4, exit: { duration: 1.2 } }}
+      transition={{ duration: 0.15 }}
     >
       <canvas ref={canvasRef} className="absolute inset-0 w-full h-full block" />
 

@@ -8,6 +8,7 @@ import { useVault } from '@/context/VaultContext';
 import { getLocalConnections, saveLocalConnections } from '@/utils/localConnections';
 import { useTranslation } from 'react-i18next';
 import { useSession, signIn } from 'next-auth/react';
+import ThemeSelect from '@/components/common/ThemeSelect';
 import MacOSModalWindow from '@/components/MacOSModalWindow';
 import {
   X, Server, User, Lock, Key, Shield, Upload, FileKey, Hash, Tag, Palette, StickyNote, Database, HardDrive, Cpu, Eye, EyeOff, Activity, RefreshCw, AlertTriangle, Network
@@ -835,18 +836,17 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
                           <label className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider block">
                             Local Relay Agent
                           </label>
-                          <select
-                            className="input-field py-1.5 text-xs bg-[var(--bg-tertiary)] border-[var(--border-color)] text-[var(--text-primary)] rounded-lg w-full"
-                            value={form.relayName}
-                            onChange={(e) => handleChange('relayName', e.target.value)}
-                          >
-                            <option value="">Any connected relay (Auto-select)</option>
-                            {relays.map((r) => (
-                              <option key={r.relayId} value={r.relayName}>
-                                {r.relayName} (:{r.localPort})
-                              </option>
-                            ))}
-                          </select>
+                          <ThemeSelect
+                            className="w-full"
+                            size="sm"
+                            value={form.relayName || ''}
+                            onChange={(v) => handleChange('relayName', v)}
+                            placeholder="Any connected relay (Auto-select)"
+                            options={[
+                              { value: '', label: 'Any connected relay (Auto-select)' },
+                              ...relays.map((r) => ({ value: r.relayName, label: `${r.relayName} (:${r.localPort})` })),
+                            ]}
+                          />
                         </div>
                       )}
                     </div>

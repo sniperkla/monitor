@@ -13,6 +13,7 @@ import { useApp } from '@/context/AppContext';
 import { useVault } from '@/context/VaultContext';
 
 import { i18n } from '@/lib/i18n';
+import ThemeSelect from '@/components/common/ThemeSelect';
 import {
   Loader2, AlertCircle, CheckCircle2, XCircle, X, Minus, Maximize2, Wifi,
   Sparkles, Copy, CornerDownLeft, ShieldAlert, Settings2, Clock, RefreshCw,
@@ -7174,13 +7175,21 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                     </div>
 
                     <div className="pt-1">
-                        <select value={sshAiPrefs.aiModel || 'auto'} onChange={(e) => setSshAiPrefs({ aiModel: e.target.value })} disabled={!isLoggedIn} className="w-full text-[11px] rounded bg-black/30 border border-white/10 px-2 py-1.5 outline-none focus:border-indigo-500/50" title={t('ai.aiModel')} style={{ color: 'var(--text-primary)' }}>
-                          <option value="auto">{t('ai.autoSelect')}</option>
-                          <option value="llama-3.1-8b-instant">🥉 Llama 3.1 8B (Thinking)</option>
-                          <option value="meta-llama/llama-4-scout-17b-16e-instruct">🥇 Llama 4 Scout (Primary)</option>
-                          <option value="llama-3.3-70b-versatile">🥈 Llama 3.3 70B (Heavy/Large)</option>
-                          <option value="manual">{t('ai.customManual')}</option>
-                        </select>
+                        <ThemeSelect
+                          className="w-full"
+                          size="sm"
+                          disabled={!isLoggedIn}
+                          title={t('ai.aiModel')}
+                          value={sshAiPrefs.aiModel || 'auto'}
+                          onChange={(v) => setSshAiPrefs({ aiModel: v })}
+                          options={[
+                            { value: 'auto', label: t('ai.autoSelect') },
+                            { value: 'llama-3.1-8b-instant', label: '🥉 Llama 3.1 8B (Thinking)' },
+                            { value: 'meta-llama/llama-4-scout-17b-16e-instruct', label: '🥇 Llama 4 Scout (Primary)' },
+                            { value: 'llama-3.3-70b-versatile', label: '🥈 Llama 3.3 70B (Heavy/Large)' },
+                            { value: 'manual', label: t('ai.customManual') },
+                          ]}
+                        />
                     </div>
                     {sshAiPrefs.aiModel === 'manual' && (
                       <div className="space-y-2 pt-2 border-t border-white/10">

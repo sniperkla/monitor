@@ -5,6 +5,64 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import AppIcon from '@/components/common/AppIcon';
 
+// ── Global pollution system (shared across all icon instances) ──
+// Every nuke adds a unit of pollution; the haze + falling ash build up and
+// slowly clear as the atmosphere "cleans itself". State lives on window so
+// every DesktopIcon instance sees the same level.
+const POLLUTION_LEVEL_KEY = '__falloutPollutionLevel';
+const POLLUTION_DECAY_KEY = '__falloutPollutionDecay';
+
+function getPollutionLevel() {
+  return typeof window !== 'undefined' ? (window[POLLUTION_LEVEL_KEY] || 0) : 0;
+}
+
+function renderPollution() {
+  if (typeof document === 'undefined') return;
+  const level = getPollutionLevel();
+  document.querySelectorAll('.fallout-smog').forEach((el) => el.remove());
+  if (level <= 0) return;
+
+  const smog = document.createElement('div');
+  smog.className = 'fallout-smog';
+  // Each detonation thickens the haze, capped at a post-apocalyptic ceiling
+  smog.style.opacity = Math.min(0.12 * level + 0.06, 0.55);
+
+  // Drifting ash flakes — density scales with pollution
+  const flakes = Math.min(8 + Math.round(level * 9), 50);
+  for (let i = 0; i < flakes; i++) {
+    const flake = document.createElement('div');
+    flake.className = 'fallout-ash-flake';
+    flake.style.left = `${Math.random() * 100}%`;
+    const size = 2 + Math.random() * 3;
+    flake.style.width = `${size}px`;
+    flake.style.height = `${size}px`;
+    flake.style.animationDuration = `${7 + Math.random() * 9}s`;
+    flake.style.animationDelay = `${-Math.random() * 12}s`;
+    flake.style.opacity = `${0.35 + Math.random() * 0.5}`;
+    smog.appendChild(flake);
+  }
+  document.body.appendChild(smog);
+}
+
+function addPollution(amount = 1) {
+  if (typeof window === 'undefined') return;
+  window[POLLUTION_LEVEL_KEY] = Math.min(getPollutionLevel() + amount, 5);
+  renderPollution();
+
+  // Atmosphere cleans itself: -1 level every 30s of no detonations,
+  // haze fades smoothly via its CSS opacity transition
+  clearInterval(window[POLLUTION_DECAY_KEY]);
+  window[POLLUTION_DECAY_KEY] = setInterval(() => {
+    window[POLLUTION_LEVEL_KEY] = Math.max(0, getPollutionLevel() - 1);
+    renderPollution();
+    if (getPollutionLevel() <= 0) {
+      clearInterval(window[POLLUTION_DECAY_KEY]);
+      delete window[POLLUTION_DECAY_KEY];
+    }
+  }, 30000);
+}
+
+
 export default function DesktopIcon({ id, title, icon: Icon, component, defaultPos, initialWidth, initialHeight, isMobile }) {
   const { state, openWindow, updateIconPosition, setSortBy, setSelectedIcons, toggleIconSelection, updateMultipleIconPositions, pinApp, unpinApp } = useOS();
   const { selectedIconIds, pinnedApps } = state;
@@ -18,7 +76,46 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
   
   const position = state.iconPositions[id] || defaultPos || { x: 0, y: 0 };
   const iconSize = state.iconSize || 'medium';
-  const isFalloutTheme = state.theme === 'retro' || state.theme === 'fallout';
+  // Nuclear hover gimmick: Fallout/Retro get the nuke; Synthwave gets a
+  // Thanos-snap dust disintegration ("EJECT"); Cyberpunk gets an ICE-breach
+  // system crash. Each has its own palette + flavor.
+  const THEME_GIMMICKS = {
+    retro: {
+      label: '⚠ DETONATION IN', tag: 'ARMED',
+      digit: ['#ffc21a', '#ff7a1a', '#ff3020'], panelBorder: 'rgba(255,180,40,0.55)',
+      ember: ['#ff4400', '#ff6600', '#ffaa00', '#18e12c', '#ff2200'],
+      capCore: ['#ffffff', '#ffcc00', '#ff2200'], lobeInner: 'rgba(255,100,0,0.5)', lobeGlow: 'rgba(255,68,0,0.2)',
+      swFrom: 'rgba(255,200,100,0.8)', swTo: 'rgba(255,0,0,0.1)',
+      rgBorder: 'rgba(255,200,50,0.4)', rgGlow: 'rgba(255,100,0,0.8)',
+      rain: 'rgba(24,225,44,0.6)', rainGlow: '#18e12c', crtFilter: 'none',
+    },
+    synthwave: {
+      label: '▶ TRACKING ERROR', tag: 'EJECT',
+      digit: ['#01cdfe', '#b967ff', '#ff2ec4'], panelBorder: 'rgba(255,46,196,0.6)',
+      ember: ['#ff2ec4', '#ff71ce', '#01cdfe', '#b967ff', '#ffffff'],
+      capCore: ['#ffffff', '#ff71ce', '#a1006e'], lobeInner: 'rgba(255,46,196,0.45)', lobeGlow: 'rgba(1,205,254,0.25)',
+      swFrom: 'rgba(255,46,196,0.8)', swTo: 'rgba(1,205,254,0.1)',
+      rgBorder: 'rgba(255,46,196,0.45)', rgGlow: 'rgba(1,205,254,0.7)',
+      rain: 'rgba(255,46,196,0.6)', rainGlow: '#ff2ec4', crtFilter: 'hue-rotate(260deg)',
+    },
+    cyberpunk: {
+      label: '⌁ BREACH IN', tag: 'HACKING',
+      digit: ['#ffe600', '#00fff0', '#ff003c'], panelBorder: 'rgba(0,255,240,0.55)',
+      ember: ['#00fff0', '#ff003c', '#ffe600', '#00b3ff', '#ffffff'],
+      capCore: ['#eaffff', '#00fff0', '#003cff'], lobeInner: 'rgba(0,255,240,0.4)', lobeGlow: 'rgba(255,0,60,0.22)',
+      swFrom: 'rgba(0,255,240,0.75)', swTo: 'rgba(255,0,60,0.12)',
+      rgBorder: 'rgba(0,255,240,0.4)', rgGlow: 'rgba(255,0,60,0.6)',
+      rain: 'rgba(0,255,240,0.55)', rainGlow: '#00fff0', crtFilter: 'hue-rotate(160deg) saturate(1.4)',
+    },
+  };
+  THEME_GIMMICKS.fallout = THEME_GIMMICKS.retro;
+  const gm = THEME_GIMMICKS[state.theme] || null;
+  const isFalloutTheme = !!gm;
+  // Destruction flavor: nuke (Fallout/Retro), dust snap (Synthwave),
+  // ICE-breach crash (Cyberpunk)
+  const GIMMICK_TYPE = state.theme === 'synthwave' ? 'synth'
+    : state.theme === 'cyberpunk' ? 'cpunk'
+      : gm ? 'nuke' : null;
 
   const handleDoubleClick = () => {
     if (isMobile) {
@@ -243,6 +340,7 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
   };
 
   const [isExploding, setIsExploding] = useState(false);
+  const [isDamaged, setIsDamaged] = useState(false); // scorch residue after a close hit
   const [isReforming, setIsReforming] = useState(false);
   const [isArmed, setIsArmed] = useState(false);
   const [countdown, setCountdown] = useState(0); // 4, 3, 2, 1 during arming
@@ -269,25 +367,54 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
       const dy = myY - e.detail.y;
       const distance = Math.sqrt(dx * dx + dy * dy);
 
-      // Max impact radius 600px
-      if (distance < 600 && distance > 0) {
-        // Inverse square-ish force dropoff
-        const force = Math.pow(Math.max(0, (600 - distance) / 600), 1.5); 
-        
-        // Push outward up to 150px
-        const pushX = (dx / distance) * force * 150;
-        const pushY = (dy / distance) * force * 150;
-        
-        // Unpredictable spin generated by the chaotic wind
-        const rotate = (Math.random() > 0.5 ? 1 : -1) * force * (45 + Math.random() * 45);
+      // Shockwave radius 900px
+      if (distance < 900 && distance > 0) {
+        // Realistic wavefront: the shock travels outward at finite speed, so
+        // farther icons are hit LATER — a visible ripple across the desktop
+        const shockDelay = distance * 0.55; // ms (≈1800px/s)
 
-        // Instantly get hit by the shockwave
-        setImpactTransform(`translate(${pushX}px, ${pushY}px) rotate(${rotate}deg)`);
-        
-        // Wait out the blast, then spring back
+        // Inverse-square-ish force dropoff
+        const force = Math.pow(Math.max(0, (900 - distance) / 900), 1.6);
+
+        // Primary shove: pushed radially away, lifted off the ground and
+        // tumbled by the chaotic overpressure — closer icons take it harder
+        const pushX = (dx / distance) * force * 130;
+        const pushY = (dy / distance) * force * 90 - force * 45; // upward bias: blast lifts things
+        const rotate = (Math.random() > 0.5 ? 1 : -1) * force * (35 + Math.random() * 50);
+        const squash = 1 - force * 0.12;
+
         setTimeout(() => {
-          setImpactTransform('');
-        }, 800 + Math.random() * 600); // 0.8s to 1.4s recovery
+          // Wavefront arrives — violent displacement
+          setImpactTransform(
+            `translate(${pushX}px, ${pushY}px) rotate(${rotate}deg) scale(${squash})`
+          );
+
+          // Secondary settling: rebound partially toward origin as the
+          // overpressure passes, then drift home
+          setTimeout(() => {
+            setImpactTransform(
+              `translate(${pushX * 0.3}px, ${pushY * 0.35}px) rotate(${rotate * 0.35}deg)`
+            );
+            // Heavy hits leave the icon slightly knocked out of place —
+            // it never quite lands back where it stood until the damage heals
+            setTimeout(() => {
+              if (force > 0.5) {
+                setImpactTransform(
+                  `translate(${pushX * 0.07}px, ${pushY * 0.09}px) rotate(${rotate * 0.1}deg)`
+                );
+                setTimeout(() => setImpactTransform(''), 7000);
+              } else {
+                setImpactTransform('');
+              }
+            }, 400 + Math.random() * 300);
+          }, 450 + Math.random() * 250);
+
+          // Close icons come away scorched — burnt tint slowly heals
+          if (force > 0.45) {
+            setTimeout(() => setIsDamaged(true), shockDelay + 500);
+            setTimeout(() => setIsDamaged(false), shockDelay + 9500);
+          }
+        }, shockDelay);
       }
     };
 
@@ -442,6 +569,118 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
     }
   }, []);
 
+  // ── Synthwave: tape-eject zap + power-down sweep + hiss tail ──
+  const playSynthEject = useCallback(() => {
+    const ctx = initAudio();
+    if (!ctx) return;
+    try {
+      const t = ctx.currentTime;
+      // Rising zap — the moment of the snap
+      const zap = ctx.createOscillator();
+      zap.type = 'sawtooth';
+      zap.frequency.setValueAtTime(180, t);
+      zap.frequency.exponentialRampToValueAtTime(2400, t + 0.18);
+      const zapFilter = ctx.createBiquadFilter();
+      zapFilter.type = 'lowpass';
+      zapFilter.frequency.value = 3200;
+      const zapGain = ctx.createGain();
+      zapGain.gain.setValueAtTime(0.32, t);
+      zapGain.gain.exponentialRampToValueAtTime(0.001, t + 0.26);
+      zap.connect(zapFilter); zapFilter.connect(zapGain); zapGain.connect(ctx.destination);
+      zap.start(t); zap.stop(t + 0.3);
+
+      // Long power-down sweep as the icon dissolves into dust
+      const sweep = ctx.createOscillator();
+      sweep.type = 'triangle';
+      sweep.frequency.setValueAtTime(900, t + 0.15);
+      sweep.frequency.exponentialRampToValueAtTime(55, t + 2.2);
+      const sweepGain = ctx.createGain();
+      sweepGain.gain.setValueAtTime(0.0001, t + 0.15);
+      sweepGain.gain.linearRampToValueAtTime(0.2, t + 0.45);
+      sweepGain.gain.exponentialRampToValueAtTime(0.001, t + 2.3);
+      sweep.connect(sweepGain); sweepGain.connect(ctx.destination);
+      sweep.start(t + 0.15); sweep.stop(t + 2.4);
+
+      // Tape hiss tail drifting away with the dust
+      const hissSize = Math.floor(ctx.sampleRate * 1.8);
+      const hissBuf = ctx.createBuffer(1, hissSize, ctx.sampleRate);
+      const hd = hissBuf.getChannelData(0);
+      for (let i = 0; i < hissSize; i++) hd[i] = (Math.random() * 2 - 1) * 0.4;
+      const hiss = ctx.createBufferSource();
+      hiss.buffer = hissBuf;
+      const hissFilter = ctx.createBiquadFilter();
+      hissFilter.type = 'highpass';
+      hissFilter.frequency.value = 4500;
+      const hissGain = ctx.createGain();
+      hissGain.gain.setValueAtTime(0.1, t + 0.2);
+      hissGain.gain.exponentialRampToValueAtTime(0.001, t + 2.0);
+      hiss.connect(hissFilter); hissFilter.connect(hissGain); hissGain.connect(ctx.destination);
+      hiss.start(t + 0.2); hiss.stop(t + 2.1);
+    } catch (e) {}
+  }, []);
+
+  // ── Cyberpunk: terminal beep per breach countdown tick ──
+  const playCpunkBeep = useCallback(() => {
+    const ctx = initAudio();
+    if (!ctx) return;
+    try {
+      const t = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      osc.type = 'square';
+      osc.frequency.value = 1150;
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0.14, t);
+      gain.gain.setValueAtTime(0.14, t + 0.07);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.start(t); osc.stop(t + 0.1);
+    } catch (e) {}
+  }, []);
+
+  // ── Cyberpunk: glitch crash — bit-crushed burst + falling data arpeggio ──
+  const playCpunkCrash = useCallback(() => {
+    const ctx = initAudio();
+    if (!ctx) return;
+    try {
+      const t = ctx.currentTime;
+
+      // Harsh digital noise burst
+      const burstSize = Math.floor(ctx.sampleRate * 0.5);
+      const burstBuf = ctx.createBuffer(1, burstSize, ctx.sampleRate);
+      const bd = burstBuf.getChannelData(0);
+      for (let i = 0; i < burstSize; i++) bd[i] = Math.random() < 0.5 ? -1 : 1; // harsh square-ish noise
+      const burst = ctx.createBufferSource();
+      burst.buffer = burstBuf;
+      const burstGain = ctx.createGain();
+      burstGain.gain.setValueAtTime(0.28, t);
+      burstGain.gain.exponentialRampToValueAtTime(0.001, t + 0.45);
+      burst.connect(burstGain); burstGain.connect(ctx.destination);
+      burst.start(t);
+
+      // Falling data arpeggio — memory dumping out
+      const arp = ctx.createOscillator();
+      arp.type = 'square';
+      arp.frequency.setValueAtTime(2200, t + 0.05);
+      arp.frequency.exponentialRampToValueAtTime(110, t + 0.9);
+      const arpGain = ctx.createGain();
+      arpGain.gain.setValueAtTime(0.16, t + 0.05);
+      arpGain.gain.exponentialRampToValueAtTime(0.001, t + 1.0);
+      arp.connect(arpGain); arpGain.connect(ctx.destination);
+      arp.start(t + 0.05); arp.stop(t + 1.05);
+
+      // Low sub thud for weight
+      const sub = ctx.createOscillator();
+      sub.type = 'sine';
+      sub.frequency.setValueAtTime(160, t);
+      sub.frequency.exponentialRampToValueAtTime(30, t + 0.5);
+      const subGain = ctx.createGain();
+      subGain.gain.setValueAtTime(0.5, t);
+      subGain.gain.exponentialRampToValueAtTime(0.001, t + 0.6);
+      sub.connect(subGain); subGain.connect(ctx.destination);
+      sub.start(t); sub.stop(t + 0.65);
+    } catch (e) {}
+  }, []);
+
   const createDistortionCurve = (amount = 50) => {
     const k = typeof amount === 'number' ? amount : 50;
     const n_samples = 44100;
@@ -588,34 +827,9 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
     // Don't trigger the apocalyptic audio instantly. Give the user a 1-second grace period 
     // so they can double-click or swipe past icons without annoyance.
     hoverDelayTimerRef.current = setTimeout(() => {
-      setIsArmed(true); // Icon starts physically tearing apart
-      setCountdown(3); // Start countdown from 3
-
-      // Start Air Raid Siren
-      startSiren();
-
-      // Start playing geiger clicks at random intervals
-      const clickLoop = () => {
-        playGeigerClick();
-        const nextClick = 50 + Math.random() * 150; // Getting faster as it approaches
-        geigerIntervalRef.current = setTimeout(clickLoop, nextClick);
-      };
-      geigerIntervalRef.current = setTimeout(clickLoop, 100);
-
-      // Countdown ticks: 3 → 2 → 1 → BOOM
-      let currentCount = 3;
-      const countdownInterval = setInterval(() => {
-        currentCount--;
-        if (currentCount > 0) {
-          setCountdown(currentCount);
-        } else {
-          clearInterval(countdownInterval);
-          setCountdown(0);
-        }
-      }, 1000);
-
-      // Detonate after 3 seconds of countdown
-      explosionTimerRef.current = setTimeout(() => {
+      // Shared blast sequence — each flavor reaches it its own way.
+      // Synthwave never counts down; the snap simply happens.
+      const doBlast = () => {
         setIsArmed(false); // Explosion takes over
         setCountdown(0);
 
@@ -629,70 +843,101 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
         stopSiren();
         
         setIsExploding(true);
-        triggerScreenShake();
-        triggerFullScreenFlash();
-        playExplosionSound();
-        
-        // Dispatch explosion event to affect other icons globally
-        const rect = iconRef.current?.getBoundingClientRect();
-        if (rect) {
-          const impactPoint = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, sourceId: id };
-          window.dispatchEvent(
-            new CustomEvent('fallout-explosion', {
-              detail: impactPoint
-            })
-          );
-          window.dispatchEvent(
-            new CustomEvent('fallout-strike-request', {
-              detail: impactPoint
-            })
-          );
+
+        // Themed audio: tape-eject zap for Synthwave, glitch crash for Cyberpunk
+        if (GIMMICK_TYPE === 'synth') playSynthEject();
+        if (GIMMICK_TYPE === 'cpunk') playCpunkCrash();
+
+        if (GIMMICK_TYPE === 'nuke') {
+          // Physical-world aftermath is nuke-only: shake, flash, boom,
+          // neighbor displacement, crater, CRT static and fallout rain.
+          triggerScreenShake();
+          triggerFullScreenFlash();
+          playExplosionSound();
+
+          const rect = iconRef.current?.getBoundingClientRect();
+          if (rect) {
+            const impactPoint = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, sourceId: id };
+            window.dispatchEvent(
+              new CustomEvent('fallout-explosion', {
+                detail: impactPoint
+              })
+            );
+            window.dispatchEvent(
+              new CustomEvent('fallout-strike-request', {
+                detail: impactPoint
+              })
+            );
+          }
+          // Leave a scorched crater at ground zero
+          setIsCratered(true);
+          setTimeout(() => setIsCratered(false), 14000);
+
+          // Every detonation pollutes the whole desktop a little more
+          addPollution(1);
         }
-        // Leave a scorched crater at ground zero
-        setIsCratered(true);
-        setTimeout(() => setIsCratered(false), 14000);
 
-        // Spawn full-screen CRT damage static
-        document.querySelectorAll('.fallout-crt-damage').forEach(el => el.remove());
-        const crtDamage = document.createElement('div');
-        crtDamage.className = 'fallout-crt-damage';
-        document.body.appendChild(crtDamage);
-        setTimeout(() => crtDamage.remove(), 3000);
-
-        // Spawn radioactive fallout rain across the viewport (Optimized Count)
-        document.querySelectorAll('.fallout-rain-container').forEach(el => el.remove());
-        const rainContainer = document.createElement('div');
-        rainContainer.className = 'fallout-rain-container';
-        for (let i = 0; i < 20; i++) {
-          const drop = document.createElement('div');
-          drop.className = 'fallout-rain-drop';
-          drop.style.left = `${Math.random() * 100}%`;
-          drop.style.animationDelay = `${Math.random() * 4}s`;
-          drop.style.animationDuration = `${3 + Math.random() * 4}s`;
-          drop.style.opacity = `${0.3 + Math.random() * 0.7}`;
-          drop.style.width = `${1 + Math.random() * 3}px`;
-          drop.style.height = `${1 + Math.random() * 3}px`;
-          rainContainer.appendChild(drop);
-        }
-        document.body.appendChild(rainContainer);
-        setTimeout(() => rainContainer.remove(), 8000);
-
-        // Let the icon start reconstructing from the nuclear ashes
-        setTimeout(() => setIsReforming(true), 6000);
+        // Let the icon start reconstructing from the ashes / corrupted sectors.
+        // Synth + cpunk scenes are shorter than the mushroom cloud.
+        const reformDelay = GIMMICK_TYPE === 'nuke' ? 6000 : 4000;
+        const sceneLifetime = GIMMICK_TYPE === 'nuke' ? 11000 : 7000;
+        setTimeout(() => setIsReforming(true), reformDelay);
         setTimeout(() => {
           setIsReforming(false);
           // Icon is now irradiated — glows green and pulses
           setIsIrradiated(true);
           setTimeout(() => setIsIrradiated(false), 5000);
-        }, 8000);
+        }, reformDelay + 2000);
 
-        // Keep the mushroom cloud DOM elements alive for 11 seconds total
         setTimeout(() => {
           setIsExploding(false);
-        }, 11000);
-      }, 2500);
+        }, sceneLifetime);
+      };
+
+      // Synthwave EJECT: no countdown panel — instead the icon charges up with
+      // chromatic ghosting for a moment, then the snap just happens
+      if (GIMMICK_TYPE === 'synth') {
+        setIsArmed(true); // arm visuals: pink/cyan glow builds while hovering
+        explosionTimerRef.current = setTimeout(doBlast, 1100);
+        return;
+      }
+
+      setIsArmed(true); // Icon starts physically tearing apart
+      setCountdown(3);
+
+      // Cyberdeck beep when the breach sequence arms
+      if (GIMMICK_TYPE === 'cpunk') playCpunkBeep();
+
+      // Siren + geiger clicks are Fallout-flavor only — a cyberdeck doesn't
+      // wail like an air-raid horn
+      if (GIMMICK_TYPE === 'nuke') {
+        startSiren();
+
+        const clickLoop = () => {
+          playGeigerClick();
+          const nextClick = 50 + Math.random() * 150; // Getting faster as it approaches
+          geigerIntervalRef.current = setTimeout(clickLoop, nextClick);
+        };
+        geigerIntervalRef.current = setTimeout(clickLoop, 100);
+      }
+
+      // Countdown ticks: 3 → 2 → 1 → BOOM / BREACH
+      let currentCount = 3;
+      const countdownInterval = setInterval(() => {
+        currentCount--;
+        if (currentCount > 0) {
+          setCountdown(currentCount);
+          // Terminal beep per breach tick
+          if (GIMMICK_TYPE === 'cpunk') playCpunkBeep();
+        } else {
+          clearInterval(countdownInterval);
+          setCountdown(0);
+        }
+      }, 1000);
+
+      explosionTimerRef.current = setTimeout(doBlast, 2500);
     }, 1000); // 1000ms grace period
-  }, [isFalloutTheme, isExploding, isReforming, playGeigerClick, playExplosionSound, startSiren, stopSiren, id]);
+  }, [GIMMICK_TYPE, isFalloutTheme, isExploding, isReforming, playGeigerClick, playExplosionSound, playSynthEject, playCpunkBeep, playCpunkCrash, startSiren, stopSiren, id]);
 
   const handleMouseLeave = useCallback(() => {
     setIsArmed(false);
@@ -777,19 +1022,161 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
       );
     }
 
+    // ── SYNTHWAVE: Thanos-snap dust disintegration ──
+    if (GIMMICK_TYPE === 'synth') {
+      const dustColors = ['#ff71ce', '#01cdfe', '#b967ff', '#ffffff'];
+      return (
+        <div className="absolute pointer-events-none z-50" style={{ left: '-60px', top: '-60px', right: '-60px', bottom: '-60px' }}>
+          {/* Dust motes — the icon crumbling away on the wind */}
+          {Array.from({ length: 42 }, (_, i) => {
+            const size = 2 + Math.random() * 3;
+            const c = dustColors[i % dustColors.length];
+            const driftX = (Math.random() - 0.35) * 90; // biased upward-right
+            const driftY = -(40 + Math.random() * 110);
+            return (
+              <div
+                key={`dust-${i}`}
+                className="absolute pointer-events-none rounded-full"
+                style={{
+                  left: `${15 + Math.random() * 70}%`,
+                  top: `${20 + Math.random() * 60}%`,
+                  width: size, height: size,
+                  backgroundColor: c,
+                  boxShadow: `0 0 ${3 + size}px ${c}`,
+                  '--dx': `${driftX}px`,
+                  '--dy': `${driftY}px`,
+                  '--d-op': `${0.5 + Math.random() * 0.5}`,
+                  animation: `synth-dust-drift ${1.6 + Math.random() * 1.8}s ${Math.random() * 1.4}s ease-out forwards`,
+                }}
+              />
+            );
+          })}
+
+          {/* Soft magenta afterglow where the icon used to be */}
+          <div
+            className="absolute pointer-events-none rounded-full"
+            style={{
+              left: '50%', top: '50%', width: 120, height: 120,
+              transform: 'translate(-50%, -50%)',
+              background: 'radial-gradient(circle, rgba(255,113,206,0.25) 0%, rgba(185,103,255,0.1) 50%, transparent 75%)',
+              animation: 'fallout-nuke-flash 2s ease-out forwards',
+            }}
+          />
+
+          {embers}
+        </div>
+      );
+    }
+
+    // ── CYBERPUNK: ICE breach system crash ──
+    if (GIMMICK_TYPE === 'cpunk') {
+      const glyphChars = '01<>[]{}#$%&*@!?ABCDEF';
+      return (
+        <div className="absolute pointer-events-none z-50" style={{ left: '-60px', top: '-60px', right: '-60px', bottom: '-60px' }}>
+          {/* Falling data glyphs — the icon's memory dumping out */}
+          {Array.from({ length: 14 }, (_, i) => (
+            <pre
+              key={`g-${i}`}
+              className="absolute pointer-events-none font-mono"
+              style={{
+                left: `${8 + Math.random() * 84}%`,
+                top: `${20 + Math.random() * 40}%`,
+                fontSize: 11,
+                lineHeight: '11px',
+                color: i % 3 === 0 ? '#ff003c' : '#00fff0',
+                textShadow: `0 0 6px ${i % 3 === 0 ? '#ff003c' : '#00fff0'}`,
+                margin: 0,
+                animation: `cpunk-glyph-fall ${1 + Math.random() * 0.9}s ${Math.random() * 0.4}s ease-in forwards`,
+              }}
+            >
+              {Array.from({ length: 6 }, () => glyphChars[Math.floor(Math.random() * glyphChars.length)]).join('\n')}
+            </pre>
+          ))}
+
+          {/* Pixel shards scattering downward */}
+          {Array.from({ length: 18 }, (_, i) => {
+            const size = 3 + Math.random() * 4;
+            const pxColors = ['#00fff0', '#ff003c', '#ffe600'];
+            const c = pxColors[i % pxColors.length];
+            const angle = Math.random() * Math.PI * 2;
+            return (
+              <div
+                key={`p-${i}`}
+                className="absolute pointer-events-none"
+                style={{
+                  left: '50%', top: '50%',
+                  width: size, height: size,
+                  backgroundColor: c,
+                  boxShadow: `0 0 5px ${c}`,
+                  animation: `cpunk-pixel-drop ${0.9 + Math.random() * 0.8}s ${Math.random() * 0.3}s ease-in forwards`,
+                  '--fly-x': `${Math.cos(angle) * 70}px`,
+                }}
+              />
+            );
+          })}
+
+          {/* ACCESS DENIED stamp */}
+          <div
+            className="absolute pointer-events-none flex items-center justify-center"
+            style={{
+              left: '50%', top: '50%',
+              padding: '4px 10px',
+              border: '3px solid #ff003c',
+              borderRadius: 4,
+              color: '#ff003c',
+              fontFamily: 'monospace',
+              fontWeight: 700,
+              fontSize: '0.85rem',
+              letterSpacing: '2px',
+              background: 'rgba(255,0,60,0.08)',
+              textShadow: '0 0 10px rgba(255,0,60,0.7)',
+              whiteSpace: 'nowrap',
+              animation: 'cpunk-denied 1.6s steps(4) 0.2s forwards',
+            }}
+          >
+            ACCESS DENIED
+          </div>
+
+          {/* EMP rings (theme-tinted) */}
+          {[
+            { delay: '0s', duration: '1s' },
+            { delay: '0.2s', duration: '1.5s' },
+          ].map((ring, i) => (
+            <div
+              key={`ering-${i}`}
+              className="absolute pointer-events-none rounded-full"
+              style={{
+                left: '50%', top: '50%',
+                transform: 'translate(-50%, -50%)',
+                '--sw-from': gm.swFrom,
+                '--sw-to': gm.swTo,
+                animation: `fallout-shockwave ${ring.duration} ${ring.delay} cubic-bezier(0, 0, 0.2, 1) forwards`,
+              }}
+            />
+          ))}
+
+          {/* EMP glow ring */}
+          <div
+            className="absolute pointer-events-none"
+            style={{
+              left: '50%', top: '50%',
+              borderRadius: '50%',
+              border: `solid ${gm.rgBorder}`,
+              boxShadow: `0 0 60px ${gm.rgGlow}, inset 0 0 60px ${gm.rgGlow}`,
+              '--rg-border': gm.rgBorder,
+              '--rg-glow': gm.rgGlow,
+              '--sw-to': gm.swTo,
+              animation: 'fallout-radiation-glow 2.5s cubic-bezier(0.1, 0.9, 0.2, 1) forwards',
+              zIndex: 9999,
+            }}
+          />
+        </div>
+      );
+    }
+
+    // ── FALLOUT / RETRO: nuclear strike ──
     return (
       <div className="absolute pointer-events-none z-50" style={{ left: '-60px', top: '-60px', right: '-60px', bottom: '-60px' }}>
-        {/* Ground-zero fireball */}
-        <div
-          className="absolute pointer-events-none"
-          style={{
-            left: '50%', top: '50%',
-            width: 20, height: 20,
-            transform: 'translate(-50%, -50%)',
-            animation: 'fallout-fireball 0.8s ease-out forwards',
-          }}
-        />
-
         {/* Central nuclear flash */}
         <div
           className="absolute pointer-events-none rounded-full"
@@ -797,7 +1184,7 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
             left: '50%', top: '50%',
             width: 10, height: 10,
             transform: 'translate(-50%, -50%)',
-            animation: 'fallout-nuke-flash 0.8s ease-out forwards',
+            animation: 'fallout-nuke-flash 0.6s ease-out forwards',
           }}
         />
 
@@ -837,14 +1224,15 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
         <svg width="0" height="0" className="absolute pointer-events-none">
           <defs>
             <filter id={`mushroom-smoke-filter-${id}`} x="-150%" y="-150%" width="400%" height="400%">
-              {/* Generate high-fidelity fractal noise for organic billows */}
-              <feTurbulence type="fractalNoise" baseFrequency="0.015" numOctaves="4" result="noise" />
+              {/* Fractal noise for organic billows — 2 octaves keeps GPU/CPU
+                  cost sane; the lumpy border-radius shapes do most of the work */}
+              <feTurbulence type="fractalNoise" baseFrequency="0.015" numOctaves="2" seed="7" result="noise" />
               {/* Volumetric displacement */}
-              <feDisplacementMap in="SourceGraphic" in2="noise" scale="40" xChannelSelector="R" yChannelSelector="G" result="displaced" />
+              <feDisplacementMap in="SourceGraphic" in2="noise" scale="30" xChannelSelector="R" yChannelSelector="G" result="displaced" />
               {/* Soften edges for smoke plume realism */}
-              <feGaussianBlur in="displaced" stdDeviation="5" result="blur" />
+              <feGaussianBlur in="displaced" stdDeviation="3" result="blur" />
               <feComponentTransfer in="blur">
-                <feFuncA type="linear" slope="1.8" />
+                <feFuncA type="linear" slope="1.6" />
               </feComponentTransfer>
             </filter>
           </defs>
@@ -875,6 +1263,7 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
             style={{
               left: '50%', top: '50%',
               width: 70,
+              height: 185,
               background: 'linear-gradient(to top, rgba(30, 20, 20, 0.95), rgba(50, 40, 40, 0.75) 50%, rgba(200, 80, 20, 0.2))',
               borderRadius: '30px',
               animation: 'fallout-giant-mushroom-stem 10s cubic-bezier(0.1, 0.8, 0.2, 1) forwards',
@@ -887,10 +1276,11 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
             style={{
               left: '50%', top: '50%',
               width: 25,
+              height: 165,
               background: 'linear-gradient(to top, #ffffff, #ffcc00 20%, #ff4400 60%, transparent)',
               boxShadow: '0 0 30px #ff3300, 0 0 10px #ffaa00',
               borderRadius: '15px',
-              animation: 'fallout-giant-mushroom-stem 10s cubic-bezier(0.1, 0.8, 0.2, 1) forwards',
+              animation: 'fallout-fiery-core 10s cubic-bezier(0.1, 0.8, 0.2, 1) forwards',
               opacity: 0.9,
             }}
           />
@@ -939,6 +1329,35 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
               border: '3px solid rgba(255, 255, 255, 0.45)',
               boxShadow: '0 0 15px rgba(255, 255, 255, 0.3), inset 0 0 15px rgba(255, 255, 255, 0.3)',
               animation: 'fallout-nuke-condensation-ring 10s cubic-bezier(0.1, 0.8, 0.2, 1) forwards',
+            }}
+          />
+
+          {/* Cauliflower billow puffs — secondary lobes rolling off the cap rim */}
+          <div
+            className="absolute pointer-events-none rounded-full"
+            style={{
+              left: '50%', top: '50%',
+              width: 90, height: 70,
+              background: 'radial-gradient(circle at 45% 45%, rgba(255, 120, 30, 0.4) 0%, rgba(60, 45, 40, 0.9) 55%, rgba(22, 16, 16, 0.95) 82%, transparent 100%)',
+              animation: 'fallout-mushroom-puff-a 10s cubic-bezier(0.1, 0.8, 0.2, 1) 0.35s forwards',
+            }}
+          />
+          <div
+            className="absolute pointer-events-none rounded-full"
+            style={{
+              left: '50%', top: '50%',
+              width: 80, height: 62,
+              background: 'radial-gradient(circle at 55% 45%, rgba(255, 110, 25, 0.38) 0%, rgba(58, 44, 40, 0.9) 55%, rgba(20, 15, 15, 0.95) 82%, transparent 100%)',
+              animation: 'fallout-mushroom-puff-b 10s cubic-bezier(0.1, 0.8, 0.2, 1) 0.55s forwards',
+            }}
+          />
+          <div
+            className="absolute pointer-events-none rounded-full"
+            style={{
+              left: '50%', top: '50%',
+              width: 74, height: 58,
+              background: 'radial-gradient(circle at 50% 40%, rgba(255, 130, 35, 0.35) 0%, rgba(62, 47, 42, 0.88) 55%, rgba(24, 18, 18, 0.94) 82%, transparent 100%)',
+              animation: 'fallout-mushroom-puff-c 10s cubic-bezier(0.1, 0.8, 0.2, 1) 0.8s forwards',
             }}
           />
         </div>
@@ -1028,8 +1447,16 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
       <div 
         className={`flex items-center justify-center transition-transform duration-300 pointer-events-none group-hover:shadow-indigo-500/20 ${isDragging ? 'scale-110 shadow-2xl' : (!isArmed && !isExploding && !isReforming ? 'group-hover:scale-110' : '')}`}
         style={{
-          ...(isExploding ? { animation: 'fallout-icon-disintegrate 0.6s 0.2s ease-in forwards' } : {}),
+          ...(isExploding ? {
+            animation: GIMMICK_TYPE === 'synth'
+              ? 'synth-dust-disintegrate 2.4s ease-in forwards'
+              : GIMMICK_TYPE === 'cpunk'
+                ? 'cpunk-dissolve 0.9s steps(8) forwards'
+                : 'fallout-icon-disintegrate 0.6s 0.2s ease-in forwards',
+          } : {}),
           ...(isReforming ? { animation: 'fallout-icon-reform 0.8s ease-out forwards' } : {}),
+          // Scorched residue from a close nuclear hit — slowly heals
+          ...(isDamaged ? { animation: 'fallout-damage-decay 9s ease-out forwards' } : {}),
           ...(isIrradiated ? { 
             filter: 'hue-rotate(80deg) brightness(1.3) drop-shadow(0 0 12px rgba(50,255,50,0.8))',
             animation: 'fallout-irradiated-pulse 0.8s ease-in-out infinite alternate',
@@ -1042,6 +1469,10 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
                 ? 'fallout-countdown-shake-medium 0.2s infinite'
                 : 'fallout-countdown-shake-light 0.3s infinite',
             filter: `brightness(${1 + (4 - countdown) * 0.15}) saturate(${1 + (4 - countdown) * 0.3})`,
+          } : {}),
+          // Synthwave arming: chromatic pink/cyan ghosting builds until the snap
+          ...(isArmed && GIMMICK_TYPE === 'synth' ? {
+            animation: 'synth-hover-arm 0.45s ease-in-out infinite alternate',
           } : {}),
         }}
       >
@@ -1075,48 +1506,128 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
         className={`${sizes.text} text-[var(--desktop-icon-text)] text-center font-bold select-none leading-tight pointer-events-none px-1.5 py-0.5 mt-1.5`} 
         style={{ 
           textShadow: '0 1px 3px rgba(0,0,0,1), 0 2px 6px rgba(0,0,0,0.8), 0 0 10px rgba(0,0,0,0.5)',
-          ...(isExploding ? { animation: 'fallout-icon-disintegrate 0.6s 0.2s ease-in forwards' } : {}),
+          ...(isExploding ? {
+            animation: GIMMICK_TYPE === 'synth'
+              ? 'synth-dust-disintegrate 2.4s ease-in forwards'
+              : GIMMICK_TYPE === 'cpunk'
+                ? 'cpunk-dissolve 0.9s steps(8) forwards'
+                : 'fallout-icon-disintegrate 0.6s 0.2s ease-in forwards',
+          } : {}),
           ...(isReforming ? { animation: 'fallout-icon-reform 0.8s ease-out forwards' } : {}),
         }}>
         {title}
       </span>
 
-      {/* Countdown Timer During Arming Phase */}
-      {isArmed && countdown > 0 && (
-        <div 
-          className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 pointer-events-none flex flex-col items-center justify-center"
+      {/* Countdown Timer During Arming Phase — themed per gimmick */}
+      {isArmed && GIMMICK_TYPE === 'synth' && (
+        <div
+          className="absolute top-full left-1/2 -translate-x-1/2 mt-1 z-50 pointer-events-none whitespace-nowrap font-mono text-[9px]"
+          style={{
+            color: '#ff71ce',
+            textShadow: '0 0 8px rgba(255,46,196,0.7)',
+            background: 'rgba(10, 2, 14, 0.9)',
+            border: '1px solid rgba(255,46,196,0.5)',
+            borderRadius: 3,
+            padding: '2px 8px',
+            letterSpacing: '2px',
+            animation: 'fallout-countdown-blink 0.6s steps(2) infinite',
+          }}
         >
-          {/* Glowing countdown number */}
-          <div
-            key={countdown}
-            style={{ 
-              fontSize: '5rem',
-              fontWeight: '900',
-              fontFamily: 'monospace',
-              color: countdown === 1 ? '#ff2200' : countdown === 2 ? '#ff6600' : '#ffcc00',
-              textShadow: countdown === 1
-                ? '0 0 30px #ff0000, 0 0 60px #ff0000, 0 0 100px #ff4400, 0 0 150px #ffffff'
-                : countdown === 2
-                  ? '0 0 25px #ff6600, 0 0 50px #ff4400, 0 0 80px #ffaa00'
-                  : '0 0 20px #ffaa00, 0 0 40px #ff6600, 0 0 60px #ffcc00',
-              animation: 'fallout-countdown-pulse 1s ease-out forwards',
-              lineHeight: 1,
+          ⏏ EJECTING
+        </div>
+      )}
+      {isArmed && countdown > 0 && GIMMICK_TYPE === 'cpunk' && (
+        <div
+          className="absolute top-full left-1/2 -translate-x-1/2 mt-1 z-50 pointer-events-none whitespace-nowrap font-mono text-[10px]"
+          style={{
+            color: countdown === 1 ? '#ff003c' : '#00fff0',
+            textShadow: `0 0 8px ${countdown === 1 ? 'rgba(255,0,60,0.7)' : 'rgba(0,255,240,0.6)'}`,
+            background: 'rgba(0, 10, 14, 0.92)',
+            border: `1px solid ${countdown === 1 ? 'rgba(255,0,60,0.5)' : 'rgba(0,255,240,0.4)'}`,
+            borderRadius: 3,
+            padding: '3px 8px',
+          }}
+        >
+          {`> ice --breach target=0x${id.slice(-4)} T-00:0${countdown}`}
+          <span
+            style={{
+              display: 'inline-block', width: 6, height: 10, marginLeft: 4,
+              background: countdown === 1 ? '#ff003c' : '#00fff0',
+              verticalAlign: 'middle',
+              animation: 'fallout-countdown-blink 0.5s steps(2) infinite',
             }}
-          >
-            {countdown}
-          </div>
-          {/* Small radiation symbol below number */}
+          />
+        </div>
+      )}
+      {isArmed && countdown > 0 && GIMMICK_TYPE !== 'cpunk' && (
+        <div
+          className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 pointer-events-none flex flex-col items-center"
+        >
+          {/* Detonator panel — themed per gimmick */}
           <div
             style={{
-              fontSize: '1.2rem',
-              color: '#ffcc00',
-              marginTop: '-4px',
-              opacity: 0.7,
-              textShadow: '0 0 10px #ffaa00',
-              animation: 'fallout-biohazard-flash 0.3s infinite alternate ease-in-out',
+              background: 'rgba(8, 10, 6, 0.92)',
+              border: `2px solid ${gm.panelBorder}`,
+              borderRadius: '4px',
+              boxShadow: 'inset 0 0 12px rgba(0,0,0,0.9), 0 4px 14px rgba(0,0,0,0.6)',
+              padding: '6px 12px 7px',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: '1px',
+              // repeating hazard stripes along the top edge
+              backgroundImage: 'repeating-linear-gradient(45deg, rgba(255,180,40,0.16) 0 8px, transparent 8px 16px)',
             }}
           >
-            ☢
+            {/* Label */}
+            <div
+              style={{
+                fontSize: '0.55rem',
+                letterSpacing: '2px',
+                fontWeight: 700,
+                color: '#ffaa00',
+                fontFamily: 'monospace',
+                opacity: 0.85,
+              }}
+            >
+              ⚠ DETONATION IN
+            </div>
+
+            {/* Digits — flat 7-segment look, minimal glow (cheap to composite) */}
+            <div
+              key={countdown}
+              style={{
+                fontSize: '2.6rem',
+                fontWeight: 700,
+                fontFamily: '"Courier New", monospace',
+                fontVariantNumeric: 'tabular-nums',
+                lineHeight: 1,
+                letterSpacing: '4px',
+                color: gm.digit[countdown - 1] || gm.digit[0],
+                textShadow: countdown === 1 ? `0 0 12px ${gm.digit[2]}` : 'none',
+                animation: 'fallout-countdown-pulse 1s ease-out forwards',
+                transformOrigin: 'center',
+              }}
+            >
+              {`00:0${countdown}`}
+            </div>
+
+            {/* Blinking arm indicator — opacity-only pulse (compositor friendly) */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '5px',
+                fontSize: '0.6rem',
+                color: gm.digit[0],
+                fontFamily: 'monospace',
+                animation: 'fallout-countdown-blink 0.5s steps(2) infinite',
+              }}
+            >
+              <span>☢</span>
+              <span style={{ letterSpacing: '1px' }}>{gm.tag}</span>
+              <span>☢</span>
+            </div>
           </div>
         </div>
       )}

@@ -11,6 +11,7 @@ import {
   PlusCircle, Terminal, ShieldCheck, Eye, Copy, Maximize2, HelpCircle, Wifi
 } from 'lucide-react';
 import { io } from 'socket.io-client';
+import ThemeSelect from '@/components/common/ThemeSelect';
 
 export default function DatabaseView({ connection, onClose }) {
   const { state: appState, apiFetch, dispatch } = useApp();
@@ -1753,22 +1754,24 @@ export default function DatabaseView({ connection, onClose }) {
 
                             <div className="flex items-center gap-2">
                                 <div className="relative">
-                                    <select 
-                                        value={aiModel} 
-                                        onChange={(e) => {
-                                            setAiModel(e.target.value);
-                                            if (e.target.value === 'manual') setAiSettingsOpen(true);
-                                        }} 
+                                    <ThemeSelect
+                                        className="w-52"
+                                        size="md"
+                                        value={aiModel}
+                                        onChange={(v) => {
+                                            setAiModel(v);
+                                            if (v === 'manual') setAiSettingsOpen(true);
+                                        }}
                                         disabled={isAiLoading || !!pendingAction}
-                                        className={`text-[11px] rounded-xl bg-purple-500/10 border border-purple-500/20 px-3 h-[38px] text-[var(--text-primary)] focus:outline-none focus:border-purple-500/50 cursor-pointer transition-all ${pendingAction ? 'opacity-50 cursor-not-allowed' : ''}`}
                                         title="AI Model"
-                                    >
-                                        <option value="auto">✨ Auto Select</option>
-                                        <option value="llama-3.1-8b-instant">🥉 Llama 3.1 8B (Thinking)</option>
-                                        <option value="meta-llama/llama-4-scout-17b-16e-instruct">🥇 Llama 4 Scout (Primary)</option>
-                                        <option value="llama-3.3-70b-versatile">🥈 Llama 3.3 70B (Heavy/Large)</option>
-                                        <option value="manual">🛠 Custom...</option>
-                                    </select>
+                                        options={[
+                                            { value: 'auto', label: '✨ Auto Select' },
+                                            { value: 'llama-3.1-8b-instant', label: '🥉 Llama 3.1 8B (Thinking)' },
+                                            { value: 'meta-llama/llama-4-scout-17b-16e-instruct', label: '🥇 Llama 4 Scout (Primary)' },
+                                            { value: 'llama-3.3-70b-versatile', label: '🥈 Llama 3.3 70B (Heavy/Large)' },
+                                            { value: 'manual', label: '🛠 Custom...' },
+                                        ]}
+                                    />
                                 </div>
                                 
                                 {aiModel === 'manual' && (

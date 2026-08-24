@@ -32,6 +32,7 @@ import SupportersAdminPanel from '@/components/common/SupportersAdminPanel';
 
 import { motion, AnimatePresence } from 'framer-motion';
 import ShortcutInput from '@/components/Desktop/ShortcutInput';
+import ThemeSelect from '@/components/common/ThemeSelect';
 
 /* ─── Production-grade reusable UI primitives ─── */
 
@@ -3143,21 +3144,19 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                             {gitProvider === 'bitbucket' && bbRepos.length > 0 && !repoInput && (
                               <div className="mb-2">
                                 <label className="block text-[10px] text-[var(--text-muted)] mb-1">Select from your repos:</label>
-                                <select
+                                <ThemeSelect
+                                  className="w-full"
+                                  size="md"
                                   value=""
-                                  onChange={(e) => {
-                                    if (e.target.value) {
-                                      setRepoInput(e.target.value);
+                                  onChange={(v) => {
+                                    if (v) {
+                                      setRepoInput(v);
                                       setBbRepos([]);
                                     }
                                   }}
-                                  className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none"
-                                >
-                                  <option value="">{loadingBbRepos ? 'Loading repos...' : 'Choose a repository...'}</option>
-                                  {bbRepos.map(r => (
-                                    <option key={r.slug} value={r.slug}>{r.name} ({r.slug}){r.isPrivate ? ' 🔒' : ''}</option>
-                                  ))}
-                                </select>
+                                  placeholder={loadingBbRepos ? 'Loading repos...' : 'Choose a repository...'}
+                                  options={bbRepos.map(r => ({ value: r.slug, label: `${r.name} (${r.slug})${r.isPrivate ? ' 🔒' : ''}` }))}
+                                />
                               </div>
                             )}
                             <input
@@ -3233,13 +3232,14 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                           <div className="rounded-2xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] p-4">
                             <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">{t('deploy.branchToWatch', 'Branch to watch')}</label>
                             {branches && branches.length > 0 ? (
-                              <select
-                                value={deployConfig.branch}
-                                onChange={(e) => setDeployConfig(p => ({ ...p, branch: e.target.value }))}
-                                className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500 transition-all"
-                              >
-                                {branches.map(b => <option key={b} value={b}>{b}</option>)}
-                              </select>
+                              <ThemeSelect
+                                className="w-full"
+                                size="md"
+                                value={deployConfig.branch || ''}
+                                onChange={(v) => setDeployConfig(p => ({ ...p, branch: v }))}
+                                placeholder="main"
+                                options={(branches || []).map(b => ({ value: b, label: b }))}
+                              />
                             ) : (
                               <input
                                 type="text"
@@ -3367,14 +3367,16 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                       <div className="space-y-3">
                         <div>
                           <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">{t('deploy.targetType', 'Target Type')}</label>
-                          <select
+                          <ThemeSelect
+                            className="w-full"
+                            size="md"
                             value={deployConfig.targetType}
-                            onChange={(e) => setDeployConfig(p => ({ ...p, targetType: e.target.value }))}
-                            className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500"
-                          >
-                            <option value="local">{t('deploy.targetLocal', 'Local Host')}</option>
-                            <option value="ssh">{t('deploy.targetSsh', 'Remote SSH Server')}</option>
-                          </select>
+                            onChange={(v) => setDeployConfig(p => ({ ...p, targetType: v }))}
+                            options={[
+                              { value: 'local', label: t('deploy.targetLocal', 'Local Host') },
+                              { value: 'ssh', label: t('deploy.targetSsh', 'Remote SSH Server') },
+                            ]}
+                          />
                         </div>
 
                         {deployConfig.targetType === 'ssh' && (
@@ -3413,16 +3415,17 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                                 <span className="block text-[9px] text-[var(--text-muted)] mt-1">{t('deploy.sshNoConnectionsHint', 'Please create an SSH connection in the main panel first.')}</span>
                               </div>
                             ) : (
-                              <select
-                                value={deployConfig.connectionId}
-                                onChange={(e) => setDeployConfig(p => ({ ...p, connectionId: e.target.value }))}
-                                className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500"
-                              >
-                                <option value="">{t('deploy.sshSelectPlaceholder', '-- Select SSH Connection --')}</option>
-                                {connections.map(c => (
-                                  <option key={c._id} value={c._id}>{c.name} ({c.host})</option>
-                                ))}
-                              </select>
+                              <ThemeSelect
+                                className="w-full"
+                                size="md"
+                                value={deployConfig.connectionId || ''}
+                                onChange={(v) => setDeployConfig(p => ({ ...p, connectionId: v }))}
+                                placeholder={t('deploy.sshSelectPlaceholder', '-- Select SSH Connection --')}
+                                options={[
+                                  { value: '', label: t('deploy.sshSelectPlaceholder', '-- Select SSH Connection --') },
+                                  ...connections.map(c => ({ value: c._id, label: `${c.name} (${c.host})` })),
+                                ]}
+                              />
                             )}
                           </div>
                         )}
@@ -3537,11 +3540,13 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                               <label className="block text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-1">
                                 Add Chat / Group to Recipients
                               </label>
-                              <select
+                              <ThemeSelect
+                                className="w-full"
+                                size="md"
                                 value=""
-                                onChange={(e) => {
-                                  if (e.target.value) {
-                                    const selectedId = e.target.value;
+                                onChange={(v) => {
+                                  if (v) {
+                                    const selectedId = v;
                                     const currentIds = String(deployConfig.telegramChatId || '')
                                       .split(/[\s,]+/)
                                       .map(id => id.trim())
@@ -3552,22 +3557,19 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                                     }
                                   }
                                 }}
-                                className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500"
-                              >
-                                <option value="">+ Select a chat to add to notification list...</option>
-                                {telegramChats.map(c => {
+                                placeholder="+ Select a chat to add to notification list..."
+                                options={telegramChats.map(c => {
                                   const currentIds = String(deployConfig.telegramChatId || '')
                                     .split(/[\s,]+/)
                                     .map(id => id.trim())
                                     .filter(Boolean);
                                   const isSelected = currentIds.includes(c.id);
-                                  return (
-                                    <option key={c.id} value={c.id} disabled={isSelected}>
-                                      {isSelected ? '✓ ' : ''}{c.title} ({c.type}) — ID: {c.id}
-                                    </option>
-                                  );
+                                  return {
+                                    value: c.id,
+                                    label: `${isSelected ? '✓ ' : ''}${c.title} (${c.type}) — ID: ${c.id}`,
+                                  };
                                 })}
-                              </select>
+                              />
                             </div>
                           )}
 
@@ -3673,16 +3675,18 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                       <div className="space-y-4">
                         <div>
                           <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">{t('deploy.aiModel', 'AI Model')}</label>
-                          <select
+                          <ThemeSelect
+                            className="w-full"
+                            size="md"
                             value={deployConfig.aiModel}
-                            onChange={(e) => setDeployConfig(p => ({ ...p, aiModel: e.target.value }))}
-                            className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500"
-                          >
-                            <option value="auto">{t('deploy.aiModelAuto', 'Auto')}</option>
-                            <option value="gpt-3.5-turbo">gpt-3.5-turbo</option>
-                            <option value="gpt-4">gpt-4</option>
-                            <option value="manual">{t('deploy.aiModelCustom', 'Custom Endpoint')}</option>
-                          </select>
+                            onChange={(v) => setDeployConfig(p => ({ ...p, aiModel: v }))}
+                            options={[
+                              { value: 'auto', label: t('deploy.aiModelAuto', 'Auto') },
+                              { value: 'gpt-3.5-turbo', label: 'gpt-3.5-turbo' },
+                              { value: 'gpt-4', label: 'gpt-4' },
+                              { value: 'manual', label: t('deploy.aiModelCustom', 'Custom Endpoint') },
+                            ]}
+                          />
                           <p className="mt-1 text-[10px] text-[var(--text-muted)]">{t('deploy.aiModelDesc', 'Choose a model or use a custom endpoint for your deployment analysis.')}</p>
                         </div>
 

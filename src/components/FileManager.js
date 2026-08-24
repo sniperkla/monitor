@@ -27,6 +27,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
 
 import MacOSModalWindow from '@/components/MacOSModalWindow';
+import ThemeSelect from '@/components/common/ThemeSelect';
 
 import { useApp } from '@/context/AppContext';
 import { useVault } from '@/context/VaultContext';
@@ -5186,12 +5187,18 @@ export default function FileManager({
                           <div className="space-y-3">
                             <div className="flex items-center justify-between text-[11px]">
                                <span>{t('ai.aiModel')}</span>
-                               <select value={sshAiPrefs.aiModel || 'auto'} onChange={(e) => setSshAiPrefs({ aiModel: e.target.value })} className="bg-black/40 border border-white/10 rounded px-1 py-0.5 outline-none text-[10px]">
-                                  <option value="auto">Auto</option>
-                                  <option value="llama-3.1-8b-instant">Llama 3.1 8B</option>
-                                  <option value="meta-llama/llama-4-scout-17b-16e-instruct">Llama 4 Scout</option>
-                                  <option value="manual">Manual Configuration</option>
-                               </select>
+                               <ThemeSelect
+                                 className="w-44"
+                                 size="xs"
+                                 value={sshAiPrefs.aiModel || 'auto'}
+                                 onChange={(v) => setSshAiPrefs({ aiModel: v })}
+                                 options={[
+                                   { value: 'auto', label: 'Auto' },
+                                   { value: 'llama-3.1-8b-instant', label: 'Llama 3.1 8B' },
+                                   { value: 'meta-llama/llama-4-scout-17b-16e-instruct', label: 'Llama 4 Scout' },
+                                   { value: 'manual', label: 'Manual Configuration' },
+                                 ]}
+                               />
                             </div>
 
                             {sshAiPrefs.aiModel === 'manual' && (

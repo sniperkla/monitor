@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import VirusScanOnboarding, { hasCompletedVirusScanOnboarding, resetVirusScanOnboarding } from '@/components/VirusScanOnboarding';
 import { useOS } from '@/context/OSContext';
+import ThemeSelect from '@/components/common/ThemeSelect';
 
 const SEVERITY = {
   critical: { label: 'Critical', color: 'text-rose-300', bg: 'bg-rose-500/10', border: 'border-rose-500/30', Icon: Skull },
@@ -48,50 +49,7 @@ function timeAgo(dateStr) {
   return new Date(dateStr).toLocaleDateString();
 }
 
-/* ---------- Themed dropdown (replaces native <select>) ---------- */
-function ThemeSelect({ value, options, onChange, disabled }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef(null);
-  useEffect(() => {
-    const close = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
-    document.addEventListener('mousedown', close);
-    return () => document.removeEventListener('mousedown', close);
-  }, []);
-  const current = options.find(o => o.value === value);
-  return (
-    <div ref={ref} className="relative flex-1 min-w-0">
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-white/[0.04] border border-white/10 hover:border-indigo-500/40 transition-colors text-sm text-left disabled:opacity-50"
-      >
-        <ServerIcon size={13} className="text-slate-500 shrink-0" />
-        <span className="flex-1 truncate text-slate-200">{current?.label || 'Select server…'}</span>
-        <ChevronDown size={14} className={`text-slate-500 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
-      </button>
-      {open && (
-        <div className="absolute z-50 mt-1 w-full max-h-56 overflow-y-auto rounded-lg bg-[#141824] border border-white/10 shadow-xl shadow-black/50 py-1">
-          {options.length === 0 && <p className="px-3 py-2 text-xs text-slate-500">No SSH connections</p>}
-          {options.map(o => (
-            <button
-              key={o.value}
-              type="button"
-              onClick={() => { onChange(o.value); setOpen(false); }}
-              className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left transition-colors ${
-                o.value === value ? 'bg-indigo-500/15 text-indigo-200' : 'text-slate-300 hover:bg-white/[0.05]'
-              }`}
-            >
-              <ServerIcon size={12} className={o.value === value ? 'text-indigo-400' : 'text-slate-600'} />
-              <span className="flex-1 truncate">{o.label}</span>
-              {o.value === value && <CheckCircle2 size={13} className="text-indigo-400" />}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
+/* ---------- Themed dropdown now shared: @/components/common/ThemeSelect ---------- */
 
 /* ---------- Collapsible evidence block ---------- */
 function Evidence({ text }) {
@@ -666,6 +624,8 @@ export default function VirusScannerApp({ windowId }) {
               value={selectedConn || ''}
               options={connOptions}
               onChange={(v) => setSelectedConn(v)}
+              icon={ServerIcon}
+              placeholder="Select server…"
             />
           </div>
           <button

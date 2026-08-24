@@ -6,14 +6,7 @@ import { useApp } from '@/context/AppContext';
 import { useVault } from '@/context/VaultContext';
 import { useSession } from 'next-auth/react';
 import { GalaxyBackground, MatrixRain } from './BackgroundEffects';
-
-const ASCII_LOGO = `
- ███████╗███████╗██╗  ██╗    ███╗   ███╗ ██████╗ ███╗   ██╗██╗████████╗ ██████╗ ██████╗
- ██╔════╝██╔════╝██║  ██║    ████╗ ████║██╔═══██╗████╗  ██║██║╚══██╔══╝██╔═══██╗██╔══██╗
- ███████╗███████╗███████║    ██╔████╔██║██║   ██║██╔██╗ ██║██║   ██║   ██║   ██║██████╔╝
- ╚════██║╚════██║██╔══██║    ██║╚██╔╝██║██║   ██║██║╚██╗██║██║   ██║   ██║   ██║██╔══██╗
- ███████║███████║██║  ██║    ██║ ╚═╝ ██║╚██████╔╝██║ ╚████║██║   ██║   ╚██████╔╝██║  ██║
- ╚══════╝╚══════╝╚═╝  ╚═╝    ╚═╝     ╚═╝ ╚═════╝ ╚═╝  ╚═══╝╚═╝   ╚═╝    ╚═════╝ ╚═╝  ╚═╝`.trim();
+import { LegacyBanner } from './LegacyBanner';
 
 const GLITCH_CSS = `
 @keyframes boot-glitch {
@@ -25,6 +18,61 @@ const GLITCH_CSS = `
 @keyframes boot-scanline {
   0% { top: -2px; }
   100% { top: 100%; }
+}
+@keyframes crt-flicker {
+  0%, 100% { opacity: 0.05; }
+  50% { opacity: 0.075; }
+  72% { opacity: 0.045; }
+}
+/* Matrix-glitch launch — hard digital corruption that decays into the dissolve */
+@keyframes launch-glitch {
+  0%, 100% { transform: translate(0) skewX(0deg); }
+  10% { transform: translate(-9px, 3px) skewX(4deg); }
+  20% { transform: translate(7px, -5px) skewX(-3deg); }
+  30% { transform: translate(-11px, -2px) skewY(1deg); }
+  40% { transform: translate(9px, 4px); }
+  50% { transform: translate(-6px, -3px) skewX(-4deg) scaleY(1.02); }
+  60% { transform: translate(10px, 1px) skewX(2deg); }
+  70% { transform: translate(-8px, 4px) scaleY(0.99); }
+  80% { transform: translate(5px, -2px) skewY(-1deg); }
+  90% { transform: translate(-3px, 1px); }
+}
+@keyframes launch-tear {
+  0%   { top: 8%;  height: 4%; opacity: 0;    transform: translateX(-45px); }
+  12%  { opacity: 1;  transform: translateX(35px); }
+  24%  { top: 62%; height: 9%; opacity: 0.6;  transform: translateX(-60px); }
+  36%  { top: 22%; height: 2%; opacity: 0.95; transform: translateX(50px); }
+  48%  { top: 74%; height: 7%; opacity: 0.55; transform: translateX(-30px); }
+  60%  { top: 40%; height: 12%; opacity: 1;   transform: translateX(65px); }
+  72%  { top: 52%; height: 3%; opacity: 0.85; transform: translateX(-40px); }
+  86%  { top: 82%; height: 6%; opacity: 0.7;  transform: translateX(25px); }
+  100% { top: 15%; height: 2%; opacity: 0;    transform: translateX(70px); }
+}
+@keyframes rgb-split {
+  0%, 100% { opacity: 0; transform: translateX(0); }
+  15% { opacity: 0.55; transform: translateX(-14px); }
+  30% { opacity: 0.2; transform: translateX(10px); }
+  45% { opacity: 0.6; transform: translateX(-18px); }
+  60% { opacity: 0.15; transform: translateX(6px); }
+  75% { opacity: 0.5; transform: translateX(-10px); }
+}
+@keyframes corrupt-blocks {
+  0%, 100% { background-position: 0 0; opacity: 0.25; }
+  20% { background-position: 40px 120px; opacity: 0.6; }
+  40% { background-position: -60px 40px; opacity: 0.3; }
+  60% { background-position: 90px -80px; opacity: 0.65; }
+  80% { background-position: -30px 160px; opacity: 0.35; }
+}
+/* Tear bands stretching into warp star-trails as the screen dissolves */
+@keyframes launch-streak {
+  0%   { transform: scaleY(0.12) translateY(50%); opacity: 0; }
+  30%  { opacity: 1; transform: scaleY(0.8) translateY(10%); }
+  100% { transform: scaleY(4) translateY(-70%); opacity: 0.85; }
+}
+@keyframes matrix-dissolve {
+  0% { opacity: 0; }
+  30% { opacity: 1; }
+  100% { opacity: 1; }
 }
 `;
 
@@ -54,7 +102,18 @@ const STATIC_BOOT_LINES = [
   { text: '[ OK ] CI/CD pipeline ready', delay: 2040, type: 'ok' },
 ];
 
-// TypewriterLine — same as BootScreen
+// Timelapse cadence — lines burst in rapid-fire like an accelerated boot recording
+const LINE_STAGGER_MS = 42; // gap between consecutive lines
+const TYPE_SPEED = { header: 3, divider: 3, dim: 2, boot: 1, ok: 1 };
+
+function staticDelay(i, original) {
+  // Compress the original choreography into a dense timelapse timeline
+  return original.type === 'header' ? 120 : 320 + i * LINE_STAGGER_MS;
+}
+
+const TIMELAPSE_LINES = STATIC_BOOT_LINES.map((line, i) => ({ ...line, delay: staticDelay(i, line) }));
+
+// TypewriterLine — timelapse variant: ultra-fast character feed
 function TypewriterLine({ text, delay, type, onDone }) {
   const [displayed, setDisplayed] = useState('');
   const [started, setStarted] = useState(false);
@@ -77,9 +136,10 @@ function TypewriterLine({ text, delay, type, onDone }) {
       return;
     }
     let i = 0;
-    const speed = type === 'header' ? 2 : type === 'divider' ? 4 : type === 'dim' ? 3 : 8;
+    const speed = TYPE_SPEED[type] ?? 1;
     const interval = setInterval(() => {
-      i++;
+      // Feed multiple chars per tick for the timelapse blur effect
+      i += speed <= 1 ? 4 : 1;
       setDisplayed(text.slice(0, i));
       if (i >= text.length) {
         clearInterval(interval);
@@ -109,6 +169,9 @@ function TypewriterLine({ text, delay, type, onDone }) {
 
   return (
     <div className="font-mono text-[9px] md:text-[11px] leading-relaxed flex items-center min-h-[18px]">
+      {(isBoot || isOk) && (
+        <span className="text-slate-600 mr-1.5 shrink-0 hidden sm:inline">[{(delay / 1000).toFixed(6).padStart(10)}]</span>
+      )}
       {isBoot && <span className="text-amber-400/80 mr-1.5 shrink-0">[BOOT]</span>}
       {isOk && <span className="text-emerald-400 mr-1.5 shrink-0">[ OK ]</span>}
       <span style={lineStyle}>{done ? (isBoot || isOk ? cleanText : text) : displayed}</span>
@@ -138,7 +201,7 @@ function FetchLine({ label, status, resultText, onDone }) {
         setTextDone(true);
         setPhase('waiting');
       }
-    }, 10);
+    }, 3);
     return () => clearInterval(interval);
   }, [label]);
 
@@ -203,6 +266,7 @@ export function BootSequence({ onComplete, onSkip }) {
   // Phase: 'static' → show static lines; 'dynamic' → show dynamic fetch lines; 'complete'
   const [showDynamic, setShowDynamic] = useState(false);
   const [dynamicStep, setDynamicStep] = useState(0); // 0=session, 1=vault, 2=connections, 3=relay
+  const [launching, setLaunching] = useState(false); // warp-zoom exit transition
   const completedRef = useRef(false);
 
   // Cursor blink
@@ -289,11 +353,12 @@ export function BootSequence({ onComplete, onSkip }) {
     if (dynamicStep === 3 && relayStatus === 'ok') setDynamicStep(4);
   }, [dynamicStep, relayStatus]);
 
-  // All dynamic steps done → complete
+  // All dynamic steps done → launch zoom transition, then hand off
   useEffect(() => {
     if (dynamicStep >= 4 && !completedRef.current) {
       completedRef.current = true;
-      setTimeout(onComplete, 600);
+      setLaunching(true);
+      setTimeout(onComplete, 500);
     }
   }, [dynamicStep, onComplete]);
 
@@ -343,38 +408,164 @@ export function BootSequence({ onComplete, onSkip }) {
   return (
     <motion.div
       initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
+      animate={launching ? { opacity: [1, 0.96, 0.85] } : { opacity: 1 }}
       exit={{ opacity: 0 }}
-      transition={{ duration: 0.3 }}
-      className="relative w-full min-h-screen flex items-center justify-center p-4 md:p-8 overflow-hidden bg-black"
+      transition={launching ? { duration: 0.5, times: [0, 0.5, 1], ease: 'easeInOut' } : { duration: 0.3 }}
+      className="relative w-full h-screen flex flex-col overflow-hidden bg-black"
+      style={{
+        animation: launching ? 'launch-glitch 0.12s steps(2) infinite' : 'none',
+        filter: launching ? 'blur(1.5px) brightness(1.25) contrast(1.15)' : 'none',
+        transition: launching ? 'filter 1.1s ease-in' : 'none',
+        willChange: launching ? 'transform, opacity' : 'auto',
+      }}
     >
       <style>{GLITCH_CSS}</style>
       <GalaxyBackground />
       <MatrixRain />
 
-      <div className="absolute inset-0 pointer-events-none z-10" style={{ background: 'radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.7) 100%)' }} />
+      <div className="absolute inset-0 pointer-events-none z-10" style={{ background: 'radial-gradient(ellipse at center, transparent 45%, rgba(0,0,0,0.75) 100%)' }} />
 
-      <motion.div
-        initial={{ y: 20, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        transition={{ type: 'spring', stiffness: 80, damping: 15 }}
-        className="relative z-20 w-full max-w-4xl flex flex-col rounded-xl overflow-hidden"
+      {/* High-intensity glitch launch — RGB channel split + corrupt data blocks + hard tear bands */}
+      <AnimatePresence>
+        {launching && (
+          <>
+            {/* Red channel ghost */}
+            <motion.div
+              key="rgb-r"
+              className="fixed inset-0 z-[60] pointer-events-none mix-blend-screen"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: [0, 0.7] }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.25, ease: 'easeOut' }}
+              style={{
+                background: 'linear-gradient(90deg, rgba(255,0,60,0.22), transparent 30%, transparent 70%, rgba(255,0,60,0.18))',
+                animation: 'rgb-split 0.19s steps(2) infinite',
+              }}
+            />
+            {/* Cyan channel ghost */}
+            <motion.div
+              key="rgb-c"
+              className="fixed inset-0 z-[60] pointer-events-none mix-blend-screen"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: [0, 0.7] }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.25, ease: 'easeOut' }}
+              style={{
+                background: 'linear-gradient(90deg, transparent 20%, rgba(0,240,255,0.2) 50%, transparent 80%)',
+                animation: 'rgb-split 0.16s steps(2) 0.04s infinite reverse',
+              }}
+            />
+            {/* Corrupt data blocks — chunky misaligned memory slices */}
+            <motion.div
+              key="corrupt"
+              className="fixed inset-0 z-[60] pointer-events-none"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: [0, 1] }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.3, ease: 'easeOut' }}
+              style={{
+                background:
+                  'repeating-linear-gradient(0deg, transparent 0 38px, rgba(74,222,128,0.12) 38px 41px), repeating-linear-gradient(90deg, transparent 0 110px, rgba(16,185,129,0.08) 110px 118px)',
+                backgroundSize: 'auto, 220px 100%',
+                animation: 'corrupt-blocks 0.24s steps(3) infinite',
+                mixBlendMode: 'screen',
+              }}
+            />
+            {/* Matrix scanline wash */}
+            <motion.div
+              key="glitch-wash"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: [0, 0.4] }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.3, ease: 'easeOut' }}
+              className="fixed inset-0 z-[61] pointer-events-none"
+              style={{
+                background: 'repeating-linear-gradient(0deg, rgba(34,197,94,0.2), rgba(34,197,94,0.2) 2px, transparent 2px, transparent 6px)',
+                mixBlendMode: 'screen',
+              }}
+            />
+            {/* Hard tear bands */}
+            {[0, 1, 2, 3].map((i) => (
+              <motion.div
+                key={`tear-${i}`}
+                className="fixed left-0 right-0 z-[62] pointer-events-none"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: [0, 1] }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.25, ease: 'easeOut', delay: i * 0.07 }}
+                style={{
+                  background: i % 2 === 1
+                    ? 'linear-gradient(90deg, rgba(16,185,129,0.45), rgba(134,239,172,0.7), rgba(16,185,129,0.45))'
+                    : i === 0
+                      ? 'rgba(255,0,60,0.28)'
+                      : 'rgba(0,240,255,0.26)',
+                  boxShadow: i % 2 === 1 ? '0 0 28px rgba(74,222,128,0.55)' : 'none',
+                  mixBlendMode: 'screen',
+                  animation: `launch-tear ${0.32 + (i % 2) * 0.14}s steps(4) ${i * 0.06}s infinite`,
+                }}
+              />
+            ))}
+            {/* Streak lines — tear bands stretching into warp star-trails */}
+            {[
+              { left: '30%', w: 2, d: 0.55, delay: 0.1 },
+              { left: '52%', w: 3, d: 0.45, delay: 0.18 },
+              { left: '68%', w: 2, d: 0.62, delay: 0.05 },
+              { left: '44%', w: 1, d: 0.5, delay: 0.24 },
+            ].map((s, i) => (
+              <motion.div
+                key={`streak-${i}`}
+                className="fixed z-[63] pointer-events-none"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.2, delay: s.delay }}
+                style={{
+                  left: s.left,
+                  top: '28%',
+                  width: s.w,
+                  height: '44vh',
+                  background: 'linear-gradient(180deg, transparent, rgba(134,239,172,0.85) 40%, rgba(255,255,255,0.9) 50%, rgba(52,211,153,0.7) 60%, transparent)',
+                  boxShadow: '0 0 14px rgba(74,222,128,0.5)',
+                  transformOrigin: 'center',
+                  animation: `launch-streak ${s.d}s ease-in ${s.delay}s infinite`,
+                }}
+              />
+            ))}
+          </>
+        )}
+      </AnimatePresence>
+
+      <div
+        className="relative z-20 w-full flex-1 flex flex-col overflow-hidden min-h-0"
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
         style={{
-          background: 'rgba(4, 5, 15, 0.85)',
-          border: hovered ? '1px solid rgba(74, 222, 128, 0.2)' : '1px solid rgba(99, 102, 241, 0.2)',
-          boxShadow: hovered
-            ? '0 0 80px rgba(74, 222, 128, 0.08), 0 25px 100px rgba(0,0,0,0.8), inset 0 0 30px rgba(74, 222, 128, 0.02)'
-            : '0 0 80px rgba(99, 102, 241, 0.1), 0 25px 100px rgba(0,0,0,0.8)',
-          maxHeight: '85vh',
-          backdropFilter: 'blur(12px)',
-          transition: 'border 0.4s, box-shadow 0.4s',
+          background: launching ? 'transparent' : 'rgba(4, 5, 15, 0.82)',
+          backdropFilter: 'blur(10px)',
+          transition: 'background 0.3s',
         }}
       >
         {/* Scanline overlay */}
-        <div className="absolute inset-0 pointer-events-none z-[1] overflow-hidden rounded-xl">
+        <div className="absolute inset-0 pointer-events-none z-[1] overflow-hidden">
           <div style={{ background: 'repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,0.012) 2px, rgba(255,255,255,0.012) 4px)', position: 'absolute', inset: 0 }} />
+          {/* CRT phosphor glow — faint emerald wash that flickers like a real tube */}
+          <div
+            className="pointer-events-none"
+            style={{
+              position: 'absolute', inset: 0,
+              background: 'radial-gradient(ellipse at center, rgba(74,222,128,0.05) 0%, rgba(74,222,128,0.015) 55%, transparent 75%)',
+              animation: 'crt-flicker 0.12s steps(2) infinite',
+            }}
+          />
+          {/* CRT vignette — dark rounded corners like a curved tube */}
+          <div
+            className="pointer-events-none"
+            style={{
+              position: 'absolute', inset: 0,
+              boxShadow: 'inset 0 0 90px rgba(0,0,0,0.45), inset 0 0 18px rgba(0,0,0,0.3)',
+              borderRadius: '10px',
+            }}
+          />
           <div
             className="absolute left-0 right-0 h-[2px]"
             style={{
@@ -414,36 +605,11 @@ export function BootSequence({ onComplete, onSkip }) {
 
         {/* Boot content */}
         <div className="flex-1 overflow-y-auto p-5 space-y-0.5 custom-scrollbar relative z-[2]" style={{ minHeight: '300px' }}>
-          {/* Glitch logo */}
-          <motion.pre
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ duration: 0.5 }}
-            className="text-[5px] sm:text-[7px] md:text-[8px] leading-tight font-mono mb-4 select-none text-indigo-500"
-            style={{
-              textShadow: '0 0 10px rgba(99,102,241,0.4)',
-              animation: hovered ? 'boot-glitch 3s infinite' : 'none',
-            }}
-          >
-            {ASCII_LOGO}
-          </motion.pre>
+          {/* Legacy terminal banner */}
+          <LegacyBanner hovered={hovered} />
 
-          {/* System info bar */}
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.2 }}
-            className="flex gap-4 mb-3 font-mono text-[8px] text-slate-500/60 border-b border-white/5 pb-2"
-          >
-            <span>CPU: 0.42</span>
-            <span>MEM: 1.2G/4G</span>
-            <span>DISK: 68%</span>
-            <span>NET: UP</span>
-            <span className="text-emerald-400/40">SECURE</span>
-          </motion.div>
-
-          {/* Static boot lines */}
-          {STATIC_BOOT_LINES.map((line, i) => (
+          {/* Static boot lines — timelapse cadence */}
+          {TIMELAPSE_LINES.map((line, i) => (
             <TypewriterLine key={i} text={line.text} delay={line.delay} type={line.type} onDone={handleStaticLineDone} />
           ))}
 
@@ -573,7 +739,7 @@ export function BootSequence({ onComplete, onSkip }) {
             <span className="shrink-0" style={{ color: serverStatus === 'error' ? '#f87171' : '#64748b' }}>{serverStatus === 'error' ? 'ERROR' : `${Math.round(progress)}%`}</span>
           </div>
         </div>
-      </motion.div>
+      </div>
     </motion.div>
   );
 }

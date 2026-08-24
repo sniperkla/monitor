@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import MongoBackupOnboarding, { hasCompletedMongoBackupOnboarding, resetMongoBackupOnboarding } from '@/components/MongoBackupOnboarding';
+import ThemeSelect from '@/components/common/ThemeSelect';
 
 const ALL_DATABASES = 'All Databases (*)';
 const ALL_COLLECTIONS = 'All Collections (*)';
@@ -4003,18 +4004,16 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                   <div className="flex items-center gap-3">
                     <div className="flex items-center gap-2">
                       <label className="text-xs font-bold text-[var(--text-muted)]">Cluster Target:</label>
-                      <select
+                      <ThemeSelect
+                        className="w-44"
+                        size="sm"
                         value={rsConnId}
-                        onChange={(e) => {
-                          setRsConnId(e.target.value);
-                          fetchReplicaSetStatus(e.target.value);
+                        onChange={(v) => {
+                          setRsConnId(v);
+                          fetchReplicaSetStatus(v);
                         }}
-                        className="select-field text-xs bg-[var(--bg-tertiary)] py-1 px-2 font-mono"
-                      >
-                        {dbConnections.map(c => (
-                          <option key={c._id} value={c._id}>{c.name}</option>
-                        ))}
-                      </select>
+                        options={dbConnections.map(c => ({ value: c._id, label: c.name }))}
+                      />
                     </div>
 
                     <button
@@ -4288,16 +4287,17 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                               <div>
                                 <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1">SSH Server</label>
                                 <div className="flex gap-1.5">
-                                  <select
-                                    value={node.sshConnId}
-                                    onChange={(e) => updateNode(i, { sshConnId: e.target.value, instances: [], selectedPort: '', selectedHost: '', verified: null, scanError: null })}
-                                    className="select-field text-xs flex-1 bg-[var(--bg-tertiary)] min-w-0 truncate"
-                                  >
-                                    <option value="">(Select SSH Server)</option>
-                                    {sshConnections.map(c => (
-                                      <option key={c._id} value={c._id}>{c.name} — {c.host}</option>
-                                    ))}
-                                  </select>
+                                  <ThemeSelect
+                                    className="flex-1 min-w-0"
+                                    size="sm"
+                                    value={node.sshConnId || ''}
+                                    onChange={(v) => updateNode(i, { sshConnId: v, instances: [], selectedPort: '', selectedHost: '', verified: null, scanError: null })}
+                                    placeholder="(Select SSH Server)"
+                                    options={[
+                                      { value: '', label: '(Select SSH Server)' },
+                                      ...sshConnections.map(c => ({ value: c._id, label: `${c.name} — ${c.host}` })),
+                                    ]}
+                                  />
                                   <button
                                     onClick={() => scanNode(i)}
                                     disabled={!node.sshConnId || node.scanning}
@@ -4323,25 +4323,21 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                               {node.instances.length > 0 && (
                                 <div>
                                   <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1">MongoDB Instance</label>
-                                  <select
+                                  <ThemeSelect
+                                    className="w-full"
+                                    size="sm"
                                     value={`${node.selectedHost}:${node.selectedPort}`}
-                                    onChange={(e) => {
-                                      const [h, ...pParts] = e.target.value.split(':');
+                                    onChange={(v) => {
+                                      const [h, ...pParts] = v.split(':');
                                       const p = pParts.join(':');
                                       updateNode(i, { selectedHost: h, selectedPort: p, verified: null });
                                       verifyNodePort(i, p, h);
                                     }}
-                                    className="select-field text-xs w-full bg-[var(--bg-tertiary)] font-mono"
-                                  >
-                                    {node.instances.map(inst => (
-                                      <option key={inst.port} value={`${inst.host}:${inst.port}`}>
-                                        {inst.host}:{inst.port}
-                                        {inst.connected
-                                          ? inst.isReplSet ? ` ✅ ${inst.state}` : ' ⚠️ Standalone'
-                                          : ' ❌ Unreachable'}
-                                      </option>
-                                    ))}
-                                  </select>
+                                    options={node.instances.map(inst => ({
+                                      value: `${inst.host}:${inst.port}`,
+                                      label: `${inst.host}:${inst.port}${inst.connected ? (inst.isReplSet ? ` ✅ ${inst.state}` : ' ⚠️ Standalone') : ' ❌ Unreachable'}`,
+                                    }))}
+                                  />
                                   {node.selectedHost && node.selectedPort && (
                                     <div className="mt-1 text-[10px] font-mono text-[var(--text-muted)]">
                                       Selected: <span className="text-emerald-400">{node.selectedHost}:{node.selectedPort}</span>

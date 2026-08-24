@@ -111,22 +111,33 @@ export function GalaxyBackground() {
     window.addEventListener('resize', handleResize);
 
     const draw = () => {
-      ctx.clearRect(0, 0, w, h);
       frame++;
 
-      vel.x *= INERTIA;
-      vel.y *= INERTIA;
-      cam.x += vel.x;
-      cam.y += vel.y;
+      // ── GPU throttle: render at ~30fps, not 60. Background parallax/twinkle
+      // is slow motion — halving the refresh is invisible but halves fill cost.
+      // Motion increments are compensated (x2) so speeds stay identical.
+      if (frame % 2 === 1) {
+        animId = requestAnimationFrame(draw);
+        return;
+      }
+      const STEP = 2;
+
+      ctx.clearRect(0, 0, w, h);
+
+      vel.x *= Math.pow(INERTIA, STEP);
+      vel.y *= Math.pow(INERTIA, STEP);
+      cam.x += vel.x * STEP;
+      cam.y += vel.y * STEP;
 
       const mouse = mouseRef.current;
+      const linkFrame = frame % 8 < STEP; // recompute node-node links every 4th render (~15fps)
 
       for (const star of stars) {
-        const noise = Math.sin(frame * star.twinkleSpeed + star.twinkleOffset) * 0.7 +
-                      Math.cos(frame * star.twinkleSpeed * 2.3 + star.twinkleOffset) * 0.3;
+        const noise = Math.sin(frame * STEP * star.twinkleSpeed + star.twinkleOffset) * 0.7 +
+                      Math.cos(frame * STEP * star.twinkleSpeed * 2.3 + star.twinkleOffset) * 0.3;
         const alpha = star.brightness * (0.35 + 0.65 * (0.5 + 0.5 * noise));
 
-        star.y += star.drift;
+        star.y += star.drift * STEP;
 
         const rx = ((star.x - cam.x * star.panSpeed) % w + w) % w;
         const ry = ((star.y - cam.y * star.panSpeed) % h + h) % h;
@@ -156,8 +167,8 @@ export function GalaxyBackground() {
 
       for (let i = 0; i < networkNodes.length; i++) {
         const node = networkNodes[i];
-        node.x += node.vx;
-        node.y += node.vy;
+        node.x += node.vx * STEP;
+        node.y += node.vy * STEP;
 
         const rx = ((node.x - cam.x * node.panSpeed) % w + w) % w;
         const ry = ((node.y - cam.y * node.panSpeed) % h + h) % h;
@@ -167,17 +178,21 @@ export function GalaxyBackground() {
         ctx.fillStyle = `rgba(129, 140, 248, ${node.brightness})`;
         ctx.fill();
 
-        for (let j = i + 1; j < networkNodes.length; j++) {
-          const n2 = networkNodes[j];
-          const rx2 = ((n2.x - cam.x * n2.panSpeed) % w + w) % w;
-          const ry2 = ((n2.y - cam.y * n2.panSpeed) % h + h) % h;
-          const dist = Math.hypot(rx - rx2, ry - ry2);
-          if (dist < 130) {
-            ctx.beginPath();
-            ctx.moveTo(rx, ry); ctx.lineTo(rx2, ry2);
-            ctx.strokeStyle = `rgba(99,102,241,${(1 - dist / 130) * 0.11})`;
-            ctx.lineWidth = 0.5;
-            ctx.stroke();
+        // O(n²) link pass — the heaviest loop on the boot screen. Run it only
+        // every 4th render; links move slowly so the pause is imperceptible.
+        if (linkFrame) {
+          for (let j = i + 1; j < networkNodes.length; j++) {
+            const n2 = networkNodes[j];
+            const rx2 = ((n2.x - cam.x * n2.panSpeed) % w + w) % w;
+            const ry2 = ((n2.y - cam.y * n2.panSpeed) % h + h) % h;
+            const dist = Math.hypot(rx - rx2, ry - ry2);
+            if (dist < 130) {
+              ctx.beginPath();
+              ctx.moveTo(rx, ry); ctx.lineTo(rx2, ry2);
+              ctx.strokeStyle = `rgba(99,102,241,${(1 - dist / 130) * 0.11})`;
+              ctx.lineWidth = 0.5;
+              ctx.stroke();
+            }
           }
         }
 
@@ -260,8 +275,15 @@ export function ShootingStars() {
     let nextSpawn = Math.random() * 3 + 1.5;
     let lastTime = null;
     let animId;
+    let sframe = 0;
 
     const draw = (timestamp) => {
+      // ── GPU throttle: ~30fps. Physics is dt-based so motion is unchanged;
+      // only the fill rate halves.
+      if (++sframe % 2 === 0) {
+        animId = requestAnimationFrame(draw);
+        return;
+      }
       if (!lastTime) lastTime = timestamp;
       const dt = Math.min((timestamp - lastTime) / 1000, 0.05);
       lastTime = timestamp;

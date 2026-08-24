@@ -14,6 +14,7 @@ import { useOS } from '@/context/OSContext';
 import MasterPasswordModal from '@/components/MasterPasswordModal';
 import MacOSModalWindow from '@/components/MacOSModalWindow';
 import RcloneOnboarding, { hasCompletedRcloneOnboarding, resetRcloneOnboarding } from '@/components/RcloneOnboarding';
+import ThemeSelect from '@/components/common/ThemeSelect';
 
 // 🎨 Custom Styled Popover Select Component
 function CustomSelect({ value, onChange, options = [], className = '', textClass = '' }) {
@@ -2525,13 +2526,17 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
 
                       {/* Scope + Folder ID side by side */}
                       <div className="grid grid-cols-2 gap-1.5">
-                        <select value={remoteConfig.scope || 'drive'}
-                          onChange={(e) => setRemoteConfig({ ...remoteConfig, scope: e.target.value })}
-                          className="w-full px-2.5 py-1.5 text-[11px] rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] text-[var(--text-primary)] focus:outline-none">
-                          <option value="drive">Full Access</option>
-                          <option value="drive.readonly">Read-Only</option>
-                          <option value="drive.file">App Files Only</option>
-                        </select>
+                        <ThemeSelect
+                          className="w-full"
+                          size="sm"
+                          value={remoteConfig.scope || 'drive'}
+                          onChange={(v) => setRemoteConfig({ ...remoteConfig, scope: v })}
+                          options={[
+                            { value: 'drive', label: 'Full Access' },
+                            { value: 'drive.readonly', label: 'Read-Only' },
+                            { value: 'drive.file', label: 'App Files Only' },
+                          ]}
+                        />
                         <input type="text" placeholder="Folder URL/ID (optional)"
                           value={remoteConfig._drive_url || ''}
                           onChange={(e) => {

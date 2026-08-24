@@ -116,13 +116,13 @@ export default function Home() {
 
   return (
     <div className="relative w-full h-screen overflow-hidden bg-black">
-      {/* Desktop Environment rendered underneath */}
-      {DesktopEnvironment && bootPhase !== 'boot' && (
-        <motion.div 
+      {/* Desktop Environment rendered underneath — mounts early so phase transitions crossfade seamlessly */}
+      {DesktopEnvironment && (
+        <motion.div
           className="w-full h-full"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          transition={{ duration: 0.6 }}
+          transition={{ duration: 1.0, ease: 'easeInOut' }}
         >
           <DesktopErrorBoundary>
             <DesktopEnvironment bootPhase={bootPhase} />
@@ -135,7 +135,7 @@ export default function Home() {
           <motion.div
             key="boot"
             exit={{ opacity: 0 }}
-            transition={{ duration: 0.5 }}
+            transition={{ duration: 0.7, ease: 'easeIn' }}
             className="fixed inset-0 z-[9999] overflow-hidden bg-black"
           >
             <BootSequence
@@ -150,7 +150,7 @@ export default function Home() {
             key="warp"
             exit={{ opacity: 0 }}
             transition={{ duration: 1.0, ease: 'easeOut' }}
-            className="fixed inset-0 z-[9998] overflow-hidden bg-black"
+            className="fixed inset-0 z-[9998] overflow-hidden"
           >
             <HyperspaceTransition onComplete={handleWarpComplete} />
           </motion.div>

@@ -3,14 +3,7 @@
 import { motion, AnimatePresence } from 'framer-motion';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { GalaxyBackground, MatrixRain } from './BackgroundEffects';
-
-const ASCII_LOGO = `
- ███████╗███████╗██╗  ██╗    ███╗   ███╗ ██████╗ ███╗   ██╗██╗████████╗ ██████╗ ██████╗
- ██╔════╝██╔════╝██║  ██║    ████╗ ████║██╔═══██╗████╗  ██║██║╚══██╔══╝██╔═══██╗██╔══██╗
- ███████╗███████╗███████║    ██╔████╔██║██║   ██║██╔██╗ ██║██║   ██║   ██║   ██║██████╔╝
- ╚════██║╚════██║██╔══██║    ██║╚██╔╝██║██║   ██║██║╚██╗██║██║   ██║   ██║   ██║██╔══██╗
- ███████║███████║██║  ██║    ██║ ╚═╝ ██║╚██████╔╝██║ ╚████║██║   ██║   ╚██████╔╝██║  ██║
- ╚══════╝╚══════╝╚═╝  ╚═╝    ╚═╝     ╚═╝ ╚═════╝ ╚═╝  ╚═══╝╚═╝   ╚═╝    ╚═════╝ ╚═╝  ╚═╝`.trim();
+import { LegacyBanner } from './LegacyBanner';
 
 const GLITCH_CSS = `
 @keyframes boot-glitch {
@@ -221,33 +214,8 @@ export function BootScreen({ onComplete, onSkip }) {
 
         {/* Boot content */}
         <div className="flex-1 overflow-y-auto p-5 space-y-0.5 custom-scrollbar relative z-[2]" style={{ minHeight: '300px' }}>
-          {/* Glitch logo */}
-          <motion.pre
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ duration: 0.5 }}
-            className="text-[5px] sm:text-[7px] md:text-[8px] leading-tight font-mono mb-4 select-none text-indigo-500"
-            style={{
-              textShadow: '0 0 10px rgba(99,102,241,0.4)',
-              animation: hovered ? 'boot-glitch 3s infinite' : 'none',
-            }}
-          >
-            {ASCII_LOGO}
-          </motion.pre>
-
-          {/* System info bar */}
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.2 }}
-            className="flex gap-4 mb-3 font-mono text-[8px] text-slate-500/60 border-b border-white/5 pb-2"
-          >
-            <span>CPU: 0.42</span>
-            <span>MEM: 1.2G/4G</span>
-            <span>DISK: 68%</span>
-            <span>NET: UP</span>
-            <span className="text-emerald-400/40">SECURE</span>
-          </motion.div>
+          {/* Legacy terminal banner */}
+          <LegacyBanner hovered={hovered} />
 
           {/* Boot lines */}
           {BOOT_LINES.map((line, i) => (
