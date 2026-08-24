@@ -27,7 +27,7 @@ const BACKUP_TYPES = [
 
 export default function ServerBackupApp({ windowId = 'server-backup', activeTab: propActiveTab }) {
   const { state, apiFetch } = useApp();
-  const { addNotification, updateWindowProps, toggleMaximize, state: osState } = useOS();
+  const { addNotification, updateWindowProps, state: osState } = useOS();
   const { connections } = state;
 
   const [activeTab, setActiveTabState] = useState(propActiveTab || 'backup');
@@ -40,14 +40,10 @@ export default function ServerBackupApp({ windowId = 'server-backup', activeTab:
 
   const [showOnboarding, setShowOnboarding] = useState(false);
   const ensureMaximizedThenShow = useCallback(() => {
-    const win = (osState?.windows || []).find(w => w.id === windowId);
-    if (win && !win.isMaximized) {
-      toggleMaximize(windowId);
-      setTimeout(() => setShowOnboarding(true), 350);
-    } else {
-      setShowOnboarding(true);
-    }
-  }, [osState, windowId, toggleMaximize]);
+    // Dynamic-focus onboarding tracks its target at ANY window size/position,
+    // so there is no need to force-maximize the window first anymore.
+    setShowOnboarding(true);
+  }, []);
   const ensureMaximizedThenShowRef = useRef(ensureMaximizedThenShow);
   useEffect(() => { ensureMaximizedThenShowRef.current = ensureMaximizedThenShow; }, [ensureMaximizedThenShow]);
 
@@ -649,7 +645,7 @@ export default function ServerBackupApp({ windowId = 'server-backup', activeTab:
   const removeExclude = (i) => updateConfig('excludes', config.excludes.filter((_, idx) => idx !== i));
 
   return (
-    <div className="flex h-full bg-[var(--bg-primary)] text-[var(--text-primary)]">
+    <div className="@container flex h-full bg-[var(--bg-primary)] text-[var(--text-primary)]">
       <div className="w-52 shrink-0 border-r border-[var(--border-color)] bg-[var(--bg-secondary)]/30 flex flex-col">
         <div className="p-3 border-b border-[var(--border-color)]">
           <div className="flex items-center justify-between gap-2 text-sm font-bold">

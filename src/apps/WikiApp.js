@@ -334,7 +334,7 @@ export default function WikiApp({ initialGuideId, windowId }) {
   };
 
   return (
-    <div className="flex h-full bg-[var(--bg-primary)] text-[var(--text-primary)] overflow-hidden font-sans custom-scrollbar relative">
+    <div className="@container flex h-full bg-[var(--bg-primary)] text-[var(--text-primary)] overflow-hidden font-sans custom-scrollbar relative">
       {/* Mobile Overlay */}
       {isMobile && showSidebar && (
         <div className="fixed inset-0 bg-black/50 z-40" onClick={() => setShowSidebar(false)} />
@@ -494,7 +494,7 @@ export default function WikiApp({ initialGuideId, windowId }) {
       <div className="flex-1 flex flex-col bg-[var(--bg-primary)] min-w-0">
         {activeGuide ? (
           <>
-            <div className="h-14 border-b border-[var(--border-color)] flex items-center justify-between px-4 md:px-8 bg-[var(--bg-secondary)] gap-3">
+            <div className="h-14 border-b border-[var(--border-color)] flex items-center justify-between px-4 @3xl:px-8 bg-[var(--bg-secondary)] gap-3">
             {isMobile && (
               <button
                 onClick={() => setShowSidebar(true)}

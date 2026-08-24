@@ -4,6 +4,7 @@ import { createContext, useContext, useReducer, useEffect, useState, useRef, use
 import { useSession } from 'next-auth/react';
 import i18n from '@/lib/i18n';
 import { AppRegistry } from '@/apps/AppRegistry';
+import { getAppEndpoint } from '@/apps/appEndpoints';
 
 const OSContext = createContext();
 
@@ -158,11 +159,13 @@ function osReducer(state, action) {
       const isMobileViewport = vw < 768;
 
       // Per-app fitted size: honor explicit width/height, then initialWidth/initialHeight
-      // (passed by DESKTOP_ICONS / openWindow callers), then sane defaults.
+      // (passed by DESKTOP_ICONS / openWindow callers), then the app's registered
+      // size endpoint (appEndpoints.js), then sane defaults.
       // This makes every app open at its designed minimum size that fits its
       // content — never fullscreen, never a broken 800x600 squeeze.
-      const initW = action.payload.width ?? action.payload.initialWidth ?? 800;
-      const initH = action.payload.height ?? action.payload.initialHeight ?? 600;
+      const endpoint = getAppEndpoint(action.payload.appType || action.payload.id);
+      const initW = action.payload.width ?? action.payload.initialWidth ?? endpoint.width;
+      const initH = action.payload.height ?? action.payload.initialHeight ?? endpoint.height;
 
       const newWindow = {
         ...action.payload,
@@ -170,6 +173,10 @@ function osReducer(state, action) {
         y: isMobileViewport ? 0 : (action.payload.y ?? defaultY),
         width: isMobileViewport ? vw : Math.min(initW, vw - 20),
         height: isMobileViewport ? vh - 60 : Math.min(initH, vh - 80),
+        // Stamp the app's size floor so <Window> can enforce it during
+        // resize AND re-enforce it on restore-from-minimize / hydration.
+        minWidth: action.payload.minWidth ?? endpoint.minWidth,
+        minHeight: action.payload.minHeight ?? endpoint.minHeight,
         isMinimized: false,
         // On phones/tablets every app opens fullscreen - floating windows are unusable
         isMaximized: isMobileViewport ? true : !!action.payload.isMaximized,

@@ -1,9 +1,9 @@
 import React from 'react';
 import {
-  Terminal, Settings, Monitor, Database, Folder, MonitorPlay, Server, FileText,
-  Globe, StickyNote, Book, BookOpen, Shield, Radio, Radiation, Cpu, HardDrive,
-  Wrench, Archive, CloudSync, Rocket, CloudCog, ShieldCheck, BrickWallShield,
-  Activity, ScrollText, Bug, History,
+  SquareTerminal, KeyRound, Settings, Database, FolderOpen, PanelsTopLeft, ScrollText,
+  Globe, StickyNote, BookOpenCheck, BrickWallShield, HardDriveDownload,
+  Workflow, CloudCog, ShieldCheck,
+  Gauge, Leaf, Bug, History, Container,
 } from 'lucide-react';
 
 // ── Canonical id resolution ──────────────────────────────────────────────────
@@ -911,9 +911,6 @@ const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "g
         case 'tmux':
             return <IconComponent size={iconSize} style={rawStyle} strokeWidth={1.5} />;
         case 'settings':
-            if (isRetro) {
-                return <Wrench size={iconSize} style={rawStyle} strokeWidth={2.5} />;
-            }
             return <IconComponent size={iconSize} style={rawStyle} strokeWidth={2} />;
         case 'wiki':
         case 'notepad':
@@ -931,23 +928,25 @@ const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "g
   };
 
   const IconComp = {
-    terminal: Terminal,
-    ssh: (isRetro || isCyberpunk || isSynthwave) ? Radio : Monitor,
-    docker: isRetro ? HardDrive : ((isCyberpunk || isSynthwave) ? Database : Server),
-    files: isRetro ? Archive : Folder,
-    tmux: (isRetro || isCyberpunk || isSynthwave) ? Cpu : MonitorPlay,
-    settings: (isRetro || isCyberpunk || isSynthwave) ? Wrench : Settings,
-    logs: isRetro ? FileText : ScrollText,
-    wiki: BookOpen,
+    // Production-grade set: one unique, modern glyph per app — no shared or
+    // legacy stand-ins across any theme.
+    terminal: SquareTerminal,
+    ssh: KeyRound,
+    docker: Container,
+    files: FolderOpen,
+    tmux: PanelsTopLeft,
+    settings: Settings,
+    logs: ScrollText,
+    wiki: BookOpenCheck,
     notepad: StickyNote,
     database: Database,
-    mongo: Database,
-    rclone: isRetro ? CloudSync : CloudCog,
-    monitor: Activity,
-    backup: isRetro ? HardDrive : Archive,
+    mongo: Leaf,
+    rclone: CloudCog,
+    monitor: Gauge,
+    backup: HardDriveDownload,
     server: ShieldCheck,
     firewall: BrickWallShield,
-    auto: Rocket,
+    auto: Workflow,
     virus: Bug,
     activity: History,
   }[iconId] || Globe;

@@ -498,7 +498,7 @@ function ScrollableChartCard({
       ref={cardRef}
       style={{ order: isExpanded ? -1 : 0 }}
       className={`bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl p-4 shadow-sm flex flex-col relative group transition-all duration-200 ${
-        isExpanded ? 'col-span-1 lg:col-span-2 shadow-xl ring-1 ring-indigo-500/40' : ''
+        isExpanded ? 'col-span-1 @4xl:col-span-2 shadow-xl ring-1 ring-indigo-500/40' : ''
       }`}
     >
       {/* Card Header */}
@@ -545,7 +545,7 @@ function ScrollableChartCard({
           )}
 
           {/* Individual Zoom Selector per Card (Only affects THIS card) */}
-          <div className="hidden sm:flex items-center gap-1 p-0.5 bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-lg text-[10px]">
+          <div className="hidden @xl:flex items-center gap-1 p-0.5 bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-lg text-[10px]">
             {['fit', '1x', '2x', '4x'].map((z) => (
               <button
                 key={z}
@@ -1223,7 +1223,7 @@ function TimelineNavigator({
 
           {/* Global Timeline Zoom Buttons */}
           <div className="flex items-center gap-1.5 text-xs text-[var(--text-muted)]">
-            <span className="text-[11px] font-medium hidden sm:inline">Zoom:</span>
+            <span className="text-[11px] font-medium hidden @xl:inline">Zoom:</span>
             <div className="flex items-center gap-1 p-0.5 bg-[var(--bg-tertiary)] border border-[var(--border-color)] rounded-lg text-xs">
               {[
                 { id: 'fit', label: 'Fit' },
@@ -2337,7 +2337,7 @@ export default function ServerMonitorApp() {
   // MAIN APP VIEW
   // ─────────────────────────────────────────────────────────────────────────────
   return (
-    <div className="flex flex-col h-full bg-[var(--bg-primary)] text-[var(--text-primary)]">
+    <div className="@container flex flex-col h-full bg-[var(--bg-primary)] text-[var(--text-primary)]">
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 border-b border-[var(--border-color)] bg-[var(--bg-secondary)]">
         <div className="flex items-center gap-3">
@@ -2430,7 +2430,7 @@ export default function ServerMonitorApp() {
             title={autoRefresh ? 'Auto-refresh active' : 'Auto-refresh paused'}
           >
             {autoRefresh ? <Pause size={14} /> : <Play size={14} />}
-            <span className="hidden sm:inline">{autoRefresh ? 'Live' : 'Paused'}</span>
+            <span className="hidden @xl:inline">{autoRefresh ? 'Live' : 'Paused'}</span>
           </button>
 
           {/* Agent Setup Wizard Button + status badge */}
@@ -2487,7 +2487,7 @@ export default function ServerMonitorApp() {
                     ? 'bg-amber-400'
                     : 'bg-indigo-400 animate-pulse'
                 }`} />
-                <span className="hidden md:inline">
+                <span className="hidden @3xl:inline">
                   {isLive ? 'Agent Connected' : agentRunning ? 'Agent (No WS)' : agentChecked ? 'Install Agent' : 'Relay Agent'}
                 </span>
               </button>
@@ -2597,7 +2597,7 @@ export default function ServerMonitorApp() {
                     <h2 className="text-sm font-semibold">System Information</h2>
                   </div>
                   
-                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
+                  <div className="grid grid-cols-2 @xl:grid-cols-3 @3xl:grid-cols-6 gap-3">
                     <InfoItem label="Hostname" value={metrics.system?.hostname || 'N/A'} />
                     <InfoItem label="OS" value={metrics.system?.os || 'N/A'} />
                     <InfoItem label="Kernel" value={metrics.system?.kernel || 'N/A'} />
@@ -2615,7 +2615,7 @@ export default function ServerMonitorApp() {
                 </div>
 
                 {/* Overview: Simple live charts — no advanced controls */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 @3xl:grid-cols-2 gap-4">
                   {/* CPU Card — static live chart */}
                   <div className="bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl p-4 shadow-sm flex flex-col">
                     <div className="flex items-center justify-between mb-2">
@@ -2682,7 +2682,7 @@ export default function ServerMonitorApp() {
                 </div>
 
                 {/* Disk and Network */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 @3xl:grid-cols-2 gap-4">
                   {/* Disk Card */}
                   <div className="bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl p-4 shadow-sm">
                     <div className="flex items-center gap-2 mb-3">
@@ -2786,7 +2786,7 @@ export default function ServerMonitorApp() {
 
             {/* Summary stats row — at the top for quick reference */}
             {metrics && (
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="grid grid-cols-2 @xl:grid-cols-4 gap-3">
                 {[
                   { label: 'CPU Cores', value: metrics.cpu?.cores ?? 'N/A', icon: <Cpu size={14} className="text-indigo-400" /> },
                   { label: 'Total RAM', value: formatBytes(metrics.memory?.total), icon: <MemoryStick size={14} className="text-emerald-400" /> },
@@ -2805,7 +2805,7 @@ export default function ServerMonitorApp() {
             )}
 
             {/* Scrollable chart grid */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 @4xl:grid-cols-2 gap-4">
               <ScrollableChartCard
                 title="CPU Usage"
                 icon={Cpu}
@@ -2990,7 +2990,7 @@ export default function ServerMonitorApp() {
                   </span>
                 </div>
                 
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 @3xl:grid-cols-2 @4xl:grid-cols-3 gap-3">
                   {availableApps.map((app, idx) => (
                     <AppCard 
                       key={app.name || idx} 
@@ -3051,7 +3051,7 @@ export default function ServerMonitorApp() {
               return (
                 <div className="space-y-4">
                   {/* Top Stats Cards */}
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="grid grid-cols-1 @xl:grid-cols-3 gap-3">
                     <div className="bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl p-3.5 flex items-center justify-between">
                       <div>
                         <div className="text-[11px] text-[var(--text-muted)] font-medium">Total Processes</div>
@@ -3155,7 +3155,7 @@ export default function ServerMonitorApp() {
                       </div>
 
                       {procTimestamp && (
-                        <span className="text-[10px] text-[var(--text-muted)] hidden sm:inline">
+                        <span className="text-[10px] text-[var(--text-muted)] hidden @xl:inline">
                           {new Date(procTimestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                         </span>
                       )}

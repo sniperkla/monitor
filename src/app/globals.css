@@ -2224,6 +2224,52 @@ body {
   overflow: hidden;
 }
 
+/* ── Resize resilience: apps must survive any window size ───────────────────
+   Targeted fix for the #1 resize breaker: flex/grid children defaulting to
+   min-width:auto refuse to shrink below their content, overflowing windows.
+   We clear that ONLY on direct children of flex/grid containers — not
+   globally, so toolbars/sidebars/labels keep their natural sizing. */
+.window-container :where([class*='flex'], [class*='grid']) > * {
+  min-width: 0;
+}
+/* Media never exceeds its container */
+.window-container :where(img, video, canvas, iframe) {
+  max-width: 100%;
+}
+/* Long text anywhere in a window wraps instead of blowing out the layout.
+   overflow-wrap only affects unbreakable runs (long words/URLs/hashes),
+   so normal spacing/nowrap behavior elsewhere is untouched. */
+.window-container :where(p, h1, h2, h3, h4, h5, h6, span, div, li, td, th, label, a, button, dt, dd, figcaption) {
+  overflow-wrap: break-word;
+}
+/* Logs & code blocks wrap instead of forcing horizontal blowout */
+.window-container :where(pre, code, kbd, samp) {
+  overflow-wrap: break-word;
+  word-break: break-word;
+  max-width: 100%;
+}
+.window-container pre {
+  white-space: pre-wrap;
+}
+/* Scrollable panes stay inside their window */
+.window-container :where(ul, ol, table) {
+  max-width: 100%;
+}
+
+/* ── Immersive Master Password modal ── */
+.vault-shake {
+  animation: vault-shake-anim 0.45s cubic-bezier(0.36, 0.07, 0.19, 0.97);
+}
+@keyframes vault-shake-anim {
+  0%, 100% { transform: translateX(0); }
+  15% { transform: translateX(-14px); }
+  30% { transform: translateX(12px); }
+  45% { transform: translateX(-9px); }
+  60% { transform: translateX(7px); }
+  75% { transform: translateX(-4px); }
+  90% { transform: translateX(2px); }
+}
+
 .fallout-rain-drop {
   position: absolute;
   bottom: 100%;

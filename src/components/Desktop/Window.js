@@ -6,6 +6,7 @@ import { useOS } from '@/context/OSContext';
 import { X, Minus, Maximize2, Minimize2, Square } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import { getAppEndpoint } from '@/apps/appEndpoints';
 
 function WindowControls({ onClose, onMinimize, onMaximize, isMaximized, layout = 'mac' }) {
   if (layout === 'pc') {
@@ -89,7 +90,7 @@ function WindowControls({ onClose, onMinimize, onMaximize, isMaximized, layout =
   );
 }
 
-export default function Window({ id, title, icon: Icon, component, isMinimized, isMaximized: _isMaximized, zIndex, initialWidth, initialHeight, previewMode = false, desktopHidden = false }) {
+export default function Window({ id, title, icon: Icon, component, isMinimized, isMaximized: _isMaximized, zIndex, initialWidth, initialHeight, minWidth: winMinWidth, minHeight: winMinHeight, previewMode = false, desktopHidden = false }) {
   const isMobile = useIsMobile();
   const isMaximized = _isMaximized;
   const { state: osState, focusWindow, closeWindow, toggleMinimize, toggleMaximize, snapWindow, updateWindowPosition } = useOS();
@@ -142,6 +143,12 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
         width: windowState.width || initialWidth || 800,
         height: windowState.height || initialHeight || 600,
       };
+
+      // Enforce the app's size endpoint — fixes sizes persisted by older
+      // sessions before endpoints existed, and viewport-shrunk leftovers.
+      const m = minSizeRef.current;
+      rect.width = Math.min(Math.max(rect.width, m.w), safeArea.w);
+      rect.height = Math.min(Math.max(rect.height, m.h), safeArea.h);
 
       // On first hydration OR meaningful difference — always force-update Rnd.
       // react-rnd's internal re-resizable needs an explicit updateSize call to
@@ -200,6 +207,16 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
   } else if (taskbarPosition === 'right') {
     safeArea.w -= TASKBAR_H;
   }
+
+  // ── Per-app size endpoint ("perfect endpoint") ──
+  // Floor comes from window state (stamped by OPEN_WINDOW from appEndpoints.js),
+  // falling back to the registry lookup for windows restored from older sessions.
+  // Capped by the current safe area so the floor can never exceed the viewport.
+  const endpoint = getAppEndpoint(windowState.appType || id);
+  const EFF_MIN_W = Math.max(240, Math.min(winMinWidth ?? endpoint.minWidth, safeArea.w));
+  const EFF_MIN_H = Math.max(150, Math.min(winMinHeight ?? endpoint.minHeight, safeArea.h));
+  const minSizeRef = useRef({ w: EFF_MIN_W, h: EFF_MIN_H });
+  useEffect(() => { minSizeRef.current = { w: EFF_MIN_W, h: EFF_MIN_H }; });
 
   // Sync initial position/size if missing in global state
   useEffect(() => {
@@ -428,7 +445,11 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
     }
   }, [id, updateWindowPosition, safeArea]);
 
-  // ── Safety check: ensure window is visible after restore from minimize ──
+  // ── Safety net: enforce the app's size endpoint & visibility after
+  // restore from minimize. react-rnd only guards interactive resizes via its
+  // minWidth/minHeight — programmatic paths (hydration sync, peer pushes,
+  // persisted legacy sizes) can leave the window below the endpoint or
+  // partially off-screen, so we correct it one frame after restore.
   useEffect(() => {
     if (isMinimized || isSnappedOrMax) return;
     const timer = setTimeout(() => {
@@ -436,9 +457,25 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
       const el = rndRef.current.getSelfElement();
       if (!el) return;
       const r = el.getBoundingClientRect();
-      if (r.top < 0) {
-        rndRef.current.updatePosition({ x: Math.max(0, r.left), y: 0 });
-        setFreeRect(prev => ({ ...prev, y: 0 }));
+      const m = minSizeRef.current;
+
+      // Clamp size up to the endpoint (never beyond the viewport)
+      const w = Math.min(Math.max(r.width, m.w), window.innerWidth);
+      const h = Math.min(Math.max(r.height, m.h), window.innerHeight);
+
+      if (Math.abs(w - r.width) > 1 || Math.abs(h - r.height) > 1) {
+        rndRef.current.updateSize({ width: w, height: h });
+        setFreeRect(prev => ({ ...prev, width: w, height: h }));
+        updateWindowPosition(id, {
+          position: { x: Math.round(r.left), y: Math.round(Math.max(0, r.top)), width: Math.round(w), height: Math.round(h) },
+        });
+      }
+
+      // Never let a restored window sit above/left of the viewport
+      if (r.top < 0 || r.left < 0) {
+        const x = Math.max(0, r.left);
+        rndRef.current.updatePosition({ x, y: Math.max(0, r.top) });
+        setFreeRect(prev => ({ ...prev, x, y: Math.max(0, r.top) }));
       }
     }, 100);
     return () => clearTimeout(timer);
@@ -475,8 +512,8 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
           width: freeRect.width,
           height: freeRect.height,
         }}
-        minWidth={window.innerWidth < 768 ? 200 : 300}
-        minHeight={window.innerWidth < 768 ? 150 : 200}
+        minWidth={EFF_MIN_W}
+        minHeight={EFF_MIN_H}
         dragHandleClassName="window-drag-handle"
         cancel=".nodrag,button,input,textarea,select,option,label"
         enableUserSelectHack={false}

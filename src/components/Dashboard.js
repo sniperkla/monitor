@@ -348,10 +348,10 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
       initial="hidden"
       animate="visible"
       variants={containerVariants}
-      className="h-full overflow-y-auto p-4 pb-16 lg:p-6 custom-scrollbar"
+      className="@container h-full overflow-y-auto p-4 pb-16 @4xl:p-6 custom-scrollbar"
     >
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between mb-5 gap-3">
+      <div className="flex flex-col @3xl:flex-row @3xl:items-center justify-between mb-5 gap-3">
         <div>
           <motion.h1 
             variants={itemVariants}
@@ -498,7 +498,7 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
           <div className="absolute top-0 right-0 p-8 opacity-10 group-hover:scale-110 transition-transform">
              <RefreshCw size={80} className="animate-spin-slow" />
           </div>
-          <div className="relative z-10 flex flex-col md:flex-row items-center justify-between gap-6">
+          <div className="relative z-10 flex flex-col @3xl:flex-row items-center justify-between gap-6">
             <div className="flex items-center gap-4">
               <div className="w-14 h-14 rounded-2xl bg-[var(--bg-selected)] border border-[var(--accent-indigo)]/30 flex items-center justify-center shadow-lg shadow-[var(--glow-indigo)]/20">
                 <Globe size={28} className="text-[var(--text-selected)]" />
@@ -545,7 +545,7 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
       )}
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-1 @xl:grid-cols-2 @4xl:grid-cols-4 gap-4 mb-6">
         <StatCard 
           icon={Server} 
           label={t('ssh.dashboard_ui.totalNodes')} 
@@ -701,9 +701,9 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
         )}
       </motion.div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
+      <div className="grid grid-cols-1 @5xl:grid-cols-3 gap-5">
         {/* Quick Connect - Favorites */}
-        <motion.div variants={itemVariants} className="xl:col-span-2 group">
+        <motion.div variants={itemVariants} className="@5xl:col-span-2 group">
           <div className="flex items-center justify-between mb-3 px-1">
             <h2 className="text-base font-bold flex items-center gap-2 text-[var(--text-primary)]">
               <Zap size={18} className="text-amber-400 fill-amber-400" />
@@ -714,7 +714,7 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
             </button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 @3xl:grid-cols-2 gap-3">
             <AnimatePresence mode="popLayout">
               {favorites.length === 0 ? (
                 <motion.div 

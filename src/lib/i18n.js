@@ -1166,7 +1166,7 @@ const resources = {
           suffixPlaceholder: "e.g. _v1",
           date: "Date",
           time: "Time",
-          tag: "Include Export/Backup Tag",
+          tag: "Include Tag",
           tagTooltip: "Adds '_export' or '_backup' to identify the file type",
           preview: "Preview"
         },
@@ -1480,6 +1480,8 @@ const resources = {
           autoSync: "Automated Sync",
           manualImport: "Manual Import",
           telemetry: "Live Telemetry & Rules",
+          quickBlock: "Quick Block",
+          engine: "Engine Guide",
         },
         telemetryLabels: {
           firewallStatus: "Firewall Status",
@@ -1557,6 +1559,11 @@ const resources = {
               title: "Full Docker & Swarm Coverage",
               description: "Firewall rules automatically inject into INPUT, DOCKER-USER, and FORWARD chains — protecting all published Docker container ports (-p) with automatic recovery on Docker daemon restarts.",
               tip: "💡 Zero-knowledge protection: A background watcher daemon automatically reinjects firewall rules whenever Docker restarts.",
+            },
+            engine: {
+              title: "Engine Guide — Under the Hood",
+              description: "Curious what happens under the hood? The Engine Guide tab walks through the kernel packet path step by step — from inbound traffic to the IPSet hash lookup that drops blocked IPs in under a microsecond.",
+              tip: "💡 No restarts needed: rules live in kernel memory via ipset list:set, so updates apply instantly with zero downtime.",
             },
             lastResort: {
               title: "Emergency Disable (Last Resort)",
@@ -2137,7 +2144,7 @@ const resources = {
           suffixPlaceholder: "เช่น _v1",
           date: "วันที่",
           time: "เวลา",
-          tag: "รวมแท็ก ส่งออก/สำรองข้อมูล",
+          tag: "รวมแท็ก",
           tagTooltip: "เพิ่ม '_export' หรือ '_backup' เพื่อระบุประเภทไฟล์",
           preview: "ตัวอย่าง"
         },
@@ -3115,6 +3122,8 @@ const resources = {
           autoSync: "ซิงค์อัตโนมัติ",
           manualImport: "นำเข้าไฟล์เอง",
           telemetry: "สถิติสดและกฎไฟร์วอลล์",
+          quickBlock: "บล็อกด่วน",
+          engine: "คู่มือเครื่องยนต์",
         },
         telemetryLabels: {
           firewallStatus: "สถานะไฟร์วอลล์",
@@ -3192,6 +3201,11 @@ const resources = {
               title: "ปกป้อง Docker และ Swarm เต็มรูปแบบ",
               description: "กฎไฟร์วอลล์จะแทรกเข้าสู่ INPUT, DOCKER-USER และ FORWARD โดยอัตโนมัติ ปกป้องทุกพอร์ตที่เปิดใน Docker (-p) พร้อมระบบกู้คืนกฎอัตโนมัติเมื่อ Docker รีสตาร์ท",
               tip: "💡 ไม่ต้องตั้งค่าเพิ่ม: มี background service คอยตรวจจับการรีสตาร์ทของ Docker และใส่กฎไฟร์วอลล์กลับเข้าไปให้ทันที",
+            },
+            engine: {
+              title: "เจาะลึกเครื่องยนต์ไฟร์วอลล์",
+              description: "อยากรู้ว่าเบื้องหลังทำงานอย่างไร? แท็บ Engine Guide จะพาดูเส้นทางของแพ็กเก็ตในเคอร์เนล — ตั้งแต่ทราฟฟิกขาเข้าจนถึง IPSet hash lookup ที่บล็อก IP ได้ในเวลาไม่ถึงหนึ่งไมโครวินาที",
+              tip: "💡 ไม่ต้องรีสตาร์ต: กฎถูกเก็บในเมมโมรีเคอร์เนลผ่าน ipset list:set จึงอัปเดตได้ทันทีโดยไม่มีดาวน์ไทม์",
             },
             lastResort: {
               title: "ปิดฉุกเฉิน (Last Resort)",
@@ -4220,7 +4234,7 @@ const resources = {
           suffixPlaceholder: "例如 _v1",
           date: "日期",
           time: "时间",
-          tag: "包含 导出/备份 标签",
+          tag: "包含标签",
           tagTooltip: "添加 '_export' 或 '_backup' 以识别文件类型",
           preview: "预览"
         },
@@ -4760,6 +4774,11 @@ const resources = {
               title: "Docker 与 Swarm 全面保护",
               description: "防火墙规则会自动注入到 INPUT、DOCKER-USER 和 FORWARD 链中，全面保护所有 Docker 容器映射端口 (-p)，且支持 Docker 重启后自动恢复。",
               tip: "💡 零配置免维护：后台监听服务会在 Docker 守护进程重启时自动重新挂载防火墙规则。",
+            },
+            engine: {
+              title: "引擎原理指南",
+              description: "想了解底层原理？Engine Guide 标签页讲解内核数据包路径——从入站流量到 IPSet 哈希查询，被封锁的 IP 会在不到一微秒内被丢弃。",
+              tip: "💡 无需重启：规则通过 ipset list:set 保存在内核内存中，更新即时生效，零停机。",
             },
             lastResort: {
               title: "紧急关闭（最后手段）",

@@ -138,7 +138,7 @@ function ServerSelect({ value, onChange, connections }) {
   const getLabel = (c) => c?.label || c?.name || (c?.username && c?.host ? `${c.username}@${c.host}` : c?.host) || 'SSH Server';
 
   return (
-    <div ref={ref} className="relative w-full sm:w-64 z-50">
+    <div ref={ref} className="relative w-full @xl:w-64 z-50">
       <button
         type="button"
         onClick={() => connections.length && setOpen(prev => !prev)}
@@ -199,7 +199,7 @@ function ApplyProgress({ progress }) {
     { at: 88, label: 'Saving Recovery' },
   ];
   return (
-    <div className={`mt-4 rounded-xl border p-3.5 font-mono ${isError ? 'border-rose-500/30 bg-rose-500/10' : 'border-indigo-500/30 bg-indigo-500/10'}`}>
+    <div className={`@container mt-4 rounded-xl border p-3.5 font-mono ${isError ? 'border-rose-500/30 bg-rose-500/10' : 'border-indigo-500/30 bg-indigo-500/10'}`}>
       <div className="flex items-center justify-between gap-3 text-xs">
         <span className={`font-semibold flex items-center gap-2 ${isError ? 'text-rose-200' : 'text-indigo-100'}`}>
           {!isError && <LoaderCircle size={13} className="animate-spin text-indigo-400" />}
@@ -215,7 +215,7 @@ function ApplyProgress({ progress }) {
           />
         </div>
       )}
-      <div className="mt-3 grid grid-cols-2 gap-2 text-[10px] sm:grid-cols-4">
+      <div className="mt-3 grid grid-cols-2 gap-2 text-[10px] @xl:grid-cols-4">
         {steps.map(step => (
           <span key={step.at} className={`flex items-center gap-1.5 ${isError ? 'text-rose-300/60' : percentage >= step.at ? 'text-indigo-200 font-semibold' : 'text-white/30'}`}>
             <span className={`h-1.5 w-1.5 rounded-full ${!isError && percentage >= step.at ? 'bg-cyan-400 shadow-[0_0_6px_rgba(6,182,212,0.8)]' : 'bg-white/20'}`} />
@@ -265,7 +265,7 @@ async function readApplyProgress(response, onProgress) {
 
 export default function FirewallBlocklistApp({ windowId } = {}) {
   const { state: appState, apiFetch } = useApp();
-  const { state: osState, toggleMaximize, addNotification, showConfirm } = useOS();
+  const { state: osState, addNotification, showConfirm } = useOS();
   const { t } = useTranslation();
   const connections = (appState?.connections || []).filter(connection => connection.type !== 'database');
   const [connectionId, setConnectionId] = useState('');
@@ -273,14 +273,10 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
   const [showOnboarding, setShowOnboarding] = useState(false);
 
   const ensureMaximizedThenShow = useCallback(() => {
-    const win = (osState?.windows || []).find(w => w.id === windowId);
-    if (win && !win.isMaximized && typeof toggleMaximize === 'function') {
-      toggleMaximize(windowId);
-      setTimeout(() => setShowOnboarding(true), 350);
-    } else {
-      setShowOnboarding(true);
-    }
-  }, [osState, windowId, toggleMaximize]);
+    // Dynamic-focus onboarding tracks its target at ANY window size/position,
+    // so there is no need to force-maximize the window first anymore.
+    setShowOnboarding(true);
+  }, []);
 
   const ensureMaximizedThenShowRef = useRef(ensureMaximizedThenShow);
   useEffect(() => { ensureMaximizedThenShowRef.current = ensureMaximizedThenShow; }, [ensureMaximizedThenShow]);
@@ -1022,20 +1018,20 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
   const canApply = Boolean(connectionId && entryCount && !conflicts.length && matchesConfirmation(confirmation) && status?.tools?.ipset && status?.tools?.iptables && status?.access !== 'limited');
 
   return (
-    <div className="h-full overflow-y-auto bg-[var(--fw-app-bg,#0a0d14)] text-slate-100 font-sans selection:bg-indigo-500/30 selection:text-indigo-200">
-      <div className="max-w-6xl mx-auto p-4 sm:p-6 lg:p-8 space-y-6">
+    <div className="@container h-full overflow-y-auto bg-[var(--fw-app-bg,#0a0d14)] text-slate-100 font-sans selection:bg-indigo-500/30 selection:text-indigo-200">
+      <div className="max-w-6xl mx-auto p-4 @xl:p-6 @4xl:p-8 space-y-6">
         
         {/* ==================================================================== */}
         {/* Top Header & Telemetry Hero Card */}
         {/* ==================================================================== */}
-        <header className="relative rounded-2xl border border-white/10 bg-gradient-to-b from-white/[0.04] to-black/40 p-5 sm:p-6 [backdrop-filter:blur(var(--glass-blur,24px))] shadow-2xl z-20">
+        <header className="relative rounded-2xl border border-white/10 bg-gradient-to-b from-white/[0.04] to-black/40 p-5 @xl:p-6 [backdrop-filter:blur(var(--glass-blur,24px))] shadow-2xl z-20">
           {/* Ambient glow container */}
           <div className="absolute inset-0 overflow-hidden rounded-2xl pointer-events-none">
             <div className="absolute -top-24 -right-24 w-72 h-72 bg-indigo-600/15 rounded-full blur-3xl" />
             <div className="absolute -bottom-24 -left-24 w-72 h-72 bg-cyan-600/10 rounded-full blur-3xl" />
           </div>
 
-          <div className="relative z-30 flex flex-col md:flex-row md:items-center md:justify-between gap-5">
+          <div className="relative z-30 flex flex-col @3xl:flex-row @3xl:items-center @3xl:justify-between gap-5">
             <div className="flex items-center gap-3.5">
               <div className="w-12 h-12 rounded-xl flex items-center justify-center bg-indigo-500/15 border border-indigo-400/25 text-indigo-400 shadow-[0_0_20px_rgba(99,102,241,0.25)]">
                 <BrickWallShield size={24} />
@@ -1043,15 +1039,6 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
               <div>
                 <div className="flex items-center gap-2.5">
                   <h1 className="text-xl font-bold tracking-tight text-white">{t('firewall.title')}</h1>
-                  <span className="text-[10px] font-mono uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 shadow-[0_0_10px_rgba(16,185,129,0.2)]">
-                    {t('firewall.engineBadge')}
-                  </span>
-                  <span
-                    data-onboarding="firewall-docker-badge"
-                    className="text-[10px] font-mono uppercase tracking-wider px-2 py-0.5 rounded-full bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 shadow-[0_0_10px_rgba(6,182,212,0.2)] hidden sm:inline-flex items-center gap-1"
-                  >
-                    🐋 {t('firewall.dockerProtectedBadge')}
-                  </span>
                 </div>
                 <p className="text-xs text-white/50 mt-1">
                   {t('firewall.subtitle')}
@@ -1091,14 +1078,14 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                 title={t('firewall.guideBtn')}
               >
                 <CircleHelp size={14} className="text-indigo-400" />
-                <span className="hidden sm:inline">{t('firewall.guideBtn')}</span>
+                <span className="hidden @xl:inline">{t('firewall.guideBtn')}</span>
               </button>
             </div>
           </div>
 
           {/* Real-Time Telemetry Bar */}
           {status && (
-            <div className="relative z-10 mt-5 pt-4 border-t border-white/10 grid grid-cols-2 sm:grid-cols-4 gap-2.5 font-mono text-xs">
+            <div className="relative z-10 mt-5 pt-4 border-t border-white/10 grid grid-cols-2 @xl:grid-cols-4 gap-2.5 font-mono text-xs">
               <div className="p-2.5 rounded-xl bg-black/40 border border-white/5 flex items-center justify-between">
                 <span className="text-[10px] text-white/40 uppercase tracking-wider">{t('firewall.telemetryLabels.firewallStatus')}</span>
                 <span className={`text-[11px] font-bold flex items-center gap-1.5 ${
@@ -1135,7 +1122,7 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
 
         {/* Missing Tools Callout */}
         {status && (!status.tools?.ipset || !status.tools?.iptables) && (
-          <div className="rounded-2xl border border-amber-500/30 bg-gradient-to-r from-amber-500/15 via-rose-500/10 to-amber-500/15 p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="rounded-2xl border border-amber-500/30 bg-gradient-to-r from-amber-500/15 via-rose-500/10 to-amber-500/15 p-4 @xl:p-5 flex flex-col @xl:flex-row @xl:items-center justify-between gap-4">
             <div className="flex items-center gap-3 min-w-0">
               <TriangleAlert size={20} className="text-amber-400 shrink-0" />
               <div>
@@ -1165,8 +1152,10 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
         <div className="flex items-center gap-2.5 border-b border-white/10 pb-3.5 overflow-x-auto">
           {[
             { id: 'manual', onboardingId: 'firewall-tab-manual', label: t('firewall.tabs.manualImport'), desc: 'File or raw IPs', icon: Layers, color: 'text-indigo-400' },
+            { id: 'quickblock', onboardingId: 'firewall-tab-quickblock', label: t('firewall.tabs.quickBlock', 'Quick Block'), desc: 'Live IP block / unblock', icon: Ban, color: 'text-rose-400' },
             { id: 'schedule', onboardingId: 'firewall-tab-autosync', label: t('firewall.tabs.autoSync'), desc: 'Auto-fetch from URL', icon: Workflow, color: 'text-cyan-400' },
             { id: 'controls', onboardingId: 'firewall-tab-telemetry', label: t('firewall.tabs.telemetry'), desc: 'Realtime filter monitor', icon: Radar, color: 'text-emerald-400' },
+            { id: 'engine', onboardingId: 'firewall-tab-engine', label: t('firewall.tabs.engine', 'Engine Guide'), desc: 'How the engine works', icon: Workflow, color: 'text-violet-400' },
           ].map(tab => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;
@@ -1194,7 +1183,7 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
         {/* ==================================================================== */}
         {activeTab === 'schedule' && (
           <div className="space-y-6">
-            <div className="rounded-2xl border border-white/10 bg-black/40 p-5 sm:p-6 space-y-5">
+            <div className="rounded-2xl border border-white/10 bg-black/40 p-5 @xl:p-6 space-y-5">
               <div>
                 <h2 className="text-sm font-bold text-white flex items-center gap-2">
                   <Workflow size={16} className="text-cyan-400" />
@@ -1240,7 +1229,7 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
               {/* Schedule Frequency Selector */}
               <div className="space-y-2">
                 <label className="text-[11px] font-mono uppercase tracking-wider text-white/60 block">Sync Frequency</label>
-                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                <div className="grid grid-cols-2 @xl:grid-cols-3 @2xl:grid-cols-5 gap-2">
                   {sourceScheduleOptions.map(opt => {
                     const isSelected = sourceSchedule === opt.value;
                     return (
@@ -1269,7 +1258,7 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                       onChange={e => setSourceCustomSchedule(e.target.value)}
                       spellCheck="false"
                       placeholder="*/30 * * * *"
-                      className="w-full sm:w-64 px-3 py-2 rounded-xl bg-black/60 border border-white/10 text-xs font-mono text-amber-200 outline-none focus:border-amber-400"
+                      className="w-full @xl:w-64 px-3 py-2 rounded-xl bg-black/60 border border-white/10 text-xs font-mono text-amber-200 outline-none focus:border-amber-400"
                     />
                     <p className="text-[10px] text-white/40 mt-1">5-part cron syntax in server local time.</p>
                   </div>
@@ -1278,7 +1267,7 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
 
               {/* Action Toolbar */}
               <div className="p-4 rounded-xl bg-white/[0.02] border border-white/5 space-y-3">
-                <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+                <div className="flex flex-col @xl:flex-row items-stretch @xl:items-center justify-between gap-3">
                   <div className="flex items-center gap-2 min-w-0">
                     <input
                       type="text"
@@ -1301,7 +1290,7 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                       type="button"
                       onClick={() => configureSourceUpdate(false)}
                       disabled={sourceLoading || !matchesConfirmation(sourceConfirmation) || (sourceSchedule === 'custom' && !sourceCustomSchedule.trim())}
-                      className="flex-1 sm:flex-initial px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 text-white hover:bg-indigo-500 transition-all flex items-center justify-center gap-1.5 shadow-[0_0_15px_rgba(99,102,241,0.3)] disabled:opacity-40 cursor-pointer"
+                      className="flex-1 @xl:flex-initial px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 text-white hover:bg-indigo-500 transition-all flex items-center justify-center gap-1.5 shadow-[0_0_15px_rgba(99,102,241,0.3)] disabled:opacity-40 cursor-pointer"
                     >
                       {sourceLoading ? <LoaderCircle size={13} className="animate-spin" /> : <Clock size={13} />}
                       Save Schedule
@@ -1311,7 +1300,7 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                       type="button"
                       onClick={() => configureSourceUpdate(true)}
                       disabled={sourceLoading || !matchesConfirmation(sourceConfirmation) || (sourceSchedule === 'custom' && !sourceCustomSchedule.trim())}
-                      className="flex-1 sm:flex-initial px-4 py-2 rounded-xl text-xs font-bold bg-emerald-600 text-white hover:bg-emerald-500 transition-all flex items-center justify-center gap-1.5 shadow-[0_0_15px_rgba(16,185,129,0.3)] disabled:opacity-40 cursor-pointer"
+                      className="flex-1 @xl:flex-initial px-4 py-2 rounded-xl text-xs font-bold bg-emerald-600 text-white hover:bg-emerald-500 transition-all flex items-center justify-center gap-1.5 shadow-[0_0_15px_rgba(16,185,129,0.3)] disabled:opacity-40 cursor-pointer"
                     >
                       {sourceLoading ? <LoaderCircle size={13} className="animate-spin" /> : <Zap size={13} />}
                       Run Update Now
@@ -1370,7 +1359,7 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
         {/* ==================================================================== */}
         {activeTab === 'manual' && (
           <div className="space-y-6">
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            <div className="grid grid-cols-1 @4xl:grid-cols-2 gap-5">
               
               {/* Drop / Import Zone */}
               <div className="rounded-2xl border border-white/10 bg-black/40 p-5 space-y-4">
@@ -1492,102 +1481,11 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                   </div>
                 )}
               </div>
-
-              {/* Quick Block / Unblock — live blocklist edits without a file import */}
-              {status?.blocklist?.active && (
-                <div data-onboarding="firewall-quick-block" className="rounded-2xl border border-rose-500/25 bg-black/40 p-5 space-y-3">
-                  <div>
-                    <h2 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-2">
-                      <Ban size={14} className="text-rose-400" />
-                      Quick Block / Unblock IPs
-                    </h2>
-                    <p className="text-[11px] text-white/50 mt-1">
-                      Instantly add or remove specific IPs or CIDR ranges on the live blocklist — no file import needed. Quick blocks live in their own dedicated set, so they survive list re-applies and scheduled updates. Separate multiple entries with commas or new lines.
-                    </p>
-                  </div>
-                  <div className="flex flex-col sm:flex-row gap-2">
-                    <input
-                      type="text"
-                      value={blockDraft}
-                      onChange={e => setBlockDraft(e.target.value)}
-                      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); quickBlock('add'); } }}
-                      placeholder="e.g. 203.0.113.50  or  185.220.101.0/24"
-                      className="flex-1 px-3 py-2 rounded-xl bg-black/60 border border-white/10 text-xs font-mono text-white outline-none focus:border-rose-400"
-                    />
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        onClick={checkBlockedIp}
-                        disabled={blocking || !blockDraft.trim()}
-                        className="px-3.5 py-2 rounded-xl text-xs font-bold bg-white/5 text-white/70 hover:text-white hover:bg-white/10 border border-white/10 flex items-center gap-1.5 cursor-pointer disabled:opacity-40"
-                        title="Check if this IP is currently blocked"
-                      >
-                        <Search size={13} /> Check
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => quickBlock('add')}
-                        disabled={blocking || !blockDraft.trim()}
-                        className="px-3.5 py-2 rounded-xl text-xs font-bold bg-rose-500/20 text-rose-200 hover:bg-rose-500/30 border border-rose-500/40 flex items-center gap-1.5 cursor-pointer disabled:opacity-40"
-                      >
-                        {blocking ? <LoaderCircle size={13} className="animate-spin" /> : <Ban size={13} />} Block
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => quickBlock('remove')}
-                        disabled={blocking || !blockDraft.trim()}
-                        className="px-3.5 py-2 rounded-xl text-xs font-bold bg-white/5 text-white/70 hover:text-white hover:bg-white/10 border border-white/10 flex items-center gap-1.5 cursor-pointer disabled:opacity-40"
-                      >
-                        <RotateCcw size={13} /> Unblock
-                      </button>
-                    </div>
-                  </div>
-                  {manualBlocks.length > 0 && (
-                    <div className="space-y-1.5">
-                      <div className="text-[10px] font-mono text-white/40 uppercase">
-                        Active Quick Blocks{status?.blocklist?.manualEntries > 0 && status.blocklist.manualEntries !== manualBlocks.length ? ` (${manualBlocks.length} here · ${status.blocklist.manualEntries} on server)` : ''}:
-                      </div>
-                      <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto">
-                        {manualBlocks.map(ip => (
-                          <span
-                            key={ip}
-                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono bg-rose-500/10 text-rose-300 border border-rose-500/25"
-                          >
-                            {ip}
-                            <button
-                              type="button"
-                              onClick={() => quickBlock('remove', [ip])}
-                              disabled={blocking}
-                              className="hover:text-emerald-300 cursor-pointer disabled:opacity-40"
-                              title="Unblock this IP"
-                            >
-                              <X size={12} />
-                            </button>
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  {blockCheck && (
-                    <div className={`text-[11px] font-mono px-3 py-2 rounded-xl border ${
-                      blockCheck.blocked
-                        ? 'bg-rose-500/10 border-rose-500/30 text-rose-300'
-                        : 'bg-emerald-500/10 border-emerald-500/25 text-emerald-300'
-                    }`}>
-                      {blockCheck.active === false
-                        ? 'The blocklist is not active on this server.'
-                        : blockCheck.blocked
-                          ? <span className="flex items-center gap-1.5"><Ban size={12} /> {blockCheck.ip} is currently BLOCKED by the live firewall.</span>
-                          : <span className="flex items-center gap-1.5"><ShieldCheck size={12} /> {blockCheck.ip} is not blocked (traffic allowed).</span>}
-                    </div>
-                  )}
-                </div>
-              )}
             </div>
 
             {/* Apply Action Card */}
-            <div className="rounded-2xl border border-indigo-500/30 bg-gradient-to-r from-indigo-500/10 via-black/40 to-indigo-500/10 p-5 sm:p-6 space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="rounded-2xl border border-indigo-500/30 bg-gradient-to-r from-indigo-500/10 via-black/40 to-indigo-500/10 p-5 @xl:p-6 space-y-4">
+              <div className="flex flex-col @xl:flex-row @xl:items-center justify-between gap-4">
                 <div>
                   <h3 className="text-sm font-bold text-white flex items-center gap-2">
                     <BrickWallShield size={16} className="text-indigo-400" />
@@ -1633,13 +1531,118 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
         )}
 
         {/* ==================================================================== */}
+        {/* TAB 2b: Quick Block / Unblock IPs (live edits) */}
+        {/* ==================================================================== */}
+        {activeTab === 'quickblock' && (
+          <div className="space-y-6">
+            {status?.blocklist?.active ? (
+              <div data-onboarding="firewall-quick-block" className="rounded-2xl border border-rose-500/25 bg-black/40 p-5 space-y-3">
+                <div>
+                  <h2 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-2">
+                    <Ban size={14} className="text-rose-400" />
+                    Quick Block / Unblock IPs
+                  </h2>
+                  <p className="text-[11px] text-white/50 mt-1">
+                    Instantly add or remove specific IPs or CIDR ranges on the live blocklist — no file import needed. Quick blocks live in their own dedicated set, so they survive list re-applies and scheduled updates. Separate multiple entries with commas or new lines.
+                  </p>
+                </div>
+                <div className="flex flex-col @xl:flex-row gap-2">
+                  <input
+                    type="text"
+                    value={blockDraft}
+                    onChange={e => setBlockDraft(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); quickBlock('add'); } }}
+                    placeholder="e.g. 203.0.113.50  or  185.220.101.0/24"
+                    className="flex-1 px-3 py-2 rounded-xl bg-black/60 border border-white/10 text-xs font-mono text-white outline-none focus:border-rose-400"
+                  />
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={checkBlockedIp}
+                      disabled={blocking || !blockDraft.trim()}
+                      className="px-3.5 py-2 rounded-xl text-xs font-bold bg-white/5 text-white/70 hover:text-white hover:bg-white/10 border border-white/10 flex items-center gap-1.5 cursor-pointer disabled:opacity-40"
+                      title="Check if this IP is currently blocked"
+                    >
+                      <Search size={13} /> Check
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => quickBlock('add')}
+                      disabled={blocking || !blockDraft.trim()}
+                      className="px-3.5 py-2 rounded-xl text-xs font-bold bg-rose-500/20 text-rose-200 hover:bg-rose-500/30 border border-rose-500/40 flex items-center gap-1.5 cursor-pointer disabled:opacity-40"
+                    >
+                      {blocking ? <LoaderCircle size={13} className="animate-spin" /> : <Ban size={13} />} Block
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => quickBlock('remove')}
+                      disabled={blocking || !blockDraft.trim()}
+                      className="px-3.5 py-2 rounded-xl text-xs font-bold bg-white/5 text-white/70 hover:text-white hover:bg-white/10 border border-white/10 flex items-center gap-1.5 cursor-pointer disabled:opacity-40"
+                    >
+                      <RotateCcw size={13} /> Unblock
+                    </button>
+                  </div>
+                </div>
+                {manualBlocks.length > 0 && (
+                  <div className="space-y-1.5">
+                    <div className="text-[10px] font-mono text-white/40 uppercase">
+                      Active Quick Blocks{status?.blocklist?.manualEntries > 0 && status.blocklist.manualEntries !== manualBlocks.length ? ` (${manualBlocks.length} here · ${status.blocklist.manualEntries} on server)` : ''}:
+                    </div>
+                    <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto">
+                      {manualBlocks.map(ip => (
+                        <span
+                          key={ip}
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono bg-rose-500/10 text-rose-300 border border-rose-500/25"
+                        >
+                          {ip}
+                          <button
+                            type="button"
+                            onClick={() => quickBlock('remove', [ip])}
+                            disabled={blocking}
+                            className="hover:text-emerald-300 cursor-pointer disabled:opacity-40"
+                            title="Unblock this IP"
+                          >
+                            <X size={12} />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {blockCheck && (
+                  <div className={`text-[11px] font-mono px-3 py-2 rounded-xl border ${
+                    blockCheck.blocked
+                      ? 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+                      : 'bg-emerald-500/10 border-emerald-500/25 text-emerald-300'
+                  }`}>
+                    {blockCheck.active === false
+                      ? 'The blocklist is not active on this server.'
+                      : blockCheck.blocked
+                        ? <span className="flex items-center gap-1.5"><Ban size={12} /> {blockCheck.ip} is currently BLOCKED by the live firewall.</span>
+                        : <span className="flex items-center gap-1.5"><ShieldCheck size={12} /> {blockCheck.ip} is not blocked (traffic allowed).</span>}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="p-8 rounded-2xl bg-black/40 border border-white/10 text-center space-y-3">
+                <Ban size={36} className="text-white/20 mx-auto" />
+                <div className="text-sm font-semibold text-white/70">Quick blocking needs an active blocklist</div>
+                <p className="text-xs text-white/40 max-w-md mx-auto">
+                  Activate protection via the <strong className="inline-flex items-center gap-1"><Zap size={12} className="text-amber-300" /> Automated Sync</strong> tab or <strong className="inline-flex items-center gap-1"><FolderUp size={12} className="text-indigo-300" /> Manual Import</strong> tab first — then block or unblock individual IPs here instantly.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ==================================================================== */}
         {/* TAB 3: Live Telemetry & Server Controls */}
         {/* ==================================================================== */}
         {activeTab === 'controls' && (
           <div className="space-y-6">
 
             {/* Server Agent status — unlocks 1s realtime graph + 24/7 attack history */}
-            <div className={`flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-2xl border p-4 ${
+            <div className={`flex flex-col @xl:flex-row @xl:items-center justify-between gap-3 rounded-2xl border p-4 ${
               realtimeActive
                 ? 'border-emerald-500/30 bg-emerald-500/5'
                 : agentStatus?.nodeInstalled
@@ -1692,7 +1695,7 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
               <div className="space-y-6">
                 
                 {/* 3 Metric Cards */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 @xl:grid-cols-3 gap-4">
                   <div className="p-5 rounded-2xl bg-black/40 border border-emerald-500/30 shadow-[0_0_20px_rgba(16,185,129,0.15)] relative overflow-hidden">
                     <div className="absolute top-0 right-0 p-4 text-emerald-400/10">
                       <BrickWallShield size={56} />
@@ -1737,8 +1740,8 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                 </div>
 
                 {/* Real-Time Drop Rate Graph */}
-                <div className="rounded-2xl border border-white/10 bg-black/40 p-5 sm:p-6 space-y-4">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="rounded-2xl border border-white/10 bg-black/40 p-5 @xl:p-6 space-y-4">
+                  <div className="flex flex-col @xl:flex-row @xl:items-center justify-between gap-3">
                     <div>
                       <h3 className="text-sm font-bold text-white flex items-center gap-2">
                         <Activity size={16} className="text-emerald-400" />
@@ -2008,8 +2011,8 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                 </div>
 
                 {/* Live Threat Packet Inspector UI */}
-                <div className="rounded-2xl border border-white/10 bg-black/40 p-5 sm:p-6 space-y-4">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="rounded-2xl border border-white/10 bg-black/40 p-5 @xl:p-6 space-y-4">
+                  <div className="flex flex-col @xl:flex-row @xl:items-center justify-between gap-3">
                     <div>
                       <h3 className="text-sm font-bold text-white flex items-center gap-2">
                         <Radar size={16} className="text-rose-400" />
@@ -2052,8 +2055,8 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                   </div>
 
                   {/* Filter & Search Bar */}
-                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5">
-                    <div className="flex items-center gap-1 overflow-x-auto pb-1 sm:pb-0 text-xs font-mono">
+                  <div className="flex flex-col @xl:flex-row items-stretch @xl:items-center justify-between gap-2.5">
+                    <div className="flex items-center gap-1 overflow-x-auto pb-1 @xl:pb-0 text-xs font-mono">
                       {(graphPinned || graphHover) && (graphPinned?.t != null || telemetryHistory[(graphPinned || graphHover).idx]) && (
                         <span className={`mr-1.5 inline-flex items-center gap-1.5 px-2 py-1 rounded-lg border whitespace-nowrap ${
                           graphPinned
@@ -2098,7 +2101,7 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                       value={packetSearch}
                       onChange={e => setPacketSearch(e.target.value)}
                       placeholder="Filter by IP (e.g. 198.51...)"
-                      className="px-3 py-1.5 rounded-xl bg-black/60 border border-white/10 text-xs font-mono text-white outline-none focus:border-indigo-400 sm:w-48"
+                      className="px-3 py-1.5 rounded-xl bg-black/60 border border-white/10 text-xs font-mono text-white outline-none focus:border-indigo-400 @xl:w-48"
                     />
                   </div>
 
@@ -2231,11 +2234,11 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
 
                 {/* Selected Packet Real Payload & Wire Header Modal */}
                 {selectedPacket && (
-                  <div className="fixed inset-0 z-[99999] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 sm:p-6 animate-in fade-in duration-150">
-                    <div className="w-full max-w-3xl max-h-[85vh] overflow-hidden rounded-2xl border border-indigo-500/40 bg-[#0d1117] shadow-[0_25px_70px_rgba(0,0,0,0.9)] flex flex-col">
+                  <div className="fixed inset-0 z-[99999] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 @xl:p-6 animate-in fade-in duration-150">
+                    <div className="@container w-full max-w-3xl max-h-[85vh] overflow-hidden rounded-2xl border border-indigo-500/40 bg-[#0d1117] shadow-[0_25px_70px_rgba(0,0,0,0.9)] flex flex-col">
                       
                       {/* Modal Header */}
-                      <div className="p-4 sm:p-5 border-b border-white/10 bg-white/[0.02] flex items-center justify-between gap-4">
+                      <div className="p-4 @xl:p-5 border-b border-white/10 bg-white/[0.02] flex items-center justify-between gap-4">
                         <div className="flex items-center gap-3">
                           <div className="w-9 h-9 rounded-xl flex items-center justify-center bg-rose-500/20 text-rose-400 border border-rose-500/30">
                             <ShieldAlert size={18} />
@@ -2269,7 +2272,7 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                       <div className="p-5 overflow-y-auto space-y-4 font-mono text-xs">
                         
                         {/* Protocol Header Breakdown */}
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                        <div className="grid grid-cols-2 @xl:grid-cols-4 gap-2.5">
                           <div className="p-2.5 rounded-xl bg-black/40 border border-white/5 space-y-1">
                             <span className="text-[9px] text-white/40 uppercase">Attacker Signature</span>
                             <div className="text-xs font-bold text-amber-300 truncate">{selectedPacket.toolSignature || 'Automated Worm'}</div>
@@ -2388,72 +2391,6 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                   </div>
                 )}
 
-                {/* Interactive Explainer: How Kernel Filtering Works */}
-                <div className="rounded-2xl border border-white/10 bg-gradient-to-b from-white/[0.03] to-black/40 p-5 sm:p-6 space-y-4">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div>
-                      <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                        <Workflow size={16} className="text-indigo-400" />
-                        How the Firewall Engine Works
-                      </h3>
-                      <p className="text-xs text-white/50 mt-0.5">
-                        Kernel packet traversal · blocklist applied via {isLocalRelayMode ? 'Local Relay (WebRTC DataChannel)' : 'Server (direct SSH)'}:
-                      </p>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      {isLocalRelayMode ? (
-                        <span className="text-[10px] font-mono px-2.5 py-1 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 flex items-center gap-1.5">
-                          <Zap size={11} />
-                          WebRTC DataChannel · Local Relay
-                        </span>
-                      ) : (
-                        <span className="text-[10px] font-mono px-2.5 py-1 rounded-full bg-blue-500/15 text-blue-300 border border-blue-500/30 flex items-center gap-1.5">
-                          <Server size={11} />
-                          Server Mode · Direct SSH
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-5 gap-2.5 font-mono text-xs">
-                    <div className="p-3.5 rounded-xl bg-black/50 border border-white/10 space-y-1.5">
-                      <div className="text-[10px] text-cyan-400 font-bold uppercase">1. Inbound Packet</div>
-                      <div className="text-white/80 text-[11px]">Network traffic hits WAN/eth0 interface on your server.</div>
-                    </div>
-
-                    <div className="p-3.5 rounded-xl bg-black/50 border border-white/10 space-y-1.5">
-                      <div className="text-[10px] text-indigo-400 font-bold uppercase">2. INPUT Chain #1</div>
-                      <div className="text-white/80 text-[11px]">iptables rule directs source IP to IPSet hash engine.</div>
-                    </div>
-
-                    <div className="p-3.5 rounded-xl bg-black/50 border border-emerald-500/30 space-y-1.5 bg-emerald-500/5">
-                      <div className="text-[10px] text-emerald-400 font-bold uppercase">3. O(1) Hash Lookup</div>
-                      <div className="text-white/80 text-[11px]">Checks memory hash table in &lt;1 microsecond.</div>
-                    </div>
-
-                    <div className="p-3.5 rounded-xl bg-black/50 border border-rose-500/30 space-y-1.5 bg-rose-500/5">
-                      <div className="text-[10px] text-rose-400 font-bold uppercase">4. Match = Drop</div>
-                      <div className="text-white/80 text-[11px]">Matched IPs are silently dropped. Zero socket or CPU load.</div>
-                    </div>
-
-                    <div className={`p-3.5 rounded-xl bg-black/50 space-y-1.5 ${
-                      isLocalRelayMode
-                        ? 'border border-cyan-500/30 bg-cyan-500/5'
-                        : 'border border-blue-500/30 bg-blue-500/5'
-                    }`}>
-                      <div className={`text-[10px] font-bold uppercase ${isLocalRelayMode ? 'text-cyan-400' : 'text-blue-400'}`}>
-                        5. {isLocalRelayMode ? 'WebRTC Relay' : 'Server SSH'}
-                      </div>
-                      <div className="text-white/80 text-[11px]">
-                        {isLocalRelayMode
-                          ? 'P2P DataChannel pipes the blocklist update out-of-band — stays connected even if inbound ports change.'
-                          : 'Blocklist update is pushed via direct SSH from the app server. WebRTC is not used in Server mode.'}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
               </div>
             ) : (
               <div className="p-8 rounded-2xl bg-black/40 border border-white/10 text-center space-y-3">
@@ -2518,7 +2455,7 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
 
               {/* Lifecycle Inline Confirmation */}
               {manageAction && (
-                <div className="p-3.5 rounded-xl bg-white/[0.02] border border-white/10 flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                <div className="p-3.5 rounded-xl bg-white/[0.02] border border-white/10 flex flex-col @xl:flex-row items-stretch @xl:items-center gap-2">
                   <span className="text-xs text-white/70 font-mono">
                     Confirm {manageAction}:
                   </span>
@@ -2568,7 +2505,7 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                   </span>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 font-mono text-xs">
+                <div className="grid grid-cols-1 @xl:grid-cols-2 gap-4 font-mono text-xs">
                   <div className="p-3.5 rounded-xl bg-[#080b11] border border-white/5 space-y-2">
                     <div className="text-[10px] uppercase text-white/40">INPUT Rule State:</div>
                     <pre className="text-cyan-300 text-[11px] overflow-x-auto whitespace-pre-wrap">
@@ -2587,6 +2524,81 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {/* ==================================================================== */}
+        {/* TAB 5: Engine Guide — How Kernel Filtering Works */}
+        {/* ==================================================================== */}
+        {activeTab === 'engine' && (
+          <div className="space-y-6">
+
+            {/* Interactive Explainer: How Kernel Filtering Works */}
+            <div className="rounded-2xl border border-white/10 bg-gradient-to-b from-white/[0.03] to-black/40 p-5 @xl:p-6 space-y-4">
+              <div className="flex flex-col @xl:flex-row @xl:items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    <Workflow size={16} className="text-indigo-400" />
+                    How the Firewall Engine Works
+                  </h3>
+                  <p className="text-xs text-white/50 mt-0.5">
+                    Kernel packet traversal · blocklist applied via {isLocalRelayMode ? 'Local Relay (WebRTC DataChannel)' : 'Server (direct SSH)'}:
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {isLocalRelayMode ? (
+                    <span className="text-[10px] font-mono px-2.5 py-1 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 flex items-center gap-1.5">
+                      <Zap size={11} />
+                      WebRTC DataChannel · Local Relay
+                    </span>
+                  ) : (
+                    <span className="text-[10px] font-mono px-2.5 py-1 rounded-full bg-blue-500/15 text-blue-300 border border-blue-500/30 flex items-center gap-1.5">
+                      <Server size={11} />
+                      Server Mode · Direct SSH
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 @3xl:grid-cols-5 gap-2.5 font-mono text-xs">
+                <div className="p-3.5 rounded-xl bg-black/50 border border-white/10 space-y-1.5">
+                  <div className="text-[10px] text-cyan-400 font-bold uppercase">1. Inbound Packet</div>
+                  <div className="text-white/80 text-[11px]">Network traffic hits WAN/eth0 interface on your server.</div>
+                </div>
+
+                <div className="p-3.5 rounded-xl bg-black/50 border border-white/10 space-y-1.5">
+                  <div className="text-[10px] text-indigo-400 font-bold uppercase">2. INPUT Chain #1</div>
+                  <div className="text-white/80 text-[11px]">iptables rule directs source IP to IPSet hash engine.</div>
+                </div>
+
+                <div className="p-3.5 rounded-xl bg-black/50 border border-emerald-500/30 space-y-1.5 bg-emerald-500/5">
+                  <div className="text-[10px] text-emerald-400 font-bold uppercase">3. O(1) Hash Lookup</div>
+                  <div className="text-white/80 text-[11px]">Checks memory hash table in &lt;1 microsecond.</div>
+                </div>
+
+                <div className="p-3.5 rounded-xl bg-black/50 border border-rose-500/30 space-y-1.5 bg-rose-500/5">
+                  <div className="text-[10px] text-rose-400 font-bold uppercase">4. Match = Drop</div>
+                  <div className="text-white/80 text-[11px]">Matched IPs are silently dropped. Zero socket or CPU load.</div>
+                </div>
+
+                <div className={`p-3.5 rounded-xl bg-black/50 space-y-1.5 ${
+                  isLocalRelayMode
+                    ? 'border border-cyan-500/30 bg-cyan-500/5'
+                    : 'border border-blue-500/30 bg-blue-500/5'
+                }`}>
+                  <div className={`text-[10px] font-bold uppercase ${isLocalRelayMode ? 'text-cyan-400' : 'text-blue-400'}`}>
+                    5. {isLocalRelayMode ? 'WebRTC Relay' : 'Server SSH'}
+                  </div>
+                  <div className="text-white/80 text-[11px]">
+                    {isLocalRelayMode
+                      ? 'P2P DataChannel pipes the blocklist update out-of-band — stays connected even if inbound ports change.'
+                      : 'Blocklist update is pushed via direct SSH from the app server. WebRTC is not used in Server mode.'}
+                  </div>
+                </div>
+              </div>
+            </div>
+
           </div>
         )}
 

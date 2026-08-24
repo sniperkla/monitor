@@ -233,7 +233,7 @@ export default function DockerLogApp({ initialConnection, initialConnectionId, i
   };
 
   return (
-    <div className="flex flex-col h-full bg-[#0d1117] text-gray-300 overflow-hidden font-mono text-xs">
+    <div className="@container flex flex-col h-full bg-[#0d1117] text-gray-300 overflow-hidden font-mono text-xs">
         {/* Header toolbar */}
         <div className="flex items-center justify-between px-4 h-10 border-b border-white/5 bg-white/5 shrink-0">
             <div className="flex items-center gap-2 truncate pr-4">

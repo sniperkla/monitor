@@ -1,5 +1,7 @@
 'use client';
 
+import OnboardingSpotlight from '@/components/OnboardingSpotlight';
+
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import {
@@ -167,20 +169,31 @@ function ProgressRing({ progress, color, size = 44, strokeWidth = 3 }) {
 function useSpotlightRect(target) {
   const [measured, setMeasured] = useState(null);
   useEffect(() => {
-    if (!target) return;
-    let scrolled = false; // scrollIntoView once per step — repeating it restarts the smooth scroll
+    if (!target) { setMeasured(null); return; }
+    let scrolled = false; // one smooth scroll per step — repeating restarts animation
     const measure = () => {
       const el = document.querySelector(`[data-onboarding="${target}"]`);
-      if (el) {
-        // Anchor may live below the fold (e.g. quick-block card) — bring it into view
-        const r = el.getBoundingClientRect();
-        if (!scrolled && (r.bottom > window.innerHeight - 80 || r.top < 80)) {
-          scrolled = true;
-          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      if (!el) { scrolled = false; setMeasured(null); return; }
+      if (!scrolled) {
+        // Walk up to the nearest scrollable ancestor actually clipping the target
+        // (works at ANY window size — not just against the browser viewport)
+        let node = el.parentElement;
+        while (node && node !== document.body) {
+          const st = window.getComputedStyle(node);
+          if (/(auto|scroll)/.test(st.overflowY) || /(auto|scroll)/.test(st.overflow)) {
+            const cr = node.getBoundingClientRect();
+            const er = el.getBoundingClientRect();
+            if (er.top < cr.top || er.bottom > cr.bottom) {
+              scrolled = true;
+              el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+            break;
+          }
+          node = node.parentElement;
         }
-        setMeasured({ top: r.top, left: r.left, width: r.width, height: r.height });
       }
-      else { scrolled = false; setMeasured(null); }
+      const r = el.getBoundingClientRect();
+      setMeasured({ top: r.top, left: r.left, width: r.width, height: r.height });
     };
     const raf = requestAnimationFrame(() => { setTimeout(measure, 50); });
     const id = setInterval(measure, 150);
@@ -197,7 +210,7 @@ function ImmersiveCenterPanel({ step, meta, total, contentStep, contentTotal, on
   if (isWelcome) {
     return (
       <div style={{
-        position: 'fixed', inset: 0, zIndex: 210,
+        position: 'fixed', inset: 0, zIndex: 999997,
         display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
         pointerEvents: show ? 'auto' : 'none', opacity: show ? 1 : 0, transition: 'opacity 0.5s ease',
       }}>
@@ -274,7 +287,7 @@ function ImmersiveCenterPanel({ step, meta, total, contentStep, contentTotal, on
   if (isLast) {
     return (
       <div style={{
-        position: 'fixed', inset: 0, zIndex: 210,
+        position: 'fixed', inset: 0, zIndex: 999997,
         display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
         pointerEvents: show ? 'auto' : 'none', opacity: show ? 1 : 0, transition: 'opacity 0.5s ease',
       }}>
@@ -326,7 +339,7 @@ function ImmersiveCenterPanel({ step, meta, total, contentStep, contentTotal, on
     <div style={{
       position: 'fixed', bottom: 32, left: '50%',
       transform: `translateX(-50%) ${show ? 'translateY(0)' : 'translateY(120px)'}`,
-      zIndex: 210, opacity: show ? 1 : 0,
+      zIndex: 999997, opacity: show ? 1 : 0,
       transition: 'all 0.5s cubic-bezier(0.34, 1.3, 0.64, 1)',
       pointerEvents: show ? 'auto' : 'none',
     }}>
@@ -506,19 +519,11 @@ export default function VirusScanOnboarding({ onComplete }) {
           position: 'fixed', inset: 0,
           background: 'rgba(0, 0, 0, 0.75)',
           backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)',
-          zIndex: 200,
+          zIndex: 999990,
         }} />
       )}
-      {spotlightRect && (
-        <div style={{
-          position: 'fixed',
-          top: spotlightRect.top - 8, left: spotlightRect.left - 8,
-          width: spotlightRect.width + 16, height: spotlightRect.height + 16,
-          borderRadius: 12, boxShadow: `0 0 0 9999px rgba(0, 0, 0, 0.72)`,
-          border: `2px solid ${meta.color}`, zIndex: 205, pointerEvents: 'none',
-          animation: 'ob-spotlight-pulse 2s ease-in-out infinite',
-        }} />
-      )}
+      <OnboardingSpotlight rect={spotlightRect} color={meta.color} />
+
       <ImmersiveCenterPanel
         step={step} meta={meta} total={total}
         contentStep={contentStep} contentTotal={contentTotal}

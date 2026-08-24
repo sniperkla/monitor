@@ -139,9 +139,9 @@ export default function NotepadApp({ windowId }) {
   }
 
   return (
-    <div className="flex h-full bg-transparent text-[var(--text-primary)] overflow-hidden font-sans relative">
+    <div className="@container flex h-full bg-transparent text-[var(--text-primary)] overflow-hidden font-sans relative">
       {/* Sidebar */}
-      <div className={`${showSidebar ? 'translate-x-0' : '-translate-x-full md:translate-x-0'} ${isMobile ? 'fixed inset-y-0 left-0 z-50 bg-[var(--bg-primary)] shadow-2xl transition-transform duration-300' : 'relative transition-none'} w-72 border-r border-[var(--border-color)] flex flex-col bg-[var(--bg-secondary)]/30 shrink-0`}>
+      <div className={`${showSidebar ? 'translate-x-0' : '-translate-x-full @3xl:translate-x-0'} ${isMobile ? 'fixed inset-y-0 left-0 z-50 bg-[var(--bg-primary)] shadow-2xl transition-transform duration-300' : 'relative transition-none'} w-72 border-r border-[var(--border-color)] flex flex-col bg-[var(--bg-secondary)]/30 shrink-0`}>
         <div className="p-4 border-b border-[var(--border-color)] bg-[var(--bg-tertiary)]/10">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">

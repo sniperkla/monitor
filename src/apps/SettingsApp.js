@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import DeploymentOnboarding, { hasCompletedDeploymentOnboarding, resetDeploymentOnboarding } from '@/components/DeploymentOnboarding';
 
 function safeStringify(obj) {
   const seen = new WeakSet();
@@ -18,7 +19,7 @@ import {
   LoaderCircle, Trash2, Lock, Unlock, Key, Mail, Code, Volume2, Sun, Moon, Cpu,
   Search, Terminal, Network, Download, Copy, X, CheckCheck, Sparkles,
   GitBranch, GitCommit, ChevronDown, Settings, Send, Music, ChevronRight, LogOut, Check,
-  RotateCcw, Menu, Coffee
+  RotateCcw, Menu, Coffee, CircleHelp
 } from 'lucide-react';
 import { useOS } from '@/context/OSContext';
 import { useApp } from '@/context/AppContext';
@@ -410,7 +411,18 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
   const [copySuccess, setCopySuccess] = useState(false);
   const [directCopySuccess, setDirectCopySuccess] = useState(false);
   const [aiAnalyzing, setAiAnalyzing] = useState(false);
-  const [deploymentTab, setDeploymentTab] = useState('configuration');
+  const [deploymentTab, setDeploymentTab] = useState('overview');
+
+  // Auto Deploy onboarding: show once on first visit (deployment mode only)
+  const [showDeployOnboarding, setShowDeployOnboarding] = useState(false);
+  const [deployTourKey, setDeployTourKey] = useState(0);
+  useEffect(() => {
+    if (!deploymentOnly) return;
+    const t = setTimeout(() => {
+      if (!hasCompletedDeploymentOnboarding()) setShowDeployOnboarding(true);
+    }, 500);
+    return () => clearTimeout(t);
+  }, [deploymentOnly]);
   const [branches, setBranches] = useState([]);
   const [loadingBranches, setLoadingBranches] = useState(false);
   const [repoInput, setRepoInput] = useState('');
@@ -1536,12 +1548,12 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
   };
 
   return (
-    <div className="flex h-full w-full bg-[var(--bg-primary)] text-[var(--text-primary)] border-[var(--border-color)] overflow-hidden relative">
+    <div className="@container flex h-full w-full bg-[var(--bg-primary)] text-[var(--text-primary)] border-[var(--border-color)] overflow-hidden relative">
       {/* Sidebar - responsive behavior */}
       {!deploymentOnly && (
         <div className={`
-          ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
-          fixed md:relative z-20 md:z-0 w-64 border-r border-[var(--border-color)] flex flex-col shrink-0 h-full overflow-y-auto custom-scrollbar transition-transform duration-300 bg-[var(--bg-secondary)] [backdrop-filter:blur(var(--glass-blur,24px))]
+          ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full @3xl:translate-x-0'}
+          fixed @3xl:relative z-20 @3xl:z-0 w-64 border-r border-[var(--border-color)] flex flex-col shrink-0 h-full overflow-y-auto custom-scrollbar transition-transform duration-300 bg-[var(--bg-secondary)] [backdrop-filter:blur(var(--glass-blur,24px))]
         `}>
         {/* User Profile Section */}
         <div className="p-4 border-b border-[var(--border-color)]/60">
@@ -1706,16 +1718,16 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
       {/* Overlay to close sidebar on mobile */}
       {!deploymentOnly && isSidebarOpen && (
         <div 
-          className="fixed inset-0 bg-black/50 z-10 md:hidden" 
+          className="fixed inset-0 bg-black/50 z-10 @3xl:hidden" 
           onClick={() => setIsSidebarOpen(false)} 
         />
       )}
 
       {/* Content */}
-      <div className={`flex-1 overflow-y-auto h-full pb-28 custom-scrollbar ${deploymentOnly ? 'p-6 md:p-10 lg:p-12' : 'p-4 md:p-8'}`}>
+      <div className={`flex-1 overflow-y-auto h-full pb-28 custom-scrollbar ${deploymentOnly ? 'p-6 @3xl:p-10 @4xl:p-12' : 'p-4 @3xl:p-8'}`}>
         {/* Mobile Header */}
         {!deploymentOnly && (
-          <div className="flex items-center gap-3 mb-6 md:hidden">
+          <div className="flex items-center gap-3 mb-6 @3xl:hidden">
             <button 
               onClick={() => setIsSidebarOpen(true)}
               className="p-2.5 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)]"
@@ -1739,7 +1751,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                   <ImageIcon size={15} className="text-indigo-400" />
                   <h3 className="text-sm font-semibold text-[var(--text-primary)]">{t('settings.wallpaper')}</h3>
                 </div>
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                <div className="grid grid-cols-2 @3xl:grid-cols-3 gap-3">
                   {WALLPAPERS.map(wp => {
                     const isActive = osState.wallpaper === wp.url;
                     return (
@@ -1841,7 +1853,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                   <Palette size={15} className="text-indigo-400" />
                   <h3 className="text-sm font-semibold text-[var(--text-primary)]">{t('settings_ui.appearance.theme')}</h3>
                 </div>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <div className="grid grid-cols-2 @xl:grid-cols-4 gap-2">
                   {[
                     { id: 'dark', label: t('settings_ui.appearance.themes.dark'), icon: Moon },
                     { id: 'retro', label: t('settings_ui.appearance.themes.retro'), icon: Cpu },
@@ -2153,7 +2165,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                           </div>
                         </div>
 
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <div className="grid grid-cols-1 @xl:grid-cols-2 gap-2">
                           {/* Server Mode */}
                           <button
                             onClick={() => {
@@ -2553,7 +2565,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                         <Database size={16} className="text-indigo-400" />
                         {t('settings_ui.db.type') || 'Database Type'}
                       </h3>
-                      <div className="grid grid-cols-3 gap-3 mb-6">
+                      <div className="grid grid-cols-1 @xl:grid-cols-3 gap-3 mb-6">
                          {[
                            { id: 'mongodb', label: 'MongoDB', color: '#10b981', icon: Database, bg: 'bg-emerald-500/10' },
                            { id: 'mysql', label: 'MySQL', color: '#00758f', icon: Database, bg: 'bg-blue-500/10' },
@@ -2584,10 +2596,10 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                         <Lock size={16} className="text-indigo-400" />
                         {dbUri.includes('mysql') ? 'MySQL Connection String' : dbUri.includes('postgres') ? 'PostgreSQL Connection String' : t('settings_ui.db.mongoDbUri')}
                       </h3>
-                      <div className="flex gap-2">
+                      <div className="flex flex-col @xl:flex-row gap-2">
                         <input
                           type="text"
-                          className="flex-1 px-4 py-3 bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl text-sm font-mono text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent-indigo)]/50 focus:ring-1 focus:ring-[var(--accent-indigo)]/25 transition-all"
+                          className="flex-1 min-w-0 px-4 py-3 bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl text-sm font-mono text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent-indigo)]/50 focus:ring-1 focus:ring-[var(--accent-indigo)]/25 transition-all"
                           placeholder={dbUri.includes('mysql') ? 'mysql://user:pass@host:port/db' : dbUri.includes('postgres') ? 'postgres://user:pass@host:port/db' : 'mongodb://127.0.0.1:27017/ssh-monitor'}
                           value={dbUri}
                           onChange={(e) => setDbUri(e.target.value)}
@@ -2596,7 +2608,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                         <button
                           onClick={handleConnect}
                           disabled={dbConnecting || !dbUri.trim()}
-                          className={`px-5 py-3 rounded-xl text-sm font-semibold transition-all flex items-center gap-2 whitespace-nowrap shadow-lg ${
+                          className={`px-5 py-3 rounded-xl text-sm font-semibold transition-all flex items-center justify-center gap-2 whitespace-nowrap shadow-lg ${
                             dbConnecting
                               ? 'bg-[var(--accent-indigo)]/50 text-[var(--text-selected)]/50 cursor-wait'
                               : 'bg-[var(--bg-selected)] hover:opacity-90 text-[var(--text-selected)] shadow-[var(--glow-indigo)]/20 border border-[var(--accent-indigo)]/30'
@@ -2746,7 +2758,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
         {activeTab === 'deployment' && (
           <div className="max-w-6xl animate-in fade-in slide-in-from-bottom-2 duration-300">
             {/* Top Toolbar / Dashboard Selector */}
-            <div className="p-4 mb-4 rounded-2xl bg-slate-900/40 border border-[var(--border-color)] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="p-4 mb-4 rounded-2xl bg-slate-900/40 border border-[var(--border-color)] flex flex-col @xl:flex-row @xl:items-center justify-between gap-4">
               <div className="flex flex-wrap items-center gap-3">
                 <label className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-wider">{t('deploy.selectProject', 'Select Project:')}</label>
                 <div className="relative" ref={projectDropdownRef}>
@@ -2852,28 +2864,34 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                   </button>
                 )}
               </div>
-              
-              <div className="flex items-center gap-2">
-                <label className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-wider">{t('deploy.alias', 'Alias:')}</label>
-                <input
-                  type="text"
-                  value={deployConfig.name || ''}
-                  onChange={(e) => setDeployConfig(p => ({ ...p, name: e.target.value }))}
-                  placeholder={t('deploy.placeholderAlias', 'Optional display name')}
-                  className="bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-1.5 text-xs text-[var(--text-primary)] font-bold focus:outline-none focus:border-indigo-500 w-[180px]"
-                />
-              </div>
+
+              {/* Replay tutorial button — pinned to the far right, same as SSH/Docker/Rclone/Mongo Sync */}
+              <button
+                type="button"
+                data-onboarding="help-btn"
+                onClick={() => {
+                  resetDeploymentOnboarding();
+                  setDeploymentTab('overview');
+                  setDeployTourKey(k => k + 1);
+                  setShowDeployOnboarding(true);
+                }}
+                className="p-2 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]/60 transition-colors cursor-pointer self-start @xl:self-auto"
+                title="Show tutorial"
+              >
+                <CircleHelp size={16} />
+              </button>
+
             </div>
 
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-2">
+            <div className="flex flex-col @xl:flex-row @xl:items-center @xl:justify-between gap-4 mb-2">
               <div>
                 <h1 className="text-2xl font-bold text-[var(--text-primary)] flex items-center gap-2">
                   {t('deploy.title', 'Auto Deployment')}: <span className="text-indigo-400">{selectedProjectId}</span>
-                  {deployConfig.name && <span className="text-sm text-[var(--text-secondary)]">({t('deploy.alias', 'Alias:')} {deployConfig.name})</span>}
+                  {deployConfig.name && deployConfig.name !== selectedProjectId && <span className="text-sm text-[var(--text-secondary)]">({deployConfig.name})</span>}
                 </h1>
                 <p className="text-[var(--text-secondary)] text-sm mt-1">{t('deploy.subtitle', 'Configure automated git-triggered deployments via webhooks.')}</p>
               </div>
-              <div className="flex flex-wrap gap-2">
+              <div data-onboarding="deploy-actions" className="flex flex-wrap gap-2">
                 <button
                   onClick={handleSaveDeployConfig}
                   disabled={deploySaving || deployLoading}
@@ -2929,29 +2947,36 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
               </div>
             ) : (
               <div className="space-y-6 mt-6">
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                  <div className="inline-flex rounded-2xl border border-[var(--border-color)] bg-[var(--bg-card)] p-1">
+                {/* Section navigator — one focused step at a time */}
+                <nav data-onboarding="deploy-nav" className="flex items-center gap-1 overflow-x-auto no-scrollbar rounded-2xl border border-[var(--border-color)] bg-[var(--bg-card)] p-1 max-w-full">
+                  {[
+                    { id: 'overview', icon: Layout, label: t('deploy.sectionOverview', 'Overview') },
+                    { id: 'connection', icon: GitBranch, label: t('deploy.sectionConnection', 'Connection') },
+                    { id: 'script', icon: Code, label: t('deploy.sectionScript', 'Script') },
+                    { id: 'target', icon: Network, label: t('deploy.sectionTarget', 'Target') },
+                    { id: 'alerts', icon: Send, label: t('deploy.sectionAlerts', 'Notifications') },
+                    { id: 'assistant', icon: Sparkles, label: t('deploy.sectionAssistant', 'AI Assistant') },
+                    { id: 'logs', icon: Terminal, label: t('deploy.tabLogs', 'Logs') },
+                  ].map(section => (
                     <button
+                      key={section.id}
                       type="button"
-                      onClick={() => setDeploymentTab('configuration')}
-                      className={`rounded-xl px-4 py-2 text-xs font-bold transition ${deploymentTab === 'configuration' ? 'bg-indigo-600 text-white' : 'text-[var(--text-secondary)] hover:bg-slate-700/50'}`}
+                      onClick={() => setDeploymentTab(section.id)}
+                      className={`flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-bold whitespace-nowrap transition cursor-pointer ${
+                        deploymentTab === section.id
+                          ? 'bg-indigo-600 text-white shadow-lg'
+                          : 'text-[var(--text-secondary)] hover:bg-slate-700/50'
+                      }`}
                     >
-                      {t('deploy.tabConfiguration', 'Configuration')}
+                      <section.icon size={13} />
+                      {section.label}
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => setDeploymentTab('logs')}
-                      className={`rounded-xl px-4 py-2 text-xs font-bold transition ${deploymentTab === 'logs' ? 'bg-indigo-600 text-white' : 'text-[var(--text-secondary)] hover:bg-slate-700/50'}`}
-                    >
-                      {t('deploy.tabLogs', 'Logs')}
-                    </button>
-                  </div>
-                  <p className="text-[10px] text-[var(--text-muted)]">{t('deploy.toggleLogHint', 'Toggle between deployment settings and console logs for easier access.')}</p>
-                </div>
-                {deploymentTab === 'configuration' ? (
+                  ))}
+                </nav>
+                {deploymentTab !== 'logs' ? (
                   <>
                     {/* Status Panel */}
-                    <div className="p-5 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div className="p-5 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] shadow-sm flex flex-col @xl:flex-row @xl:items-center justify-between gap-4">
                   <div className="flex items-start gap-4">
                     <div className={`p-3 rounded-xl ${
                       deployConfig.status === 'running' 
@@ -3010,12 +3035,39 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                   </div>
                 </div>
 
-                {/* Configuration form */}
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                  {/* Left block - settings inputs */}
-                  <div className="lg:col-span-2 space-y-6">
-                    {/* General Settings */}
-                    <div className="p-6 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] shadow-sm space-y-4">
+                {/* Overview — guided setup cards */}
+                {deploymentTab === 'overview' && (
+                  <div className="grid grid-cols-1 @3xl:grid-cols-2 gap-4">
+                    {[
+                      { id: 'connection', icon: GitBranch, title: t('deploy.ovConnection', '1 · Connect repository'), desc: t('deploy.ovConnectionDesc', 'Link GitHub or Bitbucket and pick the branch to watch.') },
+                      { id: 'script', icon: Code, title: t('deploy.ovScript', '2 · Write deploy script'), desc: t('deploy.ovScriptDesc', 'The shell commands that run on every push.') },
+                      { id: 'target', icon: Network, title: t('deploy.ovTarget', '3 · Choose target'), desc: t('deploy.ovTargetDesc', 'Deploy locally or over SSH to your server.') },
+                      { id: 'alerts', icon: Send, title: t('deploy.ovAlerts', '4 · Get notified'), desc: t('deploy.ovAlertsDesc', 'Optional Telegram alerts on success or failure.') },
+                      { id: 'assistant', icon: Sparkles, title: t('deploy.ovAssistant', 'AI Assistant'), desc: t('deploy.ovAssistantDesc', 'Let AI generate the configuration for you.') },
+                      { id: 'logs', icon: Terminal, title: t('deploy.ovLogs', 'Live logs'), desc: t('deploy.ovLogsDesc', 'Stream deployment output and jump to errors.') },
+                    ].map(step => (
+                      <button
+                        key={step.id}
+                        type="button"
+                        onClick={() => setDeploymentTab(step.id)}
+                        className="text-left p-5 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] hover:border-indigo-500/50 transition-all group cursor-pointer"
+                      >
+                        <div className="flex items-center gap-3 mb-1.5">
+                          <div className="p-2 rounded-xl bg-indigo-500/10 text-indigo-400 shrink-0">
+                            <step.icon size={16} />
+                          </div>
+                          <h4 className="text-sm font-bold text-[var(--text-primary)] truncate">{step.title}</h4>
+                          <ChevronRight size={14} className="ml-auto text-[var(--text-muted)] group-hover:text-indigo-400 transition-colors shrink-0" />
+                        </div>
+                        <p className="text-xs text-[var(--text-secondary)]">{step.desc}</p>
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {/* Focused section panels — one card at a time */}
+                {deploymentTab === 'connection' && (
+                <div data-onboarding="deploy-connection" className="p-6 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] shadow-sm space-y-4">
                       <h3 className="text-sm font-bold text-[var(--text-primary)] flex items-center gap-2 border-b border-[var(--border-color)] pb-3">
                         <Shield size={16} className="text-indigo-400" />
                         {t('deploy.triggerConfig', 'Trigger Configuration')}
@@ -3058,7 +3110,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                         {/* GitHub Connection */}
                         {gitProvider === 'github' && (
                         <div className="rounded-2xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] p-4">
-                          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                          <div className="flex flex-col @3xl:flex-row @3xl:items-center @3xl:justify-between gap-4">
                             <div>
                               <p className="text-[11px] font-bold uppercase tracking-wider text-[var(--text-secondary)]">{t('deploy.githubConnection', 'GitHub Connection')}</p>
                               <p className="mt-1 text-sm text-[var(--text-primary)]">
@@ -3138,7 +3190,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                         </div>
                         )}
 
-                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                        <div className="grid grid-cols-1 @4xl:grid-cols-2 gap-4">
                           <div className="rounded-2xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] p-4">
                             <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2">{gitProvider === 'github' ? t('deploy.githubRepoLabel', 'GitHub repository') : 'Bitbucket repository'}</label>
                             {gitProvider === 'bitbucket' && bbRepos.length > 0 && !repoInput && (
@@ -3267,7 +3319,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
 
                         <div className="space-y-1">
                           <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider">{t('deploy.webhookUrl', 'Webhook URL')}</label>
-                          <div className="flex flex-col gap-2 sm:flex-row">
+                          <div className="flex flex-col gap-2 @xl:flex-row">
                             <input
                               type="text"
                               readOnly
@@ -3307,7 +3359,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
 
                         <div className="space-y-1 pt-2">
                           <label className="block text-[11px] font-bold text-[var(--text-secondary)] uppercase tracking-wider">{t('deploy.directTriggerUrl', 'Direct Trigger URL')}</label>
-                          <div className="flex flex-col gap-2 sm:flex-row">
+                          <div className="flex flex-col gap-2 @xl:flex-row">
                             <input
                               type="text"
                               readOnly
@@ -3330,10 +3382,11 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                           <span className="text-[11px] text-amber-400 font-bold">You have unsaved changes</span>
                         </div>
                       )}
-                    </div>
+                </div>
+                )}
 
-                    {/* Script editor */}
-                    <div className="p-6 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] shadow-sm space-y-4">
+                {deploymentTab === 'script' && (
+                <div data-onboarding="deploy-script" className="p-6 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] shadow-sm space-y-4">
                       <h3 className="text-sm font-bold text-[var(--text-primary)] flex items-center gap-2 border-b border-[var(--border-color)] pb-3">
                         <Code size={16} className="text-indigo-400" />
                         {t('deploy.deploymentCommand', 'Deployment Command')}
@@ -3353,12 +3406,11 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                           <span className="text-[11px] text-amber-400 font-bold">You have unsaved changes</span>
                         </div>
                       )}
-                    </div>
-                  </div>
+                </div>
+                )}
 
-                  {/* Right block - targets */}
-                  <div className="space-y-6">
-                    <div className="p-6 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] shadow-sm space-y-4">
+                {deploymentTab === 'target' && (
+                <div data-onboarding="deploy-target" className="p-6 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] shadow-sm space-y-4">
                       <h3 className="text-sm font-bold text-[var(--text-primary)] flex items-center gap-2 border-b border-[var(--border-color)] pb-3">
                         <Network size={16} className="text-indigo-400" />
                         {t('deploy.deploymentTarget', 'Deployment Target')}
@@ -3461,10 +3513,11 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                           <span className="text-[11px] text-amber-400 font-bold">You have unsaved changes</span>
                         </div>
                       )}
-                    </div>
+                </div>
+                )}
 
-                    {/* Telegram Notifications */}
-                    <div className="p-6 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] shadow-sm space-y-4">
+                {deploymentTab === 'alerts' && (
+                <div data-onboarding="deploy-alerts" className="p-6 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] shadow-sm space-y-4">
                       <h3 className="text-sm font-bold text-[var(--text-primary)] flex items-center gap-2 border-b border-[var(--border-color)] pb-3">
                         <Send size={16} className="text-sky-400" />
                         {t('deploy.telegramTitle', 'Telegram Notification')}
@@ -3659,10 +3712,11 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                           <span className="text-[11px] text-amber-400 font-bold">You have unsaved changes</span>
                         </div>
                       )}
-                    </div>
+                </div>
+                )}
 
-                    {/* AI Configuration Assistant */}
-                    <div className="p-6 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] shadow-sm space-y-4">
+                {deploymentTab === 'assistant' && (
+                <div data-onboarding="deploy-assistant" className="p-6 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-color)] shadow-sm space-y-4">
                       <h3 className="text-sm font-bold text-[var(--text-primary)] flex items-center gap-2 border-b border-[var(--border-color)] pb-3">
                         <Sparkles size={16} className="text-indigo-400 animate-pulse" />
                         {t('deploy.aiAssistantTitle', 'AI Deploy Assistant')}
@@ -3869,9 +3923,8 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                           <span className="text-[11px] text-amber-400 font-bold">You have unsaved changes</span>
                         </div>
                       )}
-                    </div>
-                  </div>
                 </div>
+                )}
               </>
             ) : null}
 
@@ -4187,6 +4240,19 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                 )}
               </div>
             ) : null}
+
+            {/* Auto Deploy onboarding tour — must live OUTSIDE the `logs` tab
+                ternary above: the tour swaps deploymentTab per step (and Replay
+                Guide forces 'overview'), which would unmount it mid-tour if it
+                were scoped to the logs view. It portals to document.body, so
+                its position in the tree does not affect rendering. */}
+            {showDeployOnboarding && (
+              <DeploymentOnboarding
+                key={deployTourKey}
+                onComplete={() => setShowDeployOnboarding(false)}
+                onSectionChange={(id) => setDeploymentTab(id)}
+              />
+            )}
               </div>
             )}
           </div>
@@ -4229,7 +4295,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                   <Code size={15} className="text-indigo-400" />
                   <h3 className="text-sm font-semibold text-[var(--text-primary)]">Typography & Sizing</h3>
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 @3xl:grid-cols-2 gap-4">
                   <div>
                     <label className="text-[10px] font-semibold text-[var(--text-muted)] uppercase tracking-wider">{t('settings_ui.terminal.fontSize') || 'Font Size'}</label>
                     <div className="flex items-center gap-3 mt-2">

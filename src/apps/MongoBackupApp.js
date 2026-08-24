@@ -343,21 +343,16 @@ function CronBuilder({ value, onChange }) {
 
 export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: propActiveTab }) {
   const { state, apiFetch } = useApp();
-  const { addNotification, updateWindowProps, toggleMaximize, state: osState } = useOS();
+  const { addNotification, updateWindowProps, state: osState } = useOS();
   const { connections } = state;
 
   // Helper: ensure the window is maximized before starting the tour
   // so spotlight positions are measured against the full-screen layout
   const ensureMaximizedThenShow = useCallback(() => {
-    const win = (osState?.windows || []).find(w => w.id === windowId);
-    if (win && !win.isMaximized) {
-      toggleMaximize(windowId);
-      // Wait for the maximize animation to complete before showing onboarding
-      setTimeout(() => setShowOnboarding(true), 350);
-    } else {
-      setShowOnboarding(true);
-    }
-  }, [osState, windowId, toggleMaximize]);
+    // Dynamic-focus onboarding tracks its target at ANY window size/position,
+    // so there is no need to force-maximize the window first anymore.
+    setShowOnboarding(true);
+  }, []);
 
   // Onboarding: show on first visit, hide once completed
   const [showOnboarding, setShowOnboarding] = useState(false);
@@ -2703,7 +2698,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col bg-transparent overflow-hidden">
-        <div className="flex-1 overflow-y-auto custom-scrollbar p-6">
+        <div className="@container flex-1 overflow-y-auto custom-scrollbar p-6">
           <AnimatePresence mode="wait">
             {activeTab === 'import' && (
               <motion.div
@@ -2720,10 +2715,10 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                   <p className="text-xs text-[var(--text-muted)]">Upload a JSON file containing a MongoDB collection array to auto-import into your database.</p>
                 </div>
 
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div className="grid grid-cols-1 @4xl:grid-cols-3 gap-6">
                   {/* Configuration Form */}
-                  <div className="lg:col-span-2 space-y-4 bg-[var(--bg-card)] p-5 rounded-2xl border border-[var(--border-color)]">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="@4xl:col-span-2 space-y-4 bg-[var(--bg-card)] p-5 rounded-2xl border border-[var(--border-color)]">
+                    <div className="grid grid-cols-1 @3xl:grid-cols-2 gap-4">
                       <div>
                         <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1">Target Connection</label>
                         <CustomSelect
@@ -2755,7 +2750,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 @3xl:grid-cols-2 gap-4">
                       <div>
                         <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1 flex items-center justify-between">
                           <span>Target Collection Name</span>
@@ -3011,7 +3006,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                   </div>
 
                   {/* Credential inputs */}
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
+                  <div className="grid grid-cols-1 @3xl:grid-cols-3 gap-3 items-end">
                     <div>
                       <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1.5">Client ID</label>
                       <input type="text" value={clientId} onChange={(e) => setClientId(e.target.value)} placeholder="xxxxxxxxxxxx-xxxx.apps.googleusercontent.com" className="w-full px-3 py-2 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:border-emerald-500 focus:outline-none" />
@@ -3031,7 +3026,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                   </p>
                 </div>
 
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div className="grid grid-cols-1 @4xl:grid-cols-2 gap-6">
                   <div className="space-y-4 bg-[var(--bg-card)] p-5 rounded-2xl border border-[var(--border-color)]">
                     <h3 className="text-sm font-bold flex items-center gap-2 mb-2">
                       <CloudLightning className="text-emerald-400" size={16} /> 2. Link Your Google Account
@@ -3170,8 +3165,8 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                   <p className="text-xs text-[var(--text-muted)]">Configure automated sync jobs to backup MongoDB collections directly to your linked Google Drive folder.</p>
                 </div>
 
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                  {/* Job Form - Now takes half width (lg:col-span-1) for better readability */}
+                <div className="grid grid-cols-1 @4xl:grid-cols-2 gap-6">
+                  {/* Job Form - Now takes half width (@4xl:col-span-1) for better readability */}
                   <form onSubmit={handleSaveJob} className="space-y-4 bg-[var(--bg-card)] p-6 rounded-2xl border border-[var(--border-color)]">
                     <h3 className="text-sm font-bold flex items-center gap-2 border-b border-[var(--border-color)] pb-2">
                       <Plus className="text-emerald-400" size={16} /> 
@@ -3401,7 +3396,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                   </form>
 
                   {/* Jobs List - Now takes the other half of the layout */}
-                  <div className="lg:col-span-1 space-y-3">
+                  <div className="@4xl:col-span-1 space-y-3">
                     <h3 className="text-sm font-bold flex items-center gap-2 mb-3">
                       <Calendar className="text-emerald-400" size={16} /> 
                       Configured Sync Jobs ({jobs.length})
@@ -3409,7 +3404,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
 
                     <div className="space-y-3 max-h-[450px] overflow-y-auto custom-scrollbar pr-1">
                       {jobs.map(job => (
-                        <div key={job.id} className="bg-[var(--bg-card)] border border-[var(--border-color)] hover:border-emerald-500/20 rounded-2xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 transition-all shadow-sm">
+                        <div key={job.id} className="bg-[var(--bg-card)] border border-[var(--border-color)] hover:border-emerald-500/20 rounded-2xl p-4 flex flex-col @3xl:flex-row @3xl:items-center justify-between gap-4 transition-all shadow-sm">
                           <div className="space-y-1.5 min-w-0 flex-1">
                             <div className="flex items-center gap-2 flex-wrap">
                               <span className="font-bold text-xs text-[var(--text-primary)] truncate max-w-[200px]" title={job.name}>{job.name}</span>
@@ -3533,10 +3528,10 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                   <p className="text-xs text-[var(--text-muted)]">Retrieve JSON backup files from Google Drive and restore them into your server databases.</p>
                 </div>
 
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div className="grid grid-cols-1 @4xl:grid-cols-3 gap-6">
                   {/* Backup selector / Setup */}
-                  <div className="lg:col-span-2 space-y-4 bg-[var(--bg-card)] p-5 rounded-2xl border border-[var(--border-color)] flex flex-col min-h-[300px]">
-                    <div className="flex flex-col md:flex-row gap-4 mb-2">
+                  <div className="@4xl:col-span-2 space-y-4 bg-[var(--bg-card)] p-5 rounded-2xl border border-[var(--border-color)] flex flex-col min-h-[300px]">
+                    <div className="flex flex-col @3xl:flex-row gap-4 mb-2">
                       <div className="flex-1">
                         <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1">Select Backup Folder</label>
                         <div className="flex gap-2">
@@ -3780,7 +3775,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                 exit={{ opacity: 0, y: -8 }}
                 className="space-y-6"
               >
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-[var(--bg-card)] p-5 rounded-2xl border border-[var(--border-color)]">
+                <div className="flex flex-col @xl:flex-row @xl:items-center justify-between gap-4 bg-[var(--bg-card)] p-5 rounded-2xl border border-[var(--border-color)]">
                   <div>
                     <h2 className="text-xl font-black italic uppercase tracking-tight text-[var(--text-primary)] flex items-center gap-2">
                       <Clock className="text-emerald-500" /> Backup Execution History
@@ -3990,7 +3985,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                 className="space-y-6"
               >
                 {/* Header controls & Target Database Connection */}
-                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-4 rounded-xl bg-[var(--bg-secondary)]/40 border border-[var(--border-color)]">
+                <div className="flex flex-col @xl:flex-row items-start @xl:items-center justify-between gap-4 p-4 rounded-xl bg-[var(--bg-secondary)]/40 border border-[var(--border-color)]">
                   <div>
                     <h3 className="font-extrabold text-sm flex items-center gap-2 text-emerald-400">
                       <ShieldAlert size={16} />
@@ -4079,7 +4074,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                         <span className="text-[10px] font-mono text-emerald-400">Auto-Election Enabled</span>
                       </h4>
 
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div className="grid grid-cols-1 @3xl:grid-cols-3 gap-4">
                         {(rsData.rsStatus?.members || (rsData.hosts || []).map((h, i) => ({ host: h, stateStr: h === rsData.primary ? 'PRIMARY' : 'SECONDARY', health: 1 }))).map((member, idx) => {
                           const isPrimary = member.stateStr === 'PRIMARY' || member.host === rsData.primary;
                           const isHealthy = member.health === 1 || member.health === undefined;
@@ -4209,7 +4204,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                       </div>
 
                       {/* Replica Set Name */}
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                      <div className="grid grid-cols-1 @xl:grid-cols-3 gap-4">
                         <div>
                           <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1">Replica Set Name</label>
                           <input
@@ -4220,7 +4215,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                             placeholder="rs0"
                           />
                         </div>
-                        <div className="sm:col-span-2 flex items-end">
+                        <div className="@xl:col-span-2 flex items-end">
                           <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">
                             Select an SSH connection for each node, click <strong className="text-emerald-400">Scan</strong> to auto-discover MongoDB instances, then pick the port. If MongoDB isn&apos;t running with <code className="text-amber-400">--replSet</code>, a docker command will appear.
                           </p>
@@ -4228,7 +4223,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                       </div>
 
                       {/* 3 Node Cards */}
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div className="grid grid-cols-1 @3xl:grid-cols-3 gap-4">
                         {nodes.map((node, i) => {
                           const nodeLabels = ['Primary', 'Secondary 1', 'Secondary 2'];
                           const nodeColors = ['emerald', 'indigo', 'violet'];

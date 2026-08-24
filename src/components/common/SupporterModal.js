@@ -435,34 +435,10 @@ export default function SupporterModal({ open, onClose, onGranted }) {
                       {t('supporter.validUntil', 'Valid until')} <strong className="text-emerald-400">{expiryLabel}</strong>
                     </motion.p>
                   )}
-                  <motion.div variants={featureItem} className="mt-1 w-full grid grid-cols-2 gap-1.5">
-                    {FEATURES.map((f) => (
-                      <TiltCard key={f.label} className={`flex items-start gap-2 px-2 py-1.5 rounded-lg border ${f.bg} text-left`}>
-                        <f.icon size={13} className={`${f.tint} mt-0.5 shrink-0`} />
-                        <span className="text-[11px] font-medium leading-tight text-[var(--text-secondary)] truncate" title={f.label}>{f.short}</span>
-                      </TiltCard>
-                    ))}
-                  </motion.div>
                 </motion.div>
               ) : (
                 <>
-                  {/* Interactive feature cards — tilt on hover */}
-                  <motion.div
-                    initial="hidden"
-                    animate="show"
-                    variants={featureContainer}
-                    className="grid grid-cols-2 gap-1.5"
-                    style={{ perspective: 600 }}
-                  >
-                    {FEATURES.map((f) => (
-                      <TiltCard key={f.label} className={`flex items-start gap-2 px-2 py-1.5 rounded-lg border ${f.bg}`}>
-                        <f.icon size={13} className={`${f.tint} mt-0.5 shrink-0`} />
-                        <span className="text-[10px] font-semibold leading-tight text-[var(--text-secondary)] truncate" title={f.label}>{f.short}</span>
-                      </TiltCard>
-                    ))}
-                  </motion.div>
-
-                  {/* Expandable detailed benefits */}
+                  {/* Expandable detailed benefits — the single feature list entry point */}
                   <div className="rounded-xl border border-[var(--border-color)] overflow-hidden">
                     <button
                       onClick={() => setShowDetails((v) => !v)}

@@ -1,5 +1,9 @@
 'use client';
 
+import { SpotlightOverlay } from '@/components/OnboardingSpotlight';
+
+import { createPortal } from 'react-dom';
+
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -193,24 +197,44 @@ function ProgressRing({ progress, color, size = 44, strokeWidth = 3 }) {
 }
 
 // Spotlight hook
+// ── Dynamic focus ── tracks the target live (poll + resize) so the spotlight
+// follows it through window drags/resizes/minimize-restore at ANY window size.
+// If a scrollable ancestor clips the target, it is scrolled into view first.
 function useSpotlightRect(target) {
-  const [rect, setRect] = useState(null);
+  const [measured, setMeasured] = useState(null);
   useEffect(() => {
-    if (!target) { setRect(null); return; }
-    const run = () => {
+    if (!target) { setMeasured(null); return; }
+    let scrolled = false; // one smooth scroll per step — repeating restarts animation
+    const measure = () => {
       const el = document.querySelector(`[data-onboarding="${target}"]`);
-      if (el) {
-        const r = el.getBoundingClientRect();
-        setRect({ top: r.top, left: r.left, width: r.width, height: r.height });
-      } else {
-        setRect(null);
+      if (!el) { scrolled = false; setMeasured(null); return; }
+      if (!scrolled) {
+        // Walk up to the nearest scrollable ancestor actually clipping the target
+        let node = el.parentElement;
+        while (node && node !== document.body) {
+          const st = window.getComputedStyle(node);
+          if (/(auto|scroll)/.test(st.overflowY) || /(auto|scroll)/.test(st.overflow)) {
+            const cr = node.getBoundingClientRect();
+            const er = el.getBoundingClientRect();
+            if (er.top < cr.top || er.bottom > cr.bottom) {
+              scrolled = true;
+              el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+            break;
+          }
+          node = node.parentElement;
+        }
       }
+      const r = el.getBoundingClientRect();
+      setMeasured({ top: r.top, left: r.left, width: r.width, height: r.height });
     };
-    run();
-    const id = setInterval(run, 150);
-    return () => clearInterval(id);
+    measure();
+    const raf = requestAnimationFrame(() => { setTimeout(measure, 50); });
+    const id = setInterval(measure, 150);
+    window.addEventListener('resize', measure);
+    return () => { cancelAnimationFrame(raf); clearInterval(id); window.removeEventListener('resize', measure); };
   }, [target]);
-  return rect;
+  return measured;
 }
 
 // Feature card for immersive display
@@ -284,7 +308,7 @@ function ImmersiveCenterPanel({ step, meta, total, contentStep, contentTotal, on
       <div style={{
         position: 'fixed',
         inset: 0,
-        zIndex: 210,
+        zIndex: 999997,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -444,7 +468,7 @@ function ImmersiveCenterPanel({ step, meta, total, contentStep, contentTotal, on
       <div style={{
         position: 'fixed',
         inset: 0,
-        zIndex: 210,
+        zIndex: 999997,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -538,7 +562,7 @@ function ImmersiveCenterPanel({ step, meta, total, contentStep, contentTotal, on
       bottom: 32,
       left: '50%',
       transform: `translateX(-50%) ${show ? 'translateY(0)' : 'translateY(120px)'}`,
-      zIndex: 210,
+      zIndex: 999997,
       opacity: show ? 1 : 0,
       transition: 'all 0.5s cubic-bezier(0.34, 1.3, 0.64, 1)',
       pointerEvents: show ? 'auto' : 'none',
@@ -790,58 +814,6 @@ function ImmersiveCenterPanel({ step, meta, total, contentStep, contentTotal, on
   );
 }
 
-// Spotlight overlay
-function SpotlightOverlay({ rect, color, show }) {
-  if (!rect || !show) return null;
-
-  const pad = 12;
-  const R = 14;
-
-  return (
-    <>
-      {/* SVG mask */}
-      <svg style={{ position: 'fixed', inset: 0, width: '100vw', height: '100vh', pointerEvents: 'none', zIndex: 201 }}>
-        <defs>
-          <mask id="ob-mask">
-            <rect width="100%" height="100%" fill="white" />
-            <rect
-              x={rect.left - pad} y={rect.top - pad}
-              width={rect.width + pad * 2} height={rect.height + pad * 2}
-              rx={R} ry={R} fill="black"
-            />
-          </mask>
-        </defs>
-        <rect width="100%" height="100%" fill="rgba(0,0,0,0.85)" mask="url(#ob-mask)" />
-      </svg>
-
-      {/* Animated ring */}
-      <div style={{
-        position: 'fixed',
-        top: rect.top - pad - 2,
-        left: rect.left - pad - 2,
-        width: rect.width + (pad + 2) * 2,
-        height: rect.height + (pad + 2) * 2,
-        borderRadius: R + 2,
-        border: `2px solid ${color}`,
-        boxShadow: `0 0 20px ${color}60, inset 0 0 20px ${color}20`,
-        zIndex: 202,
-        pointerEvents: 'none',
-        animation: 'ob-ring-pulse 2s ease-in-out infinite',
-      }} />
-
-      {/* Corner brackets */}
-      {[
-        { top: rect.top - pad - 6, left: rect.left - pad - 6, borderTop: `3px solid ${color}`, borderLeft: `3px solid ${color}`, borderRadius: '4px 0 0 0' },
-        { top: rect.top - pad - 6, left: rect.left + rect.width + pad - 8, borderTop: `3px solid ${color}`, borderRight: `3px solid ${color}`, borderRadius: '0 4px 0 0' },
-        { top: rect.top + rect.height + pad - 8, left: rect.left - pad - 6, borderBottom: `3px solid ${color}`, borderLeft: `3px solid ${color}`, borderRadius: '0 0 0 4px' },
-        { top: rect.top + rect.height + pad - 8, left: rect.left + rect.width + pad - 8, borderBottom: `3px solid ${color}`, borderRight: `3px solid ${color}`, borderRadius: '0 0 4px 0' },
-      ].map((style, i) => (
-        <div key={i} style={{ position: 'fixed', width: 16, height: 16, zIndex: 203, pointerEvents: 'none', ...style }} />
-      ))}
-    </>
-  );
-}
-
 // Main component
 export default function SSHOnboarding({ onComplete }) {
   const [step, setStep] = useState(0);
@@ -887,7 +859,10 @@ export default function SSHOnboarding({ onComplete }) {
 
   const showOverlay = visible && !exiting;
 
-  return (
+  // Portal to document.body: guarantees true full-screen coverage and correct
+  // spotlight coordinates regardless of transformed ancestors inside the app
+  // window (framer-motion scale + backdrop-filter create containing blocks).
+  return createPortal(
     <>
       {/* Global styles */}
       <style>{`
@@ -913,7 +888,7 @@ export default function SSHOnboarding({ onComplete }) {
       <div style={{
         position: 'fixed',
         inset: 0,
-        zIndex: 200,
+        zIndex: 999990,
         background: rect ? 'transparent' : 'rgba(0,0,0,0.9)',
         backdropFilter: rect ? 'none' : 'blur(8px)',
         WebkitBackdropFilter: rect ? 'none' : 'blur(8px)',
@@ -937,7 +912,8 @@ export default function SSHOnboarding({ onComplete }) {
         onDismiss={dismiss}
         show={panelShow && showOverlay}
       />
-    </>
+    </>,
+      document.body
   );
 }
 

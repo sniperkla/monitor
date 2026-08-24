@@ -165,7 +165,7 @@ function FPill({ active, onClick, children, cls = '' }) {
 
 export default function VirusScannerApp({ windowId }) {
   const { state: appState, apiFetch } = useApp();
-  const { state: osState, toggleMaximize } = useOS();
+  const { state: osState } = useOS();
 
   const connections = useMemo(() => (
     (appState.connections || []).filter(c => c.type === 'ssh' || (!c.type && !c.dbProvider))
@@ -207,23 +207,10 @@ export default function VirusScannerApp({ windowId }) {
   const osStateRef = useRef(osState);
   useEffect(() => { osStateRef.current = osState; }, [osState]);
   const ensureMaximizedThenShow = useCallback(() => {
-    const show = () => setShowOnboarding(true);
-    const winId = windowId
-      || `virus-scanner`;
-    const win = (osStateRef.current?.windows || []).find(w => w.id === winId)
-      || (osStateRef.current?.windows || []).find(w => w.id?.startsWith('virus-scanner'));
-    if (!win || win.isMaximized) return show();
-    toggleMaximize(win.id);
-    let tries = 0;
-    const iv = setInterval(() => {
-      tries++;
-      const now = (osStateRef.current?.windows || []).find(w => w.id === win.id);
-      if ((now && now.isMaximized) || tries > 15) {
-        clearInterval(iv);
-        show();
-      }
-    }, 100);
-  }, [windowId, toggleMaximize]);
+    // Dynamic-focus onboarding tracks its target at ANY window size/position,
+    // so there is no need to force-maximize the window first anymore.
+    setShowOnboarding(true);
+  }, []);
   const ensureMaximizedThenShowRef = useRef(ensureMaximizedThenShow);
   useEffect(() => { ensureMaximizedThenShowRef.current = ensureMaximizedThenShow; }, [ensureMaximizedThenShow]);
   const [engines, setEngines] = useState({});
@@ -615,7 +602,7 @@ export default function VirusScannerApp({ windowId }) {
   const openCount = scan?.findings?.filter(f => f.status === 'open').length ?? 0;
 
   return (
-    <div className="flex flex-col h-full bg-[#0b0e14] text-slate-200">
+    <div className="@container flex flex-col h-full bg-[#0b0e14] text-slate-200">
       {/* ===== Header: connection + actions ===== */}
       <div className="shrink-0 px-5 pt-4 pb-3 border-b border-white/5">
         <div className="flex items-center gap-2">

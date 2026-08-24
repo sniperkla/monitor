@@ -1,5 +1,9 @@
 'use client';
 
+import OnboardingSpotlight from '@/components/OnboardingSpotlight';
+
+import { createPortal } from 'react-dom';
+
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -192,34 +196,44 @@ function ProgressRing({ progress, color, size = 44, strokeWidth = 3 }) {
 }
 
 // Spotlight hook
+// ── Dynamic focus ── tracks the target live (poll + resize) so the spotlight
+// follows it through window drags/resizes/minimize-restore at ANY window size.
+// If a scrollable ancestor clips the target, it is scrolled into view first.
 function useSpotlightRect(target) {
-  const [rect, setRect] = useState(null);
+  const [measured, setMeasured] = useState(null);
   useEffect(() => {
-    if (!target) { setRect(null); return; }
+    if (!target) { setMeasured(null); return; }
+    let scrolled = false; // one smooth scroll per step — repeating restarts animation
     const measure = () => {
       const el = document.querySelector(`[data-onboarding="${target}"]`);
-      if (el) {
-        const r = el.getBoundingClientRect();
-        setRect({ top: r.top, left: r.left, width: r.width, height: r.height });
-      } else {
-        setRect(null);
+      if (!el) { scrolled = false; setMeasured(null); return; }
+      if (!scrolled) {
+        // Walk up to the nearest scrollable ancestor actually clipping the target
+        let node = el.parentElement;
+        while (node && node !== document.body) {
+          const st = window.getComputedStyle(node);
+          if (/(auto|scroll)/.test(st.overflowY) || /(auto|scroll)/.test(st.overflow)) {
+            const cr = node.getBoundingClientRect();
+            const er = el.getBoundingClientRect();
+            if (er.top < cr.top || er.bottom > cr.bottom) {
+              scrolled = true;
+              el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+            break;
+          }
+          node = node.parentElement;
+        }
       }
+      const r = el.getBoundingClientRect();
+      setMeasured({ top: r.top, left: r.left, width: r.width, height: r.height });
     };
     // Delay first measurement until after layout/paint so size is correct
-    const raf = requestAnimationFrame(() => {
-      setTimeout(measure, 50);
-    });
-    // Keep polling so position stays in sync while user scrolls/resizes
+    const raf = requestAnimationFrame(() => { setTimeout(measure, 50); });
     const id = setInterval(measure, 150);
-    // Also re-measure immediately on resize
     window.addEventListener('resize', measure);
-    return () => {
-      cancelAnimationFrame(raf);
-      clearInterval(id);
-      window.removeEventListener('resize', measure);
-    };
+    return () => { cancelAnimationFrame(raf); clearInterval(id); window.removeEventListener('resize', measure); };
   }, [target]);
-  return rect;
+  return measured;
 }
 
 // Immersive center panel for welcome screen
@@ -234,7 +248,7 @@ function ImmersiveCenterPanel({ step, meta, total, contentStep, contentTotal, on
       <div style={{
         position: 'fixed',
         inset: 0,
-        zIndex: 210,
+        zIndex: 999997,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -392,7 +406,7 @@ function ImmersiveCenterPanel({ step, meta, total, contentStep, contentTotal, on
       <div style={{
         position: 'fixed',
         inset: 0,
-        zIndex: 210,
+        zIndex: 999997,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -486,7 +500,7 @@ function ImmersiveCenterPanel({ step, meta, total, contentStep, contentTotal, on
       bottom: 32,
       left: '50%',
       transform: `translateX(-50%) ${show ? 'translateY(0)' : 'translateY(120px)'}`,
-      zIndex: 210,
+      zIndex: 999997,
       opacity: show ? 1 : 0,
       transition: 'all 0.5s cubic-bezier(0.34, 1.3, 0.64, 1)',
       pointerEvents: show ? 'auto' : 'none',
@@ -792,7 +806,10 @@ export default function RcloneOnboarding({ onComplete }) {
 
   if (!isVisible) return null;
 
-  return (
+  // Portal to document.body: guarantees true full-screen coverage and correct
+  // spotlight coordinates regardless of transformed ancestors inside the app
+  // window (framer-motion scale + backdrop-filter create containing blocks).
+  return createPortal(
     <>
       {/* Backdrop overlay — only shown when there is NO spotlight target so the
           welcome/done screens still get a dark backdrop */}
@@ -803,27 +820,14 @@ export default function RcloneOnboarding({ onComplete }) {
           background: 'rgba(0, 0, 0, 0.75)',
           backdropFilter: 'blur(8px)',
           WebkitBackdropFilter: 'blur(8px)',
-          zIndex: 200,
+          zIndex: 999990,
         }} />
       )}
 
       {/* Spotlight cutout — the box-shadow creates the dark surround, leaving the
           highlighted element fully visible with no extra backdrop on top of it */}
-      {spotlightRect && (
-        <div style={{
-          position: 'fixed',
-          top: spotlightRect.top - 8,
-          left: spotlightRect.left - 8,
-          width: spotlightRect.width + 16,
-          height: spotlightRect.height + 16,
-          borderRadius: 12,
-          boxShadow: `0 0 0 9999px rgba(0, 0, 0, 0.72)`,
-          border: `2px solid ${meta.color}`,
-          zIndex: 205,
-          pointerEvents: 'none',
-          animation: 'ob-spotlight-pulse 2s ease-in-out infinite',
-        }} />
-      )}
+      <OnboardingSpotlight rect={spotlightRect} color={meta.color} />
+
 
       {/* Main panel */}
       <ImmersiveCenterPanel
@@ -857,7 +861,8 @@ export default function RcloneOnboarding({ onComplete }) {
           50% { transform: scale(1.1); opacity: 0.8; }
         }
       `}</style>
-    </>
+    </>,
+      document.body
   );
 }
 

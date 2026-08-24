@@ -27,7 +27,7 @@ const DEFAULT_SIDEBAR_W = 260;
 
 export default function SSHApp({ windowId, activeTab: propActiveTab }) {
   const { state, dispatch } = useApp();
-  const { updateWindowProps, toggleMaximize, state: osState } = useOS();
+  const { updateWindowProps, state: osState } = useOS();
   const { t } = useTranslation();
   const isMobile = useIsMobile();
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -37,14 +37,10 @@ export default function SSHApp({ windowId, activeTab: propActiveTab }) {
   // Onboarding: show on first visit, hide once completed
   const [showOnboarding, setShowOnboarding] = useState(false);
   const ensureMaximizedThenShow = useCallback(() => {
-    const win = (osState?.windows || []).find(w => w.id === windowId);
-    if (win && !win.isMaximized) {
-      toggleMaximize(windowId);
-      setTimeout(() => setShowOnboarding(true), 350);
-    } else {
-      setShowOnboarding(true);
-    }
-  }, [osState, windowId, toggleMaximize]);
+    // Dynamic-focus onboarding tracks its target at ANY window size/position,
+    // so there is no need to force-maximize the window first anymore.
+    setShowOnboarding(true);
+  }, []);
 
   useEffect(() => {
     // Defer check until after hydration to avoid SSR mismatch
@@ -146,7 +142,7 @@ export default function SSHApp({ windowId, activeTab: propActiveTab }) {
   }, [sidebarWidth]);
 
   return (
-    <div className="flex h-full w-full bg-transparent text-[var(--text-primary)] font-sans overflow-hidden relative">
+    <div className="@container flex h-full w-full bg-transparent text-[var(--text-primary)] font-sans overflow-hidden relative">
       {/* Mobile Overlay */}
       {isMobile && (
         <div
@@ -230,8 +226,8 @@ export default function SSHApp({ windowId, activeTab: propActiveTab }) {
       {/* Main content area */}
       <div className="flex-1 flex flex-col min-w-0 bg-transparent relative">
         {/* Top Navigation */}
-        <div className="h-14 border-b border-[var(--border-color)] flex items-center px-4 md:px-6 bg-[var(--bg-primary)]/20 [backdrop-filter:blur(var(--glass-blur,12px))] sticky top-0 z-10">
-           <div className="flex items-center gap-2 md:gap-4 flex-1">
+        <div className="h-14 border-b border-[var(--border-color)] flex items-center px-4 @3xl:px-6 bg-[var(--bg-primary)]/20 [backdrop-filter:blur(var(--glass-blur,12px))] sticky top-0 z-10">
+           <div className="flex items-center gap-2 @3xl:gap-4 flex-1">
              {isMobile && (
                <button onClick={() => dispatch({ type: 'TOGGLE_SIDEBAR' })} className="p-2 rounded-lg bg-[var(--bg-tertiary)]/50 text-[var(--text-primary)]">
                  <Menu size={18} />

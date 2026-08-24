@@ -12,7 +12,7 @@ import TmuxOnboarding, { hasCompletedTmuxOnboarding, resetTmuxOnboarding } from 
 
 export default function TmuxApp({ initialConnection, windowId }) {
   const { state, dispatch } = useApp();
-  const { showConfirm, updateWindowProps, toggleMaximize, state: osState } = useOS();
+  const { showConfirm, updateWindowProps, state: osState } = useOS();
   const { t } = useTranslation();
   
   // App state
@@ -20,14 +20,10 @@ export default function TmuxApp({ initialConnection, windowId }) {
 
   const [showOnboarding, setShowOnboarding] = useState(false);
   const ensureMaximizedThenShow = useCallback(() => {
-    const win = (osState?.windows || []).find(w => w.id === windowId);
-    if (win && !win.isMaximized) {
-      toggleMaximize(windowId);
-      setTimeout(() => setShowOnboarding(true), 350);
-    } else {
-      setShowOnboarding(true);
-    }
-  }, [osState, windowId, toggleMaximize]);
+    // Dynamic-focus onboarding tracks its target at ANY window size/position,
+    // so there is no need to force-maximize the window first anymore.
+    setShowOnboarding(true);
+  }, []);
   const ensureMaximizedThenShowRef = useRef(ensureMaximizedThenShow);
   useEffect(() => { ensureMaximizedThenShowRef.current = ensureMaximizedThenShow; }, [ensureMaximizedThenShow]);
 
@@ -255,7 +251,7 @@ export default function TmuxApp({ initialConnection, windowId }) {
               </div>
 
               {/* Connection Grid */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 @3xl:grid-cols-2 gap-3">
                 {sshConnections.map(conn => (
                   <div 
                     key={conn._id}
@@ -289,7 +285,7 @@ export default function TmuxApp({ initialConnection, windowId }) {
 
   // 2. DASHBOARD OR TERMINAL TAB SCREEN
   return (
-    <div className="flex flex-col h-full bg-[var(--bg-primary)] text-[var(--text-primary)] overflow-hidden">
+    <div className="@container flex flex-col h-full bg-[var(--bg-primary)] text-[var(--text-primary)] overflow-hidden">
         {/* App Tab Bar */}
         <div className="flex items-center justify-between bg-[var(--bg-secondary)] border-b border-[var(--border-color)] px-4 h-12 shrink-0">
           <div className="flex items-center gap-4">
@@ -298,7 +294,7 @@ export default function TmuxApp({ initialConnection, windowId }) {
                       <MonitorPlay size={14} />
                   </div>
                   <span className="text-sm font-bold">{selectedConnection.name}</span>
-                  <span className="text-xs text-[var(--text-muted)] font-mono hidden md:inline ml-2">{selectedConnection.host}</span>
+                  <span className="text-xs text-[var(--text-muted)] font-mono hidden @3xl:inline ml-2">{selectedConnection.host}</span>
               </div>
               
               <div className="h-4 w-px bg-[var(--border-color)] mx-2"></div>
@@ -418,7 +414,7 @@ export default function TmuxApp({ initialConnection, windowId }) {
                         </div>
                     </div>
                     
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <div className="grid grid-cols-1 @3xl:grid-cols-2 @4xl:grid-cols-3 gap-4">
                         {/* Session Cards */}
                         {sessions.map(session => (
                             <div 

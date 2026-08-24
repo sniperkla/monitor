@@ -591,18 +591,14 @@ function DynamicCronPicker({ value, onChange }) {
 export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTab }) {
   const { vaultStatus } = useVault();
   const { state: appState, apiFetch, connectionsReady } = useApp();
-  const { showAlert, showConfirm, updateWindowProps, toggleMaximize, state: osState } = useOS();
+  const { showAlert, showConfirm, updateWindowProps, state: osState } = useOS();
 
   // Helper: ensure the window is maximized before starting the tour
   const ensureMaximizedThenShow = useCallback(() => {
-    const win = (osState?.windows || []).find(w => w.id === windowId);
-    if (win && !win.isMaximized) {
-      toggleMaximize(windowId);
-      setTimeout(() => setShowOnboarding(true), 350);
-    } else {
-      setShowOnboarding(true);
-    }
-  }, [osState, windowId, toggleMaximize]);
+    // Dynamic-focus onboarding tracks its target at ANY window size/position,
+    // so there is no need to force-maximize the window first anymore.
+    setShowOnboarding(true);
+  }, []);
 
   // Onboarding: show on first visit, hide once completed
   const [showOnboarding, setShowOnboarding] = useState(false);
@@ -1426,7 +1422,7 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
   }
 
   return (
-    <div className="flex flex-col h-full bg-[var(--bg-primary)] text-[var(--text-primary)] font-sans overflow-hidden">
+    <div className="@container flex flex-col h-full bg-[var(--bg-primary)] text-[var(--text-primary)] font-sans overflow-hidden">
 
       {/* ── Top Bar ── */}
       <div className="shrink-0 px-4 py-2.5 border-b border-[var(--border-color)] bg-[var(--bg-secondary)] flex items-center gap-3">
@@ -1623,7 +1619,7 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
                   </span>
                 </div>
 
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 font-mono text-[11px]">
+                <div className="grid grid-cols-2 @xl:grid-cols-4 gap-2 pt-1 font-mono text-[11px]">
                   <div className="bg-[var(--bg-secondary)] p-2 rounded-xl border border-[var(--border-color)]">
                     <span className="text-[9px] text-[var(--text-muted)] block">TOTAL RAM</span>
                     <strong className="text-indigo-400">{(rcloneStatus.serverSpecs.totalMemMb / 1024).toFixed(1)} GB</strong> ({rcloneStatus.serverSpecs.totalMemMb} MB)
@@ -1748,7 +1744,7 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 @xl:grid-cols-2 @4xl:grid-cols-3 gap-3">
               {rcloneStatus?.remotes?.map((remote) => {
                 const details = rcloneStatus?.remoteDetails?.[remote] || {};
                 return (
@@ -2908,7 +2904,7 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
         isOpen={!!cronResult}
         onClose={() => setCronResult(null)}
         title={cronResult?.testPassed ? 'Schedule Created' : 'Dry-Run Notice'}
-        icon={cronResult?.testPassed ? CheckCircle2 : AlertTriangle}
+        icon={cronResult?.testPassed ? CircleCheckBig : TriangleAlert}
         defaultWidth={520}
         defaultHeight={420}
         closeOnOverlayClick={true}
@@ -2968,7 +2964,7 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
         isOpen={!!updateResult}
         onClose={() => setUpdateResult(null)}
         title={updateResult?.success ? 'Schedule Updated' : 'Update Failed'}
-        icon={updateResult?.success ? CheckCircle2 : AlertTriangle}
+        icon={updateResult?.success ? CircleCheckBig : TriangleAlert}
         defaultWidth={460}
         defaultHeight={260}
         closeOnOverlayClick={true}

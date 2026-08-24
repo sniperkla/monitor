@@ -175,7 +175,7 @@ export default function ActivityApp() {
   let lastDay = null;
 
   return (
-    <div className="flex flex-col h-full bg-[#0b0e14] text-slate-200">
+    <div className="@container flex flex-col h-full bg-[#0b0e14] text-slate-200">
       {/* Header */}
       <div className="shrink-0 px-5 pt-4 pb-3 border-b border-white/5">
         <div className="flex items-center justify-between mb-3">

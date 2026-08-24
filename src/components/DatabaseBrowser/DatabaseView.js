@@ -22,6 +22,7 @@ export default function DatabaseView({ connection, onClose }) {
   const [error, setError] = useState(null);
   const [schema, setSchema] = useState([]); // Tables or Collections
   const [selectedSchema, setSelectedSchema] = useState(null);
+  const [schemaOpen, setSchemaOpen] = useState(false); // Drawer state for narrow windows
   const [data, setData] = useState([]);
   const [editingRecord, setEditingRecord] = useState(null); // { mode: 'add' | 'edit', data: {} }
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -1185,8 +1186,15 @@ export default function DatabaseView({ connection, onClose }) {
 
   return (
     <div className="h-full flex overflow-hidden relative">
-      {/* Schema Sidebar */}
-      <div className="w-64 border-r border-[var(--border-color)] bg-[var(--bg-secondary)]/30 flex flex-col">
+      {/* Narrow-container backdrop for the schema drawer */}
+      {schemaOpen && (
+        <div
+          className="absolute inset-0 z-20 bg-black/40 @xl:hidden"
+          onClick={() => setSchemaOpen(false)}
+        />
+      )}
+      {/* Schema Sidebar — static column on wide containers, slide-in drawer below @xl */}
+      <div className={`absolute @xl:static inset-y-0 left-0 z-30 w-64 shrink-0 border-r border-[var(--border-color)] bg-[var(--bg-secondary)] @xl:bg-[var(--bg-secondary)]/30 flex flex-col transition-transform duration-200 shadow-2xl @xl:shadow-none ${schemaOpen ? 'translate-x-0' : '-translate-x-full @xl:translate-x-0'}`}>
         <div className="p-4 border-b border-[var(--border-color)] bg-[var(--bg-tertiary)]/10">
            <div className="flex items-center justify-between mb-4">
               <span className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-widest flex items-center gap-2">
@@ -1291,35 +1299,38 @@ export default function DatabaseView({ connection, onClose }) {
            </div>
         ) : (
            <div className="flex flex-col h-full">
-              {/* Toolbar */}
-               <div className="h-11 border-b border-[var(--border-color)] bg-[var(--bg-tertiary)]/5 flex items-center justify-between px-3 gap-2">
-                 <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium shrink-0 ${typeof window !== 'undefined' && localStorage.getItem('ssh_monitor_ssh_mode') === 'local' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-blue-500/15 text-blue-400'}`}>
-                   {typeof window !== 'undefined' && localStorage.getItem('ssh_monitor_ssh_mode') === 'local' ? '⚡ Local' : '☁ Server'}
-                 </span>
-                 {/* Left: Schema Info */}
-                 <div className="flex items-center gap-3 min-w-0">
-                    <div className="flex items-center gap-1.5 min-w-0">
-                      <span className="text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-wider shrink-0">Active:</span>
-                      <span className="text-[11px] font-bold text-indigo-400 truncate">{selectedSchema || '---'}</span>
-                    </div>
-                    <span className="text-[10px] text-[var(--text-muted)]/60 font-mono shrink-0">{data.length} rows</span>
+              {/* Toolbar — context row */}
+              <div className="px-3 py-2 border-b border-[var(--border-color)] bg-[var(--bg-tertiary)]/5 flex items-center gap-2 flex-wrap">
+                <button
+                  onClick={() => setSchemaOpen(o => !o)}
+                  className="@xl:hidden p-1.5 hover:bg-white/5 text-[var(--text-muted)] hover:text-white rounded-md transition-all shrink-0"
+                  title={schemaOpen ? 'Hide schema panel' : 'Show schema panel'}
+                >
+                  <Layers size={14} />
+                </button>
+                <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium shrink-0 ${typeof window !== 'undefined' && localStorage.getItem('ssh_monitor_ssh_mode') === 'local' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-blue-500/15 text-blue-400'}`}>
+                  {typeof window !== 'undefined' && localStorage.getItem('ssh_monitor_ssh_mode') === 'local' ? '⚡ Local' : '☁ Server'}
+                </span>
+                <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                  <span className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider shrink-0 hidden @xl:inline">Active:</span>
+                  <span className="text-[11px] font-bold text-indigo-400 truncate">{selectedSchema || '---'}</span>
+                </div>
+                {latency !== null && (
+                  <div
+                    className="flex items-center gap-1.5 text-[9px] font-bold px-2 py-0.5 rounded-full bg-[var(--bg-secondary)]/80 backdrop-blur-xl border border-[var(--border-color)]/50 shadow-sm opacity-80 shrink-0 whitespace-nowrap"
+                    style={{
+                      color: latency < 150 ? '#4ade80' : latency < 300 ? '#fbbf24' : '#f43f5e'
+                    }}
+                    title="Network Latency (Ping)"
+                  >
+                    <Wifi size={9} strokeWidth={3} />
+                    <span className="font-mono tracking-tighter">{latency}ms</span>
+                  </div>
+                )}
+              </div>
 
-                    {latency !== null && (
-                        <div 
-                          className="flex items-center gap-1.5 text-[9px] font-bold px-2 py-0.5 rounded-full bg-[var(--bg-secondary)]/80 backdrop-blur-xl border border-[var(--border-color)]/50 shadow-sm opacity-80"
-                          style={{ 
-                              color: latency < 150 ? '#4ade80' : latency < 300 ? '#fbbf24' : '#f43f5e' 
-                          }}
-                          title="Network Latency (Ping)"
-                        >
-                          <Wifi size={9} strokeWidth={3} />
-                          <span className="font-mono tracking-tighter">{latency}ms</span>
-                        </div>
-                    )}
-                 </div>
-
-                 {/* Right: Action Buttons */}
-                 <div className="flex items-center gap-0.5 shrink-0">
+              {/* Toolbar — actions row (wraps, never breaks) */}
+              <div className="px-3 py-1.5 border-b border-[var(--border-color)] bg-[var(--bg-tertiary)]/5 flex items-center flex-wrap gap-x-1 gap-y-1">
                     {/* Core Actions */}
                     <button 
                       onClick={() => fetchData(selectedSchema)}
@@ -1375,7 +1386,7 @@ export default function DatabaseView({ connection, onClose }) {
                       className={`flex items-center gap-1 px-2 py-1 hover:bg-amber-500/10 text-[var(--text-muted)] hover:text-amber-400 rounded-md text-[10px] font-semibold transition-all ${pendingAction ? 'opacity-50 cursor-not-allowed' : ''}`}
                       title="Export all tables/collections into one file"
                     >
-                       <Archive size={13} /> Export All
+                       <Archive size={13} /> <span className="hidden @xl:inline">Export All</span>
                     </button>
                       <button 
                         onClick={() => createAutoBackup(selectedSchema, 'manual_backup')}
@@ -1387,7 +1398,7 @@ export default function DatabaseView({ connection, onClose }) {
                         }`}
                         title="Create a timestamped backup of this table"
                       >
-                         <Shield size={13} /> Backup
+                         <Shield size={13} /> <span className="hidden @xl:inline">Backup</span>
                       </button>
                     
                     <div className="w-px h-5 bg-[var(--border-color)] mx-1" />
@@ -1403,10 +1414,9 @@ export default function DatabaseView({ connection, onClose }) {
                       >
                          <Settings2 size={14} />
                       </button>
-                 </div>
-              </div>
+                               </div>
 
-              {/* Naming Settings Panel */}
+               {/* Naming Settings Panel */}
               {showNamingSettings && (
                 <div className="bg-[var(--bg-tertiary)] border-b border-[var(--border-color)] p-3 px-4 flex flex-wrap items-center gap-4 animate-in slide-in-from-top duration-200">
                    <div className="flex flex-col gap-1">
@@ -1466,7 +1476,7 @@ export default function DatabaseView({ connection, onClose }) {
                         <div className={`w-3.5 h-3.5 rounded border flex items-center justify-center transition-all ${exportNaming.includeType ? 'bg-amber-500 border-amber-500' : 'border-[var(--border-color)]'}`}>
                            {exportNaming.includeType && <Check size={8} className="text-white" strokeWidth={4} />}
                         </div>
-                        <span className="text-[11px] text-[var(--text-muted)] group-hover:text-[var(--text-primary)]" title={t('database.naming.tagTooltip')}>{t('database.naming.tag')}</span>
+                        <span className="text-[11px] text-[var(--text-muted)] group-hover:text-[var(--text-primary)] whitespace-nowrap shrink-0" title={t('database.naming.tagTooltip')}>{t('database.naming.tag')}</span>
                       </label>
                    </div>
                    
@@ -1599,12 +1609,12 @@ export default function DatabaseView({ connection, onClose }) {
              {/* Query Bar */}
              {showQueryBar && (
                  <div className="bg-[var(--bg-tertiary)]/30 border-b border-[var(--border-color)] p-4 flex flex-col gap-4 animate-in slide-in-from-top-2 duration-200">
-                    <div className="flex items-center gap-3">
-                        <div className="flex items-center gap-2 text-[10px] font-bold text-indigo-400 uppercase tracking-widest shrink-0 bg-indigo-500/10 px-3 py-2 rounded-xl border border-indigo-500/20 max-w-[150px] sm:max-w-[200px]">
+                    <div className="flex flex-col @xl:flex-row items-stretch @xl:items-center gap-2 @xl:gap-3">
+                        <div className="flex items-center justify-center gap-2 text-[10px] font-bold text-indigo-400 uppercase tracking-widest shrink-0 bg-indigo-500/10 px-3 py-2 rounded-xl border border-indigo-500/20 @xl:max-w-[200px]">
                            <Search size={14} className="shrink-0" /> 
                            <span className="truncate">{connection.dbProvider === 'mongodb' ? t('database.query.filterJson') : t('database.query.whereClause')}</span>
                         </div>
-                        <div className="flex-1 relative">
+                        <div className="flex-1 relative min-w-0">
                             <input 
                               type="text"
                               value={filterQuery}
@@ -1623,14 +1633,14 @@ export default function DatabaseView({ connection, onClose }) {
                          <button 
                            onClick={handleRunQuery}
                            disabled={!!pendingAction}
-                           className={`px-6 py-2 bg-[var(--accent-indigo)] hover:brightness-110 text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-[var(--accent-indigo)]/20 shrink-0 h-[38px] flex items-center gap-2 ${pendingAction ? 'opacity-50 cursor-not-allowed grayscale' : ''}`}
+                           className={`px-6 py-2 bg-[var(--accent-indigo)] hover:brightness-110 text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-[var(--accent-indigo)]/20 shrink-0 h-[38px] w-full @xl:w-auto justify-center flex items-center gap-2 ${pendingAction ? 'opacity-50 cursor-not-allowed grayscale' : ''}`}
                          >
                             <Activity size={14} /> {t('database.query.run')}
                          </button>
                     </div>
 
-                    <div className="flex items-center gap-3 pt-2 border-t border-[var(--border-color)]/30">
-                        <div className="flex items-center gap-2 shrink-0 w-32 group/ai-label" ref={helpRef}>
+                    <div className="flex flex-col @xl:flex-row items-stretch @xl:items-center gap-2 @xl:gap-3 pt-2 border-t border-[var(--border-color)]/30">
+                        <div className="flex items-center gap-2 shrink-0 @xl:w-32 group/ai-label" ref={helpRef}>
                             <div className="relative flex items-center gap-2">
                                 <Sparkles size={14} className="text-purple-400 group-hover/ai-label:animate-pulse" />
                                 <span className="text-[10px] font-bold text-purple-400 uppercase tracking-widest">{t('database.ai.title')}</span>
@@ -1752,10 +1762,10 @@ export default function DatabaseView({ connection, onClose }) {
                                 )}
                             </div>
 
-                            <div className="flex items-center gap-2">
-                                <div className="relative">
+                            <div className="flex flex-col @xl:flex-row items-stretch @xl:items-center gap-2 w-full @xl:w-auto">
+                                <div className="relative w-full @xl:w-52">
                                     <ThemeSelect
-                                        className="w-52"
+                                        className="w-full @xl:w-52"
                                         size="md"
                                         value={aiModel}
                                         onChange={(v) => {
@@ -1882,7 +1892,7 @@ export default function DatabaseView({ connection, onClose }) {
                             <button 
                                 disabled={isAiLoading || !aiPrompt.trim() || !!pendingAction}
                                 onClick={handleAskAI}
-                                className="px-6 py-2 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-purple-500/20 shrink-0 h-[38px] flex items-center gap-2"
+                                className="px-6 py-2 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-purple-500/20 shrink-0 h-[38px] w-full @xl:w-auto justify-center flex items-center gap-2"
                             >
                                 {isAiLoading ? t('database.ai.loading') : t('database.ai.generate')}
                             </button>
@@ -2172,7 +2182,7 @@ function RecordModal({ mode, initialData, onClose, onSave, isSubmitting }) {
 function ConfirmationModal({ title, message, type, showBackup, doBackup, onCancel, onConfirm, onToggleBackup }) {
   const { t } = useTranslation();
   const isDanger = type === 'danger';
-  const Icon = isDanger ? AlertTriangle : AlertCircle;
+  const Icon = isDanger ? TriangleAlert : AlertCircle;
 
   return (
     <MacOSModalWindow

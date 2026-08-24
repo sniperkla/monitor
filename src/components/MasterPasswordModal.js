@@ -14,7 +14,6 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
 import { useOS } from '@/context/OSContext';
-import MacOSModalWindow from '@/components/MacOSModalWindow';
 import { useIsMobile } from '@/hooks/useIsMobile';
 
 // Floating particles background (disabled on mobile for performance)
@@ -1015,23 +1014,111 @@ export default function MasterPasswordModal({ isBooted = true }) {
   }
 
   return createPortal(
-    <MacOSModalWindow
-      isOpen
-      title={title}
-      icon={icon}
-      draggable={true}
-      resizable={true}
-      defaultWidth={500}
-      defaultHeight={620}
-      minWidth={450}
-      minHeight={550}
-      onClose={() => dismissVault?.()}
-      zIndexClassName="z-[90000]"
-      contentClassName="p-4"
-      closeOnOverlayClick={false}
-    >
-      {renderContent()}
-    </MacOSModalWindow>,
+    <AnimatePresence>
+      <motion.div
+        key="vault-immersive-overlay"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        transition={{ duration: 0.4 }}
+        className="fixed inset-0 z-[90000] flex items-center justify-center p-4 overflow-hidden"
+        style={{
+          background: 'radial-gradient(ellipse at center, rgba(10,12,24,0.9) 0%, rgba(2,4,10,0.97) 100%)',
+          backdropFilter: 'blur(16px)',
+          WebkitBackdropFilter: 'blur(16px)',
+        }}
+      >
+        {/* ── Ambient environment ── */}
+        <div className="absolute inset-0 pointer-events-none overflow-hidden">
+          {/* Aurora orbs */}
+          <div className="absolute -top-48 left-1/2 -translate-x-1/2 w-[720px] h-[520px] rounded-full bg-indigo-600/20 blur-[140px]" />
+          <div className="absolute -bottom-56 -right-32 w-[560px] h-[440px] rounded-full bg-blue-600/15 blur-[130px]" />
+          <div className="absolute top-1/3 -left-40 w-[420px] h-[420px] rounded-full bg-purple-600/10 blur-[120px]" />
+          {/* Faint security grid */}
+          <div
+            className="absolute inset-0 opacity-[0.05]"
+            style={{
+              backgroundImage:
+                'linear-gradient(rgba(255,255,255,.6) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.6) 1px, transparent 1px)',
+              backgroundSize: '44px 44px',
+            }}
+          />
+          {/* Floating particles */}
+          <Particles count={24} />
+          {/* Vignette */}
+          <div
+            className="absolute inset-0"
+            style={{ boxShadow: 'inset 0 0 220px rgba(0,0,0,0.85)' }}
+          />
+        </div>
+
+        {/* ── Glass card ── */}
+        <motion.div
+          initial={{ scale: 0.92, y: 34, opacity: 0 }}
+          animate={{ scale: 1, y: 0, opacity: 1 }}
+          transition={{ type: 'spring', stiffness: 110, damping: 18 }}
+          className={`relative z-10 w-full max-w-lg ${shakeKey ? 'vault-shake' : ''}`}
+          key={shakeKey ? `shake-${shakeKey}` : 'card'}
+        >
+          {/* Gradient rim */}
+          <div className="absolute -inset-[1px] rounded-3xl bg-gradient-to-b from-indigo-400/50 via-white/5 to-transparent pointer-events-none" />
+          {/* Glow behind card */}
+          <div className="absolute -inset-8 rounded-[40px] bg-indigo-500/10 blur-3xl pointer-events-none" />
+
+          <div
+            className="relative rounded-3xl overflow-hidden border border-white/10 shadow-[0_40px_120px_rgba(0,0,0,0.85)]"
+            style={{ background: 'linear-gradient(180deg, rgba(17,21,38,0.88) 0%, rgba(8,10,20,0.96) 100%)' }}
+          >
+            {/* Header — secure-channel status strip */}
+            <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-white/5 bg-black/30">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-9 h-9 shrink-0 rounded-xl bg-indigo-500/15 border border-indigo-400/25 flex items-center justify-center">
+                  {icon && (() => { const Ic = icon; return <Ic size={16} className="text-indigo-300" />; })()}
+                </div>
+                <div className="min-w-0">
+                  <div className="text-sm font-bold text-[var(--text-primary)] truncate">{title}</div>
+                  <div className="flex items-center gap-1.5 text-[8px] font-bold uppercase tracking-[2px] text-emerald-400/80">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+                    AES-256 · Zero-Knowledge · Secure Channel
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => dismissVault?.()}
+                className="w-8 h-8 shrink-0 flex items-center justify-center rounded-lg hover:bg-white/10 text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
+                aria-label="Close"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            {/* Scanline sweep across the card — reuses boot-scanline keyframes */}
+            <div
+              className="absolute left-0 right-0 h-px pointer-events-none opacity-40"
+              style={{
+                background: 'linear-gradient(90deg, transparent, rgba(129,140,248,0.35), transparent)',
+                animation: 'boot-scanline 5s linear infinite',
+              }}
+            />
+
+            {/* Content */}
+            <div className="p-6 max-h-[calc(100vh-260px)] overflow-y-auto custom-scrollbar">
+              {renderContent()}
+            </div>
+
+            {/* Footer trust strip */}
+            <div className="px-5 py-2.5 border-t border-white/5 bg-black/30 flex items-center justify-center gap-4 text-[8px] font-bold uppercase tracking-[2px] text-[var(--text-muted)]/70">
+              <span>🔐 End-to-End Encrypted</span>
+              <span>·</span>
+              <span>No Server Storage</span>
+              <span>·</span>
+              <span>Local Decryption</span>
+            </div>
+          </div>
+        </motion.div>
+      </motion.div>
+    </AnimatePresence>,
     document.body
   );
 }

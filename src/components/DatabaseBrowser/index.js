@@ -19,7 +19,7 @@ function DatabaseConnectionPicker({ dbConnections, onOpen, onNewConnection, t })
 
   return (
     <div
-      className="h-full bg-[var(--bg-primary)] rounded-3xl border border-[var(--border-color)] overflow-hidden relative"
+      className="@container h-full bg-[var(--bg-primary)] rounded-3xl border border-[var(--border-color)] overflow-hidden relative"
       onDragOver={(e) => {
         if (e.dataTransfer.types.includes('application/ssh-connection')) {
           e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; setIsDragOver(true);
@@ -274,7 +274,7 @@ export default function DatabaseBrowser({ initialConnection, initialConnectionId
   if (isStandalone) {
     if (!standaloneBrowser) return null;
     return (
-      <div className="h-full flex flex-col bg-[var(--bg-primary)] rounded-3xl border border-[var(--border-color)] overflow-hidden">
+      <div className="@container h-full flex flex-col bg-[var(--bg-primary)] rounded-3xl border border-[var(--border-color)] overflow-hidden">
         <DatabaseView
           connection={resolveBrowserConnection(standaloneBrowser)}
           onClose={() => handleCloseTab(standaloneBrowser.id)}

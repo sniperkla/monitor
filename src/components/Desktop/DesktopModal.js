@@ -52,7 +52,7 @@ export default function DesktopModal() {
 
   const getIcon = () => {
     switch (modal.type) {
-      case 'confirm': return HelpCircle;
+      case 'confirm': return CircleHelp;
       case 'prompt': return Type;
       default: return AlertCircle;
     }

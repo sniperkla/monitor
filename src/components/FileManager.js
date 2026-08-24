@@ -3689,7 +3689,7 @@ export default function FileManager({
   };
 
   return (
-    <div className="flex flex-col h-full bg-[var(--bg-primary)] text-[var(--text-primary)] relative overflow-hidden group/filemanager">
+    <div className="@container flex flex-col h-full bg-[var(--bg-primary)] text-[var(--text-primary)] relative overflow-hidden group/filemanager">
       {/* Floating Latency Badge */}
       {latency !== null && status === 'ready' && (
         <div 
@@ -4625,13 +4625,13 @@ export default function FileManager({
       )}
 
       {/* Toolbar */}
-      <div className="flex flex-wrap sm:flex-nowrap items-center justify-between gap-3 p-3 lg:p-4 border-b border-[var(--border-color)] bg-[var(--bg-tertiary)]/50">
-        <div className="flex items-center gap-1.5 lg:gap-2 flex-1 min-w-[120px]">
-          <button onClick={goBack} disabled={currentPath === '.'} className="p-1.5 lg:p-2 hover:bg-[var(--border-color)] rounded-lg disabled:opacity-30 flex-shrink-0">
+      <div className="flex flex-wrap @xl:flex-nowrap items-center justify-between gap-3 p-3 @4xl:p-4 border-b border-[var(--border-color)] bg-[var(--bg-tertiary)]/50">
+        <div className="flex items-center gap-1.5 @4xl:gap-2 flex-1 min-w-[120px]">
+          <button onClick={goBack} disabled={currentPath === '.'} className="p-1.5 @4xl:p-2 hover:bg-[var(--border-color)] rounded-lg disabled:opacity-30 flex-shrink-0">
             <ChevronLeft size={18} />
           </button>
           <div 
-            className="flex items-center gap-2 px-2 lg:px-3 py-1.5 bg-[var(--bg-primary)]/50 rounded-lg border border-[var(--border-color)] w-full min-w-0 max-w-md group/path cursor-text"
+            className="flex items-center gap-2 px-2 @4xl:px-3 py-1.5 bg-[var(--bg-primary)]/50 rounded-lg border border-[var(--border-color)] w-full min-w-0 max-w-md group/path cursor-text"
             onClick={() => setIsEditingPath(true)}
           >
             {connectionName && (
@@ -4687,14 +4687,14 @@ export default function FileManager({
                     setPathInput(currentPath);
                   }
                 }}
-                className="bg-transparent text-[11px] lg:text-xs font-mono focus:outline-none w-full text-[var(--text-primary)]"
+                className="bg-transparent text-[11px] @4xl:text-xs font-mono focus:outline-none w-full text-[var(--text-primary)]"
                 onClick={(e) => e.stopPropagation()}
               />
             ) : (
-              <span className="text-[11px] lg:text-xs font-mono truncate">{currentPath}</span>
+              <span className="text-[11px] @4xl:text-xs font-mono truncate">{currentPath}</span>
             )}
           </div>
-          <button onClick={() => refreshFiles()} className="p-1.5 lg:p-2 hover:bg-[var(--border-color)] rounded-lg flex-shrink-0">
+          <button onClick={() => refreshFiles()} className="p-1.5 @4xl:p-2 hover:bg-[var(--border-color)] rounded-lg flex-shrink-0">
             <RefreshCw size={18} className={loading ? 'animate-spin text-blue-400' : ''} />
           </button>
         </div>
@@ -4708,7 +4708,7 @@ export default function FileManager({
               title={t('files.layout.splitLeftRight')}
             >
               <Columns size={14} />
-              <span className="hidden lg:inline">{t('files.layout.split')}</span>
+              <span className="hidden @4xl:inline">{t('files.layout.split')}</span>
             </button>
             {isSplit && (
               <button 
@@ -4717,14 +4717,14 @@ export default function FileManager({
                 title={t('files.layout.closePane')}
               >
                 <X size={14} strokeWidth={2.5} />
-                <span className="hidden lg:inline">{t('files.layout.close')}</span>
+                <span className="hidden @4xl:inline">{t('files.layout.close')}</span>
               </button>
             )}
           </div>
         )}
 
-        <div className="flex flex-wrap items-center justify-end gap-2 lg:gap-4 shrink-0">
-          <div className="relative flex-shrink min-w-[100px] w-full max-w-[200px] sm:max-w-none sm:w-40 lg:w-52">
+        <div className="flex flex-wrap items-center justify-end gap-2 @4xl:gap-4 shrink-0">
+          <div className="relative flex-shrink min-w-[100px] w-full max-w-[200px] @xl:max-w-none @xl:w-40 @4xl:w-52">
             {searchLoading
               ? <RefreshCw className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-400 animate-spin" size={14} />
               : <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)]" size={14} />}
@@ -4736,7 +4736,7 @@ export default function FileManager({
               onKeyDown={(e) => {
                 if (e.key === 'Escape') setSearchQuery('');
               }}
-              className={`bg-[var(--bg-primary)]/50 border rounded-lg py-1.5 pl-9 pr-6 lg:pr-8 text-[11px] lg:text-xs focus:outline-none w-full text-[var(--text-primary)] transition-colors ${
+              className={`bg-[var(--bg-primary)]/50 border rounded-lg py-1.5 pl-9 pr-6 @4xl:pr-8 text-[11px] @4xl:text-xs focus:outline-none w-full text-[var(--text-primary)] transition-colors ${
                 isSearchMode ? 'border-blue-500/60 focus:border-blue-500' : 'border-[var(--border-color)] focus:border-blue-500/50'
               }`}
             />
@@ -4905,7 +4905,7 @@ export default function FileManager({
             </div>
           ) : (
           <div className={viewMode === 'grid' 
-            ? "grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4"
+            ? "grid grid-cols-2 @3xl:grid-cols-4 @4xl:grid-cols-6 gap-4"
             : "flex flex-col gap-1"
           }>
             {filteredFiles.map(file => {

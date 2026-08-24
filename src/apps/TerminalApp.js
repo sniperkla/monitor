@@ -195,7 +195,7 @@ export default function TerminalApp({ onEditConnection, initialConnection, initi
   }
 
   return (
-    <div className="flex flex-col h-full bg-transparent text-[var(--text-primary)] overflow-hidden">
+    <div className="@container flex flex-col h-full bg-transparent text-[var(--text-primary)] overflow-hidden">
       {/* App Tab Bar */}
       <div className="flex items-center bg-[var(--bg-secondary)] border-b border-[var(--border-color)] px-2 h-10 shrink-0">
         <div className="flex flex-1 items-center gap-1 overflow-x-auto no-scrollbar h-full">
@@ -272,7 +272,7 @@ export default function TerminalApp({ onEditConnection, initialConnection, initi
               </div>
 
               {/* Connection Grid */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 @3xl:grid-cols-2 gap-3">
                 {sshConnections.map(conn => (
                   <div 
                     key={conn._id}

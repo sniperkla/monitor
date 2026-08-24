@@ -185,7 +185,7 @@ function ImageComboBox({ value, onChange, options }) {
 // ── Main Component ────────────────────────────
 export default function DockerApp({ initialConnection, initialConnectionId, windowId, activeTab: propActiveTab }) {
   const { state } = useApp();
-  const { showConfirm, showPrompt, addNotification, openWindow, updateWindowProps, dispatch: osDispatch, toggleMaximize, state: osState } = useOS();
+  const { showConfirm, showPrompt, addNotification, openWindow, updateWindowProps, dispatch: osDispatch, state: osState } = useOS();
   const { t } = useTranslation();
   const { connectionsReady } = useApp();
   
@@ -207,20 +207,10 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
   const osStateRef = useRef(osState);
   useEffect(() => { osStateRef.current = osState; }, [osState]);
   const ensureMaximizedThenShow = useCallback(() => {
-    const show = () => setShowOnboarding(true);
-    const win = (osStateRef.current?.windows || []).find(w => w.id === windowId);
-    if (!win || win.isMaximized) return show();
-    toggleMaximize(windowId);
-    let tries = 0;
-    const iv = setInterval(() => {
-      tries++;
-      const now = (osStateRef.current?.windows || []).find(w => w.id === windowId);
-      if ((now && now.isMaximized) || tries > 15) {
-        clearInterval(iv);
-        show();
-      }
-    }, 100);
-  }, [windowId, toggleMaximize]);
+    // Dynamic-focus onboarding tracks its target at ANY window size/position,
+    // so there is no need to force-maximize the window first anymore.
+    setShowOnboarding(true);
+  }, []);
   const ensureMaximizedThenShowRef = useRef(ensureMaximizedThenShow);
   useEffect(() => { ensureMaximizedThenShowRef.current = ensureMaximizedThenShow; }, [ensureMaximizedThenShow]);
 
@@ -1542,7 +1532,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
             </div>
             <h1 className="text-3xl font-bold mb-2">Docker Manager</h1>
             <p className="text-sm text-[var(--text-muted)] mb-8">Select a server to manage Docker containers</p>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 @3xl:grid-cols-2 gap-4">
                 {sshConnections.map(conn => (
                 <div 
                   key={conn._id} 
@@ -1590,13 +1580,13 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
   const tabColors = { sky: 'bg-sky-500', purple: 'bg-purple-500', emerald: 'bg-emerald-500', violet: 'bg-violet-500', amber: 'bg-amber-500' };
 
   return (
-    <div className="flex flex-col h-full bg-transparent text-[var(--text-primary)]">
+    <div className="@container flex flex-col h-full bg-transparent text-[var(--text-primary)]">
         {/* ── Toolbar ── */}
-        <div className="flex items-center justify-between bg-[var(--bg-secondary)] border-b border-[var(--border-color)] px-2 sm:px-4 h-12 shrink-0 gap-2">
-            <div className="flex items-center gap-2 sm:gap-4 min-w-0 flex-1 overflow-hidden">
-                <span className="text-xs sm:text-sm font-bold flex items-center gap-2 shrink-0">
+        <div className="flex items-center justify-between bg-[var(--bg-secondary)] border-b border-[var(--border-color)] px-2 @xl:px-4 h-12 shrink-0 gap-2">
+            <div className="flex items-center gap-2 @xl:gap-4 min-w-0 flex-1 overflow-hidden">
+                <span className="text-xs @xl:text-sm font-bold flex items-center gap-2 shrink-0">
                     <Box size={14} className="text-sky-400" />
-                    <span className="truncate max-w-[80px] sm:max-w-none">{selectedConnection.name}</span>
+                    <span className="truncate max-w-[80px] @xl:max-w-none">{selectedConnection.name}</span>
                 </span>
                 <div className="toolbar-tabs flex items-center gap-0.5 bg-black/20 p-0.5 rounded-lg min-w-0 max-w-full overflow-x-auto no-scrollbar">
                     {tabs.map(tab => (
@@ -1604,7 +1594,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                         key={tab.id}
                         data-onboarding={`tab-${tab.id}`}
                         onClick={() => setActiveTab(tab.id)} 
-                        className={`px-2 sm:px-3 py-1 text-[10px] font-bold rounded-md transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
+                        className={`px-2 @xl:px-3 py-1 text-[10px] font-bold rounded-md transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
                           activeTab === tab.id 
                             ? `${tabColors[tab.color]} text-white shadow-lg` 
                             : 'text-[var(--text-muted)] hover:text-white hover:bg-white/5'
@@ -1618,7 +1608,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                     ))}
                 </div>
             </div>
-            <div className="flex items-center gap-1 sm:gap-3 shrink-0">
+            <div className="flex items-center gap-1 @xl:gap-3 shrink-0">
                 <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium ${typeof window !== 'undefined' && localStorage.getItem('ssh_monitor_ssh_mode') === 'local' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-blue-500/15 text-blue-400'}`}>
                   {typeof window !== 'undefined' && localStorage.getItem('ssh_monitor_ssh_mode') === 'local' ? '⚡ Local' : '☁ Server'}
                 </span>
@@ -1776,7 +1766,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                 )}
                               </div>
                             ) : (
-                              <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                              <div className="grid grid-cols-1 @5xl:grid-cols-2 gap-3">
                                 <AnimatePresence mode="popLayout">
                                   {groupedContainers.map((item, i) => {
                                     if (item.type === 'swarm_group') {
@@ -2358,7 +2348,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                 <p className="text-xs mt-1">Search Docker Hub and pull an image</p>
                               </div>
                             ) : (
-                              <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                              <div className="grid grid-cols-1 @5xl:grid-cols-2 gap-3">
                                   {images.map((img, idx) => {
                                       const fullTag = `${img.Repository}:${img.Tag}`;
                                       const imgIdDisplay = img.ID || img.Id || '';
@@ -2468,7 +2458,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                             <p className="text-sm font-bold">No volumes found</p>
                           </div>
                         ) : (
-                          <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                          <div className="grid grid-cols-1 @5xl:grid-cols-2 gap-3">
                             {volumes.map((vol, i) => {
                               const isSelected = selectedVolumes.includes(vol.Name);
                               return (
@@ -2567,7 +2557,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                             <p className="text-sm font-bold">No networks found</p>
                           </div>
                         ) : (
-                          <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                          <div className="grid grid-cols-1 @5xl:grid-cols-2 gap-3">
                             {networks.map((net, i) => (
                               <div key={i} className="p-4 rounded-2xl border border-[var(--border-color)] bg-[var(--bg-card)] hover:border-amber-500/20 transition-all">
                                 <div className="flex items-center justify-between">
@@ -2750,7 +2740,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                 </button>
                               </div>
                             )}
-                            <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                            <div className="grid grid-cols-1 @5xl:grid-cols-2 gap-3">
                               {swarmServices.map((svc, idx) => {
                                 const svcName = svc.Name || svc.name || 'unnamed-service';
                                 const svcImage = svc.Image || svc.image || '-';
@@ -2925,7 +2915,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                               <Cpu size={14} />
                               SWARM CLUSTER NODES ({swarmNodes.length})
                             </h3>
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                            <div className="grid grid-cols-1 @3xl:grid-cols-3 gap-3">
                               {swarmNodes.map((node, i) => {
                                 const hostname = node.Hostname || node.hostname || 'node';
                                 const role = node.ManagerStatus || node.Role || 'Worker';
