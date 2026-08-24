@@ -84,6 +84,22 @@ export async function POST(request) {
       const nodeInstallScript = `
         export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 
+        # 🔧 PREREQUISITE BOOTSTRAP — minimal systems (bare Debian, tiny Alpine
+        # images, custom AMIs) may lack curl/xz/procps. Install them quietly via
+        # whichever package manager exists so every later step just works.
+        for _pm in apt-get dnf yum apk zypper pacman; do
+          command -v $_pm >/dev/null 2>&1 || continue
+          if [ $_pm = apt-get ]; then
+            $_pm update -qq >/dev/null 2>&1 || true
+            $_pm install -y -qq curl ca-certificates xz-utils procps >/dev/null 2>&1 || true
+          elif [ $_pm = apk ]; then
+            $_pm add --no-cache curl ca-certificates xz procps >/dev/null 2>&1 || true
+          else
+            $_pm install -y -q curl xz procps >/dev/null 2>&1 || true
+          fi
+          break
+        done
+
         if command -v node >/dev/null 2>&1; then
           echo "✅ Node.js is already installed: $(node -v)"
           exit 0
@@ -115,6 +131,13 @@ export async function POST(request) {
           sudo cp -r "$TMPDIR/bin/"* /usr/local/bin/ 2>/dev/null || cp -r "$TMPDIR/bin/"* /usr/local/bin/ 2>/dev/null || true
           sudo cp -r "$TMPDIR/lib/"* /usr/local/lib/ 2>/dev/null || cp -r "$TMPDIR/lib/"* /usr/local/lib/ 2>/dev/null || true
           rm -rf "$TMPDIR"
+          # Verify the binary actually EXECUTES — very old distros (e.g. CentOS 7,
+          # glibc 2.17) cannot run official Node 20 builds even though the file exists.
+          if ! node -v >/dev/null 2>&1; then
+            GLIBC_VER=$(ldd --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+$')
+            echo "❌ Portable Node binary downloaded but cannot run on this system (glibc \${GLIBC_VER:-unknown} found, 2.28+ required)." >&2
+            echo "   Upgrade the OS or install a distro-native Node package instead." >&2
+          fi
         }
 
         if [ -f /etc/os-release ]; then
@@ -136,7 +159,13 @@ export async function POST(request) {
         # ── Amazon Linux 2023 (uses dnf, no modules) ───────────────────────────
         elif echo "$OS_ID $OS_ID_LIKE" | grep -qi "amzn" && command -v dnf >/dev/null 2>&1; then
           echo "Detected Amazon Linux 2023..."
-          sudo dnf install -y nodejs npm 2>/dev/null || dnf install -y nodejs npm 2>/dev/null || _install_node_binary
+          # AL2023's own repo ships Node 18 (epoch 1) and its repo priority makes
+          # dnf resolve 'nodejs' to 18 even when NodeSource 20.x is enabled.
+          # Ladder: NodeSource 20 (amzn repos excluded) → distro 18 (works for agent) → portable binary 20.
+          (curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash - 2>/dev/null || true)
+          sudo dnf install -y --disablerepo=amazonlinux --disablerepo=kernel-livepatch nodejs npm 2>/dev/null \
+            || sudo dnf install -y nodejs npm 2>/dev/null \
+            || _install_node_binary
 
         # ── Amazon Linux 2 (uses yum + amazon-linux-extras) ───────────────────
         elif echo "$OS_ID $OS_ID_LIKE" | grep -qi "amzn" && command -v amazon-linux-extras >/dev/null 2>&1; then
@@ -186,17 +215,13 @@ export async function POST(request) {
         fi
 
         # Final check
-        if command -v node >/dev/null 2>&1; then
-          echo "🎉 Node.js successfully installed: $(node -v)"
+        # Final check — Node must actually EXECUTE, not merely exist on disk
+        NODE_V=$(node -v 2>/dev/null)
+        if [ -n "$NODE_V" ]; then
+          echo "🎉 Node.js successfully installed: $NODE_V"
         else
-          echo "❌ Could not install Node.js automatically. Trying portable binary fallback..."
-          _install_node_binary
-          if command -v node >/dev/null 2>&1; then
-            echo "🎉 Node.js portable binary installed: $(node -v)"
-          else
-            echo "❌ All installation methods failed."
-            exit 1
-          fi
+          echo "❌ Could not install a WORKING Node.js automatically (see messages above)."
+          exit 1
         fi
       `;
 
@@ -294,6 +319,21 @@ export async function POST(request) {
       if (method === 'tmux') {
         installScript = `
           export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+
+          # 🔧 PREREQUISITE BOOTSTRAP — same as Node installer: make sure the
+          # process tools this agent relies on exist on minimal systems.
+          for _pm in apt-get dnf yum apk zypper pacman; do
+            command -v $_pm >/dev/null 2>&1 || continue
+            if [ $_pm = apt-get ]; then
+              $_pm update -qq >/dev/null 2>&1 || true
+              $_pm install -y -qq procps curl ca-certificates >/dev/null 2>&1 || true
+            elif [ $_pm = apk ]; then
+              $_pm add --no-cache procps curl ca-certificates >/dev/null 2>&1 || true
+            else
+              $_pm install -y -q procps curl >/dev/null 2>&1 || true
+            fi
+            break
+          done
 
           # 1. Check Node.js
           if ! command -v node >/dev/null 2>&1; then

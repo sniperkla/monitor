@@ -88,7 +88,7 @@ export async function POST(request, { params }) {
       const connectDB = (await import('@/lib/mongodb')).default;
       const { ConnectionRepository } = await import('@/lib/repositories/ConnectionRepository');
       const db = await connectDB();
-      const repo = new ConnectionRepository(db);
+      const repo = new ConnectionRepository(db, session?.user?.id || session?.user?.sub || null);
       const fullConn = await repo.findById(id);
       if (fullConn) {
         conn = { ...conn, ...fullConn.toObject ? fullConn.toObject() : fullConn };

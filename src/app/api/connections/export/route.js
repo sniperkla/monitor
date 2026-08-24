@@ -28,7 +28,7 @@ export async function GET(request) {
     const password = searchParams.get('password') || null;
 
     const db = await connectDB();
-    const repo = new ConnectionRepository(db);
+    const repo = new ConnectionRepository(db, session?.user?.id || session?.user?.sub || null);
     await repo.init();
     const connections = await repo.findAll();
 

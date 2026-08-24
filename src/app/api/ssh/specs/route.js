@@ -116,7 +116,7 @@ export async function POST(request) {
     }
 
     const db = await connectDB();
-    const repo = new ConnectionRepository(db);
+    const repo = new ConnectionRepository(db, session?.user?.id || session?.user?.sub || null);
     const conn = await repo.findById(connectionId);
     if (!conn) {
       return NextResponse.json({ success: false, error: 'Connection not found' }, { status: 404 });

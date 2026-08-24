@@ -33,7 +33,7 @@ export async function GET(request) {
       throw dbErr;
     }
 
-    const repo = new ConnectionRepository(db);
+    const repo = new ConnectionRepository(db, session?.user?.id || session?.user?.sub || null);
     await repo.init();
     let connections = await repo.findAll();
 
@@ -104,7 +104,7 @@ export async function POST(request) {
     if (!rateCheck.allowed) return NextResponse.json({ success: false, error: 'Rate limit exceeded' }, { status: 429 });
 
     const db = await connectDB();
-    const repo = new ConnectionRepository(db);
+    const repo = new ConnectionRepository(db, session?.user?.id || session?.user?.sub || null);
     await repo.init();
     const body = await request.json();
 

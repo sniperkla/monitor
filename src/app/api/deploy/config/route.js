@@ -151,7 +151,7 @@ export async function POST(request) {
       try {
         logger.info(`[deploy/config] Looking up SSH connection from user database: ${normalizedConnectionId}`);
         const userDb = await connectDB();
-        const userRepo = new ConnectionRepository(userDb);
+        const userRepo = new ConnectionRepository(userDb, session?.user?.id || session?.user?.sub || null);
         await userRepo.init();
         const connection = await userRepo.findById(normalizedConnectionId);
         

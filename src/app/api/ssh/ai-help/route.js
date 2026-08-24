@@ -12,6 +12,59 @@ import { readdir, readFile } from 'fs/promises';
 import { join } from 'path';
 import { logger } from '@/lib/logger';
 
+// ── Local-relay AI proxy ─────────────────────────────────────────────────────
+// When the user has an active Local Relay agent announcing the 'ai' capability,
+// the provider HTTP call is performed BY THE RELAY (on the user's own machine).
+// The server only shuttles a small JSON envelope over the already-open relay
+// WebSocket — saving server egress bandwidth and keeping the server IP out of
+// provider logs. Falls back to direct server-side fetch whenever no capable
+// relay exists, the relay errors, or the round-trip times out.
+const AI_RELAY_TIMEOUT_MS = 180000;
+
+async function relayAiFetch(userId, url, options) {
+  const pending = global.__aiRelayPending || (global.__aiRelayPending = new Map());
+  const userRelays = global.__activeRelays?.get(userId);
+  if (!userRelays?.size) return null;
+  let relayWs = null;
+  for (const r of userRelays.values()) {
+    if (r?.capabilities?.ai && r?.ws?.readyState === 1) { relayWs = r.ws; break; }
+  }
+  if (!relayWs) return null;
+
+  const authHeader = options?.headers?.Authorization || options?.headers?.authorization || '';
+  const apiKey = typeof authHeader === 'string' ? authHeader.replace(/^Bearer\s+/i, '') : '';
+  const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  try {
+    return await new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        resolve(null); // timeout → caller falls back to direct fetch
+      }, AI_RELAY_TIMEOUT_MS);
+      pending.set(id, (msg) => {
+        clearTimeout(timer);
+        if (!msg || msg.ok === false) return resolve(null); // any relay failure → direct fallback
+        // Response-like object: works for both .json()/.text() consumers and
+        // SSE readers (full payload arrives as a single body chunk).
+        resolve(new Response(msg.body ?? '', { status: msg.status || 200, headers: { 'Content-Type': 'application/json' } }));
+      });
+      relayWs.send(JSON.stringify({ type: 'ai:chat', id, endpoint: url, apiKey, body: options?.body, timeoutMs: AI_RELAY_TIMEOUT_MS - 5000 }));
+    });
+  } catch (_) {
+    return null;
+  }
+}
+
+// Drop-in replacement for fetch() targeting LLM providers.
+async function llmFetch(userId, url, options) {
+  if (userId) {
+    try {
+      const viaRelay = await relayAiFetch(userId, url, options);
+      if (viaRelay) return viaRelay;
+    } catch (_) { /* fall through to direct */ }
+  }
+  return fetch(url, options);
+}
+
 // Truncate skill content to save tokens (keep most important parts)
 const truncateSkill = (content, maxChars = 3000) => {
   if (content.length <= maxChars) return content;
@@ -333,6 +386,8 @@ export async function POST(req) {
     if (!session) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
+    // Must match the key used when the relay token was created (agent route)
+    const relayUserId = session.user?.id || 'admin';
 
     const extractCooldownMap = globalThis.__sshMemoryExtractCooldownMap || (globalThis.__sshMemoryExtractCooldownMap = new Map());
 
@@ -602,7 +657,7 @@ RULES:
 • GLIBC error: build from source, NEVER upgrade glibc.
 • Backup configs: cp FILE FILE.bak.$(date +%s)
 • journalctl/systemctl: always --no-pager
-• danger=true: rm -rf, disk format, user deletion.
+• danger=true is YOUR semantic risk judgment, not a keyword match. Set it when the command is destructive, irreversible, or affects anything beyond this task's own artifacts: recursive deletion outside this task's temp/build dirs, formatting or writing raw disks, stopping/disabling/removing services, containers or processes this task did not create, firewall/SSH/sudoers/fstab changes that could lock out access, permission or ownership changes on system paths, removing packages, modifying cron/systemd units, or any change that persists after reboot. If danger=true, say why in <explain>. Prefer reversible alternatives first (backup file, --dry-run, reload over restart-over-stop).
 • Docker: ALL steps INSIDE container. No sudo inside container. Use docker exec for verify.
 • Service fails: journalctl -xeu SVC -n 50 --no-pager FIRST, then fix root cause, then restart.
 • Search: <search_skills>keyword</search_skills> if no local skill covers the task.
@@ -720,7 +775,7 @@ Now output the <diff> needed to complete the request.`;
           { role: 'user', content: retryUserMsg },
         ];
 
-        const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        const res = await llmFetch(relayUserId, 'https://api.groq.com/openai/v1/chat/completions', {
           method: 'POST',
           headers: {
             Authorization: `Bearer ${apiKey}`,
@@ -818,7 +873,7 @@ Now output the <diff> needed to complete the request.`;
                 'X-Title': 'ZeroClaw Monitor'
               };
 
-              const response = await fetch(apiUrl, {
+              const response = await llmFetch(relayUserId, apiUrl, {
                 method: 'POST',
                 headers: fetchHeaders,
                 body: JSON.stringify({
@@ -969,7 +1024,7 @@ Now output the <diff> needed to complete the request.`;
             }
 
             try {
-                const response = await fetch(manualEndpoint, {
+                const response = await llmFetch(relayUserId, manualEndpoint, {
                     method: 'POST',
                     headers: {
                         Authorization: `Bearer ${manualApiKey}`,
@@ -1010,7 +1065,7 @@ Now output the <diff> needed to complete the request.`;
             const apiKey = apiKeys[tryIndex];
 
             try {
-                const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                const response = await llmFetch(relayUserId, 'https://api.groq.com/openai/v1/chat/completions', {
                     method: 'POST',
                     headers: {
                         Authorization: `Bearer ${apiKey}`,

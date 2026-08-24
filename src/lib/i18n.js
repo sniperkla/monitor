@@ -969,7 +969,6 @@ const resources = {
         presets: {
           openRouter: "Use OpenRouter Preset",
           openAI: "Use default OpenAI Endpoint",
-          ollama: "Use Ollama Local Preset",
         },
         tooltips: {
           endpoint: "API Endpoint URL",
@@ -2614,7 +2613,6 @@ const resources = {
         presets: {
           openRouter: "ใช้ค่าเริ่มต้น OpenRouter",
           openAI: "ใช้ค่าเริ่มต้น OpenAI",
-          ollama: "ใช้ค่าเริ่มต้น Ollama Local",
         },
         tooltips: {
           endpoint: "URL ปลายทาง API",
@@ -4037,7 +4035,6 @@ const resources = {
         presets: {
           openRouter: "使用 OpenRouter 预设",
           openAI: "使用默认 OpenAI 端点",
-          ollama: "使用 Ollama 本地预设",
         },
         tooltips: {
           endpoint: "API 终端 URL",

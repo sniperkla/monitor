@@ -61,7 +61,7 @@ export async function POST(request) {
       pooled = { db };
     } else {
       const db = await connectDB();
-      const repo = new ConnectionRepository(db);
+      const repo = new ConnectionRepository(db, session?.user?.id || session?.user?.sub || null);
       await repo.init();
       const fullConn = await repo.findById(connectionId);
       if (!fullConn) {

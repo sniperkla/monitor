@@ -927,7 +927,7 @@ export async function runDeployment(config, runMeta = {}) {
         logger.info(`[deploy] SSH connection data not cached, attempting fresh lookup for ID: ${connectionId}`);
         try {
           const db = await connectDB(process.env.MONGODB_URI, true);
-          const repo = new ConnectionRepository(db);
+          const repo = new ConnectionRepository(db, session?.user?.id || session?.user?.sub || null);
           await repo.init();
           const connection = await repo.findById(connectionId);
           if (connection) {
@@ -1573,7 +1573,7 @@ export async function POST(request) {
       if (!hasCachedConnection) {
         logger.info(`[webhook] SSH connection data not cached in project config, verifying in DB...`);
         const db = await connectDB(isManual ? null : process.env.MONGODB_URI, !isManual);
-        const repo = new ConnectionRepository(db);
+        const repo = new ConnectionRepository(db, session?.user?.id || session?.user?.sub || null);
         await repo.init();
         const connection = await repo.findById(connectionId);
         if (!connection) {

@@ -21,7 +21,7 @@ export async function GET(request, { params }) {
 
     const { id } = await params;
     const db = await connectDB();
-    const repo = new ConnectionRepository(db);
+    const repo = new ConnectionRepository(db, session?.user?.id || session?.user?.sub || null);
 
     if (db.type !== 'mysql' && db.type !== 'postgres' && !isValidMongoId(id)) {
       return NextResponse.json({ success: false, error: 'Invalid ID' }, { status: 400 });
@@ -51,7 +51,7 @@ export async function PUT(request, { params }) {
 
     const { id } = await params;
     const db = await connectDB();
-    const repo = new ConnectionRepository(db);
+    const repo = new ConnectionRepository(db, session?.user?.id || session?.user?.sub || null);
 
     if (db.type !== 'mysql' && db.type !== 'postgres' && !isValidMongoId(id)) {
       return NextResponse.json({ success: false, error: 'Invalid ID' }, { status: 400 });
@@ -95,7 +95,7 @@ export async function DELETE(request, { params }) {
 
     const { id } = await params;
     const db = await connectDB();
-    const repo = new ConnectionRepository(db);
+    const repo = new ConnectionRepository(db, session?.user?.id || session?.user?.sub || null);
 
     if (db.type !== 'mysql' && db.type !== 'postgres' && !isValidMongoId(id)) {
       return NextResponse.json({ success: false, error: 'Invalid ID' }, { status: 400 });

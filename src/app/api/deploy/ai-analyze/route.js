@@ -107,7 +107,7 @@ export async function POST(request) {
         return NextResponse.json({ success: false, error: 'Connection ID is required for SSH target' }, { status: 400 });
       }
       const db = await connectDB();
-      const repo = new ConnectionRepository(db);
+      const repo = new ConnectionRepository(db, session?.user?.id || session?.user?.sub || null);
       await repo.init();
       const connection = await repo.findById(connectionId);
       if (!connection) {

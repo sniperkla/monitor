@@ -261,8 +261,8 @@ function connect() {
     switch (msg.type) {
       // ── TCP relay ──
       case 'ready':
-        ws.send(JSON.stringify({ type: 'init', relayName: RELAY_NAME, capabilities: { ssh: !!ssh2, sftp: !!ssh2, docker: true } }));
-        console.log(`\n✅ Relay ready! Name: ${RELAY_NAME}, Capabilities: SSH=${!!ssh2}, SFTP=${!!ssh2}, Docker=true`);
+        ws.send(JSON.stringify({ type: 'init', relayName: RELAY_NAME, capabilities: { ssh: !!ssh2, sftp: !!ssh2, docker: true, ai: true } }));
+        console.log(`\n✅ Relay ready! Name: ${RELAY_NAME}, Capabilities: SSH=${!!ssh2}, SFTP=${!!ssh2}, Docker=true, AI=true`);
         startDiscoveryServer(RELAY_NAME);
         break;
 
@@ -270,6 +270,7 @@ function connect() {
         const { connId } = msg;
         const tcpHost = msg.host || 'localhost';
         const tcpPort = Number(msg.port) || 22;
+        console.log(`📡 [relay] open ${connId} → ${tcpHost}:${tcpPort}`);
         const tcp = net.connect(tcpPort, tcpHost);
         tcp.on('connect', () => {
           if (ws.readyState === 1) {
@@ -318,6 +319,7 @@ function connect() {
       case 'ssh:connect':     handleSshConnect(ws, msg); break;
       case 'ssh:exec':        handleSshExec(ws, msg);    break;
       case 'ssh:disconnect':  cleanupSsh(msg.connId);    break;
+      case 'ai:chat':         handleAiChat(ws, msg);     break;
 
       case 'ssh:input': {
         const session = sshSessions.get(msg.connId);
@@ -531,6 +533,42 @@ function handleSshExec(ws, msg) {
       ws.send(JSON.stringify({ type: 'ssh:exec_result', connId: msg.connId, stdout, stderr, code }));
     });
   });
+}
+
+// ── AI chat proxy ───────────────────────────────────────────────────────────
+// Performs the LLM provider call LOCALLY on this machine so the server never
+// makes outbound AI requests (saves server bandwidth/egress and keeps the
+// server IP out of provider logs). The server passes endpoint + key + body per
+// request — nothing is stored here. Always replies exactly once with
+// { type:'ai:chat:result', id, ok, status, body } or ok:false + error.
+async function handleAiChat(ws, msg) {
+  const reply = (m) => { try { if (ws.readyState === 1) ws.send(JSON.stringify(m)); } catch (_) {} };
+  const { id, endpoint, apiKey, body } = msg;
+  console.log(`📡 [relay] AI chat proxy request → ${endpoint} (id=${id})`);
+  if (!id || !endpoint || !body) {
+    return reply({ type: 'ai:chat:result', id: id || '', ok: false, status: 0, error: 'Missing id/endpoint/body' });
+  }
+  const timeoutMs = Math.min(Number(msg.timeoutMs) || 180000, 300000);
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers,
+      body: typeof body === 'string' ? body : JSON.stringify(body),
+      signal: ctrl.signal,
+    });
+    const text = await res.text();
+    clearTimeout(timer);
+    // Cap stored payload to keep the WS frame sane (~8 MB)
+    reply({ type: 'ai:chat:result', id, ok: res.ok, status: res.status, body: text.length > 8 * 1024 * 1024 ? text.slice(0, 8 * 1024 * 1024) : text });
+  } catch (err) {
+    clearTimeout(timer);
+    const aborted = err?.name === 'AbortError';
+    reply({ type: 'ai:chat:result', id, ok: false, status: aborted ? 408 : 0, error: aborted ? 'Relay AI request timed out' : (err?.message || 'Relay AI request failed') });
+  }
 }
 
 function cleanupSsh(connId) {

@@ -27,9 +27,13 @@ export const authOptions = {
         }
 
         const cleanEmail = String(credentials.email).trim().toLowerCase();
+        // req.headers may be a Fetch-style Headers instance OR a plain object
+        // depending on which NextAuth entry point invoked authorize().
+        const _hdr = (h, k) =>
+          typeof h?.get === 'function' ? h.get(k) : h?.[k] ?? h?.[String(k).toLowerCase()];
         const ip =
-          req?.headers?.get('x-forwarded-for')?.split(',')[0]?.trim() ||
-          req?.headers?.get('x-real-ip') ||
+          _hdr(req?.headers, 'x-forwarded-for')?.split(',')[0]?.trim() ||
+          _hdr(req?.headers, 'x-real-ip') ||
           'unknown';
         const gate = checkLoginAllowed({ email: cleanEmail, ip });
         if (!gate.allowed) {

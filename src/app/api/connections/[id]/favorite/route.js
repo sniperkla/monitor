@@ -16,7 +16,7 @@ export async function PUT(request, { params }) {
   try {
     const { id } = await params;
     const db = await connectDB();
-    const repo = new ConnectionRepository(db);
+    const repo = new ConnectionRepository(db, session?.user?.id || session?.user?.sub || null);
 
     if (db.type !== 'mysql' && !isValidMongoId(id)) {
       return NextResponse.json({ success: false, error: 'Invalid ID' }, { status: 400 });

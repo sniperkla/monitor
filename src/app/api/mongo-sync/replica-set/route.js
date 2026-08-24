@@ -21,7 +21,7 @@ async function getClientForConn(connectionId, customUri) {
   }
 
   const db = await connectDB();
-  const repo = new ConnectionRepository(db);
+  const repo = new ConnectionRepository(db, session?.user?.id || session?.user?.sub || null);
   await repo.init();
   const fullConn = await repo.findById(connectionId);
   if (!fullConn) throw new Error('Target connection not found');
@@ -49,7 +49,7 @@ export async function GET(request) {
     if (discover === 'true') {
       try {
         const db = await connectDB();
-        const repo = new ConnectionRepository(db);
+        const repo = new ConnectionRepository(db, session?.user?.id || session?.user?.sub || null);
         await repo.init();
         const allConns = await repo.findAll();
         

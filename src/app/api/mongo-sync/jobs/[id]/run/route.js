@@ -47,7 +47,7 @@ export async function POST(request, { params }) {
         await connectDB(null, true);
         pooled = { db: mongoose.connection.db };
       } else {
-        const repo = new ConnectionRepository(db);
+        const repo = new ConnectionRepository(db, session?.user?.id || session?.user?.sub || null);
         await repo.init();
         const fullConn = await repo.findById(job.connectionId);
         if (!fullConn) {

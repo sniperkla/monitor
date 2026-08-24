@@ -39,7 +39,7 @@ export async function GET(request) {
       throw dbErr;
     }
 
-    const repo = new ConnectionRepository(db);
+    const repo = new ConnectionRepository(db, session?.user?.id || session?.user?.sub || null);
     await repo.init();
     
     // Fetch all connections

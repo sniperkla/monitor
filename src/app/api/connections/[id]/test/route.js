@@ -32,7 +32,7 @@ export async function POST(request, { params }) {
     
     // 1. Determine if it's a DB connection or a direct payload (for local/manual)
     const db = await connectDB();
-    const repo = new ConnectionRepository(db);
+    const repo = new ConnectionRepository(db, session?.user?.id || session?.user?.sub || null);
 
     if (id && !id.startsWith('local-')) {
       connection = await repo.findById(id);

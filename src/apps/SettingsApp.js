@@ -3750,13 +3750,6 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                               <div className="flex flex-wrap gap-2 mb-3">
                                 <button
                                   type="button"
-                                  onClick={() => setDeployConfig(p => ({ ...p, aiEndpoint: 'https://gen.ai.kku.ac.th/okmd/api/v1', aiCustomModel: 'gpt-5.4' }))}
-                                  className="text-[9px] px-2 py-1.5 rounded-lg bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 border border-purple-500/30 transition-all flex items-center gap-1 cursor-pointer"
-                                >
-                                  🎓 KKU AI (gpt-5.4)
-                                </button>
-                                <button
-                                  type="button"
                                   onClick={() => setDeployConfig(p => ({ ...p, aiEndpoint: 'https://openrouter.ai/api/v1', aiCustomModel: 'anthropic/claude-3.5-sonnet' }))}
                                   className="text-[9px] px-2 py-1.5 rounded-lg bg-indigo-500/20 text-indigo-400 hover:bg-indigo-500/30 border border-indigo-500/30 transition-all cursor-pointer"
                                 >
@@ -3768,13 +3761,6 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                                   className="text-[9px] px-2 py-1.5 rounded-lg bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 border border-emerald-500/30 transition-all cursor-pointer"
                                 >
                                   🟢 OpenAI
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setDeployConfig(p => ({ ...p, aiEndpoint: 'http://localhost:11434/v1', aiCustomModel: 'llama3.2' }))}
-                                  className="text-[9px] px-2 py-1.5 rounded-lg bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 border border-amber-500/30 transition-all cursor-pointer"
-                                >
-                                  🦙 Ollama
                                 </button>
                               </div>
 

@@ -113,8 +113,11 @@ const requestChatCompletion = async ({ modelName, messages, aiConfig, apiKey, pr
         messages,
         model: customModel,
         temperature: aiConfig.temperature !== undefined ? aiConfig.temperature : 0.1,
+        // Provider compatibility: send max_tokens by default; only include
+        // max_completion_tokens when explicitly configured, since some
+        // OpenAI-compatible providers reject unknown body parameters.
         max_tokens: aiConfig.max_completion_tokens || 8000,
-        max_completion_tokens: aiConfig.max_completion_tokens || 8000,
+        ...(aiConfig.max_completion_tokens ? { max_completion_tokens: aiConfig.max_completion_tokens } : {}),
         top_p: aiConfig.top_p || 1
       }),
     });

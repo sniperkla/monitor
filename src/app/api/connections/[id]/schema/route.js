@@ -33,7 +33,7 @@ export async function POST(request, { params }) {
       const connectDB = (await import('@/lib/mongodb')).default;
       const { ConnectionRepository } = await import('@/lib/repositories/ConnectionRepository');
       const db = await connectDB();
-      const repo = new ConnectionRepository(db);
+      const repo = new ConnectionRepository(db, session?.user?.id || session?.user?.sub || null);
       const fullConn = await repo.findById(id);
       if (fullConn) {
         conn = { ...conn, ...fullConn.toObject ? fullConn.toObject() : fullConn };
@@ -60,7 +60,7 @@ export async function POST(request, { params }) {
       if (id && !id.startsWith('local-')) {
         try {
           const { ConnectionRepository } = await import('@/lib/repositories/ConnectionRepository');
-          const repo = new ConnectionRepository(await (await import('@/lib/mongodb')).default());
+          const repo = new ConnectionRepository(await (await import('@/lib/mongodb')).default(), session?.user?.id || session?.user?.sub || null);
           await repo.update(id, { status: 'online', lastConnected: new Date() });
         } catch (e) {}
       }
@@ -74,7 +74,7 @@ export async function POST(request, { params }) {
       if (id && !id.startsWith('local-')) {
         try {
           const { ConnectionRepository } = await import('@/lib/repositories/ConnectionRepository');
-          const repo = new ConnectionRepository(await (await import('@/lib/mongodb')).default());
+          const repo = new ConnectionRepository(await (await import('@/lib/mongodb')).default(), session?.user?.id || session?.user?.sub || null);
           await repo.update(id, { status: 'online', lastConnected: new Date() });
         } catch (e) {}
       }
@@ -94,7 +94,7 @@ export async function POST(request, { params }) {
       if (id && !id.startsWith('local-')) {
         try {
           const { ConnectionRepository } = await import('@/lib/repositories/ConnectionRepository');
-          const repo = new ConnectionRepository(await (await import('@/lib/mongodb')).default());
+          const repo = new ConnectionRepository(await (await import('@/lib/mongodb')).default(), session?.user?.id || session?.user?.sub || null);
           await repo.update(id, { status: 'online', lastConnected: new Date() });
         } catch (e) {}
       }
@@ -109,7 +109,7 @@ export async function POST(request, { params }) {
       const { id } = await params;
       if (id && !id.startsWith('local-')) {
         const { ConnectionRepository } = await import('@/lib/repositories/ConnectionRepository');
-        const repo = new ConnectionRepository(await (await import('@/lib/mongodb')).default());
+        const repo = new ConnectionRepository(await (await import('@/lib/mongodb')).default(), session?.user?.id || session?.user?.sub || null);
         await repo.update(id, { status: 'offline' });
       }
     } catch (e) {}

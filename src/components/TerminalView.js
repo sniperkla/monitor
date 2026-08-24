@@ -137,6 +137,12 @@ const TERMINAL_PRESETS = {
 };
 
 const MAX_AUTO_STEPS = Number.POSITIVE_INFINITY;
+// 🧭 No-progress budget: max consecutive steps that hit the SAME error signature
+// despite varying commands. Catches "meta-loops" where the AI keeps trying
+// different commands but the underlying problem never changes — each attempt
+// evades the identical-output loop detector, so a deterministic budget is the
+// only reliable stop. Only counts steps with an actual detected error.
+const AUTO_NO_PROGRESS_LIMIT = 8;
 
 // ─── Error recovery rules keyed by detectTerminalError type ───────────────────
 const ERROR_RECOVERY_RULES = {
@@ -730,6 +736,7 @@ logstash:
   const autoLoopRepeatRef = useRef(0);
   const autoRepeatSigRef = useRef({ key: '', count: 0 });
   const autoSameCommandRef = useRef({ cmd: '', count: 0 });
+  const autoStallSigRef = useRef({ key: '', count: 0 });
   const autoRecentCommandsRef = useRef([]);
   const autoRecentSigsRef = useRef([]);
   const autoDiagKeyRef = useRef('');
@@ -1885,6 +1892,63 @@ logstash:
       return m;
     });
     return t;
+  };
+
+  // 🛑 DETERMINISTIC CATASTROPHIC COMMAND GUARD (last-resort, AI-proposed commands only)
+  // Security requires predictable behavior: a tiny set of patterns that can destroy
+  // an entire server MUST be blocked deterministically — never left to LLM judgment
+  // or user settings alone. Deliberately narrow to avoid false positives on normal
+  // operations (e.g. `rm -rf ./node_modules/.cache` or `rm -rf /var/log/myapp` are fine).
+  // This runs ONLY on the AI→terminal path; human keyboard input is never gated.
+  const _SYSTEM_ROOTS = new Set([
+    '/', '/etc', '/usr', '/var', '/boot', '/home', '/root', '/opt',
+    '/bin', '/sbin', '/lib', '/lib64', '/dev', '/proc', '/sys', '/run', '/srv',
+  ]);
+  const _normPathToken = (tok) => {
+    let t = String(tok || '').replace(/^['"(]+|['")]+$/g, '').replace(/\*+$/, '');
+    if (/^\/+$/.test(t)) return '/';   // preserve filesystem root ('/', '//', '/*')
+    return t.replace(/\/+$/, '').toLowerCase();
+  };
+  const _isSystemRootToken = (tok) => {
+    const t = _normPathToken(tok);
+    return _SYSTEM_ROOTS.has(t) || t === '~' || t === '$home' || t === '$homedir';
+  };
+
+  const isCatastrophicCommand = (rawCmd) => {
+    const cmd = String(rawCmd || '');
+    if (!cmd.trim()) return false;
+
+    if (/--no-preserve-root/i.test(cmd)) return true;                        // rm root-guard bypass
+    if (/:\s*\(\s*\)\s*\{\s*:\s*\|\s*:?\s*&\s*\}\s*;\s*:/.test(cmd)) return true; // fork bomb
+    if (/\bmkfs/i.test(cmd)) return true;                                    // format filesystem
+    if (/\bdd\b[^|;&]*\bof=\s*"?\s*\/dev\/(sd|hd|vd|nvme|xvd|mmcblk)/i.test(cmd)) return true; // raw disk write
+    if (/>\s*\/dev\/(sd|hd|vd|nvme|xvd|mmcblk)/i.test(cmd)) return true;     // redirect into raw disk
+    if (/(^|[;&|(]\s*)(sudo\s+)?(shutdown|poweroff|halt|reboot)\b/i.test(cmd)) return true; // host power-cycle
+    if (/\binit\s+[06]\b\s*$/.test(cmd.trim())) return true;                 // init 0 / init 6
+    if (/\bkill\s+(?:-\w+\s+)*-1\b/.test(cmd)) return true;                  // kill every process
+
+    // Recursive rm/chmod/chown aimed at filesystem roots (token-based so quoting,
+    // flags order and paths like "/etc/" vs "/etc/*" are all handled uniformly).
+    const tokens = cmd.split(/\s+/);
+    for (let i = 0; i < tokens.length; i++) {
+      const base = tokens[i].split('/').pop();
+      if (base !== 'rm' && base !== 'chmod' && base !== 'chown') continue;
+      let j = i + 1;
+      let flags = '';
+      while (j < tokens.length && /^-{1,2}[A-Za-z-]/.test(tokens[j]) && tokens[j] !== '--') {
+        flags += tokens[j];
+        j++;
+      }
+      const isRecursive = /r/i.test(flags.replace(/-/g, '')) || /--recursive/.test(flags);
+      if (!isRecursive) continue;
+      for (let k = j; k < tokens.length; k++) {
+        const tok = tokens[k];
+        if (tok === '&&' || tok === '||' || tok === ';' || tok === '|') break; // next pipeline segment
+        if (_isSystemRootToken(tok)) return true;
+        if (tok === '*' || tok === './*') return true; // recursive-force glob of whole cwd
+      }
+    }
+    return false;
   };
 
   // Detect if a command is sensitive/dangerous and requires user confirmation
@@ -5137,6 +5201,34 @@ If you cannot produce a patch, explain why and set <done>true</done>.`
       return;
     }
 
+    // 🧭 NO-PROGRESS GUARD: catches meta-loops where commands keep changing but
+    // the underlying error signature never does — each turn gets a fresh loopKey
+    // so the identical-loop detector above can't fire. Keyed per goal+error so a
+    // new goal (or a fixed error) starts the budget fresh automatically.
+    {
+      const stallErrSig = computeErrorSignature(snap);
+      if (!nudgeMsg && stallErrSig) {
+        const stallKey = `${String(goal || '').slice(0, 80)}::${stallErrSig}`;
+        if (autoStallSigRef.current.key === stallKey) {
+          autoStallSigRef.current.count += 1;
+        } else {
+          autoStallSigRef.current = { key: stallKey, count: 1 };
+        }
+        if (autoStallSigRef.current.count >= AUTO_NO_PROGRESS_LIMIT) {
+          console.error('[AI Agent] 🛑 No-progress limit reached:', String(stallErrSig).slice(0, 150));
+          setAiError(`⚠️ Auto Mode stopped: ${AUTO_NO_PROGRESS_LIMIT} consecutive steps hit the same error ("${String(stallErrSig).slice(0, 120)}") without progress. Fix it manually or refine the goal, then restart Auto Mode.`);
+          setAutoMode(false);
+          setAiOpen(true);
+          setAiHasOpenedOnce(true);
+          autoStallSigRef.current = { key: '', count: 0 };
+          return;
+        }
+      } else if (!nudgeMsg) {
+        // Progress made (no detected error) — reset the budget
+        autoStallSigRef.current = { key: '', count: 0 };
+      }
+    }
+
     const curSig = computeErrorSignature(snap);
     const curKey = `${String(lastExecutedCommand || '').trim()}::${curSig}`;
     if (autoRepeatSigRef.current.key === curKey) {
@@ -6376,6 +6468,19 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
       setAutoStepsRemaining((n) => (Number.isFinite(n) ? Math.max(0, n - 1) : n));
       const cmdTrim = String(parsed.command || '').trim();
       
+      // 🛑 CATASTROPHIC COMMAND GUARD (Auto Mode)
+      // Deterministic last resort: never let an unattended loop run a command that
+      // can destroy the server — independent of LLM danger flag or user settings.
+      if (cmdTrim && isCatastrophicCommand(cmdTrim)) {
+        console.error('[AI Agent] 🚨 BLOCKED catastrophic command in Auto Mode:', cmdTrim.slice(0, 200));
+        setAiError('🚨 Auto Mode stopped: AI proposed a command that could destroy the server. It was blocked.');
+        setAiAnswer({ ...parsed, danger: true }); // force manual double-confirm if user still wants it
+        setAutoMode(false);
+        setAiOpen(true);
+        setAiHasOpenedOnce(true);
+        return;
+      }
+
       // 🧪 SENSITIVE OPERATIONS GUARD (Auto Mode)
       // Pause if setting is enabled and command is dangerous OR AI explicitly flagged it
       const confirmSensitive = sshAiPrefs?.confirmSensitive !== false;
@@ -6578,6 +6683,14 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
     // Skip check for patch commands (they are safe, system-managed operations)
     const confirmSensitive = sshAiPrefs?.confirmSensitive !== false; // default true
     const isPatchCmd = command.startsWith('backup_id=') || command.includes('PATCH_EOF') || command.includes('patch_') || bypassSensitive;
+
+    // 🛑 HARD BLOCK: catastrophic commands are never executable from AI proposals,
+    // regardless of settings, danger flag or user confirmation flow.
+    if (isCatastrophicCommand(command)) {
+      console.error('[AI Agent] 🚨 BLOCKED catastrophic command (manual run):', command.slice(0, 200));
+      setAiError('🚫 Blocked: this AI-proposed command could destroy the server. Execution refused.');
+      return;
+    }
     if (confirmSensitive && isSensitiveCommand(command) && !autoMode && !isPatchCmd) {
       setPendingSensitiveCommand(command);
       setSensitiveConfirmOpen(true);
@@ -6593,6 +6706,13 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
     // Backticks in GLIBC errors (e.g. `GLIBC_2.39') break bash with unmatched quotes.
     if (/GLIBC_\d|\/lib(?:64)?\/.*\.so.*:\s|not found \(required by|Traceback \(most recent call last\)/i.test(command)) {
       console.error('[AI Agent] 🚨 BLOCKED execution of error message:', command.slice(0, 100));
+      return;
+    }
+
+    // 🛑 LAST-RESORT HARD BLOCK (defense-in-depth): covers every AI-driven call site.
+    if (isCatastrophicCommand(command)) {
+      console.error('[AI Agent] 🚨 HARD-BLOCKED catastrophic command:', command.slice(0, 200));
+      setAiError('🚫 Blocked: a proposed command could destroy the server. Execution refused.');
       return;
     }
     
@@ -7199,9 +7319,6 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                            </button>
                            <button onClick={() => setSshAiPrefs({ aiEndpoint: 'https://api.openai.com/v1/chat/completions', aiCustomModel: 'gpt-4o' })} className="text-[9px] px-2 py-1 rounded bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 border border-emerald-500/30 transition-colors" title={t('ai.presets.openAI')}>
                              🟢 OpenAI
-                           </button>
-                           <button onClick={() => setSshAiPrefs({ aiEndpoint: 'http://localhost:11434/v1/chat/completions', aiCustomModel: 'llama3.2' })} className="text-[9px] px-2 py-1 rounded bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 border border-amber-500/30 transition-colors" title={t('ai.presets.ollama')}>
-                             🦙 Ollama
                            </button>
                         </div>
                         <input type="text" placeholder={t('ai.endpointUrl')} value={sshAiPrefs.aiEndpoint || ''} onChange={e => setSshAiPrefs({ ...sshAiPrefs, aiEndpoint: e.target.value })} disabled={!isLoggedIn} className="w-full text-[10px] rounded bg-black/30 border border-white/10 px-2 py-1.5 focus:border-indigo-500/50 outline-none" style={{ color: 'var(--text-primary)' }} title={t('ai.tooltips.endpoint')} />

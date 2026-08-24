@@ -203,7 +203,7 @@ export async function POST(request) {
 
     // Load SSH connection
     const db = await connectDB();
-    const repo = new ConnectionRepository(db);
+    const repo = new ConnectionRepository(db, session?.user?.id || session?.user?.sub || null);
     await repo.init();
     const fullConn = await repo.findById(sshConnId);
     if (!fullConn) return NextResponse.json({ success: false, error: 'SSH connection not found' }, { status: 404 });

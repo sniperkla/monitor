@@ -4937,6 +4937,49 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
       // collection directly instead of importing the ESM helper.
       const RELAY_SUPPORTER_TTL_MS = 5 * 60 * 1000;
       global.__relaySupporterCache = new Map(); // key → { value, at }
+
+      // 🔀 PER-TARGET FORWARDERS — fixes the shared-target race.
+      // The legacy single `targetHost/targetPort` slot is mutated by every flow
+      // that uses the relay (Mongo re-dials, SSH, etc.), so a dial could be
+      // hijacked by a concurrent target change. A forwarder is a dedicated
+      // listener whose host:port is FIXED at creation — immune to mutation.
+      global.__requestRelayForwarder = function requestRelayForwarder(userId, relayName, host, port) {
+        return new Promise((resolve, reject) => {
+          const crypto = require('crypto');
+          const userRelays = global.__activeRelays?.get(userId);
+          if (!userRelays || userRelays.size === 0) return reject(new Error('No active relay'));
+          const relay = (relayName && userRelays.get(relayName)) || userRelays.values().next().value;
+          if (!relay || !relay.ws || relay.ws.readyState !== 1) return reject(new Error('Relay WebSocket not open'));
+
+          if (!(relay.forwarders instanceof Map)) relay.forwarders = new Map();
+          const key = `${host}:${port}`;
+          const existing = relay.forwarders.get(key);
+          if (existing) return resolve({ port: existing.port });
+
+          const netServer = net.createServer((tcpSock) => {
+            const connId = crypto.randomBytes(12).toString('hex');
+            if (relay.ws.readyState !== 1) { tcpSock.destroy(); return; }
+            relay.ws.send(JSON.stringify({ type: 'open', connId, host, port }));
+            tcpSock.on('data', (data) => {
+              if (relay.ws.readyState === 1) relay.ws.send(JSON.stringify({ type: 'data', connId, data: data.toString('base64') }));
+            });
+            tcpSock.on('close', () => {
+              try { if (relay.ws.readyState === 1) relay.ws.send(JSON.stringify({ type: 'close', connId })); } catch (_) {}
+            });
+            tcpSock.on('error', () => tcpSock.destroy());
+          });
+          netServer.on('error', (err) => {
+            relay.forwarders.delete(key);
+            reject(err);
+          });
+          netServer.listen(0, '127.0.0.1', () => {
+            const fport = netServer.address().port;
+            relay.forwarders.set(key, { netServer, port: fport });
+            resolve({ port: fport });
+          });
+        });
+      };
+
       async function isRelaySupporter(entry) {
         const userId = entry.userId;
         const email = entry.email ? String(entry.email).trim().toLowerCase() : null;
@@ -5052,6 +5095,18 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                   }
                 }
               }
+            }
+            // ── Local-relay AI proxy result routing ──
+            // The ai-help route sends 'ai:chat' requests through the relay's own
+            // WebSocket; the provider HTTP call happens on the user's machine.
+            if (msg.type === 'ai:chat:result') {
+              const pending = global.__aiRelayPending;
+              if (pending?.has(msg.id)) {
+                const resolve = pending.get(msg.id);
+                pending.delete(msg.id);
+                resolve(msg);
+              }
+              return;
             }
             // ── TCP relay (MongoDB) ──
             if (msg.type === 'data') {

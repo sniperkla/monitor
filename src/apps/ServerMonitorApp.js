@@ -15,6 +15,7 @@ import { useTranslation } from 'react-i18next';
 import { io } from 'socket.io-client';
 import { createRelayPeer } from '@/lib/webrtc-relay';
 import AgentSetupWizard from '@/components/AgentSetupWizard';
+import ServerCompatPanel from '@/components/ServerCompatPanel';
 import { Line } from 'react-chartjs-2';
 import {
   Chart as ChartJS,
@@ -2613,6 +2614,9 @@ export default function ServerMonitorApp() {
                     />
                   </div>
                 </div>
+
+                {/* Compatibility Check — which functions pass/warn/fail on this distro */}
+                <ServerCompatPanel connectionId={selectedConnection} apiFetch={apiFetch} />
 
                 {/* Overview: Simple live charts — no advanced controls */}
                 <div className="grid grid-cols-1 @3xl:grid-cols-2 gap-4">

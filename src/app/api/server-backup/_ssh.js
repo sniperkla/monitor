@@ -2,6 +2,7 @@ import { Client } from 'ssh2';
 import connectDB from '@/lib/mongodb';
 import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import { decrypt } from '@/utils/encryption';
+import { logger } from '@/lib/logger';
 
 const isLocalhost = (host) => /^(localhost|127\.0\.0\.1)$/.test(host);
 
@@ -24,9 +25,28 @@ export async function resolveSshConfig(baseConfig, options = {}) {
       throw new Error('Local Relay Agent is not connected. Please start local-relay.js on your target machine.');
     }
 
-    // Set the target host and port on the active relay instance
-    relay.targetHost = (sshConfig.host && !isLocalhost(sshConfig.host)) ? sshConfig.host : 'localhost';
-    relay.targetPort = parseInt(sshConfig.port, 10) || 22;
+    // Resolve the actual dial target (what the relay will connect to)
+    const dialHost = (sshConfig.host && !isLocalhost(sshConfig.host)) ? sshConfig.host : 'localhost';
+    const dialPort = parseInt(sshConfig.port, 10) || 22;
+
+    // 🔀 Preferred path: per-target forwarder — a dedicated listener whose
+    // host:port is fixed at creation, immune to concurrent target mutations
+    // from other flows sharing this relay (e.g. MongoDB re-dials).
+    if (typeof global.__requestRelayForwarder === 'function') {
+      try {
+        const fwd = await global.__requestRelayForwarder(options.userId || null, options.preferredRelay || null, dialHost, dialPort);
+        sshConfig.host = '127.0.0.1';
+        sshConfig.port = fwd.port;
+        delete sshConfig.sock;
+        return sshConfig;
+      } catch (err) {
+        logger.warn('[ssh] forwarder request failed, using shared-target mode:', err.message);
+      }
+    }
+
+    // Legacy fallback: shared single-target slot (race-prone under concurrency)
+    relay.targetHost = dialHost;
+    relay.targetPort = dialPort;
 
     // Connect ssh2 through local TCP proxy port managed by server's netServer
     sshConfig.host = '127.0.0.1';
@@ -39,7 +59,20 @@ export async function resolveSshConfig(baseConfig, options = {}) {
 
 export async function getSshConfig(connectionId, options = {}) {
   const db = await connectDB();
-  const repo = new ConnectionRepository(db);
+  const repo = new ConnectionRepository(db, options.userId || null);
+
+  // 🔐 Resolve the acting user for ownership enforcement.
+  // Explicit options.userId wins (internal jobs); otherwise derive from the
+  // browser session so every getSshConfig caller is automatically scoped.
+  let actingUserId = options.userId || null;
+  if (!actingUserId && !options.skipSessionResolve) {
+    try {
+      const { getServerSession } = await import('next-auth/next');
+      const { authOptions } = await import('@/lib/auth');
+      const session = await getServerSession(authOptions);
+      actingUserId = session?.user?.id || null;
+    } catch (_) {}
+  }
   await repo.init();
   const conn = await repo.findById(connectionId);
   if (!conn) throw new Error('Connection not found');
@@ -47,7 +80,7 @@ export async function getSshConfig(connectionId, options = {}) {
   // Ownership enforcement: if the connection has an owner, the caller must prove
   // they are that owner. Callers that don't pass userId (internal jobs/cron) can
   // only access unowned (legacy/global) connections.
-  if (conn.userId && String(conn.userId) !== String(options.userId || '')) {
+  if (conn.userId && String(conn.userId) !== String(actingUserId || '')) {
     throw new Error('Access denied: this connection belongs to another user');
   }
 

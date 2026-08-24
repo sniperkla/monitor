@@ -1,11 +1,30 @@
 import { getConnectionModel } from '../../models/Connection.js';
 
 export class ConnectionRepository {
-  constructor(db) {
+  constructor(db, userId = null) {
     this.db = db;
+    // 🔐 Multi-tenant scoping: when a userId is provided, EVERY query is scoped
+    // to that owner and writes are tagged. Callers without a userId keep legacy
+    // unscoped behavior (internal/server-side use only — never expose via API).
+    this.userId = userId || null;
     this.isMysql = db.type === 'mysql';
     this.isPostgres = db.type === 'postgres';
     this.isSql = this.isMysql || this.isPostgres;
+  }
+
+  // Row may carry the owner under either casing depending on engine/driver.
+  _rowOwnerId(r) {
+    const v = r?.userid ?? r?.userId ?? null;
+    return v == null ? null : String(v);
+  }
+
+  // Ownership gate for scoped repositories. Legacy rows with NO owner are only
+  // visible unscoped (pre-migration); once scoped, an orphan or foreign row is
+  // treated as not-found so IDs from other tenants are unfetchable.
+  _owns(r) {
+    if (!this.userId) return true;
+    const ownerId = this._rowOwnerId(r);
+    return ownerId === String(this.userId);
   }
 
   async init() {
@@ -39,6 +58,11 @@ export class ConnectionRepository {
       // Migration: Add isSrv if missing
       try {
         await this.db.query('ALTER TABLE connections ADD COLUMN isSrv BOOLEAN DEFAULT FALSE');
+      } catch (e) {}
+      // 🔐 Multi-tenant: owner column + index
+      try {
+        await this.db.query('ALTER TABLE connections ADD COLUMN userId VARCHAR(64)');
+        await this.db.query('CREATE INDEX idx_connections_userId ON connections (userId)');
       } catch (e) {}
       try {
         await this.db.query('ALTER TABLE connections ADD COLUMN authSource VARCHAR(255)');
@@ -104,6 +128,11 @@ export class ConnectionRepository {
       try {
         await this.db.query('ALTER TABLE connections ADD COLUMN relayName VARCHAR(255)');
       } catch (e) {}
+      // 🔐 Multi-tenant: owner column + index
+      try {
+        await this.db.query('ALTER TABLE connections ADD COLUMN userId VARCHAR(64)');
+        await this.db.query('CREATE INDEX idx_connections_userId ON connections (userId)');
+      } catch (e) {}
     }
   }
 
@@ -139,12 +168,17 @@ export class ConnectionRepository {
 
   async findAll() {
     if (this.isSql) {
-      const res = await this.db.query('SELECT * FROM connections ORDER BY updatedAt DESC');
+      const where = this.userId ? ' WHERE userId = ?' : '';
+      const params = this.userId ? [this.userId] : [];
+      const res = await this.db.query(`SELECT * FROM connections${where} ORDER BY updatedAt DESC`, params);
       const rows = this.isPostgres ? res.rows : res[0];
-      return rows.map(r => this._mapSqlRow(r));
+      return rows.filter(r => this._owns(r)).map(r => this._mapSqlRow(r));
     } else {
       const model = getConnectionModel(this.db);
-      return await model.find({}).sort({ updatedAt: -1 });
+      const query = this.userId
+        ? model.find({ userId: this.userId }).sort({ updatedAt: -1 })
+        : model.find({}).sort({ updatedAt: -1 });
+      return await query;
     }
   }
 
@@ -159,11 +193,15 @@ export class ConnectionRepository {
       const res = await this.db.query(query, [normalizedId]);
       const rows = this.isPostgres ? res.rows : res[0];
       if (rows.length === 0) return null;
+      if (!this._owns(rows[0])) return null; // foreign row → not-found
       return this._mapSqlRow(rows[0]);
     } else {
       const model = getConnectionModel(this.db);
       try {
-        return await model.findById(normalizedId);
+        // NOTE: findById() ignores extra filter fields, so ownership scoping
+        // requires an explicit findOne() compound filter.
+        const filter = this.userId ? { _id: normalizedId, userId: this.userId } : { _id: normalizedId };
+        return await model.findOne(filter);
       } catch (err) {
         if (err.name === 'CastError') return null;
         throw err;
@@ -176,14 +214,23 @@ export class ConnectionRepository {
       const keys = Object.keys(criteria);
       if (keys.length === 0) return null;
       const where = keys.map((k, i) => `${k === 'database' ? 'database_name' : k} = ${this.isPostgres ? '$' + (i + 1) : '?'}`).join(' AND ');
-      const query = `SELECT * FROM connections WHERE ${where} LIMIT 1`;
-      const res = await this.db.query(query, Object.values(criteria));
+      let query = `SELECT * FROM connections WHERE ${where}`;
+      const params = [...Object.values(criteria)];
+      // 🔐 Scoped repositories search only their own rows
+      if (this.userId) {
+        query += this.isPostgres ? ` AND userId = $${params.length + 1}` : ' AND userId = ?';
+        params.push(this.userId);
+      }
+      query += ' LIMIT 1';
+      const res = await this.db.query(query, params);
       const rows = this.isPostgres ? res.rows : res[0];
       if (rows.length === 0) return null;
+      if (!this._owns(rows[0])) return null; // foreign row → not-found
       return this._mapSqlRow(rows[0]);
     } else {
+      const scoped = this.userId ? { ...criteria, userId: this.userId } : criteria;
       const model = getConnectionModel(this.db);
-      return await model.findOne(criteria);
+      return await model.findOne(scoped);
     }
   }
 
@@ -226,6 +273,12 @@ export class ConnectionRepository {
         data.relayName || null
       ];
 
+      // 🔐 Tag the row with the owning user when the repository is scoped
+      if (this.userId) {
+        columns.unshift('userId');
+        values.unshift(this.userId);
+      }
+
       const placeholders = this.isPostgres 
         ? columns.map((_, i) => '$' + (i + 1)).join(', ')
         : columns.map(() => '?').join(', ');
@@ -237,7 +290,8 @@ export class ConnectionRepository {
       return { _id: insertedId.toString(), name: data.name };
     } else {
       const model = getConnectionModel(this.db);
-      return await model.create(data);
+      const docData = this.userId ? { ...data, userId: this.userId } : data;
+      return await model.create(docData);
     }
   }
 
@@ -270,22 +324,37 @@ export class ConnectionRepository {
       if (fields.length === 0) return true;
 
       values.push(id);
-      const query = `UPDATE connections SET ${fields.join(', ')} WHERE id = ${this.isPostgres ? '$' + (++i) : '?'}`;
+      let query = `UPDATE connections SET ${fields.join(', ')} WHERE id = ${this.isPostgres ? '$' + (++i) : '?'}`;
+      // 🔐 Scoped repositories may only touch their own rows
+      if (this.userId) query += this.isPostgres ? ` AND userId = $${++i}` : ' AND userId = ?';
+      if (this.userId) values.push(this.userId);
       await this.db.query(query, values);
       return true;
     } else {
       const model = getConnectionModel(this.db);
-      return await model.findByIdAndUpdate(id, data, { new: true });
+      // NOTE: findByIdAndUpdate() ignores non-_id filter fields, so ownership
+      // scoping requires an explicit compound-filter findOneAndUpdate().
+      const filter = this.userId ? { _id: id, userId: this.userId } : { _id: id };
+      return await model.findOneAndUpdate(filter, data, { new: true });
     }
   }
 
   async delete(id) {
     if (this.isSql) {
-      const query = this.isPostgres ? 'DELETE FROM connections WHERE id = $1' : 'DELETE FROM connections WHERE id = ?';
-      await this.db.query(query, [id]);
+      let query = this.isPostgres ? 'DELETE FROM connections WHERE id = $1' : 'DELETE FROM connections WHERE id = ?';
+      const params = [id];
+      // 🔐 Scoped repositories may only delete their own rows
+      if (this.userId) {
+        query += this.isPostgres ? ' AND userId = $2' : ' AND userId = ?';
+        params.push(this.userId);
+      }
+      await this.db.query(query, params);
       return true;
     } else {
       const model = getConnectionModel(this.db);
+      if (this.userId) {
+        return await model.findOneAndDelete({ _id: id, userId: this.userId });
+      }
       return await model.findByIdAndDelete(id);
     }
   }

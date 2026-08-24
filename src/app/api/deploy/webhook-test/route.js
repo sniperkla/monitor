@@ -120,7 +120,7 @@ export async function POST(request) {
 
         if (!sshConnData || !sshConnData.host) {
           const db = await connectDB(process.env.MONGODB_URI, true);
-          const repo = new ConnectionRepository(db);
+          const repo = new ConnectionRepository(db, session?.user?.id || session?.user?.sub || null);
           await repo.init();
           const connection = await repo.findById(connectionId);
           if (!connection) {
