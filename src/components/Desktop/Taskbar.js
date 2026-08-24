@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useOS } from '@/context/OSContext';
-import { Terminal, Settings, LayoutGrid, Monitor, Wifi, Volume2, Search, Power, User, X, StickyNote, Book, Layers, Columns, StickyNote as NoteIcon, BookOpen, FolderClosed, Cpu, Clock, ChevronLeft, ChevronRight, Grid3x3, Keyboard, Server, Rocket, MonitorPlay, Database, CloudCog, ShieldCheck, Activity, BrickWallShield } from 'lucide-react';
+import { Terminal, Settings, LayoutGrid, Monitor, Wifi, Volume2, Search, Power, User, X, StickyNote, Book, Layers, Columns, StickyNote as NoteIcon, BookOpen, FolderClosed, Cpu, Clock, ChevronLeft, ChevronRight, Grid3x3, Keyboard, Server, Rocket, MonitorPlay, Database, CloudCog, ShieldCheck, Activity, BrickWallShield, History } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import SSHApp from '@/apps/SSHApp';
 import SettingsApp from '@/apps/SettingsApp';
@@ -18,6 +18,7 @@ const RcloneApp = dynamic(() => import('@/apps/RcloneApp'), { ssr: false });
 const ServerBackupApp = dynamic(() => import('@/apps/ServerBackupApp'), { ssr: false });
 const ServerMonitorApp = dynamic(() => import('@/apps/ServerMonitorApp'), { ssr: false });
 const FirewallBlocklistApp = dynamic(() => import('@/apps/FirewallBlocklistApp'), { ssr: false });
+const ActivityApp = dynamic(() => import('@/apps/ActivityApp'), { ssr: false });
 import { AnimatePresence, motion } from 'framer-motion';
 import { useSession, signOut } from 'next-auth/react';
 import { useTranslation } from 'react-i18next';
@@ -163,6 +164,7 @@ export default function Taskbar() {
     { id: 'server-backup', title: 'Server Backup', icon: ShieldCheck, component: <ServerBackupApp />, initialWidth: 1200, initialHeight: 780 },
     { id: 'server-monitor', title: 'Server Monitor', icon: Activity, component: <ServerMonitorApp />, initialWidth: 1300, initialHeight: 800 },
     { id: 'firewall-blocklist', title: 'Firewall Blocklist', icon: BrickWallShield, component: <FirewallBlocklistApp />, initialWidth: 1180, initialHeight: 780 },
+    { id: 'activity', title: 'Activity', icon: History, component: <ActivityApp />, initialWidth: 900, initialHeight: 640 },
     { id: 'settings', title: t('apps.settings'), icon: Settings, component: <SettingsApp />, initialWidth: 700, initialHeight: 500 },
     { id: 'notepad', title: t('apps.notepad'), icon: StickyNote, component: <NotepadApp />, initialWidth: 800, initialHeight: 600 },
     { id: 'wiki', title: t('apps.resourceHub'), icon: Book, component: <WikiApp />, initialWidth: 1100, initialHeight: 700 },

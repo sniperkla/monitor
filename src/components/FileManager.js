@@ -2392,6 +2392,22 @@ export default function FileManager({
             type: 'success',
             duration: 3000,
           });
+          // Record in the user's Activity timeline (fire-and-forget)
+          try {
+            fetch('/api/activity', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                action: 'upload.success',
+                message: `Uploaded ${file.name}`,
+                category: 'file',
+                target: file.name,
+                status: 'success',
+                meta: { path, size: file.size },
+              }),
+              keepalive: true,
+            }).catch(() => {});
+          } catch (_) {}
           // Remove from queue on completion
           setUploadQueue(prev => prev.filter(item => item.path !== path));
           if (!skipCleanup) {

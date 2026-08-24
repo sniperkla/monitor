@@ -8,6 +8,7 @@ export default function MongoDeadBanner() {
   const { dispatch, fetchConnections, mongoDown, relayDown, autoSwitchedToServer } = useApp();
   const [dismissed, setDismissed] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  const [retryFailed, setRetryFailed] = useState(null); // { mongoUp, relayUp }
 
   if ((!mongoDown && !relayDown) || dismissed) return null;
 
@@ -37,12 +38,21 @@ export default function MongoDeadBanner() {
     try {
       const res = await fetch('/api/health', { signal: AbortSignal.timeout(5000) });
       const data = await res.json();
-      if (data.mongo?.up) {
-        dispatch({ type: 'SET_HEALTH_STATUS', payload: { mongoDown: false, autoSwitchedToServer: false } });
+      // Only dismiss when EVERYTHING that was reported down is now back up.
+      // A failed retry must keep the banner visible.
+      const mongoOk = !mongoDown || !!data.mongo?.up;
+      const relayOk = !relayDown || !!data.relay?.up;
+      if (mongoOk && relayOk) {
+        dispatch({ type: 'SET_HEALTH_STATUS', payload: { mongoDown: false, relayDown: false, autoSwitchedToServer: false } });
         fetchConnections();
         setDismissed(true);
+      } else {
+        setRetryFailed({ mongoUp: !!data.mongo?.up, relayUp: !!data.relay?.up });
       }
-    } catch (_) {}
+    } catch (_) {
+      // Health check itself unreachable — definitely still down
+      setRetryFailed({ mongoUp: false, relayUp: false });
+    }
     finally { setRetrying(false); }
   };
 
@@ -77,6 +87,13 @@ export default function MongoDeadBanner() {
           <X size={12} />
         </button>
       </div>
+
+      {/* Retry result — shown only when the retry FAILED; banner stays visible */}
+      {retryFailed && (
+        <p className="leading-snug mb-1.5 font-medium" style={{ color: accentColor }}>
+          Still down after retry — MongoDB: {retryFailed.mongoUp ? 'up' : 'down'} · Relay agent: {retryFailed.relayUp ? 'connected' : 'offline'}
+        </p>
+      )}
 
       {/* Detail */}
       <p className="leading-snug mb-2" style={{ color: 'var(--text-muted)' }}>

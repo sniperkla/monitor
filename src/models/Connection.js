@@ -1,6 +1,8 @@
 import mongoose from 'mongoose';
 
 const ConnectionSchema = new mongoose.Schema({
+  // Owning user (NextAuth user id). null = legacy/global connection (no ownership check).
+  userId: { type: String, default: null, index: true },
   type: { type: String, enum: ['ssh', 'database'], default: 'ssh' },
   dbProvider: { type: String, enum: ['mongodb', 'mysql', 'postgres', 'sqlite'], default: 'mongodb' },
   name: { type: String, required: true, trim: true },

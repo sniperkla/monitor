@@ -1213,11 +1213,27 @@ export function OSProvider({ children }) {
     }
   }, [state.language]);
 
+  // Fire-and-forget activity logging — never blocks or breaks window management.
+  // Identity comes from the session cookie server-side; failures are silently ignored.
+  const logActivity = (action, message, category = 'app', target = null) => {
+    try {
+      fetch('/api/activity', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, message, category, target }),
+        keepalive: true,
+      }).catch(() => {});
+    } catch (_) {}
+  };
+
   const openWindow = (id, title, component, icon, options = {}) => {
     dispatch({ type: 'OPEN_WINDOW', payload: { id, title, component, icon, ...options } });
+    if (title) logActivity('app.open', `Opened ${title}`, 'app', id);
   };
 
   const closeWindow = (id) => {
+    const win = state.windows.find(w => w.id === id);
+    if (win?.title) logActivity('app.close', `Left ${win.title}`, 'app', id);
     dispatch({ type: 'CLOSE_WINDOW', payload: id });
   };
 

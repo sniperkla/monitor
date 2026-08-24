@@ -8,8 +8,8 @@ import Taskbar from '@/components/Desktop/Taskbar';
 import SSHApp from '@/apps/SSHApp';
 import SettingsApp from '@/apps/SettingsApp';
 import { Terminal, Settings, FolderClosed, Monitor, RefreshCw, Plus, FolderPlus,
-  Image as ImageIcon, Layout, Grid, List, AlignLeft, SortAsc, Server, BrickWallShield,
-  ChevronRight, Type, Calendar, HardDrive, Palette, MonitorCog, Globe, Maximize, Minimize, Database, Check, MonitorPlay, GitBranch, CloudSync, Rocket, CloudCog, ShieldCheck, Activity
+  Image as ImageIcon, Layout, Grid, List, AlignLeft, SortAsc, Server, BrickWallShield, ShieldAlert,
+  ChevronRight, Type, Calendar, HardDrive, Palette, MonitorCog, Globe, Maximize, Minimize, Database, Check, MonitorPlay, GitBranch, CloudSync, Rocket, CloudCog, ShieldCheck, Activity, History
 } from 'lucide-react';
 import NotificationCenter from '@/components/Desktop/NotificationCenter';
 import AutoDeployApp from '@/apps/AutoDeployApp';
@@ -53,6 +53,13 @@ const ServerMonitorApp = dynamic(() => import('@/apps/ServerMonitorApp'), {
 });
 
 const FirewallBlocklistApp = dynamic(() => import('@/apps/FirewallBlocklistApp'), {
+  ssr: false,
+});
+
+const VirusScannerApp = dynamic(() => import('@/apps/VirusScannerApp'), {
+  loading: () => <div className="flex items-center justify-center h-full text-slate-500 text-sm">Loading Virus Scanner…</div>,
+});
+const ActivityApp = dynamic(() => import('@/apps/ActivityApp'), {
   ssr: false,
 });
 
@@ -334,6 +341,8 @@ export default function DesktopEnvironment({ bootPhase }) {
     { id: 'server-backup', title: 'Server Backup', icon: ShieldCheck, component: <ServerBackupApp />, type: 'app', initialWidth: 1200, initialHeight: 780 },
     { id: 'server-monitor', title: 'Server Monitor', icon: Activity, component: <ServerMonitorApp />, type: 'app', initialWidth: 1300, initialHeight: 800 },
     { id: 'firewall-blocklist', title: 'Firewall Blocklist', icon: BrickWallShield, component: <FirewallBlocklistApp />, type: 'app', initialWidth: 1180, initialHeight: 780 },
+    { id: 'virus-scanner', title: 'Virus Scanner', icon: ShieldAlert, component: <VirusScannerApp />, type: 'app', initialWidth: 980, initialHeight: 700 },
+    { id: 'activity', title: 'Activity', icon: History, component: <ActivityApp />, type: 'app', initialWidth: 900, initialHeight: 640 },
     { id: 'settings', title: t('apps.settings'), icon: Settings, component: <SettingsApp />, type: 'app', initialWidth: 700, initialHeight: 500 },
   ];
 

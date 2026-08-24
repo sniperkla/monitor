@@ -199,17 +199,28 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
     }
   };
 
-  // Helper: ensure window is maximized before showing onboarding
+  // Helper: ensure window is maximized before showing onboarding.
+  // Polls until the maximize has actually been applied to the window record
+  // (a blind 350ms timeout raced the layout update and left the guide
+  // rendering over a non-fullscreen window).
   const [showOnboarding, setShowOnboarding] = useState(false);
+  const osStateRef = useRef(osState);
+  useEffect(() => { osStateRef.current = osState; }, [osState]);
   const ensureMaximizedThenShow = useCallback(() => {
-    const win = (osState?.windows || []).find(w => w.id === windowId);
-    if (win && !win.isMaximized) {
-      toggleMaximize(windowId);
-      setTimeout(() => setShowOnboarding(true), 350);
-    } else {
-      setShowOnboarding(true);
-    }
-  }, [osState, windowId, toggleMaximize]);
+    const show = () => setShowOnboarding(true);
+    const win = (osStateRef.current?.windows || []).find(w => w.id === windowId);
+    if (!win || win.isMaximized) return show();
+    toggleMaximize(windowId);
+    let tries = 0;
+    const iv = setInterval(() => {
+      tries++;
+      const now = (osStateRef.current?.windows || []).find(w => w.id === windowId);
+      if ((now && now.isMaximized) || tries > 15) {
+        clearInterval(iv);
+        show();
+      }
+    }, 100);
+  }, [windowId, toggleMaximize]);
   const ensureMaximizedThenShowRef = useRef(ensureMaximizedThenShow);
   useEffect(() => { ensureMaximizedThenShowRef.current = ensureMaximizedThenShow; }, [ensureMaximizedThenShow]);
 
@@ -1333,6 +1344,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
       { 
         initialWidth: 900, 
         initialHeight: 600, 
+        isMaximized: true,
         appType: 'docker-logs',
         props: { initialConnectionId: selectedConnection._id, initialContainerId: id, initialContainerName: name } 
       }
@@ -1586,13 +1598,13 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                     <Box size={14} className="text-sky-400" />
                     <span className="truncate max-w-[80px] sm:max-w-none">{selectedConnection.name}</span>
                 </span>
-                <div className="toolbar-tabs flex items-center gap-0.5 bg-black/20 p-0.5 rounded-lg shrink-0">
+                <div className="toolbar-tabs flex items-center gap-0.5 bg-black/20 p-0.5 rounded-lg min-w-0 max-w-full overflow-x-auto no-scrollbar">
                     {tabs.map(tab => (
                       <button 
                         key={tab.id}
                         data-onboarding={`tab-${tab.id}`}
                         onClick={() => setActiveTab(tab.id)} 
-                        className={`px-2 sm:px-3 py-1 text-[10px] font-bold rounded-md transition-all flex items-center gap-1.5 whitespace-nowrap ${
+                        className={`px-2 sm:px-3 py-1 text-[10px] font-bold rounded-md transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
                           activeTab === tab.id 
                             ? `${tabColors[tab.color]} text-white shadow-lg` 
                             : 'text-[var(--text-muted)] hover:text-white hover:bg-white/5'

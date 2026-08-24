@@ -1,4 +1,4 @@
-import { Terminal, Settings, Monitor, Database, Folder, AlertCircle, StickyNote, Book, MonitorPlay, Server, FileText, GitBranch, CloudSync, Rocket, HardDrive, CloudCog, ShieldCheck, Activity, BrickWallShield } from 'lucide-react';
+import { Terminal, Settings, Monitor, Database, Folder, AlertCircle, StickyNote, Book, MonitorPlay, Server, FileText, GitBranch, CloudSync, Rocket, HardDrive, CloudCog, ShieldCheck, ShieldAlert, Activity, BrickWallShield, History, Bug } from 'lucide-react';
 
 import TerminalApp from '@/apps/TerminalApp';
 import SettingsApp from '@/apps/SettingsApp';
@@ -16,9 +16,21 @@ import ServerBackupApp from '@/apps/ServerBackupApp';
 import RcloneApp from '@/apps/RcloneApp';
 import ServerMonitorApp from '@/apps/ServerMonitorApp';
 import FirewallBlocklistApp from '@/apps/FirewallBlocklistApp';
+import ActivityApp from '@/apps/ActivityApp';
+import VirusScannerApp from '@/apps/VirusScannerApp';
 
 // Add other apps here as needed
 export const AppRegistry = {
+  'virus-scanner': {
+    component: VirusScannerApp,
+    icon: Bug,
+    defaultTitle: 'Virus Scanner'
+  },
+  'activity': {
+    component: ActivityApp,
+    icon: History,
+    defaultTitle: 'Activity'
+  },
   'firewall-blocklist': {
     component: FirewallBlocklistApp,
     icon: BrickWallShield,

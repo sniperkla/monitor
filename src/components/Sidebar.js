@@ -13,6 +13,7 @@ import { useVault } from '@/context/VaultContext';
 import { encryptWithPassword } from '@/utils/clientCrypto';
 import { getLocalConnections, saveLocalConnections } from '@/utils/localConnections';
 import MongoDeadBanner from '@/components/MongoDeadBanner';
+import GlobalScanNotifications from '@/components/GlobalScanNotifications';
 
 export default function Sidebar({ onNewConnection, onEditConnection }) {
   const { state, dispatch, fetchConnections, apiFetch } = useApp();
@@ -847,6 +848,8 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
 
       {/* MongoDB / Relay Dead Banner */}
       <MongoDeadBanner />
+      {/* Desktop-wide virus scan finished banners */}
+      <GlobalScanNotifications />
 
       {/* Connection List */}
       <div className="flex-1 overflow-y-auto px-2 py-2 space-y-1 custom-scrollbar">

@@ -436,7 +436,14 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
       setPackets(prev => {
         const seen = new Set(prev.map(p => p.id));
         const fresh = (data.packets || [])
-          .map(p => ({ ...p, _ms: capturedMs, id: `${p.id}-${bucket}` }))
+          .map((p, i) => ({
+            ...p,
+            _ms: capturedMs,
+            // Display the REAL capture time — the API's cosmetic `timestamp`
+            // (now − idx×32s) drifted minutes away from the ±15s pin window.
+            timestamp: new Date(capturedMs - i * 1000).toLocaleTimeString(),
+            id: `${p.id}-${bucket}`,
+          }))
           .filter(p => !seen.has(p.id));
         return fresh.length ? [...prev, ...fresh].slice(-600) : prev;
       });
@@ -1811,7 +1818,19 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
 
                       const hoverIdx = graphHover && graphHover.idx >= 0 && graphHover.idx < coords.length ? graphHover.idx : null;
                       const hoverPt = hoverIdx != null ? coords[hoverIdx] : null;
-                      const pinnedIdx = graphPinned && graphPinned.idx >= 0 && graphPinned.idx < coords.length ? graphPinned.idx : null;
+                      const pinnedIdx = (() => {
+                        if (!graphPinned) return null;
+                        // Prefer time-based resolution — indices shift as samples stream in
+                        if (graphPinned.t != null) {
+                          let best = null, bestDiff = Infinity;
+                          coords.forEach((c, i) => {
+                            const d = Math.abs((dataPoints[i]?.time ?? 0) - graphPinned.t);
+                            if (d < bestDiff) { bestDiff = d; best = i; }
+                          });
+                          return best;
+                        }
+                        return graphPinned.idx >= 0 && graphPinned.idx < coords.length ? graphPinned.idx : null;
+                      })();
                       const pinnedPt = pinnedIdx != null ? coords[pinnedIdx] : null;
                       const hoverSample = hoverIdx != null ? dataPoints[hoverIdx] : null;
                       const peakIdx = values.length > 1 ? values.reduce((mi, v, i, a) => v > a[mi] ? i : mi, 0) : 0;
@@ -1877,7 +1896,7 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                                 }}
                                 onClick={() => {
                                   if (graphDragMovedRef.current) return; // that was a pan, not a click
-                                  if (hoverIdx != null) setGraphPinned({ idx: hoverIdx });
+                                  if (hoverIdx != null) setGraphPinned({ idx: hoverIdx, t: dataPoints[hoverIdx].time });
                                 }}
                               >
                                 <defs>
@@ -2035,13 +2054,13 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                   {/* Filter & Search Bar */}
                   <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5">
                     <div className="flex items-center gap-1 overflow-x-auto pb-1 sm:pb-0 text-xs font-mono">
-                      {(graphPinned || graphHover) && telemetryHistory[(graphPinned || graphHover).idx] && (
+                      {(graphPinned || graphHover) && (graphPinned?.t != null || telemetryHistory[(graphPinned || graphHover).idx]) && (
                         <span className={`mr-1.5 inline-flex items-center gap-1.5 px-2 py-1 rounded-lg border whitespace-nowrap ${
                           graphPinned
                             ? 'bg-amber-500/10 border-amber-500/30 text-amber-300'
                             : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
                         }`}>
-                          {graphPinned ? <Pin size={11} /> : <Clock size={11} />} {graphPinned ? 'Pinned' : 'Threats'} @ {new Date(telemetryHistory[(graphPinned || graphHover).idx].time).toLocaleTimeString()} ±15s
+                          {graphPinned ? <Pin size={11} /> : <Clock size={11} />} {graphPinned ? 'Pinned' : 'Threats'} @ {new Date(graphPinned ? graphPinned.t : telemetryHistory[graphHover.idx].time).toLocaleTimeString()} ±15s
                           <button
                             type="button"
                             onClick={() => setGraphPinned(null)}
@@ -2099,12 +2118,42 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                         </thead>
                         <tbody className="divide-y divide-white/5">
                           {(() => {
-                            // A click-pinned point locks the time filter; hover only previews when nothing is pinned
+                            // A click-pinned point locks the time filter; hover only previews when nothing is pinned.
+                            // Pins store an absolute timestamp (t) because telemetryHistory shifts as new samples
+                            // arrive — a raw index would silently drift to the wrong moment.
                             const activePoint = graphPinned || graphHover;
-                            const activeSample = activePoint ? telemetryHistory[activePoint.idx] : null;
-                            const hoverWindow = activeSample
-                              ? { from: activeSample.time - 15000, to: activeSample.time + 15000 }
-                              : null;
+                            let activeSample = null;
+                            if (activePoint) {
+                              if (activePoint.t != null) {
+                                let best = null, bestDiff = Infinity;
+                                for (const s of telemetryHistory) {
+                                  const d = Math.abs(s.time - activePoint.t);
+                                  if (d < bestDiff) { bestDiff = d; best = s; }
+                                }
+                                // fall back to the pinned instant itself if history rotated past it
+                                activeSample = best && bestDiff <= 30000 ? best : { time: activePoint.t };
+                              } else {
+                                activeSample = telemetryHistory[activePoint.idx] || null;
+                              }
+                            }
+                            // No hover/pin → list ALL captured packets (no time filter)
+                            if (activePoint && !activeSample) return null;
+                            // Packets arrive in discrete sniffer-fetch batches (pkt._ms). Prefer the strict ±15s
+                            // window around the selected moment; if no batch falls inside, snap to the nearest
+                            // capture batch within 90s so the inspector still shows the closest traffic.
+                            let hoverWindow = null;
+                            if (activeSample) {
+                              let winCenter = activeSample.time;
+                              if (packets.length && !packets.some(p => Math.abs((p._ms ?? 0) - winCenter) <= 15000)) {
+                                const nearest = packets.reduce((b, p) =>
+                                  Math.abs((p._ms ?? 0) - winCenter) < Math.abs((b._ms ?? 0) - winCenter) ? p : b
+                                , packets[0]);
+                                if (nearest && Math.abs((nearest._ms ?? 0) - winCenter) <= 90000) {
+                                  winCenter = nearest._ms;
+                                }
+                              }
+                              hoverWindow = { from: winCenter - 15000, to: winCenter + 15000 };
+                            }
                             const filtered = packets.filter(pkt => {
                               if (hoverWindow && !((pkt._ms ?? 0) >= hoverWindow.from && (pkt._ms ?? 0) <= hoverWindow.to)) return false;
                               if (packetSearch && !pkt.srcIp.includes(packetSearch)) return false;

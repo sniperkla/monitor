@@ -3,7 +3,42 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
 import { logger } from '@/lib/logger';
-import { checkRateLimit, withTimeout } from '@/lib/serverGuard';
+import { checkRateLimit } from '@/lib/serverGuard';
+import connectDB from '@/lib/mongodb';
+import AuditLog, { getAuditLogModel } from '@/models/AuditLog';
+import { getActivityLogModel } from '@/models/ActivityLog';
+
+// Fire-and-forget audit trail — never blocks or fails the request itself.
+// Writes to both the compliance AuditLog and the user-facing Activity timeline.
+const ACTION_VERBS = {
+  start: 'Started', stop: 'Stopped', restart: 'Restarted',
+  enable: 'Enabled', disable: 'Disabled', update: 'Updated',
+  uninstall: 'Uninstalled', 'install-version': 'Installed',
+};
+
+async function writeAudit(entry, { appName, action, version, host, success, error }) {
+  try {
+    const db = await connectDB();
+    await getAuditLogModel(db).create(entry);
+    const verb = ACTION_VERBS[action] || action;
+    const msg = success
+      ? `${verb} ${appName}${version ? ` ${version}` : ''} on ${host}`
+      : `Failed to ${action} ${appName} on ${host}`;
+    await getActivityLogModel(db).create({
+      userId: entry.userId,
+      username: entry.username,
+      category: 'server',
+      action: `service.${action}`,
+      message: msg,
+      target: host,
+      status: success ? 'success' : 'error',
+      meta: { exitCode: entry.exitCode },
+      ip: entry.ip,
+    });
+  } catch (err) {
+    logger.warn('[server-monitor/app-action] audit log failed:', err.message);
+  }
+}
 
 // Cap command output returned to the client so a runaway command can't
 // balloon the HTTP response or the browser's memory.
@@ -273,15 +308,28 @@ export async function POST(request) {
     }
 
     // Get SSH config and execute command
-    const sshConfig = await getSshConfig(connectionId);
+    // Ownership: if the connection has an owner, only that user may act on it.
+    const actingUserId = session.user?.id || session.user?.sub || null;
+    let sshConfig;
+    try {
+      sshConfig = await getSshConfig(connectionId, { userId: actingUserId });
+    } catch (err) {
+      if (/Access denied/.test(err.message)) {
+        logger.warn(`[server-monitor/app-action] DENIED ${action} on ${connectionId} by user ${actingUserId}`);
+        return NextResponse.json({ success: false, error: 'Access denied: this connection belongs to another user' }, { status: 403 });
+      }
+      throw err;
+    }
     const command = getActionCommand(appName, action, version);
     
     logger.info(`[server-monitor/app-action] Executing ${action} for ${appName}`);
     
     // Package operations can legitimately take minutes; everything else should finish fast.
-    // The timeout prevents hung SSH sessions from pinning API requests indefinitely.
+    // The native timeout kills the remote process (SIGKILL via channel signal) and tears
+    // down the SSH channel — nothing keeps running after the caller gives up.
     const timeoutMs = ['update', 'install-version', 'uninstall'].includes(action) ? 300_000 : 60_000;
-    const result = await withTimeout(() => execCommand(sshConfig, command), timeoutMs);
+    const clientIp = (request.headers.get('x-forwarded-for') || '').split(',')[0].trim() || null;
+    const result = await execCommand(sshConfig, command, { timeoutMs });
 
     logger.info(`[server-monitor/app-action] Result:`, {
       code: result.code,
@@ -337,15 +385,36 @@ export async function POST(request) {
       responseBody.error = firstLine || `Command exited with code ${result.code}`;
     }
 
+    // Audit trail (privileged actions only)
+    if (MUTATING_ACTIONS.has(action)) {
+      writeAudit({
+        userId: actingUserId,
+        username: session.user?.name || session.user?.email || null,
+        connectionId,
+        host: sshConfig.host,
+        appName,
+        action,
+        version: version || null,
+        success,
+        exitCode: result.code ?? null,
+        error: responseBody.error ? String(responseBody.error).slice(0, 500) : null,
+        ip: clientIp,
+      }, { appName, action, version, host: sshConfig.host, success, error: responseBody.error });
+    }
+
     return NextResponse.json(responseBody);
 
   } catch (error) {
     logger.error('[server-monitor/app-action] error:', error.message);
-    // Known client-facing validation errors return 400; anything else is a server fault.
-    const isClientError = /^Invalid app name:/.test(error.message || '');
+    // Map known errors to precise status codes: bad input → 400,
+    // command timeout → 504 (gateway-style timeout), everything else → 500.
+    const msg = error.message || '';
+    const status = /^Invalid app name:/.test(msg) ? 400
+      : /Command timed out/.test(msg) ? 504
+      : 500;
     return NextResponse.json(
-      { success: false, error: isClientError ? error.message : 'Failed to execute action on remote server' },
-      { status: isClientError ? 400 : 500 }
+      { success: false, error: status === 500 ? 'Failed to execute action on remote server' : msg },
+      { status }
     );
   }
 }

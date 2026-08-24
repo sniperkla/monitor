@@ -518,6 +518,18 @@
   font-family: 'Rajdhani', 'Orbitron', 'Inter', sans-serif !important;
 }
 
+/* Tone down solid-accent fills (tabs, buttons) so white text stays readable —
+   full neon #00f3ff behind white text is unreadable glare. */
+.cyberpunk .bg-\[var\(--accent-indigo\)\] {
+  background: rgba(0, 243, 255, 0.14) !important;
+  border: 1px solid rgba(0, 243, 255, 0.45) !important;
+  color: #00f3ff !important;
+  text-shadow: none !important;
+}
+.cyberpunk .bg-\[var\(--accent-indigo\)\]:hover:not(:disabled) {
+  background: rgba(0, 243, 255, 0.24) !important;
+}
+
 .cyberpunk ::selection {
   background: rgba(236, 72, 153, 0.4);
   color: #fff;
@@ -659,11 +671,25 @@
   animation: cyberpunk-glitch 0.5s infinite;
 }
 
-/* Glowing Headers */
+/* Glowing Headers (subtle — heavy 8px glow made small text look blurry) */
 
 .cyberpunk h1, .cyberpunk h2, .cyberpunk h3, .cyberpunk h4, .cyberpunk strong {
-  text-shadow: 0 0 8px rgba(0, 243, 255, 0.6), 0 0 2px rgba(255, 255, 255, 0.6);
+  text-shadow: 0 0 3px rgba(0, 243, 255, 0.35);
   letter-spacing: 1px;
+}
+
+/* Keep body-size text crisp: no glow on paragraphs, spans, labels */
+.cyberpunk p, .cyberpunk span:not(.xterm *), .cyberpunk label, .cyberpunk td, .cyberpunk th {
+  text-shadow: none;
+}
+
+/* Hide scrollbars while keeping scrollability (tab strips, chip rows) */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }
 
 /* Custom Cyberpunk Scrollbar */
@@ -2442,4 +2468,10 @@ body {
     min-width: 0;
     min-height: 0;
   }
+}
+
+/* Virus Scanner notification banner slide-in */
+@keyframes vsNotifIn {
+  from { opacity: 0; transform: translateX(24px); }
+  to   { opacity: 1; transform: translateX(0); }
 }

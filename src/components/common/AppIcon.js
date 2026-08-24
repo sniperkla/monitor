@@ -3,7 +3,7 @@ import {
   Terminal, Settings, Monitor, Database, Folder, MonitorPlay, Server, FileText,
   Globe, StickyNote, Book, BookOpen, Shield, Radio, Radiation, Cpu, HardDrive,
   Wrench, Archive, CloudSync, Rocket, CloudCog, ShieldCheck, BrickWallShield,
-  Activity, ScrollText,
+  Activity, ScrollText, Bug, History,
 } from 'lucide-react';
 
 // ── Canonical id resolution ──────────────────────────────────────────────────
@@ -12,6 +12,7 @@ import {
 // "server-monitor"/"server-backup" shared one icon).
 const ID_MAP = {
   'firewall-blocklist': 'firewall',
+  'virus-scanner': 'virus',
   'server-monitor': 'monitor',
   'server-backup': 'backup',
   'database-browser': 'database',
@@ -45,6 +46,8 @@ const DARK_TOKENS = {
   backup:    { from: '#334155', to: '#0f172e', accent: '#7dd3fc' },
   firewall:  { from: '#065f46', to: '#022c22', accent: '#f87171' },
   auto:      { from: '#dc2626', to: '#450a0a', accent: '#fca5a5' },
+  virus:     { from: '#365314', to: '#0c1206', accent: '#a3e635' },
+  activity:  { from: '#a16207', to: '#3f2d05', accent: '#facc15' },
 };
 
 const LIGHT_TOKENS = {
@@ -64,6 +67,8 @@ const LIGHT_TOKENS = {
   backup:    { from: '#f1f5f9', to: '#e2e8f0', accent: '#0ea5e9', glyph: '#1e3a5f' },
   firewall:  { from: '#dcfce7', to: '#bbf7d0', accent: '#dc2626', glyph: '#166534' },
   auto:      { from: '#fee2e2', to: '#fecaca', accent: '#991b1b', glyph: '#991b1b' },
+  virus:     { from: '#ecfccb', to: '#d9f99d', accent: '#4d7c0f', glyph: '#3f6212' },
+  activity:  { from: '#fef9c3', to: '#fef08a', accent: '#854d0e', glyph: '#713f12' },
 };
 
 const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "glass", isDesktop = false }) => {
@@ -188,6 +193,39 @@ const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "g
             ))}
           </div>
         );
+      case 'virus':
+        // Three orbiting bio-spores — slow centrifuge rotation
+        return (
+          <div className="absolute inset-0 pointer-events-none animate-[spin_8s_linear_infinite]">
+            {[0, 120, 240].map(deg => (
+              <div
+                key={deg}
+                className="absolute w-[9%] aspect-square rounded-full"
+                style={{
+                  backgroundColor: accent,
+                  boxShadow: `0 0 5px ${accent}90`,
+                  top: '50%', left: '50%',
+                  transform: `rotate(${deg}deg) translateY(-30%) translate(-50%, -50%)`,
+                  opacity: 0.75,
+                }}
+              />
+            ))}
+            <div className="absolute rounded-full border" style={{ width: '62%', height: '62%', top: '19%', left: '19%', borderColor: `${accent}28` }} />
+          </div>
+        );
+      case 'activity':
+        // Mini bar-chart timeline — last bar pulses (live log feed)
+        return (
+          <div className="absolute bottom-[14%] left-[18%] right-[18%] h-[26%] flex items-end justify-between pointer-events-none">
+            {[35, 55, 42, 70, 100].map((h, i) => (
+              <div
+                key={i}
+                className={`w-[12%] rounded-t-[1.5px] ${i === 4 ? 'animate-pulse' : ''}`}
+                style={{ height: `${h}%`, backgroundColor: accent, opacity: i === 4 ? 0.95 : 0.32 + i * 0.1 }}
+              />
+            ))}
+          </div>
+        );
       default:
         return null;
     }
@@ -229,6 +267,8 @@ const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "g
           database:  { primary: '#f97316', glow: 'rgba(249,115,22,0.35)', accent: '#fb923c' },
           firewall:  { primary: '#22c55e', glow: 'rgba(34,197,94,0.35)', accent: '#4ade80' },
           auto:      { primary: '#ff5500', glow: 'rgba(255,85,0,0.35)', accent: '#ff7733' },
+          virus:     { primary: '#a3e635', glow: 'rgba(163,230,53,0.4)', accent: '#bef264' },
+          activity:  { primary: '#facc15', glow: 'rgba(250,204,21,0.35)', accent: '#fde047' },
         };
         const pal = falloutPalette[iconId] || falloutPalette.terminal;
 
@@ -409,6 +449,8 @@ const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "g
           database:  { primary: '#ff7b00', secondary: '#00ff9f', glow: 'rgba(255,123,0,0.3)' },
           firewall:  { primary: '#00ff88', secondary: '#ff004d', glow: 'rgba(0,255,136,0.35)' },
           auto:      { primary: '#ff0055', secondary: '#00ffff', glow: 'rgba(255,0,85,0.3)' },
+          virus:     { primary: '#39ff14', secondary: '#ccff00', glow: 'rgba(57,255,20,0.35)' },
+          activity:  { primary: '#ffd700', secondary: '#00e5ff', glow: 'rgba(255,215,0,0.3)' },
         };
         const cp = cpPalette[iconId] || cpPalette.terminal;
         const cpClip = 'polygon(0 12%, 12% 0, 100% 0, 100% 88%, 88% 100%, 0 100%)';
@@ -607,6 +649,8 @@ const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "g
           database:  { primary: '#ff2d96', secondary: '#ffb800', glow: 'rgba(255,45,150,0.3)' },
           firewall:  { primary: '#0affcd', secondary: '#ff2d96', glow: 'rgba(10,255,205,0.35)' },
           auto:      { primary: '#ff2d96', secondary: '#ffb800', glow: 'rgba(255,45,150,0.35)' },
+          virus:     { primary: '#a3e635', secondary: '#ff2d96', glow: 'rgba(163,230,53,0.4)' },
+          activity:  { primary: '#ffd700', secondary: '#0affcd', glow: 'rgba(255,215,0,0.35)' },
         };
         const sw = swPalette[iconId] || swPalette.terminal;
 
@@ -809,18 +853,21 @@ const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "g
         tmux: '#7b68ee', settings: '#ff4444', wiki: '#00bfff', notepad: '#ff8c00',
         logs: '#ff1493', mongo: '#00ff66', rclone: '#bf5fff', monitor: '#00fef0',
         backup: '#c0ff00', database: '#ff7b00', firewall: '#00ff88', auto: '#ff0055',
+        virus: '#39ff14', activity: '#ffd700',
       },
       fallout: {
         terminal:  '#18e12c', ssh: '#00e5ff', docker: '#ff9f1c', files: '#ffd166',
         tmux: '#06d6a0', settings: '#ef476f', wiki: '#118ab2', notepad: '#fca311',
         logs: '#e63946', mongo: '#10b981', rclone: '#8b5cf6', monitor: '#38bdf8',
         backup: '#a3e635', database: '#f97316', firewall: '#22c55e', auto: '#ff5500',
+        virus: '#a3e635', activity: '#facc15',
       },
       synthwave: {
         terminal:  '#ff2d96', ssh: '#bf5fff', docker: '#0affcd', files: '#ffb800',
         tmux: '#ff2d96', settings: '#bf5fff', wiki: '#0affcd', notepad: '#ffb800',
         logs: '#ff2d96', mongo: '#0affcd', rclone: '#bf5fff', monitor: '#0affcd',
         backup: '#ffb800', database: '#ff2d96', firewall: '#0affcd', auto: '#ff2d96',
+        virus: '#a3e635', activity: '#ffd700',
       },
     };
 
@@ -901,6 +948,8 @@ const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "g
     server: ShieldCheck,
     firewall: BrickWallShield,
     auto: Rocket,
+    virus: Bug,
+    activity: History,
   }[iconId] || Globe;
 
   return (

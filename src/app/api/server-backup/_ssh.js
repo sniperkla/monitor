@@ -44,6 +44,13 @@ export async function getSshConfig(connectionId, options = {}) {
   const conn = await repo.findById(connectionId);
   if (!conn) throw new Error('Connection not found');
 
+  // Ownership enforcement: if the connection has an owner, the caller must prove
+  // they are that owner. Callers that don't pass userId (internal jobs/cron) can
+  // only access unowned (legacy/global) connections.
+  if (conn.userId && String(conn.userId) !== String(options.userId || '')) {
+    throw new Error('Access denied: this connection belongs to another user');
+  }
+
   const baseConfig = {
     host: conn.host,
     port: conn.port || 22,
@@ -146,6 +153,19 @@ function getOrCreatePooledClient(sshConfig) {
   });
 }
 
+// Attach a hard timeout to an SSH exec stream. On expiry the remote process is
+// killed (SIGKILL via channel signal), the channel is closed, and the connection
+// torn down — so nothing keeps running or holding sockets after the caller gives up.
+function attachExecTimeout(stream, conn, options, onTimeout) {
+  if (!options.timeoutMs) return null;
+  return setTimeout(() => {
+    try { stream.signal('KILL'); } catch {}
+    try { stream.close(); } catch {}
+    try { conn.end(); } catch {}
+    onTimeout();
+  }, options.timeoutMs);
+}
+
 export function execCommand(sshConfig, command, options = {}) {
   const usePool = options.pool !== false;
 
@@ -171,12 +191,18 @@ export function execCommand(sshConfig, command, options = {}) {
               stdout += chunk;
               options.onStdout?.(chunk);
             });
+            let timedOut = false;
+            const timer = attachExecTimeout(stream, conn, options, () => { timedOut = true; });
             stream.stderr.on('data', (d) => {
               const chunk = d.toString();
               stderr += chunk;
               options.onStderr?.(chunk);
             });
             stream.on('close', (code) => {
+              if (timer) clearTimeout(timer);
+              if (timedOut) {
+                return reject(new Error(`Command timed out after ${Math.round(options.timeoutMs / 1000)}s`));
+              }
               const exitCode = typeof code === 'number' ? code : (stderr.trim() && !stdout.trim() ? 1 : 0);
               resolve({ code: exitCode, stdout, stderr });
             });
@@ -197,6 +223,8 @@ export function execCommand(sshConfig, command, options = {}) {
     conn.on('ready', () => {
       conn.exec(command, (err, stream) => {
         if (err) { conn.end(); return reject(err); }
+        let timedOut = false;
+        const timer = attachExecTimeout(stream, conn, options, () => { timedOut = true; });
         stream.on('data', (d) => {
           const chunk = d.toString();
           stdout += chunk;
@@ -208,7 +236,11 @@ export function execCommand(sshConfig, command, options = {}) {
           options.onStderr?.(chunk);
         });
         stream.on('close', (code) => {
+          if (timer) clearTimeout(timer);
           conn.end();
+          if (timedOut) {
+            return reject(new Error(`Command timed out after ${Math.round(options.timeoutMs / 1000)}s`));
+          }
           const exitCode = typeof code === 'number' ? code : (stderr.trim() && !stdout.trim() ? 1 : 0);
           resolve({ code: exitCode, stdout, stderr });
         });

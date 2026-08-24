@@ -91,6 +91,58 @@ function SettingRow({ label, description, children, noBorder = false }) {
   );
 }
 
+const SCAN_NOTIF_PREFS_KEY = 'virus-scan-notif-prefs';
+const SCAN_NOTIF_DEFAULTS = { enabled: true, clamav: true, maldet: true };
+
+/**
+ * Global virus-scan notification preferences (shared with
+ * GlobalScanNotifications via localStorage). Rendered under the
+ * "Notifications" tab of the Settings app.
+ */
+function ScanNotificationSettings() {
+  const [prefs, setPrefs] = useState(SCAN_NOTIF_DEFAULTS);
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(SCAN_NOTIF_PREFS_KEY);
+      if (raw) setPrefs({ ...SCAN_NOTIF_DEFAULTS, ...JSON.parse(raw) });
+    } catch (_) {}
+  }, []);
+  const update = (patch) => {
+    setPrefs(p => {
+      const next = { ...p, ...patch };
+      try { localStorage.setItem(SCAN_NOTIF_PREFS_KEY, JSON.stringify(next)); } catch (_) {}
+      return next;
+    });
+  };
+  return (
+    <div className="max-w-3xl animate-in fade-in slide-in-from-bottom-2 duration-300">
+      <SettingsSectionTitle
+        icon={Bell}
+        iconColor="text-amber-400"
+        title="Scan Notifications"
+        description="Desktop-wide banners shown at the top-right of the screen when a background ClamAV or LMD malware scan finishes on any of your servers — even while the Virus Scanner app is closed."
+      />
+      <SettingsCard>
+        <SettingRow
+          label="Allow scan notifications"
+          description="Master switch for all background-scan finished banners."
+          noBorder={false}
+        >
+          <Toggle value={prefs.enabled} onChange={() => update({ enabled: !prefs.enabled })} />
+        </SettingRow>
+        {[
+          ['clamav', 'ClamAV deep scan', 'Notify when the full ClamAV signature scan finishes.'],
+          ['maldet', 'LMD malware scan', 'Notify when the Linux Malware Detect scan finishes.'],
+        ].map(([id, label, desc]) => (
+          <SettingRow key={id} label={label} description={desc}>
+            <Toggle value={!!prefs[id]} disabled={!prefs.enabled} onChange={() => update({ [id]: !prefs[id] })} />
+          </SettingRow>
+        ))}
+      </SettingsCard>
+    </div>
+  );
+}
+
 const WALLPAPERS = [
   { id: 'space', name: 'Space Earth', url: 'https://images.unsplash.com/photo-1451187580459-43490279c0fa?q=80&w=2072&auto=format&fit=crop' },
   { id: 'cyberpunk', name: 'Cyberpunk City', url: 'https://images.unsplash.com/photo-1550745165-9bc0b252726f?q=80&w=2070&auto=format&fit=crop' },
@@ -1917,6 +1969,11 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                 );
               })}
             </section>
+
+            {/* Global virus-scan notification preferences */}
+            <div className="mt-6">
+              <ScanNotificationSettings />
+            </div>
           </div>
         )}
 
