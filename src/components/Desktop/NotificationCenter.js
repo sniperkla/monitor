@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useOS } from '@/context/OSContext';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, CheckCircle, AlertCircle, Info, AlertTriangle, Loader } from 'lucide-react';
+import { X, CircleCheck, AlertCircle, Info, TriangleAlert, LoaderCircle } from 'lucide-react';
 import { createPortal } from 'react-dom';
 
 export default function NotificationCenter() {
@@ -55,11 +55,11 @@ function NotificationItem({ notification, removeNotification, glassmorphism }) {
   }, [id, duration, removeNotification]);
 
   const icons = {
-    success: <CheckCircle size={18} className="text-emerald-400" />,
-    error: <AlertTriangle size={18} className="text-rose-400" />,
+    success: <CircleCheck size={18} className="text-emerald-400" />,
+    error: <TriangleAlert size={18} className="text-rose-400" />,
     info: <Info size={18} className="text-blue-400" />,
     warning: <AlertCircle size={18} className="text-amber-400" />,
-    loading: <Loader size={18} className="text-indigo-400 animate-spin" />
+    loading: <LoaderCircle size={18} className="text-indigo-400 animate-spin" />
   };
 
   return (

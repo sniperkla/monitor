@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom';
 import {
   X, ChevronRight, ChevronLeft, Sparkles,
   Shield, Server, Workflow, Layers, Radar,
-  CheckCircle2, Zap, Ban, Power, Activity,
+  CircleCheckBig, Zap, Ban, Power, Activity,
   Bug, HardDrive, FileWarning, Download, Clock3,
 } from 'lucide-react';
 
@@ -84,7 +84,7 @@ const STEPS = [
   },
   {
     id: 'done',
-    icon: CheckCircle2,
+    icon: CircleCheckBig,
     color: '#10b981',
     accentColor: '#34d399',
     spotlight: null,
@@ -296,7 +296,7 @@ function ImmersiveCenterPanel({ step, meta, total, contentStep, contentTotal, on
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               boxShadow: `0 8px 40px ${meta.color}60`,
             }}>
-              <CheckCircle2 size={36} style={{ color: '#fff' }} />
+              <CircleCheckBig size={36} style={{ color: '#fff' }} />
             </div>
           </div>
           <h1 style={{ margin: '0 0 12px', fontSize: 32, fontWeight: 800, color: '#f1f5f9' }}>

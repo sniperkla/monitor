@@ -6,9 +6,9 @@ import { useVault } from '@/context/VaultContext';
 import { useSession } from 'next-auth/react';
 import {
   Lock, Unlock, Shield, Key, Eye, EyeOff,
-  Mail, AlertTriangle, CheckCircle, Loader,
+  Mail, TriangleAlert, CircleCheck, LoaderCircle,
   Database, ArrowRight, RefreshCw, Zap,
-  HelpCircle, ChevronDown, ChevronUp, Monitor, Network,
+  CircleHelp, ChevronDown, ChevronUp, Monitor, Network,
   X
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -331,7 +331,7 @@ export default function MasterPasswordModal({ isBooted = true }) {
       >
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-lg bg-[var(--accent-indigo)]/10 flex items-center justify-center text-[var(--accent-indigo)] group-hover:bg-[var(--accent-indigo)]/20 transition-colors">
-            <HelpCircle size={16} />
+            <CircleHelp size={16} />
           </div>
           <div className="text-left">
             <span className="block text-[13px] font-bold text-[var(--text-primary)] tracking-tight">{t('vault.faq.title')}</span>
@@ -501,7 +501,7 @@ export default function MasterPasswordModal({ isBooted = true }) {
             className="flex items-center gap-2.5 text-rose-400 text-xs bg-rose-500/10 border border-rose-500/20 rounded-xl px-4 py-3 shadow-lg backdrop-blur-md"
             style={{ boxShadow: '0 0 20px rgba(244,63,94,0.15)' }}
           >
-            <AlertTriangle size={14} className="shrink-0" />
+            <TriangleAlert size={14} className="shrink-0" />
             <span className="font-medium">{error}</span>
           </motion.div>
         )}
@@ -520,7 +520,7 @@ export default function MasterPasswordModal({ isBooted = true }) {
             <div className="absolute inset-0 bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity" />
             <div className="relative flex items-center justify-center gap-3">
               {loading ? (
-                <><Loader size={20} className="animate-spin" /> {t('vault.unlocking') || 'Authorizing...'}</>
+                <><LoaderCircle size={20} className="animate-spin" /> {t('vault.unlocking') || 'Authorizing...'}</>
               ) : (
                 <><Unlock size={20} /> {t('vault.unlockVault') || 'Unlock & Access Dashboard'}</>
               )}
@@ -697,7 +697,7 @@ export default function MasterPasswordModal({ isBooted = true }) {
             animate={{ x: [0, -8, 8, -4, 4, 0], opacity: 1 }}
             className="flex items-center gap-2.5 text-rose-400 text-xs bg-rose-500/10 border border-rose-500/20 rounded-xl px-4 py-3 backdrop-blur-md"
           >
-            <AlertTriangle size={14} className="shrink-0" />
+            <TriangleAlert size={14} className="shrink-0" />
             <span className="font-medium">{error}</span>
           </motion.div>
         )}
@@ -718,7 +718,7 @@ export default function MasterPasswordModal({ isBooted = true }) {
             <div className="absolute inset-0 bg-gradient-to-r from-emerald-500 to-teal-600 transition-all group-hover:scale-105" />
             <div className="relative flex items-center justify-center gap-2">
                {loading ? (
-                <><Loader size={16} className="animate-spin" /> {hasLegacyUri ? (t('vault.migrating') || 'Migrating...') : (t('vault.encrypting') || 'Encrypting...')}</>
+                <><LoaderCircle size={16} className="animate-spin" /> {hasLegacyUri ? (t('vault.migrating') || 'Migrating...') : (t('vault.encrypting') || 'Encrypting...')}</>
               ) : (
                 <><Shield size={16} /> {hasLegacyUri ? (t('vault.secureNow') || 'Complete Migration') : (t('vault.createVault') || 'Initialize Vault')}</>
               )}
@@ -840,7 +840,7 @@ export default function MasterPasswordModal({ isBooted = true }) {
 
       <div className="p-4 bg-rose-500/5 border border-rose-500/10 rounded-2xl relative z-10 backdrop-blur-md">
         <div className="flex items-start gap-3">
-          <AlertTriangle size={18} className="text-rose-500 mt-0.5 shrink-0" />
+          <TriangleAlert size={18} className="text-rose-500 mt-0.5 shrink-0" />
           <div className="space-y-1">
             <h4 className="text-[11px] font-bold text-rose-500 uppercase tracking-widest">{t('vault.recovery.warning') || 'Critical Warning'}</h4>
             <p className="text-[11px] text-rose-500/80 leading-relaxed font-semibold">
@@ -852,7 +852,7 @@ export default function MasterPasswordModal({ isBooted = true }) {
 
       {error && (
         <div className="flex items-center gap-2.5 text-rose-400 text-xs bg-rose-500/10 border border-rose-500/20 rounded-xl px-4 py-3 backdrop-blur-md">
-          <AlertTriangle size={14} className="shrink-0" />
+          <TriangleAlert size={14} className="shrink-0" />
           <span className="font-medium">{error}</span>
         </div>
       )}
@@ -872,7 +872,7 @@ export default function MasterPasswordModal({ isBooted = true }) {
           <div className="absolute inset-0 bg-gradient-to-r from-amber-500 to-orange-600 transition-all group-hover:scale-105" />
           <div className="relative flex items-center justify-center gap-2">
             {loading ? (
-              <><Loader size={16} className="animate-spin" /> {t('vault.recovery.sending') || 'Requesting...'}</>
+              <><LoaderCircle size={16} className="animate-spin" /> {t('vault.recovery.sending') || 'Requesting...'}</>
             ) : (
               <><Mail size={16} /> {t('vault.recovery.sendCode') || 'Request Recovery Code'}</>
             )}
@@ -895,7 +895,7 @@ export default function MasterPasswordModal({ isBooted = true }) {
         >
           <div className="absolute inset-0 rounded-2xl bg-gradient-to-tr from-blue-500/30 to-cyan-500/30 blur-xl animate-pulse" />
           <div className="relative w-16 h-16 bg-gradient-to-br from-slate-800 to-slate-900 border border-white/10 rounded-2xl flex items-center justify-center shadow-2xl">
-            <CheckCircle size={28} className="text-blue-400 shadow-[0_0_15px_rgba(59,130,246,0.5)]" />
+            <CircleCheck size={28} className="text-blue-400 shadow-[0_0_15px_rgba(59,130,246,0.5)]" />
           </div>
         </motion.div>
         
@@ -930,7 +930,7 @@ export default function MasterPasswordModal({ isBooted = true }) {
             animate={{ x: [0, -8, 8, -4, 4, 0], opacity: 1 }}
             className="flex items-center gap-2.5 text-rose-400 text-xs bg-rose-500/10 border border-rose-500/20 rounded-xl px-4 py-3 backdrop-blur-md"
           >
-            <AlertTriangle size={14} className="shrink-0" />
+            <TriangleAlert size={14} className="shrink-0" />
             <span className="font-medium">{error}</span>
           </motion.div>
         )}
@@ -951,9 +951,9 @@ export default function MasterPasswordModal({ isBooted = true }) {
             <div className="absolute inset-0 bg-gradient-to-r from-blue-500 to-indigo-600 transition-all group-hover:scale-105" />
             <div className="relative flex items-center justify-center gap-2">
               {loading ? (
-                <><Loader size={16} className="animate-spin" /> {t('vault.verify.verifying') || 'Verifying...'}</>
+                <><LoaderCircle size={16} className="animate-spin" /> {t('vault.verify.verifying') || 'Verifying...'}</>
               ) : (
-                <><CheckCircle size={16} /> {t('vault.verify.verifyReset') || 'Confirm Verification'}</>
+                <><CircleCheck size={16} /> {t('vault.verify.verifyReset') || 'Confirm Verification'}</>
               )}
             </div>
           </button>
@@ -976,7 +976,7 @@ export default function MasterPasswordModal({ isBooted = true }) {
       case 'unlock': return { title: t('vault.locked') || 'Security', icon: Lock };
       case 'setup': return { title: t('vault.setupVault') || 'Setup Vault', icon: Shield };
       case 'recovery': return { title: t('vault.recovery.title') || 'Recovery', icon: Mail };
-      case 'verify': return { title: t('vault.verify.title') || 'Verify', icon: CheckCircle };
+      case 'verify': return { title: t('vault.verify.title') || 'Verify', icon: CircleCheck };
       default: return { title: 'Security', icon: Shield };
     }
   };

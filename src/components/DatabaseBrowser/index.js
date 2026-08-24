@@ -1,7 +1,7 @@
 'use client';
 
 import { useApp } from '@/context/AppContext';
-import { X, Database, Edit, Plus, Search, ChevronRight } from 'lucide-react';
+import { X, Database, Pen, Plus, Search, ChevronRight } from 'lucide-react';
 import { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import DatabaseView from './DatabaseView';

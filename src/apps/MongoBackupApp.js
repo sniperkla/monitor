@@ -5,11 +5,11 @@ import { useApp } from '@/context/AppContext';
 import { useOS } from '@/context/OSContext';
 import { 
   Database, Upload, Cloud, RefreshCw, Play, Trash2, Plus, 
-  CheckCircle, AlertCircle, Calendar, ShieldAlert, ArrowRight,
-  FolderPlus, History, Key, Settings, Loader, CloudLightning, FileJson, ShieldCheck,
+  CircleCheck, AlertCircle, Calendar, ShieldAlert, ArrowRight,
+  FolderPlus, History, Key, Settings, LoaderCircle, CloudLightning, FileJson, ShieldCheck,
   Copy, Server, Wifi, WifiOff, Terminal, ChevronDown, Check, Clock,
-  XCircle, TrendingUp, X, Zap, Shield, BarChart3, Folder, ExternalLink, Search,
-  ChevronLeft, ChevronRight, HelpCircle
+  CircleX, TrendingUp, X, Zap, Shield, BarChart3, Folder, ExternalLink, Search,
+  ChevronLeft, ChevronRight, CircleHelp
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import MongoBackupOnboarding, { hasCompletedMongoBackupOnboarding, resetMongoBackupOnboarding } from '@/components/MongoBackupOnboarding';
@@ -2076,7 +2076,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
               {/* Active File indicator */}
               <div className="text-[11px] font-mono text-emerald-300 bg-emerald-500/10 border border-emerald-500/20 px-3.5 py-2.5 rounded-xl mb-4 flex items-center justify-between">
                 <span className="truncate flex items-center gap-2">
-                  <Loader size={12} className="animate-spin text-emerald-400 shrink-0" />
+                  <LoaderCircle size={12} className="animate-spin text-emerald-400 shrink-0" />
                   <span className="truncate">Active: <b className="text-emerald-200">{restoreProgress.currentFile}</b></span>
                 </span>
                 <span className="text-[10px] font-bold text-emerald-400 shrink-0 pl-2">
@@ -2095,8 +2095,8 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                     <div key={idx} className="flex items-center justify-between px-3 py-1.5 rounded-xl bg-[var(--bg-card)] border border-[var(--border-color)]">
                       <span className="flex items-center gap-2 truncate text-[var(--text-secondary)]">
                         {f.success 
-                          ? <CheckCircle size={13} className="text-emerald-400 shrink-0" /> 
-                          : <XCircle size={13} className="text-red-400 shrink-0" />
+                          ? <CircleCheck size={13} className="text-emerald-400 shrink-0" /> 
+                          : <CircleX size={13} className="text-red-400 shrink-0" />
                         }
                         <span className="truncate">{f.name}</span>
                       </span>
@@ -2161,8 +2161,8 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                     : 'bg-red-500/15 border-red-500/30'
                 }`}>
                   {restoreResult.success
-                    ? <CheckCircle size={32} className="text-emerald-400" />
-                    : <XCircle size={32} className="text-red-400" />
+                    ? <CircleCheck size={32} className="text-emerald-400" />
+                    : <CircleX size={32} className="text-red-400" />
                   }
                 </div>
 
@@ -2229,7 +2229,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                       {restoreResult.processedLog.map((f, idx) => (
                         <div key={idx} className="flex items-center justify-between px-2 py-1 rounded-lg bg-[var(--bg-card)] border border-[var(--border-color)]">
                           <span className="flex items-center gap-1.5 truncate text-[var(--text-secondary)]">
-                            {f.success ? <CheckCircle size={10} className="text-emerald-400 shrink-0" /> : <XCircle size={10} className="text-red-400 shrink-0" />}
+                            {f.success ? <CircleCheck size={10} className="text-emerald-400 shrink-0" /> : <CircleX size={10} className="text-red-400 shrink-0" />}
                             <span className="truncate">{f.name}</span>
                           </span>
                           <span className="text-[9px] font-bold text-[var(--text-muted)] shrink-0 pl-2">
@@ -2477,8 +2477,8 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                         : 'bg-red-500/10 border-red-500/30 text-red-400'
                     }`}>
                       {installed
-                        ? <CheckCircle size={13} className="shrink-0" />
-                        : <XCircle size={13} className="shrink-0" />}
+                        ? <CircleCheck size={13} className="shrink-0" />
+                        : <CircleX size={13} className="shrink-0" />}
                       <span className="truncate">{tool}</span>
                     </div>
                   );
@@ -2489,7 +2489,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                     : 'bg-amber-500/10 border-amber-500/30 text-amber-400'
                 }`}>
                   {depCheckModal.status.mongosh?.installed || depCheckModal.status.mongo?.installed
-                    ? <CheckCircle size={13} className="shrink-0" />
+                    ? <CircleCheck size={13} className="shrink-0" />
                     : <AlertCircle size={13} className="shrink-0" />}
                   <span className="truncate">mongo shell</span>
                 </div>
@@ -2596,7 +2596,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
             className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]/60 transition-colors"
             title="Show tutorial"
           >
-            <HelpCircle size={15} />
+            <CircleHelp size={15} />
           </button>
         </div>
 
@@ -2735,7 +2735,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                       <div>
                         <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1 flex items-center justify-between">
                           <span>Target Database</span>
-                          {importFetchingDbs && <Loader size={10} className="animate-spin text-emerald-400" />}
+                          {importFetchingDbs && <LoaderCircle size={10} className="animate-spin text-emerald-400" />}
                         </label>
                         {importFetchedDbs.length > 0 ? (
                           <CustomSelect
@@ -2759,7 +2759,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                       <div>
                         <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1 flex items-center justify-between">
                           <span>Target Collection Name</span>
-                          {importFetchingColls && <Loader size={10} className="animate-spin text-emerald-400" />}
+                          {importFetchingColls && <LoaderCircle size={10} className="animate-spin text-emerald-400" />}
                         </label>
                         {importFetchedColls.length > 0 ? (
                           <CustomSelect
@@ -2861,9 +2861,9 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                             >
                               <div className="flex items-center gap-2 flex-1 min-w-0">
                                 {fileObj.error ? (
-                                  <XCircle size={14} className="text-red-400 shrink-0" />
+                                  <CircleX size={14} className="text-red-400 shrink-0" />
                                 ) : (
-                                  <CheckCircle size={14} className="text-emerald-400 shrink-0" />
+                                  <CircleCheck size={14} className="text-emerald-400 shrink-0" />
                                 )}
                                 <span className="font-mono truncate">{fileObj.name}</span>
                               </div>
@@ -2896,7 +2896,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                     >
                       {(loading || batchImporting) ? (
                         <>
-                          <Loader size={14} className="animate-spin" />
+                          <LoaderCircle size={14} className="animate-spin" />
                           <span>{batchImportMode ? 'Importing files...' : 'Importing documents...'}</span>
                         </>
                       ) : (
@@ -3021,7 +3021,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                       <input type="password" value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} placeholder="GOCSPX-xxxxxxxxxxxxxxxxxxxx" className="w-full px-3 py-2 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:border-emerald-500 focus:outline-none" />
                     </div>
                     <button onClick={handleSaveCredentials} disabled={driveLoading || !clientId.trim() || !clientSecret.trim()} className="w-full px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-md transition-all">
-                      {driveLoading ? <Loader className="animate-spin" size={12} /> : <><ShieldCheck size={13} /> Save &amp; Continue</>}
+                      {driveLoading ? <LoaderCircle className="animate-spin" size={12} /> : <><ShieldCheck size={13} /> Save &amp; Continue</>}
                     </button>
                   </div>
 
@@ -3043,7 +3043,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                     {driveConnected ? (
                       <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-xl space-y-3">
                         <div className="flex items-center gap-3">
-                          <CheckCircle className="text-emerald-400" size={20} />
+                          <CircleCheck className="text-emerald-400" size={20} />
                           <div>
                             <div className="text-xs font-bold text-emerald-400">Connected to Google Drive</div>
                             <div className="text-[10px] text-[var(--text-muted)]">{driveEmail} ({driveName})</div>
@@ -3115,7 +3115,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                           disabled={!driveConnected || driveLoading || !newFolderName.trim()}
                           className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm"
                         >
-                          {driveLoading ? <Loader className="animate-spin" size={12} /> : <><FolderPlus size={12} /> Create</>}
+                          {driveLoading ? <LoaderCircle className="animate-spin" size={12} /> : <><FolderPlus size={12} /> Create</>}
                         </button>
                       </div>
                     </div>
@@ -3203,7 +3203,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                         <div>
                           <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1 flex items-center justify-between">
                             <span>Database</span>
-                            {fetchingDbs && <Loader size={10} className="animate-spin text-emerald-400" />}
+                            {fetchingDbs && <LoaderCircle size={10} className="animate-spin text-emerald-400" />}
                           </label>
                           <CustomSelect
                             value={jobDbName}
@@ -3219,7 +3219,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                       <div>
                         <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1 flex items-center justify-between">
                           <span>Collection</span>
-                          {fetchingColls && <Loader size={10} className="animate-spin text-emerald-400" />}
+                          {fetchingColls && <LoaderCircle size={10} className="animate-spin text-emerald-400" />}
                         </label>
                         <CustomSelect
                           value={jobCollName}
@@ -3386,7 +3386,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                         disabled={loading || depCheckLoading || !driveConnected || driveFolders.length === 0}
                         className="flex-1 btn-primary justify-center font-bold text-xs py-2 disabled:opacity-40"
                       >
-                        {loading || depCheckLoading ? <Loader className="animate-spin" size={14} /> : 'Save Job'}
+                        {loading || depCheckLoading ? <LoaderCircle className="animate-spin" size={14} /> : 'Save Job'}
                       </button>
                       {editingJobId && (
                         <button
@@ -3705,7 +3705,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                       <div>
                         <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1 flex items-center justify-between">
                           <span>Target Database</span>
-                          {restoreFetchingDbs && <Loader size={10} className="animate-spin text-emerald-400" />}
+                          {restoreFetchingDbs && <LoaderCircle size={10} className="animate-spin text-emerald-400" />}
                         </label>
                         <CustomSelect
                           value={restoreDbName}
@@ -3720,11 +3720,11 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                       <div>
                         <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1 flex items-center justify-between">
                           <span>Target Collection</span>
-                          {restoreFetchingColls && <Loader size={10} className="animate-spin text-emerald-400" />}
+                          {restoreFetchingColls && <LoaderCircle size={10} className="animate-spin text-emerald-400" />}
                         </label>
                         {selectedFileId === 'ALL' || backupFiles.find(f => f.id === selectedFileId)?.name?.includes('ALL_COLLECTIONS') ? (
                           <div className="input-field text-xs w-full bg-emerald-500/10 border-emerald-500/30 text-emerald-400 font-bold flex items-center gap-2 px-3 py-2 rounded-xl">
-                            <CheckCircle size={12} />
+                            <CircleCheck size={12} />
                             <span>{selectedFileId === 'ALL' ? `All Collections (Restore All ${backupFiles.length} Files)` : 'All Collections (auto-detected)'}</span>
                           </div>
                         ) : (
@@ -3756,7 +3756,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                     >
                       {loading ? (
                         <>
-                          <Loader className="animate-spin" size={14} />
+                          <LoaderCircle className="animate-spin" size={14} />
                           <span>Restoring Data...</span>
                         </>
                       ) : (
@@ -3901,7 +3901,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                               </pre>
                               ) : cronLogLoading[job.id] ? (
                                 <div className="p-4 text-center text-[11px] text-[var(--text-muted)] flex items-center justify-center gap-2">
-                                  <Loader size={12} className="animate-spin text-blue-400" /> Fetching log...
+                                  <LoaderCircle size={12} className="animate-spin text-blue-400" /> Fetching log...
                                 </div>
                               ) : (
                                 <div className="p-4 text-center text-[11px] text-[var(--text-muted)] italic">
@@ -3924,7 +3924,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                   </h3>
                   {historyLoading && historyRuns.length === 0 ? (
                     <div className="py-12 text-center text-xs text-[var(--text-muted)] flex items-center justify-center gap-2">
-                      <Loader size={16} className="animate-spin text-emerald-400" />
+                      <LoaderCircle size={16} className="animate-spin text-emerald-400" />
                       <span>Loading execution history...</span>
                     </div>
                   ) : historyRuns.length === 0 ? (
@@ -4030,7 +4030,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                 {/* Loading / Status State */}
                 {rsLoading && !rsData && (
                   <div className="p-8 text-center bg-[var(--bg-secondary)]/20 rounded-xl border border-[var(--border-color)]">
-                    <Loader size={24} className="animate-spin text-emerald-400 mx-auto mb-2" />
+                    <LoaderCircle size={24} className="animate-spin text-emerald-400 mx-auto mb-2" />
                     <p className="text-xs text-[var(--text-muted)] font-medium">Inspecting MongoDB Replica Set status across nodes...</p>
                   </div>
                 )}
@@ -4268,7 +4268,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                                 </div>
                                 {/* Status badge */}
                                 {node.verifying ? (
-                                  <Loader size={12} className="animate-spin text-emerald-400" />
+                                  <LoaderCircle size={12} className="animate-spin text-emerald-400" />
                                 ) : v ? (
                                   <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border flex items-center gap-1 ${
                                     isInitialized
@@ -4305,7 +4305,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                                     className="px-2.5 py-1.5 text-[11px] font-bold rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/25 transition-all disabled:opacity-40 flex items-center gap-1 shrink-0"
                                   >
                                     {node.scanning
-                                      ? <Loader size={11} className="animate-spin" />
+                                      ? <LoaderCircle size={11} className="animate-spin" />
                                       : <RefreshCw size={11} />}
                                     Scan
                                   </button>
@@ -4446,7 +4446,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                       >
                         {rsActionLoading ? (
                           <>
-                            <Loader className="animate-spin" size={14} />
+                            <LoaderCircle className="animate-spin" size={14} />
                             <span>Connecting &amp; Initializing {nodes.filter(n => n.selectedHost && n.selectedPort).length}-Node Cluster...</span>
                           </>
                         ) : (
@@ -4488,7 +4488,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                       </button>
                     </span>
                   ))}
-                  {drivePicker.loading && <Loader size={11} className="animate-spin text-emerald-400 ml-1" />}
+                  {drivePicker.loading && <LoaderCircle size={11} className="animate-spin text-emerald-400 ml-1" />}
                 </div>
 
                 {/* Search bar */}
@@ -4517,7 +4517,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                 <div className="flex-1 overflow-y-auto p-3 space-y-1">
                   {drivePicker.loading && drivePicker.folders.length === 0 ? (
                     <div className="flex items-center justify-center py-10 text-[var(--text-muted)] text-xs gap-2">
-                      <Loader size={14} className="animate-spin" /> Loading...
+                      <LoaderCircle size={14} className="animate-spin" /> Loading...
                     </div>
                   ) : (() => {
                     const q = drivePicker.search.toLowerCase().trim();

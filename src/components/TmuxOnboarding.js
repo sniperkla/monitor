@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next';
 import {
   X, ChevronRight, ChevronLeft, Sparkles,
   Laptop, LayoutDashboard, Terminal, Play, History,
-  CheckCircle2, Zap
+  CircleCheckBig, Zap
 } from 'lucide-react';
 
 const STORAGE_KEY = 'tmux-onboarding-completed';
@@ -391,7 +391,7 @@ function ImmersiveCenterPanel({ step, meta, total, contentStep, contentTotal, on
               justifyContent: 'center',
               boxShadow: `0 8px 40px ${meta.color}60`,
             }}>
-              <CheckCircle2 size={36} style={{ color: '#fff' }} />
+              <CircleCheckBig size={36} style={{ color: '#fff' }} />
             </div>
           </div>
 

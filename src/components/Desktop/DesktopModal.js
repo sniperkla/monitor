@@ -3,7 +3,7 @@
 import { motion, AnimatePresence } from 'framer-motion';
 import { useOS } from '@/context/OSContext';
 import { useState, useEffect } from 'react';
-import { AlertCircle, HelpCircle, Type } from 'lucide-react';
+import { AlertCircle, CircleHelp, Type } from 'lucide-react';
 import MacOSModalWindow from '@/components/MacOSModalWindow';
 
 export default function DesktopModal() {

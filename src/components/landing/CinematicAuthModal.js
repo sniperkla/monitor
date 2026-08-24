@@ -4,8 +4,8 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { motion, AnimatePresence, useDragControls } from 'framer-motion';
 import {
   Mail, Lock, User as UserIcon, UserPlus, ShieldCheck, ShieldAlert,
-  Terminal, KeyRound, CheckCircle2, AlertCircle, Eye, EyeOff,
-  Sparkles, ArrowRight, Loader2, Cpu, Wifi, Battery,
+  Terminal, KeyRound, CircleCheckBig, AlertCircle, Eye, EyeOff,
+  Sparkles, ArrowRight, LoaderCircle, Cpu, Wifi, Battery,
   Search, ChevronLeft, ChevronRight, Activity, Zap,
 } from 'lucide-react';
 
@@ -840,7 +840,7 @@ export function CinematicAuthModal({
                                 <div key={label}
                                   className={`flex items-center gap-1 transition-colors duration-300 ${ok ? 'text-emerald-400 font-medium' : 'text-white/20'}`}>
                                   <motion.div animate={ok ? { scale: [1, 1.3, 1] } : {}} transition={{ duration: 0.4 }}>
-                                    <CheckCircle2 size={9} />
+                                    <CircleCheckBig size={9} />
                                   </motion.div>
                                   {label}
                                 </div>
@@ -861,7 +861,7 @@ export function CinematicAuthModal({
                           className="absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-white/60 to-transparent pointer-events-none" />
                         <div className="flex items-center justify-center gap-2">
                           {authLoading
-                            ? <Loader2 size={14} className="animate-spin" />
+                            ? <LoaderCircle size={14} className="animate-spin" />
                             : <motion.span animate={{ x: [0, 3, 0] }} transition={{ duration: 1.5, repeat: Infinity }}>
                                 <ArrowRight size={14} />
                               </motion.span>

@@ -5,11 +5,11 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   Folder, File as FileIcon, ChevronLeft, ChevronRight, ChevronUp, ChevronDown, RefreshCw, 
   Download, Upload, Trash2, FolderPlus, Search, Grid, List as ListIcon,
-  AlertCircle, Edit, FileText, X, Save, AlertTriangle, Eye,
+  AlertCircle, Pen, FileText, X, Save, TriangleAlert, Eye,
   Copy, Scissors, Clipboard, Wifi, AtSign, Replace, Columns, Rows,
   Sparkles, Brain, Clock, Settings2, Languages, CornerDownLeft, 
   MessagesSquare, BrainCircuit, ShieldAlert, Terminal,
-  Cpu, Zap, Flame, Box, Layers, CheckCircle2, Lock, Unlock
+  Cpu, Zap, Flame, Box, Layers, CircleCheckBig, Lock, Unlock
 } from 'lucide-react';
 import io from 'socket.io-client';
 import { 
@@ -3746,7 +3746,7 @@ export default function FileManager({
                     {transfer.action === 'extract' ? (
                       <RefreshCw size={20} className="animate-spin text-purple-400" />
                     ) : transfer.finalizing ? (
-                      <CheckCircle2 size={20} className="text-emerald-400 animate-pulse" />
+                      <CircleCheckBig size={20} className="text-emerald-400 animate-pulse" />
                     ) : transfer.action === 'upload' ? (
                       <Upload size={20} className={transfer.channel === 'webrtc' ? 'text-violet-400' : 'text-blue-400'} />
                     ) : transfer.action === 'download' ? (
@@ -4446,7 +4446,7 @@ export default function FileManager({
                 className="w-full text-left px-3 py-2 text-sm hover:bg-[var(--glow-indigo)] text-[var(--text-primary)] hover:text-[var(--accent-indigo)] flex items-center gap-2 transition-colors disabled:opacity-50"
                 disabled={contextMenu.file?.longname.startsWith('d')}
               >
-                <Edit size={14} /> {t('files.context.edit')}
+                <Pen size={14} /> {t('files.context.edit')}
               </button>
               <button 
                 onClick={handlePreview}
@@ -4809,7 +4809,7 @@ export default function FileManager({
         {reconnectAlert && (
           <div className={`mx-3 mb-3 flex items-center justify-between gap-3 rounded-xl border px-3 py-2 text-xs ${reconnectAlert.exhausted ? 'border-rose-500/40 bg-rose-500/10 text-rose-200' : 'border-amber-500/30 bg-amber-500/10 text-amber-100'}`}>
             <div className="flex items-start gap-2 min-w-0">
-              <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+              <TriangleAlert size={14} className="mt-0.5 shrink-0" />
               <div className="min-w-0">
                 <div className="font-semibold">{reconnectAlert.exhausted ? 'Reconnect paused' : 'Reconnecting session'}</div>
                 <div className="text-[11px] opacity-90 break-words">{reconnectAlert.message}</div>

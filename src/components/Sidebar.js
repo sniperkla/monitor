@@ -2,8 +2,8 @@
 import { createPortal } from 'react-dom';
 import { useApp } from '@/context/AppContext';
 import {
-  Server, Star, StarOff, Wifi, WifiOff, Clock, MoreVertical, Terminal, Edit, Trash2,  
-  RotateCw, Plus, Search, Filter, Key, Lock, BarChart3, TrendingUp, Zap, RefreshCw, Folder, Box, AlertTriangle, X, Database,
+  Server, Star, StarOff, Wifi, WifiOff, Clock, EllipsisVertical, Terminal, Pen, Trash2,  
+  RotateCw, Plus, Search, Filter, Key, Lock, BarChart3, TrendingUp, Zap, RefreshCw, Folder, Box, TriangleAlert, X, Database,
   PanelLeftClose, PanelLeft, CloudUpload, CloudDownload, Check, Cpu, MemoryStick, HardDrive
 } from 'lucide-react';
 import { useState, useEffect, useRef } from 'react';
@@ -972,7 +972,7 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
           )}
 
           <div className="h-px" style={{ background: 'var(--border-color)' }} />
-          <PanelItem icon={Edit} label="Edit Connection" onClick={() => { onEditConnection(hoverPanel.conn); setHoverPanel(null); }} />
+          <PanelItem icon={Pen} label="Edit Connection" onClick={() => { onEditConnection(hoverPanel.conn); setHoverPanel(null); }} />
           <PanelItem icon={Trash2} label="Delete Connection" color="text-red-400" onClick={() => { handleDelete(hoverPanel.conn._id); setHoverPanel(null); }} />
         </div>
       </div>,

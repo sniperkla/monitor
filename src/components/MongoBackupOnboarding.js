@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next';
 import {
   X, ChevronRight, ChevronLeft, ArrowRight, Sparkles,
   Database, Cloud, RefreshCw, History, Shield, Play,
-  Upload, Download, CheckCircle2, HelpCircle, Zap, Server, ShieldAlert
+  Upload, Download, CircleCheckBig, CircleHelp, Zap, Server, ShieldAlert
 } from 'lucide-react';
 
 const STORAGE_KEY = 'mongo-backup-onboarding-completed';
@@ -431,7 +431,7 @@ function ImmersiveCenterPanel({ step, meta, total, contentStep, contentTotal, on
               justifyContent: 'center',
               boxShadow: `0 8px 40px ${meta.color}60`,
             }}>
-              <CheckCircle2 size={36} style={{ color: '#fff' }} />
+              <CircleCheckBig size={36} style={{ color: '#fff' }} />
             </div>
           </div>
           

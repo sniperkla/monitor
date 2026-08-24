@@ -15,7 +15,7 @@ import { useVault } from '@/context/VaultContext';
 import { i18n } from '@/lib/i18n';
 import ThemeSelect from '@/components/common/ThemeSelect';
 import {
-  Loader2, AlertCircle, CheckCircle2, XCircle, X, Minus, Maximize2, Wifi,
+  LoaderCircle, AlertCircle, CircleCheckBig, CircleX, X, Minus, Maximize2, Wifi,
   Sparkles, Copy, CornerDownLeft, ShieldAlert, Settings2, Clock, RefreshCw,
   ListChecks, Trophy, Search, Languages, Lock, Brain, ChevronDown, ChevronUp,
   AtSign, Folder, File as FileIconAi, Container, Zap, Mouse, SquareArrowOutUpRight
@@ -6710,13 +6710,13 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
   const getStatusInfo = () => {
     switch (status) {
       case 'connecting':
-        return { icon: <Loader2 size={12} className="animate-spin" />, text: t('terminal.status.connecting'), color: 'var(--accent-amber)' };
+        return { icon: <LoaderCircle size={12} className="animate-spin" />, text: t('terminal.status.connecting'), color: 'var(--accent-amber)' };
       case 'connected':
-        return { icon: <CheckCircle2 size={12} />, text: t('terminal.status.connected'), color: 'var(--accent-emerald)' };
+        return { icon: <CircleCheckBig size={12} />, text: t('terminal.status.connected'), color: 'var(--accent-emerald)' };
       case 'error':
         return { icon: <AlertCircle size={12} />, text: t('terminal.status.error'), color: 'var(--accent-rose)' };
       case 'closed':
-        return { icon: <XCircle size={12} />, text: t('terminal.status.disconnected'), color: 'var(--text-muted)' };
+        return { icon: <CircleX size={12} />, text: t('terminal.status.disconnected'), color: 'var(--text-muted)' };
       default:
         return { icon: null, text: '', color: '' };
     }
@@ -7679,7 +7679,7 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                   <div className="rounded-lg border border-indigo-500/20 bg-indigo-500/5 p-3">
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-indigo-400">
-                        <Loader2 size={12} className="animate-spin" />
+                        <LoaderCircle size={12} className="animate-spin" />
                         Streaming
                       </div>
                       <span className="text-[9px] opacity-60" style={{ color: 'var(--text-secondary)' }}>
@@ -7722,7 +7722,7 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                         </div>
                         <div className="flex items-center gap-2">
                           {aiAnswer.raw.includes('AUTO_FIX_REQUEST') && <span className="text-[9px] font-bold bg-amber-500/20 text-amber-500 px-1.5 py-0.5 rounded border border-amber-500/30">{t('ai.autoFix')}</span>}
-                          {aiAnswer.done && <span className="text-[10px] font-bold text-emerald-400 flex items-center gap-1"><CheckCircle2 size={10} /> {t('ai.done')}</span>}
+                          {aiAnswer.done && <span className="text-[10px] font-bold text-emerald-400 flex items-center gap-1"><CircleCheckBig size={10} /> {t('ai.done')}</span>}
                           {aiAnswer.danger && <span className="text-[10px] font-bold text-red-400 flex items-center gap-1"><ShieldAlert size={10} /> {t('ai.danger')}</span>}
                           {aiAnswer.interactive && <span className="text-[10px] font-bold text-amber-400">⚡ {aiAnswer.interactive}</span>}
                           <button className="p-1 rounded hover:bg-white/5" style={{ color: 'var(--text-muted)' }}>
@@ -7809,7 +7809,7 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                     {/* Header */}
                     <div className="px-3 py-2.5 bg-emerald-600/25 border-b border-emerald-500/30 flex items-center justify-between">
                       <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-emerald-200">
-                        <CheckCircle2 size={12} className="text-emerald-400" />
+                        <CircleCheckBig size={12} className="text-emerald-400" />
                         Skills Ready — AI Context Updated
                       </div>
                       <button onClick={() => setInjectedSkills(null)} className="text-emerald-300/60 hover:text-emerald-300"><X size={12} /></button>
@@ -7837,7 +7837,7 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                               style={{ animationDelay: `${i * 150}ms`, animationFillMode: 'both' }}
                             >
                               <div className="w-5 h-5 rounded-md bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center shrink-0">
-                                <CheckCircle2 size={10} className="text-emerald-400" />
+                                <CircleCheckBig size={10} className="text-emerald-400" />
                               </div>
                               <div className="flex-1 min-w-0">
                                 <div className="text-[10px] font-bold text-emerald-600 text-emerald-300 truncate">{skill.name}</div>
@@ -7968,7 +7968,7 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                   <div className="relative rounded-xl border border-[var(--accent-indigo)]/20 bg-[var(--accent-indigo)]/5 p-5 flex items-center justify-center">
                     <div className="absolute -inset-[1px] rounded-xl bg-gradient-to-r from-indigo-500/20 via-purple-500/20 to-indigo-500/20 animate-pulse-slow -z-10 opacity-70" />
                     <div className="flex items-center gap-3">
-                      <Loader2 size={16} className="animate-spin text-[var(--accent-indigo)]" />
+                      <LoaderCircle size={16} className="animate-spin text-[var(--accent-indigo)]" />
                       <span className="text-xs font-bold uppercase tracking-widest text-[var(--accent-indigo)] opacity-80 animate-pulse">{t('ai.thinking') || 'Thinking...'}</span>
                     </div>
                   </div>
@@ -7990,7 +7990,7 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                       {(aiLoading || autoRunningRef.current) && (
                         <div className="flex items-center gap-1.5">
                            <span className="text-[9px] text-[var(--accent-indigo)] opacity-70 animate-pulse italic">{t('ai.thinking')}</span>
-                           <Loader2 size={10} className="animate-spin text-[var(--accent-indigo)]" />
+                           <LoaderCircle size={10} className="animate-spin text-[var(--accent-indigo)]" />
                         </div>
                       )}
                     </div>
@@ -8248,7 +8248,7 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                     
                     {dockerComposeAnalyzing ? (
                       <div className="flex items-center gap-2 py-4 text-[11px] text-indigo-400">
-                        <Loader2 size={14} className="animate-spin" />
+                        <LoaderCircle size={14} className="animate-spin" />
                         Analyzing project dependencies...
                       </div>
                     ) : (
@@ -8445,7 +8445,7 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                     <div className="px-2 pb-2 space-y-1 max-h-[180px] overflow-y-auto scrollbar-thin">
                       {activeSkills.map((skill, i) => (
                         <div key={skill.name || i} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-black/30 border border-indigo-500/10 hover:border-indigo-500/30 transition-colors group">
-                          <CheckCircle2 size={10} className="text-indigo-400 shrink-0" />
+                          <CircleCheckBig size={10} className="text-indigo-400 shrink-0" />
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2">
                               <span className="text-[10px] font-bold text-white/90">{skill.name}</span>
@@ -8834,7 +8834,7 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
                     >
                       {aiMode === 'auto' 
                          ? (autoMode ? <X size={18} strokeWidth={3} /> : <CornerDownLeft size={18} strokeWidth={3} />)
-                         : (aiLoading ? <Loader2 size={18} className="animate-spin" /> : <Sparkles size={18} strokeWidth={2} />)
+                         : (aiLoading ? <LoaderCircle size={18} className="animate-spin" /> : <Sparkles size={18} strokeWidth={2} />)
                       }
                     </button>
                   </div>

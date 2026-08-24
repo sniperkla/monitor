@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useApp } from '@/context/AppContext';
 import { useOS } from '@/context/OSContext';
-import { FileText, RefreshCw, X, AlertTriangle, ChevronUp, ChevronDown, Search } from 'lucide-react';
+import { FileText, RefreshCw, X, TriangleAlert, ChevronUp, ChevronDown, Search } from 'lucide-react';
 import { io } from 'socket.io-client';
 
 export default function DockerLogApp({ initialConnection, initialConnectionId, initialContainerId, initialContainerName, windowId }) {
@@ -296,7 +296,7 @@ export default function DockerLogApp({ initialConnection, initialConnectionId, i
         >
             {error ? (
                 <div className="flex flex-col items-center justify-center h-full gap-4 text-red-400/60 p-8 text-center">
-                    <AlertTriangle size={32} />
+                    <TriangleAlert size={32} />
                     <div className="space-y-1">
                         <p className="font-bold text-red-400">Connection Error</p>
                         <p className="text-[10px] max-w-xs mx-auto">{error}</p>

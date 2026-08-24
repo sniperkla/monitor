@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { motion, useDragControls, AnimatePresence } from 'framer-motion';
-import { Bot, Send, History, Plus, ChevronLeft, Trash, Clock, MessageSquare, Languages } from 'lucide-react';
+import { Bot, Send, History, Plus, ChevronLeft, Trash2, Clock, MessageSquare, Languages } from 'lucide-react';
 import { MessageContent } from '@/components/MessageContent';
 import { useOS } from '@/context/OSContext';
 import { useTranslation } from 'react-i18next';
@@ -533,7 +533,7 @@ export default function WikiChatWindow({ id, guide, onClose }) {
                           onClick={(e) => deleteHistory(e, hist._id)}
                           className="opacity-0 group-hover:opacity-100 p-1 rounded-md hover:bg-red-500/10 hover:text-red-400 transition-all text-[var(--text-muted)]"
                         >
-                          <Trash size={12} />
+                          <Trash2 size={12} />
                         </button>
                       </div>
                     </div>

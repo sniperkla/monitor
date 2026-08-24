@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Laptop, Terminal as TermIcon, Play, Square, Settings, RefreshCw, Layers, List, MonitorPlay, History, ExternalLink, Zap, HelpCircle } from 'lucide-react';
+import { Laptop, Terminal as TermIcon, Play, Square, Settings, RefreshCw, Layers, List, MonitorPlay, History, ExternalLink, Zap, CircleHelp } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 import { useOS } from '@/context/OSContext';
 import TerminalView from '@/components/TerminalView';
@@ -374,7 +374,7 @@ export default function TmuxApp({ initialConnection, windowId }) {
                 className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-white/5 transition-colors"
                 title="Show tutorial"
               >
-                <HelpCircle size={15} />
+                <CircleHelp size={15} />
               </button>
               <button onClick={() => {
                 setSelectedConnection(null);

@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next';
 import {
   X, ChevronRight, ChevronLeft, ArrowRight, Sparkles,
   CloudCog, Server, RefreshCw, FolderOpen, HardDrive,
-  Cloud, Shield, Play, CheckCircle2, HelpCircle, Zap, History
+  Cloud, Shield, Play, CircleCheckBig, CircleHelp, Zap, History
 } from 'lucide-react';
 
 const STORAGE_KEY = 'rclone-onboarding-completed';
@@ -431,7 +431,7 @@ function ImmersiveCenterPanel({ step, meta, total, contentStep, contentTotal, on
               justifyContent: 'center',
               boxShadow: `0 8px 40px ${meta.color}60`,
             }}>
-              <CheckCircle2 size={36} style={{ color: '#fff' }} />
+              <CircleCheckBig size={36} style={{ color: '#fff' }} />
             </div>
           </div>
           

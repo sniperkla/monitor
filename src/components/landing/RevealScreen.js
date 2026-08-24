@@ -2,7 +2,7 @@
 
 import { signIn } from 'next-auth/react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Terminal, Shield, ChevronRight, Server, Database, Mail, Lock, User as UserIcon, X, Loader, AlertCircle, CheckCircle } from 'lucide-react';
+import { Terminal, Shield, ChevronRight, Server, Database, Mail, Lock, User as UserIcon, X, LoaderCircle, AlertCircle, CircleCheck } from 'lucide-react';
 import { useState, useEffect, useRef } from 'react';
 import { GalaxyBackground, ShootingStars, Nebula, MatrixRain } from './BackgroundEffects';
 import { CinematicAuthModal } from './CinematicAuthModal';

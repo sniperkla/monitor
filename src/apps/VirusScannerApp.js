@@ -4,8 +4,8 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useApp } from '@/context/AppContext';
 import {
   ShieldCheck, ShieldAlert, Play, RefreshCw, Trash2, Bug,
-  FileWarning, Clock3, Skull, ArchiveRestore, EyeOff, XCircle,
-  CheckCircle2, AlertTriangle, Info, Server as ServerIcon, Loader2,
+  FileWarning, Clock3, Skull, ArchiveRestore, EyeOff, CircleX,
+  CircleCheckBig, TriangleAlert, Info, Server as ServerIcon, LoaderCircle,
   BadgeCheck, Download, ChevronDown, ChevronRight, Activity, Cpu, Terminal,
   X, Zap, HardDrive, Search,
 } from 'lucide-react';
@@ -15,7 +15,7 @@ import ThemeSelect from '@/components/common/ThemeSelect';
 
 const SEVERITY = {
   critical: { label: 'Critical', color: 'text-rose-300', bg: 'bg-rose-500/10', border: 'border-rose-500/30', Icon: Skull },
-  high:     { label: 'High',     color: 'text-orange-300', bg: 'bg-orange-500/10', border: 'border-orange-500/30', Icon: AlertTriangle },
+  high:     { label: 'High',     color: 'text-orange-300', bg: 'bg-orange-500/10', border: 'border-orange-500/30', Icon: TriangleAlert },
   medium:   { label: 'Medium',   color: 'text-amber-300', bg: 'bg-amber-500/10', border: 'border-amber-500/30', Icon: FileWarning },
   low:      { label: 'Low',      color: 'text-sky-300', bg: 'bg-sky-500/10', border: 'border-sky-500/30', Icon: Info },
 };
@@ -89,7 +89,7 @@ function ConfirmModal({ modal, onClose }) {
         <div className="p-5">
           <div className="flex items-start gap-3">
             <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${modal.danger ? 'bg-rose-500/15' : 'bg-indigo-500/15'}`}>
-              {modal.danger ? <AlertTriangle size={17} className="text-rose-300" /> : <ShieldCheck size={17} className="text-indigo-300" />}
+              {modal.danger ? <TriangleAlert size={17} className="text-rose-300" /> : <ShieldCheck size={17} className="text-indigo-300" />}
             </div>
             <div className="flex-1 min-w-0">
               <h4 className="text-sm font-semibold text-slate-100 leading-snug">{modal.title}</h4>
@@ -370,9 +370,9 @@ export default function VirusScannerApp({ windowId }) {
   //   running → amber spinner · done → green check · stopped → red x (killed/crashed, results incomplete)
   //   idle → gray dot (never run) · active → green pulse (Wazuh service) · null → hidden
   const SCAN_BADGE_STYLES = {
-    running: { cls: 'bg-amber-500/15 text-amber-300 border-amber-500/30', icon: <Loader2 size={10} className="animate-spin" />, text: 'Scanning' },
-    done:    { cls: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30', icon: <CheckCircle2 size={10} />, text: 'Done' },
-    stopped: { cls: 'bg-rose-500/15 text-rose-300 border-rose-500/30', icon: <XCircle size={10} />, text: 'Stopped' },
+    running: { cls: 'bg-amber-500/15 text-amber-300 border-amber-500/30', icon: <LoaderCircle size={10} className="animate-spin" />, text: 'Scanning' },
+    done:    { cls: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30', icon: <CircleCheckBig size={10} />, text: 'Done' },
+    stopped: { cls: 'bg-rose-500/15 text-rose-300 border-rose-500/30', icon: <CircleX size={10} />, text: 'Stopped' },
     idle:    { cls: 'bg-white/[0.06] text-slate-400 border-white/10', icon: <span className="w-1.5 h-1.5 rounded-full bg-slate-500" />, text: 'Idle' },
     active:  { cls: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30', icon: <Activity size={10} />, text: 'Active' },
   };
@@ -770,13 +770,13 @@ export default function VirusScannerApp({ windowId }) {
       <div className="flex-1 overflow-y-auto px-5 py-4">
         {error && (
           <div className="mb-3 flex items-start gap-2 p-3 rounded-xl bg-rose-500/10 border border-rose-500/25">
-            <XCircle size={15} className="text-rose-400 shrink-0 mt-0.5" />
+            <CircleX size={15} className="text-rose-400 shrink-0 mt-0.5" />
             <p className="text-xs text-rose-200 break-words">{error}</p>
           </div>
         )}
         {notice && (
           <div className="mb-3 flex items-start gap-2 p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/25">
-            <CheckCircle2 size={15} className="text-emerald-400 shrink-0 mt-0.5" />
+            <CircleCheckBig size={15} className="text-emerald-400 shrink-0 mt-0.5" />
             <p className="text-xs text-emerald-200 break-words">{notice}</p>
           </div>
         )}
@@ -793,7 +793,7 @@ export default function VirusScannerApp({ windowId }) {
                   disabled={scanning || !selectedConn}
                   className="w-24 flex items-center justify-center gap-1.5 py-2 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-xs font-medium text-emerald-200 transition-colors disabled:opacity-50"
                 >
-                  {scanningMode === 'quick' ? <Loader2 size={13} className="animate-spin" /> : <Zap size={13} />}
+                  {scanningMode === 'quick' ? <LoaderCircle size={13} className="animate-spin" /> : <Zap size={13} />}
                   {scanningMode === 'quick' ? 'Quick…' : 'Quick'}
                 </button>
                 <div className="pointer-events-none absolute left-0 top-full mt-2 w-72 rounded-xl border border-white/10 bg-[#141824] shadow-2xl shadow-black/60 p-3 opacity-0 group-hover:opacity-100 transition-opacity duration-150 z-50">
@@ -815,7 +815,7 @@ export default function VirusScannerApp({ windowId }) {
                   disabled={scanning || !selectedConn}
                   className="w-24 flex items-center justify-center gap-1.5 py-2 rounded-lg bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/40 text-xs font-medium text-indigo-200 transition-colors disabled:opacity-50"
                 >
-                  {scanningMode === 'deep' ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}
+                  {scanningMode === 'deep' ? <LoaderCircle size={13} className="animate-spin" /> : <Play size={13} />}
                   {scanningMode === 'deep' ? 'Deep…' : 'Deep'}
                 </button>
                 <div className="pointer-events-none absolute left-0 top-full mt-2 w-72 rounded-xl border border-white/10 bg-[#141824] shadow-2xl shadow-black/60 p-3 opacity-0 group-hover:opacity-100 transition-opacity duration-150 z-50">
@@ -834,7 +834,7 @@ export default function VirusScannerApp({ windowId }) {
                   disabled={scanning || !selectedConn}
                   className="w-24 flex items-center justify-center gap-1.5 py-2 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-xs font-medium text-rose-200 transition-colors disabled:opacity-50"
                 >
-                  {scanningMode === 'full' ? <Loader2 size={13} className="animate-spin" /> : <HardDrive size={13} />}
+                  {scanningMode === 'full' ? <LoaderCircle size={13} className="animate-spin" /> : <HardDrive size={13} />}
                   {scanningMode === 'full' ? 'Full…' : 'Full'}
                 </button>
                 <div className="pointer-events-none absolute left-0 top-full mt-2 w-72 rounded-xl border border-white/10 bg-[#141824] shadow-2xl shadow-black/60 p-3 opacity-0 group-hover:opacity-100 transition-opacity duration-150 z-50">
@@ -882,7 +882,7 @@ export default function VirusScannerApp({ windowId }) {
                   : scan ? 'bg-emerald-500/15 border-emerald-500/30'
                   : 'bg-white/[0.04] border-white/10'
                 }`}>
-                  {scanning ? <Loader2 size={26} className="text-indigo-300 animate-spin" />
+                  {scanning ? <LoaderCircle size={26} className="text-indigo-300 animate-spin" />
                     : totalIssues > 0 ? <ShieldAlert size={26} className="text-rose-300" />
                     : scan ? <ShieldCheck size={26} className="text-emerald-300" />
                     : <Bug size={26} className="text-slate-600" />}
@@ -944,7 +944,7 @@ export default function VirusScannerApp({ windowId }) {
                       }`}>
                         {st?.available
                           ? <BadgeCheck size={16} className="text-emerald-300" />
-                          : busy ? <Loader2 size={16} className="text-amber-300 animate-spin" />
+                          : busy ? <LoaderCircle size={16} className="text-amber-300 animate-spin" />
                           : <Download size={16} className="text-slate-600" />}
                       </div>
                       <div className="flex-1 min-w-0 leading-snug">
@@ -994,7 +994,7 @@ export default function VirusScannerApp({ windowId }) {
                     <span className="text-[11px] font-medium text-slate-300 ml-1">
                       Installing {ENGINES.find(e => e.id === installingEngine)?.name} — live output
                     </span>
-                    <Loader2 size={11} className="animate-spin text-slate-500 ml-auto" />
+                    <LoaderCircle size={11} className="animate-spin text-slate-500 ml-auto" />
                   </div>
                   <pre className="p-3 text-[10px] leading-relaxed text-emerald-200/80 font-mono overflow-y-auto max-h-56 whitespace-pre-wrap break-all">
                     {installLog || 'Starting installer…'}
@@ -1018,7 +1018,7 @@ export default function VirusScannerApp({ windowId }) {
               </div>
             ) : scan.status === 'failed' ? (
               <div className="flex flex-col items-center justify-center text-center py-16">
-                <XCircle size={28} className="text-rose-400 mb-3" />
+                <CircleX size={28} className="text-rose-400 mb-3" />
                 <p className="text-sm font-medium text-rose-300">Scan failed</p>
                 <p className="text-xs text-slate-500 mt-1 max-w-[280px] break-words">{scan.error}</p>
               </div>
@@ -1070,7 +1070,7 @@ export default function VirusScannerApp({ windowId }) {
                               <div className="flex items-center gap-1.5 mt-2.5 flex-wrap">
                                 {busy ? (
                                   <span className="inline-flex items-center gap-1.5 text-[11px] text-slate-400">
-                                    <Loader2 size={12} className="animate-spin" /> Working…
+                                    <LoaderCircle size={12} className="animate-spin" /> Working…
                                   </span>
                                 ) : (
                                   <>

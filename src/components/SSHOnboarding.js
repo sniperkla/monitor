@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next';
 import {
   X, ChevronRight, ChevronLeft, ArrowRight, Sparkles,
   Monitor, Plus, Terminal, FolderOpen,
-  Database, Star, Zap, CheckCircle2, HelpCircle,
+  Database, Star, Zap, CircleCheckBig, CircleHelp,
   Server, Shield
 } from 'lucide-react';
 
@@ -74,7 +74,7 @@ const STEPS = [
   },
   {
     id: 'help-btn',
-    icon: HelpCircle,
+    icon: CircleHelp,
     color: '#6366f1',
     accentColor: '#818cf8',
     spotlight: 'help-btn',
@@ -483,7 +483,7 @@ function ImmersiveCenterPanel({ step, meta, total, contentStep, contentTotal, on
               justifyContent: 'center',
               boxShadow: `0 8px 40px ${meta.color}60`,
             }}>
-              <CheckCircle2 size={36} style={{ color: '#fff' }} />
+              <CircleCheckBig size={36} style={{ color: '#fff' }} />
             </div>
           </div>
           

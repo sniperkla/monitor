@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { AlertTriangle, X, RefreshCw, CloudUpload, WifiOff, ArrowRight } from 'lucide-react';
+import { TriangleAlert, X, RefreshCw, CloudUpload, WifiOff, ArrowRight } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 
 export default function MongoDeadBanner() {
@@ -74,7 +74,7 @@ export default function MongoDeadBanner() {
         <div className="flex items-center gap-1.5 min-w-0">
           {isRelayOnly
             ? <WifiOff size={13} style={{ color: accentColor, flexShrink: 0 }} />
-            : <AlertTriangle size={13} style={{ color: accentColor, flexShrink: 0 }} />
+            : <TriangleAlert size={13} style={{ color: accentColor, flexShrink: 0 }} />
           }
           <span className="font-bold truncate" style={{ color: accentColor }}>{title}</span>
         </div>

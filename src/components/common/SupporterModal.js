@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Coffee, Zap, ChevronDown, ChevronRight, Sparkles, Link2, Ticket, Send, CheckCircle, Loader, LogIn, Crown, Cable, Gauge, FolderSync, Bot, MousePointerClick } from 'lucide-react';
+import { X, Coffee, Zap, ChevronDown, ChevronRight, Sparkles, Link2, Ticket, Send, CircleCheck, LoaderCircle, LogIn, Crown, Cable, Gauge, FolderSync, Bot, MousePointerClick } from 'lucide-react';
 import { useSession, signIn } from 'next-auth/react';
 import { useTranslation } from 'react-i18next';
 import { useSupporter } from '@/hooks/useSupporter';
@@ -424,7 +424,7 @@ export default function SupporterModal({ open, onClose, onGranted }) {
                       className="absolute -inset-2 rounded-full border border-dashed border-emerald-500/30"
                     />
                     <div className="w-16 h-16 rounded-full bg-emerald-500/15 border-2 border-emerald-500/40 flex items-center justify-center shadow-[0_0_30px_rgba(52,211,153,0.25)]">
-                      <CheckCircle size={30} className="text-emerald-400" />
+                      <CircleCheck size={30} className="text-emerald-400" />
                     </div>
                   </motion.div>
                   <motion.p variants={featureItem} className="text-base font-bold text-[var(--text-primary)]">
@@ -566,7 +566,7 @@ export default function SupporterModal({ open, onClose, onGranted }) {
                         disabled={redeeming || !code.trim()}
                         className="px-4 py-2 bg-pink-500 hover:bg-pink-600 disabled:opacity-50 rounded-xl text-white text-xs font-bold transition-all flex items-center gap-1.5 shrink-0"
                       >
-                        {redeeming ? <Loader size={11} className="animate-spin" /> : <Ticket size={11} />}
+                        {redeeming ? <LoaderCircle size={11} className="animate-spin" /> : <Ticket size={11} />}
                         {t('supporter.redeem', 'Redeem')}
                       </button>
                     </div>
@@ -612,7 +612,7 @@ export default function SupporterModal({ open, onClose, onGranted }) {
                       disabled={requesting}
                       className="flex items-center justify-center gap-1.5 w-full px-4 py-2 bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] disabled:opacity-50 rounded-xl text-[var(--text-secondary)] text-xs font-bold transition-all"
                     >
-                      {requesting ? <Loader size={11} className="animate-spin" /> : <Send size={11} />}
+                      {requesting ? <LoaderCircle size={11} className="animate-spin" /> : <Send size={11} />}
                       {t('supporter.sendRequest', 'Send Request')}
                     </button>
                     {requestMsg && (

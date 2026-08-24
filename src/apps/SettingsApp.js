@@ -14,8 +14,8 @@ function safeStringify(obj) {
 }
 import {
   Palette, Image as ImageIcon, Monitor, Layout, Bell, Shield, Info,
-  Database, CheckCircle, AlertCircle, RefreshCw, Zap, Wifi, WifiOff, Server, Box, Package,
-  Loader, Trash2, Lock, Unlock, Key, Mail, Code, Volume2, Sun, Moon, Cpu,
+  Database, CircleCheck, AlertCircle, RefreshCw, Zap, Wifi, WifiOff, Server, Box, Package,
+  LoaderCircle, Trash2, Lock, Unlock, Key, Mail, Code, Volume2, Sun, Moon, Cpu,
   Search, Terminal, Network, Download, Copy, X, CheckCheck, Sparkles,
   GitBranch, GitCommit, ChevronDown, Settings, Send, Music, ChevronRight, LogOut, Check,
   RotateCcw, Menu, Coffee
@@ -1755,7 +1755,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                         <img src={wp.url} alt={wp.name} className="w-full h-full object-cover transition-transform group-hover:scale-105 duration-300" />
                         <div className={`absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent flex items-end justify-between p-2.5 transition-opacity ${isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
                           <span className="text-[10px] font-semibold text-white">{wp.name}</span>
-                          {isActive && <CheckCircle size={16} className="text-indigo-300" />}
+                          {isActive && <CircleCheck size={16} className="text-indigo-300" />}
                         </div>
                       </div>
                     );
@@ -1774,7 +1774,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                         <div className={`absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent flex items-end justify-between p-2.5 transition-opacity ${isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
                           <span className="text-[10px] font-semibold text-white">Custom #{idx + 1}</span>
                           <div className="flex items-center gap-1.5">
-                            {isActive && <CheckCircle size={14} className="text-indigo-300" />}
+                            {isActive && <CircleCheck size={14} className="text-indigo-300" />}
                             <button 
                               onClick={(e) => { e.stopPropagation(); removeCustomWallpaper(url); }}
                               className="p-1 bg-red-500/80 hover:bg-red-500 text-white rounded-md transition-colors"
@@ -2359,7 +2359,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                               disabled={relayLoading}
                               className="px-3 py-1.5 rounded-xl text-[11px] font-bold transition-all flex items-center gap-1.5 bg-amber-500 hover:bg-amber-600 text-white shadow-md shadow-amber-500/20 disabled:opacity-50"
                             >
-                              {relayLoading ? <Loader size={11} className="animate-spin" /> : <Zap size={11} />}
+                              {relayLoading ? <LoaderCircle size={11} className="animate-spin" /> : <Zap size={11} />}
                               {relayLoading ? 'Generating…' : 'Generate Token'}
                             </button>
                           ) : (
@@ -2603,7 +2603,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                           }`}
                         >
                           {dbConnecting ? (
-                            <><Loader size={14} className="animate-spin" /> {t('settings_ui.db.connecting')}</>
+                            <><LoaderCircle size={14} className="animate-spin" /> {t('settings_ui.db.connecting')}</>
                           ) : (
                             <><Zap size={14} /> {t('settings_ui.db.connect')}</>
                           )}
@@ -2879,7 +2879,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                   disabled={deploySaving || deployLoading}
                   className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-lg flex items-center gap-1.5 cursor-pointer"
                 >
-                  {deploySaving ? <Loader size={12} className="animate-spin" /> : <CheckCircle size={12} />}
+                  {deploySaving ? <LoaderCircle size={12} className="animate-spin" /> : <CircleCheck size={12} />}
                   {t('deploy.saveSettings', 'Save Settings')}
                 </button>
                 <button
@@ -2887,7 +2887,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                   disabled={deployTriggering || deployLoading || deployConfig.status === 'running'}
                   className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-lg flex items-center gap-1.5 cursor-pointer"
                 >
-                  {deployTriggering ? <Loader size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                  {deployTriggering ? <LoaderCircle size={12} className="animate-spin" /> : <RefreshCw size={12} />}
                   {t('deploy.deployNow', 'Deploy Now')}
                 </button>
                 {deployConfig.status === 'failed' && (
@@ -2896,7 +2896,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                     disabled={deployTriggering || deployLoading}
                     className="px-4 py-2 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-lg flex items-center gap-1.5 cursor-pointer"
                   >
-                    {deployTriggering ? <Loader size={12} className="animate-spin" /> : <RotateCcw size={12} />}
+                    {deployTriggering ? <LoaderCircle size={12} className="animate-spin" /> : <RotateCcw size={12} />}
                     {t('deploy.retry', 'Retry')}
                   </button>
                 )}
@@ -2924,7 +2924,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
 
             {deployLoading ? (
               <div className="py-20 flex flex-col items-center justify-center gap-3">
-                <Loader className="animate-spin text-indigo-500" size={32} />
+                <LoaderCircle className="animate-spin text-indigo-500" size={32} />
                 <p className="text-xs text-[var(--text-muted)] font-medium">{t('deploy.loadingConfig', 'Loading deployment configuration...')}</p>
               </div>
             ) : (
@@ -3285,7 +3285,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                               disabled={webhookTesting}
                               className="px-3 py-2 bg-indigo-600/10 hover:bg-indigo-600/20 disabled:opacity-50 border border-indigo-500/30 rounded-xl text-xs text-indigo-400 font-bold transition-all flex items-center gap-1.5 cursor-pointer"
                             >
-                              {webhookTesting ? <Loader size={14} className="animate-spin" /> : <Wifi size={14} />}
+                              {webhookTesting ? <LoaderCircle size={14} className="animate-spin" /> : <Wifi size={14} />}
                               {webhookTesting ? t('deploy.testWebhookRunning', 'Testing...') : t('deploy.testWebhook', 'Test Webhook')}
                             </button>
                           </div>
@@ -3294,7 +3294,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                             <div className="mt-3 rounded-xl border border-[var(--border-color)] bg-[var(--bg-tertiary)] p-3 space-y-2">
                               {webhookTestResult.checks.map((check, i) => (
                                 <div key={i} className="flex items-center gap-2 text-xs">
-                                  {check.status === 'pass' && <CheckCircle size={14} className="text-emerald-400 shrink-0" />}
+                                  {check.status === 'pass' && <CircleCheck size={14} className="text-emerald-400 shrink-0" />}
                                   {check.status === 'fail' && <AlertCircle size={14} className="text-red-400 shrink-0" />}
                                   {check.status === 'skip' && <Info size={14} className="text-[var(--text-muted)] shrink-0" />}
                                   <span className="font-bold text-[var(--text-secondary)] capitalize">{check.name.replace(/_/g, ' ')}:</span>
@@ -3496,7 +3496,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                               </label>
                               {telegramBotInfo && (
                                 <span className="text-[10px] text-emerald-400 font-semibold flex items-center gap-1">
-                                  <CheckCircle size={11} />
+                                  <CircleCheck size={11} />
                                   🤖 {telegramBotInfo.first_name} (@{telegramBotInfo.username})
                                 </span>
                               )}
@@ -3515,7 +3515,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                                 disabled={telegramLoadingChats || (!deployConfig.telegramBotToken && !telegramBotInfo)}
                                 className="px-3 py-2 rounded-xl bg-sky-500/10 hover:bg-sky-500/20 border border-sky-500/30 text-sky-400 hover:text-sky-300 text-xs font-semibold flex items-center gap-1.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
                               >
-                                {telegramLoadingChats ? <Loader size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+                                {telegramLoadingChats ? <LoaderCircle size={13} className="animate-spin" /> : <RefreshCw size={13} />}
                                 Fetch Chats
                               </button>
                             </div>
@@ -3634,7 +3634,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                                 disabled={telegramTesting || !deployConfig.telegramChatId}
                                 className="px-3 py-2 rounded-xl bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/30 text-indigo-400 hover:text-indigo-300 text-xs font-semibold flex items-center gap-1.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
                               >
-                                {telegramTesting ? <Loader size={13} className="animate-spin" /> : <Send size={13} />}
+                                {telegramTesting ? <LoaderCircle size={13} className="animate-spin" /> : <Send size={13} />}
                                 Test Alert
                               </button>
                             </div>
@@ -3647,7 +3647,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                                 ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' 
                                 : 'bg-rose-500/10 border-rose-500/30 text-rose-400'
                             }`}>
-                              {telegramTestStatus.success ? <CheckCircle size={14} /> : <AlertCircle size={14} />}
+                              {telegramTestStatus.success ? <CircleCheck size={14} /> : <AlertCircle size={14} />}
                               <span>{telegramTestStatus.message}</span>
                             </div>
                           )}
@@ -3777,7 +3777,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                                   : 'bg-gradient-to-r from-indigo-500 to-violet-600 hover:from-indigo-600 hover:to-violet-700 cursor-pointer'
                               }`}
                             >
-                              {aiAnalyzing ? <Loader size={12} className="animate-spin" /> : <Sparkles size={12} />}
+                              {aiAnalyzing ? <LoaderCircle size={12} className="animate-spin" /> : <Sparkles size={12} />}
                               {aiAnalyzing ? t('deploy.aiAnalyzing', 'Scanning & Analyzing...') : isMissingKey ? 'AI API Key Required' : t('deploy.aiAnalyzeBtn', 'Analyze with AI')}
                             </button>
 
@@ -3896,7 +3896,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                         disabled={deployTriggering || deployLoading}
                         className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white rounded-lg text-[10px] font-bold transition-all flex items-center gap-1.5 cursor-pointer"
                       >
-                        {deployTriggering ? <Loader size={10} className="animate-spin" /> : <RotateCcw size={10} />}
+                        {deployTriggering ? <LoaderCircle size={10} className="animate-spin" /> : <RotateCcw size={10} />}
                         {t('deploy.retry', 'Retry')}
                       </button>
                     )}
@@ -3915,7 +3915,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                       disabled={loadingCommits || deployConfig.status === 'running'}
                       className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-lg text-[10px] font-bold transition-all flex items-center gap-1.5 cursor-pointer"
                     >
-                      {loadingCommits ? <Loader size={10} className="animate-spin" /> : <GitCommit size={10} />}
+                      {loadingCommits ? <LoaderCircle size={10} className="animate-spin" /> : <GitCommit size={10} />}
                       {t('deploy.selectCommit', 'Select Commit')}
                     </button>
                     <span className={`text-xs font-bold px-3 py-1 rounded-lg ${isDeployFailed ? 'bg-red-500/20 text-red-300' : 'bg-emerald-500/20 text-emerald-300'}`}>
@@ -4359,7 +4359,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                     >
                       <div className="absolute inset-0 rounded-full bg-emerald-500/20 blur-xl animate-pulse" />
                       <div className="relative w-20 h-20 rounded-full bg-emerald-500/15 border-2 border-emerald-500/30 flex items-center justify-center">
-                        <CheckCircle size={38} className="text-emerald-400" />
+                        <CircleCheck size={38} className="text-emerald-400" />
                       </div>
                     </motion.div>
                     <motion.div
@@ -4435,7 +4435,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                             <code className="text-[10px] font-mono text-amber-300 break-all leading-relaxed">{getRelayOneLiner('install')}</code>
                           ) : (
                             <div className="flex items-center gap-2 text-[10px] text-slate-500 italic">
-                              <Loader size={11} className="animate-spin" />
+                              <LoaderCircle size={11} className="animate-spin" />
                               <span>Generating your unique install command…</span>
                             </div>
                           )}
@@ -4483,7 +4483,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                             disabled={relayLoading}
                             className="px-3 py-2.5 bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] border border-[var(--border-color)] disabled:opacity-40 rounded-xl text-[var(--text-muted)] hover:text-[var(--text-secondary)] text-xs font-bold transition-colors"
                           >
-                            {relayLoading ? <Loader size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+                            {relayLoading ? <LoaderCircle size={13} className="animate-spin" /> : <RefreshCw size={13} />}
                           </button>
                         )}
                       </div>
@@ -4494,7 +4494,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                       <div className="flex items-center gap-2">
                         <div className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 transition-colors ${relayConnected ? 'bg-emerald-500' : 'bg-[var(--bg-tertiary)] border border-[var(--border-color)]'}`}>
                           {relayConnected
-                            ? <CheckCircle size={12} className="text-white" />
+                            ? <CircleCheck size={12} className="text-white" />
                             : <span className="text-[10px] font-bold text-[var(--text-muted)]">2</span>
                           }
                         </div>
@@ -4528,7 +4528,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                             animate={{ opacity: 1 }}
                             className="flex items-center gap-2.5 p-3 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)]"
                           >
-                            <Loader size={12} className="shrink-0 text-[var(--text-muted)] animate-spin" />
+                            <LoaderCircle size={12} className="shrink-0 text-[var(--text-muted)] animate-spin" />
                             <span className="text-[10px] text-[var(--text-muted)]">After running the command above, your relay will connect here automatically.</span>
                           </motion.div>
                         )}

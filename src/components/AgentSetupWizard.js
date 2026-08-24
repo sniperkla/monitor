@@ -3,8 +3,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { 
   Zap, Server, Play, Square, RefreshCw, Copy, Check, 
-  Terminal, Shield, Trash2, CheckCircle2, AlertTriangle, 
-  Cpu, X, ExternalLink, HelpCircle, Download, CheckCircle,
+  Terminal, Shield, Trash2, CircleCheckBig, TriangleAlert, 
+  Cpu, X, ExternalLink, CircleHelp, Download, CircleCheck,
   Settings2, BookOpen, PackageX
 } from 'lucide-react';
 
@@ -236,11 +236,11 @@ export default function AgentSetupWizard({
                 </span>
               ) : status.isRunning ? (
                 <span className="flex items-center gap-1.5 text-emerald-400 font-semibold px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20">
-                  <CheckCircle2 size={12} /> Running on Server {status.inTmux ? '(tmux)' : status.inService ? '(systemd)' : ''}
+                  <CircleCheckBig size={12} /> Running on Server {status.inTmux ? '(tmux)' : status.inService ? '(systemd)' : ''}
                 </span>
               ) : (
                 <span className="flex items-center gap-1.5 text-amber-400 font-medium px-2 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/20">
-                  <AlertTriangle size={12} /> Not Running (Agentless Mode)
+                  <TriangleAlert size={12} /> Not Running (Agentless Mode)
                 </span>
               )}
             </div>
@@ -294,7 +294,7 @@ export default function AgentSetupWizard({
               <div className="relative">
                 <div className="absolute inset-0 rounded-full bg-emerald-500/20 blur-xl animate-pulse" />
                 <div className="relative w-20 h-20 rounded-full bg-emerald-500/15 border-2 border-emerald-500/30 flex items-center justify-center">
-                  <CheckCircle size={38} className="text-emerald-400" />
+                  <CircleCheck size={38} className="text-emerald-400" />
                 </div>
               </div>
               <div className="space-y-2">
@@ -347,7 +347,7 @@ export default function AgentSetupWizard({
                 </p>
               </div>
               <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-500/10 border border-indigo-500/20">
-                <CheckCircle2 size={14} className="text-indigo-400 shrink-0" />
+                <CircleCheckBig size={14} className="text-indigo-400 shrink-0" />
                 <span className="text-xs text-indigo-300 font-medium">Ready — agentless monitoring active</span>
               </div>
               <div className="flex gap-3">
@@ -371,7 +371,7 @@ export default function AgentSetupWizard({
               {!status.nodeInstalled && !status.loading && (
                 <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/25 text-amber-300 flex items-center justify-between gap-3 shadow-sm animate-in fade-in">
                   <div className="flex items-start gap-2.5">
-                    <AlertTriangle size={17} className="text-amber-400 shrink-0 mt-0.5" />
+                    <TriangleAlert size={17} className="text-amber-400 shrink-0 mt-0.5" />
                     <div>
                       <p className="font-semibold text-xs text-amber-200">Node.js is not installed on this server</p>
                       <p className="text-[11px] text-amber-300/80 mt-0.5 leading-relaxed">
@@ -538,7 +538,7 @@ export default function AgentSetupWizard({
         {/* Footer */}
         <div className="px-6 py-3 border-t border-[var(--border-color)] bg-[var(--bg-secondary)] flex items-center justify-between text-xs">
           <span className="text-[var(--text-muted)] flex items-center gap-1">
-            <HelpCircle size={13} /> Pure SSH polling continues to work even without the agent.
+            <CircleHelp size={13} /> Pure SSH polling continues to work even without the agent.
           </span>
           <button
             onClick={onClose}

@@ -3,12 +3,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-  AlertTriangle, ChevronDown, ChevronUp, Copy, FileUp, BrickWallShield, Globe2, Info,
-  Loader2, LockKeyhole, Plus, RefreshCw, ShieldAlert, ShieldCheck, Search,
+  TriangleAlert, ChevronDown, ChevronUp, Copy, FileUp, BrickWallShield, Globe2, Info,
+  LoaderCircle, LockKeyhole, Plus, RefreshCw, ShieldAlert, ShieldCheck, Search,
   Upload, X, Power, RotateCcw, Trash2, Activity, Check, Zap,
   Terminal, Shield, Clock, Layers, SlidersHorizontal, ExternalLink, Sparkles,
   Workflow, FileSpreadsheet, Radio, Radar, Server, Cpu, CloudLightning, ArrowUpRight,
-  HelpCircle, Play, Pause, Pin, Ban, FolderUp, TrendingUp, FastForward
+  CircleHelp, Play, Pause, Pin, Ban, FolderUp, TrendingUp, FastForward
 } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 import { useOS } from '@/context/OSContext';
@@ -202,7 +202,7 @@ function ApplyProgress({ progress }) {
     <div className={`mt-4 rounded-xl border p-3.5 font-mono ${isError ? 'border-rose-500/30 bg-rose-500/10' : 'border-indigo-500/30 bg-indigo-500/10'}`}>
       <div className="flex items-center justify-between gap-3 text-xs">
         <span className={`font-semibold flex items-center gap-2 ${isError ? 'text-rose-200' : 'text-indigo-100'}`}>
-          {!isError && <Loader2 size={13} className="animate-spin text-indigo-400" />}
+          {!isError && <LoaderCircle size={13} className="animate-spin text-indigo-400" />}
           {isError ? 'Apply failed' : progress.message || 'Applying firewall update...'}
         </span>
         {!isError && <span className="font-bold text-cyan-300 tabular-nums">{percentage}%</span>}
@@ -1090,7 +1090,7 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                 className="p-2.5 px-3 rounded-xl border border-white/10 bg-black/40 hover:bg-white/5 hover:border-indigo-400/50 text-white/70 hover:text-white transition-all cursor-pointer flex items-center gap-1.5 text-xs font-medium"
                 title={t('firewall.guideBtn')}
               >
-                <HelpCircle size={14} className="text-indigo-400" />
+                <CircleHelp size={14} className="text-indigo-400" />
                 <span className="hidden sm:inline">{t('firewall.guideBtn')}</span>
               </button>
             </div>
@@ -1137,7 +1137,7 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
         {status && (!status.tools?.ipset || !status.tools?.iptables) && (
           <div className="rounded-2xl border border-amber-500/30 bg-gradient-to-r from-amber-500/15 via-rose-500/10 to-amber-500/15 p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div className="flex items-center gap-3 min-w-0">
-              <AlertTriangle size={20} className="text-amber-400 shrink-0" />
+              <TriangleAlert size={20} className="text-amber-400 shrink-0" />
               <div>
                 <h2 className="text-xs font-bold text-amber-200 uppercase tracking-wider">Kernel Tools Required</h2>
                 <p className="text-xs text-amber-300/80 mt-0.5">
@@ -1152,7 +1152,7 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                 disabled={installing}
                 className="px-4 py-2 rounded-xl text-xs font-bold bg-amber-500 text-black hover:bg-amber-400 transition-all flex items-center gap-1.5 shadow-[0_0_15px_rgba(245,158,11,0.3)] disabled:opacity-50 cursor-pointer"
               >
-                {installing ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+                {installing ? <LoaderCircle size={13} className="animate-spin" /> : <Sparkles size={13} />}
                 {installing ? 'Installing...' : '1-Click Install Tools'}
               </button>
             </div>
@@ -1303,7 +1303,7 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                       disabled={sourceLoading || !matchesConfirmation(sourceConfirmation) || (sourceSchedule === 'custom' && !sourceCustomSchedule.trim())}
                       className="flex-1 sm:flex-initial px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 text-white hover:bg-indigo-500 transition-all flex items-center justify-center gap-1.5 shadow-[0_0_15px_rgba(99,102,241,0.3)] disabled:opacity-40 cursor-pointer"
                     >
-                      {sourceLoading ? <Loader2 size={13} className="animate-spin" /> : <Clock size={13} />}
+                      {sourceLoading ? <LoaderCircle size={13} className="animate-spin" /> : <Clock size={13} />}
                       Save Schedule
                     </button>
 
@@ -1313,7 +1313,7 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                       disabled={sourceLoading || !matchesConfirmation(sourceConfirmation) || (sourceSchedule === 'custom' && !sourceCustomSchedule.trim())}
                       className="flex-1 sm:flex-initial px-4 py-2 rounded-xl text-xs font-bold bg-emerald-600 text-white hover:bg-emerald-500 transition-all flex items-center justify-center gap-1.5 shadow-[0_0_15px_rgba(16,185,129,0.3)] disabled:opacity-40 cursor-pointer"
                     >
-                      {sourceLoading ? <Loader2 size={13} className="animate-spin" /> : <Zap size={13} />}
+                      {sourceLoading ? <LoaderCircle size={13} className="animate-spin" /> : <Zap size={13} />}
                       Run Update Now
                     </button>
 
@@ -1401,7 +1401,7 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                       : 'border-white/10 bg-white/[0.02] hover:border-indigo-400/50 hover:bg-white/5'
                   }`}
                 >
-                  {previewing ? <Loader2 size={24} className="text-indigo-400 animate-spin" /> : <FileUp size={24} className="text-indigo-400" />}
+                  {previewing ? <LoaderCircle size={24} className="text-indigo-400 animate-spin" /> : <FileUp size={24} className="text-indigo-400" />}
                   <span className="text-xs font-semibold text-white">Click or drag & drop .ipset / .netset / .txt files</span>
                   <span className="text-[10px] text-white/40">Files up to 128 MB · Deduplication is automated</span>
                 </button>
@@ -1530,7 +1530,7 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                         disabled={blocking || !blockDraft.trim()}
                         className="px-3.5 py-2 rounded-xl text-xs font-bold bg-rose-500/20 text-rose-200 hover:bg-rose-500/30 border border-rose-500/40 flex items-center gap-1.5 cursor-pointer disabled:opacity-40"
                       >
-                        {blocking ? <Loader2 size={13} className="animate-spin" /> : <Ban size={13} />} Block
+                        {blocking ? <LoaderCircle size={13} className="animate-spin" /> : <Ban size={13} />} Block
                       </button>
                       <button
                         type="button"
@@ -1621,7 +1621,7 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                     disabled={!canApply || applying}
                     className="px-5 py-2.5 rounded-xl text-xs font-bold bg-indigo-600 text-white hover:bg-indigo-500 transition-all flex items-center gap-2 shadow-[0_0_20px_rgba(99,102,241,0.35)] disabled:opacity-40 cursor-pointer"
                   >
-                    {applying ? <Loader2 size={14} className="animate-spin" /> : <BrickWallShield size={14} />}
+                    {applying ? <LoaderCircle size={14} className="animate-spin" /> : <BrickWallShield size={14} />}
                     {applying ? 'Applying...' : 'Apply Blocklist'}
                   </button>
                 </div>
@@ -2511,7 +2511,7 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                   disabled={inspectionLoading}
                   className="ml-auto px-3.5 py-2 rounded-xl text-xs font-semibold bg-indigo-500/15 border border-indigo-500/30 text-indigo-200 hover:bg-indigo-500/25 transition-all flex items-center gap-1.5 disabled:opacity-30 cursor-pointer"
                 >
-                  {inspectionLoading ? <Loader2 size={13} className="animate-spin" /> : <Terminal size={13} />}
+                  {inspectionLoading ? <LoaderCircle size={13} className="animate-spin" /> : <Terminal size={13} />}
                   Deep Inspect Server
                 </button>
               </div>
@@ -2542,7 +2542,7 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                     disabled={managing || !matchesConfirmation(manageConfirmation)}
                     className="px-4 py-1.5 rounded-xl text-xs font-bold bg-amber-500 text-black hover:bg-amber-400 transition-all disabled:opacity-40 cursor-pointer"
                   >
-                    {managing ? <Loader2 size={13} className="animate-spin" /> : 'Execute Now'}
+                    {managing ? <LoaderCircle size={13} className="animate-spin" /> : 'Execute Now'}
                   </button>
                   <button
                     type="button"

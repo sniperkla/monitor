@@ -5,10 +5,10 @@ import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { 
   Laptop, Terminal as TermIcon, Play, Square, RefreshCw, Box, Layers, 
-  ExternalLink, AlertTriangle, Trash2, Folder, FileText, Star, Archive,
+  ExternalLink, TriangleAlert, Trash2, Folder, FileText, Star, Archive,
   Download, Search, X, RotateCcw, Cpu, HardDrive, Clock, Activity,
   ChevronDown, ChevronRight, Zap, Globe, Package, Shield, Plus, Share2,
-  Upload, Eye, EyeOff, Settings, CircleCheck, CircleAlert, Sunrise, MoreHorizontal, Sliders, HelpCircle
+  Upload, Eye, EyeOff, Settings, CircleCheck, CircleAlert, Sunrise, Ellipsis, Sliders, CircleHelp
 } from 'lucide-react';
 import DockerOnboarding, { hasCompletedDockerOnboarding, resetDockerOnboarding } from '@/components/DockerOnboarding';
 import { useApp } from '@/context/AppContext';
@@ -1662,7 +1662,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                   className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-white/5 transition-colors"
                   title="Show tutorial"
                 >
-                  <HelpCircle size={15} />
+                  <CircleHelp size={15} />
                 </button>
                 <button onClick={fetchContainers} className="p-1.5 hover:bg-white/5 rounded-lg text-sky-400 transition-colors active:scale-90" title="Refresh">
                     <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
@@ -1682,13 +1682,13 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
         <div className="flex-1 overflow-y-auto p-6 scrollbar-hide">
             {!isDockerInstalled ? (
                 <div className="text-center py-20">
-                    <AlertTriangle size={48} className="text-rose-500 mx-auto mb-4" />
+                    <TriangleAlert size={48} className="text-rose-500 mx-auto mb-4" />
                     <h2 className="text-xl font-bold mb-2">Docker Not Installed</h2>
                     <p className="text-sm text-[var(--text-muted)]">Docker was not found on this server</p>
                 </div>
             ) : !isDockerRunning ? (
                 <div className="text-center py-20">
-                    <AlertTriangle size={48} className="text-amber-500 mx-auto mb-4" />
+                    <TriangleAlert size={48} className="text-amber-500 mx-auto mb-4" />
                     <h2 className="text-xl font-bold mb-2">Docker Daemon Not Running</h2>
                     <p className="text-sm text-[var(--text-muted)]">Cannot connect to unix:///var/run/docker.sock</p>
                 </div>
@@ -2051,7 +2051,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                             className="p-1.5 rounded-xl bg-white/[0.04] border border-white/5 text-[var(--text-secondary)] hover:text-white hover:bg-white/10 transition-all cursor-pointer flex items-center gap-1"
                                             title="More Actions"
                                           >
-                                            <MoreHorizontal size={14} />
+                                            <Ellipsis size={14} />
                                           </button>
 
                                           {openMenuContainerId === c.id && (
@@ -2615,7 +2615,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                               {swarmInitNeedsAddr && (
                                 <div className="w-full max-w-sm space-y-1.5">
                                   <label className="text-[10px] font-bold uppercase tracking-wider text-amber-400 flex items-center gap-1.5">
-                                    <AlertTriangle size={11} /> --advertise-addr required
+                                    <TriangleAlert size={11} /> --advertise-addr required
                                   </label>
                                   <input
                                     type="text"
@@ -3151,7 +3151,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                     {orphansModal.ports.length > 0 && (
                       <div>
                         <h3 className="text-[10px] font-bold uppercase tracking-wider text-amber-400 flex items-center gap-1.5 mb-2">
-                          <AlertTriangle size={11} /> Port Conflicts ({orphansModal.ports.length})
+                          <TriangleAlert size={11} /> Port Conflicts ({orphansModal.ports.length})
                         </h3>
                         <div className="flex flex-wrap gap-1.5">
                           {orphansModal.ports.map(port => (
@@ -3231,7 +3231,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
           <MacOSModalWindow
             isOpen
             title="Prune Volumes"
-            icon={AlertTriangle}
+            icon={TriangleAlert}
             onClose={() => setPruneVolumesModal({ isOpen: false, confirmText: '' })}
             zIndexClassName="z-[9999]"
             defaultWidth={360}
@@ -3282,7 +3282,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
           <MacOSModalWindow
             isOpen
             title="Prune Images"
-            icon={AlertTriangle}
+            icon={TriangleAlert}
             onClose={() => setPruneImagesModal({ isOpen: false, pruneAll: false, confirmText: '' })}
             zIndexClassName="z-[9999]"
             defaultWidth={400}
@@ -3347,7 +3347,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
           <MacOSModalWindow
             isOpen
             title="Docker Prune"
-            icon={AlertTriangle}
+            icon={TriangleAlert}
             onClose={() => setPruneSystemModal({ isOpen: false, targets: { containers: false, images: false, volumes: false, networks: false, cache: false }, pruneAll: false, confirmText: '' })}
             zIndexClassName="z-[9999]"
             defaultWidth={440}
@@ -3515,7 +3515,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                   return (
                     <div>
                       <div className="flex items-center gap-2 bg-rose-500/10 border border-rose-500/20 p-2.5 rounded-xl mb-2">
-                        <AlertTriangle size={14} className="text-rose-400 shrink-0" />
+                        <TriangleAlert size={14} className="text-rose-400 shrink-0" />
                         <p className="text-[11px] text-rose-300">
                           <strong>Warning:</strong> Volumes with database files or persistent data will be permanently deleted.
                         </p>

@@ -6,7 +6,7 @@ import { useTranslation } from 'react-i18next';
 import {
   X, ChevronRight, ChevronLeft, Sparkles,
   Shield, Server, Workflow, Layers, Radar,
-  CheckCircle2, Zap, Ban, Power
+  CircleCheckBig, Zap, Ban, Power
 } from 'lucide-react';
 
 const STORAGE_KEY = 'firewall-onboarding-completed';
@@ -297,7 +297,7 @@ function ImmersiveCenterPanel({ step, meta, total, contentStep, contentTotal, on
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               boxShadow: `0 8px 40px ${meta.color}60`,
             }}>
-              <CheckCircle2 size={36} style={{ color: '#fff' }} />
+              <CircleCheckBig size={36} style={{ color: '#fff' }} />
             </div>
           </div>
           <h1 style={{ margin: '0 0 12px', fontSize: 32, fontWeight: 800, color: '#f1f5f9' }}>

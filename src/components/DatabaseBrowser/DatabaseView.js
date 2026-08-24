@@ -5,10 +5,10 @@ import { useOS } from '@/context/OSContext';
 import { getLocalConnections, saveLocalConnections } from '@/utils/localConnections';
 import MacOSModalWindow from '@/components/MacOSModalWindow';
 import { 
-  Search, RefreshCw, Layers, Table, Code, Activity, Save, Loader2, 
-  Trash2, Edit, Plus, Download, Upload, X, Check, AlertCircle, Sparkles,
-  Clock, ChevronDown, Shield, Archive, Settings2, AlertTriangle, Edit3,
-  PlusCircle, Terminal, ShieldCheck, Eye, Copy, Maximize2, HelpCircle, Wifi
+  Search, RefreshCw, Layers, Table, Code, Activity, Save, LoaderCircle, 
+  Trash2, Pen, Plus, Download, Upload, X, Check, AlertCircle, Sparkles,
+  Clock, ChevronDown, Shield, Archive, Settings2, TriangleAlert, PenLine,
+  PlusCircle, Terminal, ShieldCheck, Eye, Copy, Maximize2, CircleHelp, Wifi
 } from 'lucide-react';
 import { io } from 'socket.io-client';
 import ThemeSelect from '@/components/common/ThemeSelect';
@@ -1213,7 +1213,7 @@ export default function DatabaseView({ connection, onClose }) {
         <div className="flex-1 overflow-y-auto p-2 space-y-0.5 custom-scrollbar">
           {loading && schema.length === 0 ? (
              <div className="text-center py-10 opacity-50">
-                <Loader2 size={20} className="animate-spin mx-auto mb-2 text-indigo-400" />
+                <LoaderCircle size={20} className="animate-spin mx-auto mb-2 text-indigo-400" />
                 <span className="text-[10px]">Loading Schema...</span>
              </div>
           ) : schema.length === 0 ? (
@@ -1279,7 +1279,7 @@ export default function DatabaseView({ connection, onClose }) {
                 </button>
                 {connectRetryCount > 0 && connectRetryCount < 10 && (
                    <div className="flex items-center gap-2 text-[10px] text-amber-500/80 font-bold animate-pulse">
-                      <Loader2 size={12} className="animate-spin" />
+                      <LoaderCircle size={12} className="animate-spin" />
                       Retrying automatically (Attempt {connectRetryCount}/10)...
                    </div>
                 )}
@@ -1531,7 +1531,7 @@ export default function DatabaseView({ connection, onClose }) {
                                 'bg-emerald-500/20 text-emerald-500'
                             }`}>
                                 {pendingAction.type === 'DELETE' ? <Trash2 size={20} /> :
-                                 pendingAction.type === 'UPDATE' ? <Edit3 size={20} /> :
+                                 pendingAction.type === 'UPDATE' ? <PenLine size={20} /> :
                                  <PlusCircle size={20} />}
                             </div>
                             
@@ -1639,13 +1639,13 @@ export default function DatabaseView({ connection, onClose }) {
                                     className={`p-1 rounded-full transition-all ${showAiHelp ? 'bg-purple-500 text-white' : 'text-purple-400/50 hover:text-purple-400 hover:bg-purple-500/10'}`}
                                     title={t('database.ai.help')}
                                 >
-                                    <HelpCircle size={12} />
+                                    <CircleHelp size={12} />
                                 </button>
                                 
                                 {showAiHelp && (
                                     <div className="absolute top-full left-0 mt-3 w-72 bg-[var(--bg-secondary)] border border-purple-500/30 rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] p-4 z-[100] animate-in slide-in-from-top-2 backdrop-blur-xl">
                                         <div className="flex items-center gap-2 mb-3 border-b border-purple-500/20 pb-2">
-                                            <HelpCircle size={14} className="text-purple-400" />
+                                            <CircleHelp size={14} className="text-purple-400" />
                                             <h4 className="text-[11px] font-bold text-purple-400 uppercase tracking-widest">{t('database.ai.help')}</h4>
                                         </div>
                                             <div className="space-y-2">
@@ -1692,7 +1692,7 @@ export default function DatabaseView({ connection, onClose }) {
                              
                              {isAiLoading ? (
                                  <div className="absolute right-12 top-1/2 -translate-y-1/2">
-                                     <Loader2 size={14} className="animate-spin text-purple-400" />
+                                     <LoaderCircle size={14} className="animate-spin text-purple-400" />
                                  </div>
                              ) : (
                                 <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center" ref={historyRef}>
@@ -1893,7 +1893,7 @@ export default function DatabaseView({ connection, onClose }) {
              <div className="flex-1 overflow-auto bg-[var(--bg-primary)] p-4 custom-scrollbar">
                 {loading && data.length === 0 ? (
                    <div className="h-full flex flex-col items-center justify-center opacity-50">
-                      <Loader2 size={24} className="animate-spin mb-4 text-indigo-400" />
+                      <LoaderCircle size={24} className="animate-spin mb-4 text-indigo-400" />
                       <span className="text-xs font-medium tracking-widest uppercase">{t('database.status.fetching')}</span>
                    </div>
                 ) : (data.length > 0 || (pendingAction?.type === 'INSERT' && pendingAction.mockRows?.length > 0)) ? (
@@ -1957,7 +1957,7 @@ export default function DatabaseView({ connection, onClose }) {
                                            className="p-1.5 hover:bg-blue-500/20 text-blue-400 rounded-lg transition-colors"
                                            title={t('database.editor.edit')}
                                          >
-                                            <Edit size={14} />
+                                            <Pen size={14} />
                                          </button>
                                          <button 
                                            onClick={() => handleDelete(row)}
@@ -2160,7 +2160,7 @@ function RecordModal({ mode, initialData, onClose, onSave, isSubmitting }) {
             disabled={isSubmitting}
             className="flex items-center gap-2 px-6 py-2.5 bg-indigo-500 hover:bg-indigo-600 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-indigo-500/20"
           >
-            {isSubmitting ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
+            {isSubmitting ? <LoaderCircle size={16} className="animate-spin" /> : <Check size={16} />}
             {mode === 'add' ? t('database.editor.createRecord') : t('database.editor.saveChanges')}
           </button>
         </div>

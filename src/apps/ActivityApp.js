@@ -6,7 +6,7 @@ import {
   History, Search, RefreshCw, Trash2, ChevronDown,
   FolderOpen, FolderMinus, UploadCloud, Server, Rocket, DatabaseBackup,
   CloudSync, LogIn, Terminal, Settings, Monitor, Book, StickyNote,
-  CheckCircle2, XCircle, Info, Inbox,
+  CircleCheckBig, CircleX, Info, Inbox,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -37,8 +37,8 @@ const ACTION_ICONS = [
 ];
 
 const STATUS_STYLES = {
-  success: { dot: 'bg-emerald-400', text: 'text-emerald-300', Icon: CheckCircle2 },
-  error:   { dot: 'bg-rose-400',    text: 'text-rose-300',    Icon: XCircle },
+  success: { dot: 'bg-emerald-400', text: 'text-emerald-300', Icon: CircleCheckBig },
+  error:   { dot: 'bg-rose-400',    text: 'text-rose-300',    Icon: CircleX },
   info:    { dot: 'bg-sky-400',     text: 'text-sky-300',     Icon: Info },
 };
 
@@ -248,7 +248,7 @@ export default function ActivityApp() {
         ) : error && items.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center py-16">
             <div className="w-14 h-14 rounded-2xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-center mb-4">
-              <XCircle size={24} className="text-rose-400" />
+              <CircleX size={24} className="text-rose-400" />
             </div>
             <p className="text-sm font-medium text-rose-300">Could not load activity</p>
             <p className="text-xs text-slate-500 mt-1 max-w-[280px] break-words">{error}</p>

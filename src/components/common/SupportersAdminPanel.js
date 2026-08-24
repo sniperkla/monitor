@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { motion } from 'framer-motion';
-import { Heart, RefreshCw, Loader, Crown, Ticket, Copy, Check, Ban, Inbox, ShieldCheck, ShieldOff, Clock, AlertCircle } from 'lucide-react';
+import { Heart, RefreshCw, LoaderCircle, Crown, Ticket, Copy, Check, Ban, Inbox, ShieldCheck, ShieldOff, Clock, AlertCircle } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 function StatusBadge({ status }) {
@@ -138,7 +138,7 @@ export default function SupportersAdminPanel() {
   if (loading && !data) {
     return (
       <div className="flex items-center justify-center py-16 text-[var(--text-muted)]">
-        <Loader size={18} className="animate-spin" />
+        <LoaderCircle size={18} className="animate-spin" />
       </div>
     );
   }
@@ -252,7 +252,7 @@ export default function SupportersAdminPanel() {
                   disabled={busy === r.email}
                   className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-400 border border-emerald-500/25 rounded-lg text-[11px] font-bold transition-all disabled:opacity-50"
                 >
-                  {busy === r.email ? <Loader size={11} className="animate-spin" /> : <ShieldCheck size={11} />}
+                  {busy === r.email ? <LoaderCircle size={11} className="animate-spin" /> : <ShieldCheck size={11} />}
                   {t('supporter.admin.grant', 'Grant')}
                 </button>
                 <button
@@ -334,7 +334,7 @@ export default function SupportersAdminPanel() {
                     title={s.isAdmin ? t('supporter.admin.adminNoRevoke', 'Admins always have access') : t('supporter.admin.extendHint', 'Extend membership')}
                     className="px-2.5 py-1.5 bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] text-[var(--text-secondary)] rounded-lg text-[11px] font-bold transition-all disabled:opacity-40"
                   >
-                    {busy === s.email ? <Loader size={11} className="animate-spin" /> : '+30'}
+                    {busy === s.email ? <LoaderCircle size={11} className="animate-spin" /> : '+30'}
                   </button>
                   {!s.isAdmin && (
                     <button
@@ -343,7 +343,7 @@ export default function SupportersAdminPanel() {
                       title={t('supporter.admin.revokeHint', 'Revoke — also disconnects active relays')}
                       className="p-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg transition-all disabled:opacity-50"
                     >
-                      {busy === s.email ? <Loader size={11} className="animate-spin" /> : <ShieldOff size={12} />}
+                      {busy === s.email ? <LoaderCircle size={11} className="animate-spin" /> : <ShieldOff size={12} />}
                     </button>
                   )}
                 </div>
@@ -408,7 +408,7 @@ export default function SupportersAdminPanel() {
             disabled={generating}
             className="flex items-center justify-center gap-1.5 w-full px-4 py-2 bg-pink-500 hover:bg-pink-600 disabled:opacity-50 rounded-xl text-white text-xs font-bold transition-all"
           >
-            {generating ? <Loader size={12} className="animate-spin" /> : <Ticket size={12} />}
+            {generating ? <LoaderCircle size={12} className="animate-spin" /> : <Ticket size={12} />}
             {t('supporter.admin.generate', 'Generate Codes')}
           </button>
 

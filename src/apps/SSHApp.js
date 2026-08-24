@@ -11,7 +11,7 @@ import { useApp } from '@/context/AppContext';
 import { useOS } from '@/context/OSContext';
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronLeft, ChevronRight, Menu, HelpCircle } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Menu, CircleHelp } from 'lucide-react';
 import { useIsMobile } from '@/hooks/useIsMobile';
 
 import dynamic from 'next/dynamic';
@@ -296,7 +296,7 @@ export default function SSHApp({ windowId, activeTab: propActiveTab }) {
               className="p-2 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]/60 transition-colors"
               title="Show tutorial"
             >
-              <HelpCircle size={16} />
+              <CircleHelp size={16} />
             </button>
         </div>
 

@@ -11,7 +11,7 @@ import { useSession, signIn } from 'next-auth/react';
 import ThemeSelect from '@/components/common/ThemeSelect';
 import MacOSModalWindow from '@/components/MacOSModalWindow';
 import {
-  X, Server, User, Lock, Key, Shield, Upload, FileKey, Hash, Tag, Palette, StickyNote, Database, HardDrive, Cpu, Eye, EyeOff, Activity, RefreshCw, AlertTriangle, Network
+  X, Server, User, Lock, Key, Shield, Upload, FileKey, Hash, Tag, Palette, StickyNote, Database, HardDrive, Cpu, Eye, EyeOff, Activity, RefreshCw, TriangleAlert, Network
 } from 'lucide-react';
 
 const COLORS = [
@@ -823,7 +823,7 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
                       {/* Relay agent hint when host is localhost (only if relay is not connected) */}
                       {form.type === 'database' && /^(localhost|127\.0\.0\.1)$/.test(form.host) && !relayConnected && (
                         <div className="flex gap-2 mt-2 p-2.5 rounded-xl bg-amber-500/8 border border-amber-500/25 text-[10px] leading-relaxed">
-                          <AlertTriangle size={13} className="shrink-0 text-amber-400 mt-0.5" />
+                          <TriangleAlert size={13} className="shrink-0 text-amber-400 mt-0.5" />
                           <span className="text-amber-300/90">
                             <strong>{t('ssh.modal.relay.localDetected')}</strong> {t('ssh.modal.relay.localDesc')}
                             <span className="text-[var(--text-muted)]"> {t('ssh.modal.relay.localHint')}</span>

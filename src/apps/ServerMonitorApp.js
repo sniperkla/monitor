@@ -3,9 +3,9 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { 
   Activity, Server, HardDrive, Wifi, Cpu, MemoryStick, Download, Upload, 
-  Clock, Package, Database, Box, RefreshCw, AlertCircle, CheckCircle2, 
+  Clock, Package, Database, Box, RefreshCw, AlertCircle, CircleCheckBig, 
   Zap, TrendingUp, TrendingDown, Minus, Pause, Play, RotateCw, Radio,
-  Check, Shield, Sparkles, ExternalLink, Laptop, AlertTriangle,
+  Check, Shield, Sparkles, ExternalLink, Laptop, TriangleAlert,
   ChevronDown, ListFilter, Search, XOctagon, Skull, ArrowUpDown, Trash2, X,
   ZoomIn, ZoomOut, Maximize2, Minimize2, GripHorizontal, MoveHorizontal, ChevronLeft, ChevronRight, Sliders, ChevronsRight, ChevronsLeft, Eye, History, Navigation,
   Flame, FileSpreadsheet, ScrollText
@@ -3555,7 +3555,7 @@ function AppActionButtons({ app, actionLoading, onAction, canControlService, upd
             title={`${app.name} is already at the latest version`}
             className="flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded"
           >
-            <CheckCircle2 size={9} />
+            <CircleCheckBig size={9} />
             Up to date
           </span>
         ) : (
@@ -3620,7 +3620,7 @@ function AppActionButtons({ app, actionLoading, onAction, canControlService, upd
                       }`}
                     >
                       <span className="truncate">{v}</span>
-                      {isCurrent && <CheckCircle2 size={10} className="shrink-0" />}
+                      {isCurrent && <CircleCheckBig size={10} className="shrink-0" />}
                     </button>
                   );
                 })
@@ -3654,7 +3654,7 @@ function AppActionButtons({ app, actionLoading, onAction, canControlService, upd
             title={`Uninstall ${app.name} from the server via package manager`}
             className="flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 rounded transition-colors disabled:opacity-50"
           >
-            <AlertTriangle size={9} />
+            <TriangleAlert size={9} />
             Uninstall
           </button>
         )}
@@ -3772,7 +3772,7 @@ function AppCard({ app, onRefresh }) {
           {app.status && (
             <div className="flex items-center gap-1 mt-1.5">
               {app.status === 'running' ? (
-                <CheckCircle2 size={12} className="text-emerald-400" />
+                <CircleCheckBig size={12} className="text-emerald-400" />
               ) : (
                 <AlertCircle size={12} className="text-amber-400" />
               )}
@@ -3803,7 +3803,7 @@ function AppCard({ app, onRefresh }) {
               }`}
             >
               {actionResult.success ? (
-                <CheckCircle2 size={11} className="shrink-0 mt-0.5" />
+                <CircleCheckBig size={11} className="shrink-0 mt-0.5" />
               ) : (
                 <AlertCircle size={11} className="shrink-0 mt-0.5" />
               )}

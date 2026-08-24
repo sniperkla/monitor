@@ -2,11 +2,11 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  CloudSync, HardDrive, RefreshCw, Terminal, CheckCircle2, AlertTriangle,
+  CloudSync, HardDrive, RefreshCw, Terminal, CircleCheckBig, TriangleAlert,
   Plus, Trash2, Folder, File, Play, Shield, Settings, Server, Database,
   ArrowRight, Download, Eye, ExternalLink, Cpu, Info, Check, ShieldCheck,
   Zap, Copy, ArrowLeftRight, Monitor, ChevronRight, Link2, ChevronDown, Search, X, Clock,
-  KeyRound, LogIn, HelpCircle
+  KeyRound, LogIn, CircleHelp
 } from 'lucide-react';
 import { useVault } from '@/context/VaultContext';
 import { useApp } from '@/context/AppContext';
@@ -1562,7 +1562,7 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
           className="p-2 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]/60 transition-colors"
           title="Show tutorial"
         >
-          <HelpCircle size={16} />
+          <CircleHelp size={16} />
         </button>
       </div>
 
@@ -1581,7 +1581,7 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
             }`}>
               <div className="flex items-center gap-3">
                 <div className={`p-2.5 rounded-xl ${rcloneStatus?.installed ? 'bg-emerald-500/10 text-emerald-400' : 'bg-amber-500/10 text-amber-400'}`}>
-                  {rcloneStatus?.installed ? <ShieldCheck size={24} /> : <AlertTriangle size={24} />}
+                  {rcloneStatus?.installed ? <ShieldCheck size={24} /> : <TriangleAlert size={24} />}
                 </div>
                 <div>
                   <h3 className="text-sm font-bold">
@@ -1806,7 +1806,7 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
                   { id: 'copy',  label: 'Copy',  icon: Copy, tip: 'Add new files' },
                   { id: 'sync',  label: 'Sync',  icon: RefreshCw, tip: 'Mirror source' },
                   { id: 'move',  label: 'Move',  icon: ArrowLeftRight, tip: 'Move & delete source' },
-                  { id: 'check', label: 'Check', icon: CheckCircle2, tip: 'Verify only' },
+                  { id: 'check', label: 'Check', icon: CircleCheckBig, tip: 'Verify only' },
                 ].map((act) => (
                   <button
                     key={act.id}
@@ -2333,9 +2333,9 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
                                     <span className={`px-2 py-0.5 rounded text-[10px] font-bold border shrink-0 ${badge.cls}`}>{badge.label}</span>
                                     {/* Status */}
                                     {isAborted && <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-400 font-bold text-[10px] border border-rose-500/30 shrink-0">🛑 ABORTED</span>}
-                                    {isSuccess  && <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 font-bold text-[10px] border border-emerald-500/30 shrink-0"><CheckCircle2 size={10} /> SUCCESS</span>}
-                                    {isWarning  && <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400 font-bold text-[10px] border border-amber-500/30 shrink-0"><AlertTriangle size={10} /> WARNING ({run.errors} err)</span>}
-                                    {isFailed   && <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-400 font-bold text-[10px] border border-rose-500/30 shrink-0"><AlertTriangle size={10} /> FAILED</span>}
+                                    {isSuccess  && <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 font-bold text-[10px] border border-emerald-500/30 shrink-0"><CircleCheckBig size={10} /> SUCCESS</span>}
+                                    {isWarning  && <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400 font-bold text-[10px] border border-amber-500/30 shrink-0"><TriangleAlert size={10} /> WARNING ({run.errors} err)</span>}
+                                    {isFailed   && <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-400 font-bold text-[10px] border border-rose-500/30 shrink-0"><TriangleAlert size={10} /> FAILED</span>}
                                     {isRunning  && <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-500/15 text-indigo-400 font-bold text-[10px] border border-indigo-500/30 shrink-0 animate-pulse">● EXECUTING</span>}
                                     {/* Timestamp & elapsed */}
                                     <span className="text-[10px] text-[var(--text-muted)] font-mono shrink-0">
@@ -2553,7 +2553,7 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
                       {/* Toast */}
                       {oauthToast && (
                         <div className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold ${oauthToast.type === 'success' ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' : 'bg-rose-500/10 border-rose-500/30 text-rose-400'}`}>
-                          {oauthToast.type === 'success' ? <CheckCircle2 size={12} className="shrink-0" /> : <AlertTriangle size={12} className="shrink-0" />}
+                          {oauthToast.type === 'success' ? <CircleCheckBig size={12} className="shrink-0" /> : <TriangleAlert size={12} className="shrink-0" />}
                           <span className="truncate">{oauthToast.msg}</span>
                         </div>
                       )}
@@ -2920,7 +2920,7 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
             <div className={`px-6 py-4 ${cronResult.testPassed ? 'bg-emerald-500/10 border-b border-emerald-500/20' : 'bg-amber-500/10 border-b border-amber-500/20'}`}>
               <div className="flex items-center gap-3">
                 <div className={`p-2 rounded-full ${cronResult.testPassed ? 'bg-emerald-500/20 text-emerald-400' : 'bg-amber-500/20 text-amber-400'}`}>
-                  {cronResult.testPassed ? <CheckCircle2 size={22} /> : <AlertTriangle size={22} />}
+                  {cronResult.testPassed ? <CircleCheckBig size={22} /> : <TriangleAlert size={22} />}
                 </div>
                 <div>
                   <h3 className="text-sm font-bold text-[var(--text-primary)]">
@@ -2980,7 +2980,7 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
             <div className={`px-6 py-4 ${updateResult.success ? 'bg-emerald-500/10 border-b border-emerald-500/20' : 'bg-rose-500/10 border-b border-rose-500/20'}`}>
               <div className="flex items-center gap-3">
                 <div className={`p-2 rounded-full ${updateResult.success ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}`}>
-                  {updateResult.success ? <CheckCircle2 size={22} /> : <AlertTriangle size={22} />}
+                  {updateResult.success ? <CircleCheckBig size={22} /> : <TriangleAlert size={22} />}
                 </div>
                 <div>
                   <h3 className="text-sm font-bold text-[var(--text-primary)]">

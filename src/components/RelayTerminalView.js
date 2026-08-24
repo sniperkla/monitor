@@ -8,7 +8,7 @@ import { useApp } from '@/context/AppContext';
 import { useVault } from '@/context/VaultContext';
 import { RelayClient } from '@/lib/relayClient';
 import {
-  Loader2, AlertCircle, CheckCircle2, XCircle, RefreshCw, Wifi, WifiOff
+  LoaderCircle, AlertCircle, CircleCheckBig, CircleX, RefreshCw, Wifi, WifiOff
 } from 'lucide-react';
 
 let Terminal, FitAddon;
@@ -477,16 +477,16 @@ export default function RelayTerminalView({
       >
         <div className="flex items-center gap-2">
           {status === 'connecting' && (
-            <Loader2 size={12} className="animate-spin" style={{ color: 'var(--accent-amber)' }} />
+            <LoaderCircle size={12} className="animate-spin" style={{ color: 'var(--accent-amber)' }} />
           )}
           {status === 'connected' && (
-            <CheckCircle2 size={12} style={{ color: 'var(--accent-emerald)' }} />
+            <CircleCheckBig size={12} style={{ color: 'var(--accent-emerald)' }} />
           )}
           {status === 'error' && (
             <AlertCircle size={12} style={{ color: 'var(--accent-rose)' }} />
           )}
           {status === 'disconnected' && (
-            <XCircle size={12} style={{ color: 'var(--text-muted)' }} />
+            <CircleX size={12} style={{ color: 'var(--text-muted)' }} />
           )}
           <span className="text-[10px] font-mono" style={{ color: 'var(--text-muted)' }}>
             {status === 'connecting' && 'Connecting...'}

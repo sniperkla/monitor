@@ -6,7 +6,7 @@ import { getLocalConnections, saveLocalConnections } from '@/utils/localConnecti
 import {
   Server, Terminal, Activity, Clock, Globe, Shield, Cpu, HardDrive, Database,
   BarChart3, TrendingUp, Zap, Plus, RefreshCw, ChevronRight, AlertCircle,
-  CheckCircle2, AlertTriangle, Star, Download, Upload, Eye, EyeOff
+  CircleCheckBig, TriangleAlert, Star, Download, Upload, Eye, EyeOff
 } from 'lucide-react';
 import { useEffect, useState, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -554,14 +554,14 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
           subValue={t('ssh.dashboard_ui.statsSub.total')}
         />
         <StatCard 
-          icon={CheckCircle2} 
+          icon={CircleCheckBig} 
           label={t('ssh.dashboard_ui.healthy')} 
           value={stats.online} 
           color="emerald" 
           subValue={t('ssh.dashboard_ui.statsSub.healthy')}
         />
         <StatCard 
-          icon={AlertTriangle} 
+          icon={TriangleAlert} 
           label={t('ssh.dashboard_ui.down')} 
           value={stats.offline} 
           color="rose" 
@@ -799,7 +799,7 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
           variants={itemVariants}
           className="mt-6 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 flex items-start gap-3"
         >
-          <AlertTriangle size={20} className="text-amber-400 shrink-0 mt-0.5" />
+          <TriangleAlert size={20} className="text-amber-400 shrink-0 mt-0.5" />
           <div className="flex-1 min-w-0">
             <p className="text-sm font-semibold text-amber-300">{t('relay.warningTitle', 'Local Relay Agent Required')}</p>
             <p className="text-xs text-amber-400/80 mt-0.5">
