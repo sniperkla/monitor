@@ -1375,11 +1375,14 @@ logstash:
     const socket = io({
       path: '/api/socket',
       transports: ['websocket', 'polling'],
-      query: {
-        dbUri: termDbUriRef.current
-      }
+      query: { dbUri: termDbUriRef.current },
+      timeout: 60000,
+      reconnection: true,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
     });
     socketRef.current = socket;
+    socket.on('connect_error', () => { /* suppress — reconnect logic retries */ });
 
     socket.on('connect', () => {
       socket.emit('ssh:connect', {

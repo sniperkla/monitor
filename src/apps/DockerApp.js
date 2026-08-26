@@ -398,9 +398,14 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
     const newSocket = io({
       path: '/api/socket',
       transports: ['websocket', 'polling'],
-      query: { dbUri: dbConfig?.uri || '' }
+      query: { dbUri: dbConfig?.uri || '' },
+      timeout: 60000,
+      reconnection: true,
+      reconnectionDelay: 2000,
+      reconnectionDelayMax: 10000,
     });
     socketRef.current = newSocket;
+    newSocket.on('connect_error', () => { /* silent — reconnect retries; reconnectionAttempts is finite so we'll still see fatal errors */ });
 
     newSocket.on('connect', () => {
       newSocket.emit('ssh:connect', {

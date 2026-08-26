@@ -386,13 +386,17 @@ export function AppProvider({ children }) {
           payload: { uri: decryptedUri, tunnel: decryptedTunnel || null },
         });
       }
+      // Refetch on the locked/setup -> unlocked transition: any fetch that ran
+      // before unlock went out WITHOUT the x-mongodb-uri header (center DB),
+      // leaving a stale/empty connection list until the next full page reload.
+      fetchConnections();
     } else if (vaultStatus === 'no_auth') {
       // Not logged in and no vault — ensure config is empty
       if (state.dbConfig?.uri) {
         dispatch({ type: 'SET_DB_CONFIG', payload: { uri: '', tunnel: null } });
       }
     }
-  }, [vaultStatus, decryptedUri, decryptedTunnel]);
+  }, [vaultStatus, decryptedUri, decryptedTunnel, state.dbConfig?.uri, state.dbConfig?.tunnel, fetchConnections]);
 
 
   // 3. Auto-detect local relay on mount (if discovery server running on localhost:48923)

@@ -19,14 +19,14 @@ const nextConfig = {
             value: [
               "default-src 'self'",
               "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
-              "style-src 'self' 'unsafe-inline'",
+              "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https:",
               "img-src 'self' data: blob: https:",
-              "font-src 'self' data:",
-              "connect-src 'self' ws: wss: https:",
+              "font-src 'self' data: https://fonts.gstatic.com https:",
+              "connect-src 'self' ws: wss: https: http://127.0.0.1:* http://localhost:*",
               "frame-ancestors 'none'",
               "object-src 'none'",
               "base-uri 'self'",
-              "form-action 'self'",
+              "form-action 'self' http://localhost:3000 https://accounts.google.com",
             ].join('; '),
           },
           {

@@ -28,7 +28,12 @@ export class RelayClient {
         path: '/api/socket',
         transports: ['websocket', 'polling'],
         withCredentials: true,
+        timeout: 60000, // 60s — was firing 'timeout' too eagerly with the 20s default
+        reconnection: true,
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 5000,
       });
+      this.socket.on('connect_error', () => { /* suppress — reconnection will retry */ });
 
       this.socket.on('connect', () => {
         logger.info('[relay-client] Connected to /relay');

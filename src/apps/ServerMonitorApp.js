@@ -8,13 +8,14 @@ import {
   Check, Shield, Sparkles, ExternalLink, Laptop, TriangleAlert,
   ChevronDown, ListFilter, Search, XOctagon, Skull, ArrowUpDown, Trash2, X,
   ZoomIn, ZoomOut, Maximize2, Minimize2, GripHorizontal, MoveHorizontal, ChevronLeft, ChevronRight, Sliders, ChevronsRight, ChevronsLeft, Eye, History, Navigation,
-  Flame, FileSpreadsheet, ScrollText
+  Flame, FileSpreadsheet, ScrollText, BellRing
 } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 import { useTranslation } from 'react-i18next';
 import { io } from 'socket.io-client';
 import { createRelayPeer } from '@/lib/webrtc-relay';
 import AgentSetupWizard from '@/components/AgentSetupWizard';
+import HermesAgentWizard from '@/components/HermesAgentWizard';
 import ServerCompatPanel from '@/components/ServerCompatPanel';
 import { Line } from 'react-chartjs-2';
 import {
@@ -1432,6 +1433,7 @@ export default function ServerMonitorApp() {
   const [refreshInterval, setRefreshInterval] = useState(10000); // default 10s for agentless; agent unlocks faster intervals
   const [isTabVisible, setIsTabVisible] = useState(true);
   const [showAgentWizard, setShowAgentWizard] = useState(false);
+  const [showHermesWizard, setShowHermesWizard] = useState(false);
 
   // ── Processes Management State ──
   const [processesData, setProcessesData] = useState({}); // { [connId]: { processes: [], total: 0, timestamp: null } }
@@ -2495,6 +2497,16 @@ export default function ServerMonitorApp() {
             );
           })()}
 
+          {/* Agents & Notifications (Hermes) */}
+          <button
+            onClick={() => setShowHermesWizard(true)}
+            className="px-2.5 py-1.5 border border-[var(--border-color)] rounded-lg text-xs font-medium flex items-center gap-1.5 bg-[var(--bg-tertiary)] hover:bg-[var(--bg-card-hover)] transition-colors shadow-sm cursor-pointer"
+            title="Install notification agents (Telegram / LINE / Discord / Slack / webhook)"
+          >
+            <BellRing size={13} className="text-[var(--accent-indigo)]" />
+            <span className="hidden @3xl:inline">Agents</span>
+          </button>
+
           {/* Manual refresh */}
           <button
             onClick={() => {
@@ -3415,6 +3427,15 @@ export default function ServerMonitorApp() {
           </div>
         </div>
       )}
+
+      {/* Agents & Notifications wizard (Hermes) */}
+      <HermesAgentWizard
+        isOpen={showHermesWizard}
+        onClose={() => setShowHermesWizard(false)}
+        connections={connections}
+        selectedId={selectedConnection}
+        apiFetch={apiFetch}
+      />
 
       {/* Relay Agent Setup & Management Wizard */}
       <AgentSetupWizard

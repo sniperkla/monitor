@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import {
-  Search, Terminal, Settings, Monitor, StickyNote, Book, Folder,
+  Search, Bot, Terminal, Settings, Monitor, StickyNote, Book, Folder,
   ArrowRight, Command, CornerDownLeft, ChevronUp, ChevronDown,
   Hash, FileText, Server, Globe, Database, Shield, Layers, X, GitBranch, CloudSync, Rocket, CloudCog, ShieldCheck, BrickWallShield
 } from 'lucide-react';
@@ -14,6 +14,7 @@ import MacOSModalWindow from '@/components/MacOSModalWindow';
 import dynamic from 'next/dynamic';
 
 import SSHApp from '@/apps/SSHApp';
+import AIAgentsApp from '@/apps/AIAgentsApp';
 import AutoDeployApp from '@/apps/AutoDeployApp';
 import SettingsApp from '@/apps/SettingsApp';
 import NotepadApp from '@/apps/NotepadApp';
@@ -49,6 +50,7 @@ const SYSTEM_APPS = [
   { id: 'rclone', titleKey: null, fallback: 'Rclone Sync', icon: CloudCog, component: <RcloneApp />, category: 'app', initialWidth: 1100, initialHeight: 720 },
   { id: 'server-backup', titleKey: null, fallback: 'Server Backup', icon: ShieldCheck, component: <ServerBackupApp />, category: 'app', initialWidth: 1200, initialHeight: 780 },
   { id: 'firewall-blocklist', titleKey: null, fallback: 'Firewall Blocklist', icon: BrickWallShield, component: <FirewallBlocklistApp />, category: 'app', initialWidth: 1180, initialHeight: 780 },
+  { id: 'ai-agents', titleKey: null, fallback: 'AI Agents', icon: Bot, component: <AIAgentsApp />, category: 'app', initialWidth: 1100, initialHeight: 760 },
   { id: 'settings', titleKey: 'common.settings', fallback: 'Settings', icon: Settings, component: <SettingsApp />, category: 'app', initialWidth: 700, initialHeight: 500 },
 ];
 

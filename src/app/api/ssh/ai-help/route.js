@@ -661,6 +661,8 @@ RULES:
 • Docker: ALL steps INSIDE container. No sudo inside container. Use docker exec for verify.
 • Service fails: journalctl -xeu SVC -n 50 --no-pager FIRST, then fix root cause, then restart.
 • Search: <search_skills>keyword</search_skills> if no local skill covers the task.
+• FIRST TURN (OS/package manager unknown): run 'cat /etc/os-release' to pin the distro before installing anything — package names and flags differ (apt/dnf/zypper/pacman).
+• GOAL ALREADY MET: if the CTX output already proves the goal is satisfied, reply with <done>true</done> and NO <command>/<diff>.
 
 REQUEST TYPES:
 Bug→Read logs→Fix→Verify | Config→Backup→Edit→Validate→Reload | Deploy→Scout→Deps→Build→Start→Test→Verify | Remove→Verify present→Remove→Verify gone→done=true

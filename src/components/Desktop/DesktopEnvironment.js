@@ -9,8 +9,9 @@ import SSHApp from '@/apps/SSHApp';
 import SettingsApp from '@/apps/SettingsApp';
 import { Terminal, Settings, FolderClosed, Monitor, RefreshCw, Plus, FolderPlus,
   Image as ImageIcon, Layout, Grid, List, AlignLeft, SortAsc, Server, BrickWallShield, ShieldAlert,
-  ChevronRight, Type, Calendar, HardDrive, Palette, MonitorCog, Globe, Maximize, Minimize, Database, Check, MonitorPlay, GitBranch, CloudSync, Rocket, CloudCog, ShieldCheck, Activity, History
+  ChevronRight, Type, Calendar, HardDrive, Palette, MonitorCog, Globe, Maximize, Minimize, Database, Check, MonitorPlay, GitBranch, CloudSync, Rocket, CloudCog, ShieldCheck, Activity, History, Bot
 } from 'lucide-react';
+import AIAgentsApp from '@/apps/AIAgentsApp';
 import NotificationCenter from '@/components/Desktop/NotificationCenter';
 import AutoDeployApp from '@/apps/AutoDeployApp';
 import { useState, useEffect, useRef, cloneElement, isValidElement } from 'react';
@@ -340,6 +341,7 @@ export default function DesktopEnvironment({ bootPhase }) {
     { id: 'rclone', title: 'Rclone Sync', icon: CloudCog, component: <RcloneApp />, type: 'app', initialWidth: 1100, initialHeight: 720 },
     { id: 'server-backup', title: 'Server Backup', icon: ShieldCheck, component: <ServerBackupApp />, type: 'app', initialWidth: 1200, initialHeight: 780 },
     { id: 'server-monitor', title: 'Server Monitor', icon: Activity, component: <ServerMonitorApp />, type: 'app', initialWidth: 1300, initialHeight: 800 },
+    { id: 'ai-agents', title: 'AI Agents', icon: Bot, component: <AIAgentsApp />, type: 'app', initialWidth: 1100, initialHeight: 760 },
     { id: 'firewall-blocklist', title: 'Firewall Blocklist', icon: BrickWallShield, component: <FirewallBlocklistApp />, type: 'app', initialWidth: 1180, initialHeight: 780 },
     { id: 'virus-scanner', title: 'Virus Scanner', icon: ShieldAlert, component: <VirusScannerApp />, type: 'app', initialWidth: 980, initialHeight: 700 },
     { id: 'activity', title: 'Activity', icon: History, component: <ActivityApp />, type: 'app', initialWidth: 900, initialHeight: 640 },

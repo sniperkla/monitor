@@ -42,3 +42,7 @@ db-config.json
 *.tsbuildinfo
 next-env.d.ts
 RECOVERY_CODE.txt
+
+# scratch & test artifacts
+scratch/
+.fleet-e2e.py

@@ -90,6 +90,10 @@ export async function getSshConfig(connectionId, options = {}) {
     username: conn.username || 'root',
     readyTimeout: 20000,
     keepaliveInterval: 10000,
+    // ssh2 default is 3 (~30s tolerance). Long CPU-heavy remote commands
+    // (agent installers) can starve keepalive replies longer than that and
+    // abort mid-run with "Keepalive timeout" — allow up to ~2 minutes.
+    keepaliveCountMax: 12,
   };
 
   if (conn.authType === 'password' && conn.password) {
@@ -200,6 +204,7 @@ function attachExecTimeout(stream, conn, options, onTimeout) {
 }
 
 export function execCommand(sshConfig, command, options = {}) {
+  const cmdStr = Array.isArray(command) ? command.join('\n') : String(command ?? '');
   const usePool = options.pool !== false;
 
   if (usePool) {
@@ -208,7 +213,7 @@ export function execCommand(sshConfig, command, options = {}) {
         .then((conn) => {
           let stdout = '';
           let stderr = '';
-          conn.exec(command, (err, stream) => {
+          conn.exec(cmdStr, (err, stream) => {
             if (err) {
               // On exec channel failure, evict and retry once with fresh connection
               const pool = global.__sshConnectionPool;
@@ -217,7 +222,7 @@ export function execCommand(sshConfig, command, options = {}) {
               try { conn.end(); } catch {}
               
               // Fallback non-pooled execution
-              return execCommand(sshConfig, command, { ...options, pool: false }).then(resolve).catch(reject);
+              return execCommand(sshConfig, cmdStr, { ...options, pool: false }).then(resolve).catch(reject);
             }
             stream.on('data', (d) => {
               const chunk = d.toString();
@@ -243,7 +248,7 @@ export function execCommand(sshConfig, command, options = {}) {
         })
         .catch((err) => {
           // If pool creation failed, try direct connection once
-          execCommand(sshConfig, command, { ...options, pool: false }).then(resolve).catch(reject);
+          execCommand(sshConfig, cmdStr, { ...options, pool: false }).then(resolve).catch(reject);
         });
     });
   }
@@ -254,7 +259,7 @@ export function execCommand(sshConfig, command, options = {}) {
     let stdout = '';
     let stderr = '';
     conn.on('ready', () => {
-      conn.exec(command, (err, stream) => {
+      conn.exec(cmdStr, (err, stream) => {
         if (err) { conn.end(); return reject(err); }
         let timedOut = false;
         const timer = attachExecTimeout(stream, conn, options, () => { timedOut = true; });

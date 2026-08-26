@@ -62,6 +62,6 @@ export const config = {
     "/api/admin/:path*",
     "/api/user/:path*",
     "/api/wiki/:path*",
-    "/((?!api/auth|api/health|api/settings/database|api/deploy/webhook|api/deploy/trigger|_next/static|_next/image|favicon.ico|monitor-agent\\.min\\.js|monitor-agent\\.js|local-relay\\.min\\.js|local-relay\\.js|$).*)"
+    "/((?!api/auth|api/health|api/settings/database|api/deploy/webhook|api/deploy/trigger|_next/static|_next/image|favicon.ico|manifest\\.json|icon\\.svg|sw\\.js|monitor-agent\\.min\\.js|monitor-agent\\.js|local-relay\\.min\\.js|local-relay\\.js|agents/.*|$).*)"
   ],
 };

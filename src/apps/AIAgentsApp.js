@@ -1,0 +1,1491 @@
+'use client';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { Bot, Server as ServerIcon, RefreshCw, Loader2, CheckCircle2, XCircle, Settings2, Puzzle, Trash2, Play, Square, RotateCw, Plus, ExternalLink, Send, Search, Sparkles, Check, FileText, Sparkle, Copy } from 'lucide-react';
+import { useApp } from '@/context/AppContext';
+import HermesAgentWizard from '@/components/HermesAgentWizard';
+import ThemeSelect from '@/components/common/ThemeSelect';
+
+/**
+ * AIAgentsApp — dedicated app for installing and managing AI agents on servers.
+ *
+ * AGENTS registry makes it extensible: add a new entry + handler and it shows up
+ * as a selectable card. Currently supported: Hermes Agent (Nous Research).
+ *
+ * For an installed agent it exposes:
+ *   • Overview   — version / model / service state, gateway start/stop/restart
+ *   • Config     — live ~/.hermes/config.yaml editor (+ backup & restart)
+ *   • Skills     — installed skills list, install from hub, remove,
+ *                  bundled-skills seeding toggle (opt-out / opt-in)
+ */
+
+const AGENTS = [
+  {
+    id: 'hermes',
+    name: 'Hermes Agent',
+    by: 'Nous Research',
+    desc: 'Self-improving AI agent with persistent memory, skills, cron automations, and chat via Telegram / LINE / Discord.',
+    docs: 'https://hermes-agent.nousresearch.com/docs/',
+    api: '/api/agents/hermes',
+    logo: '/agents/hermes.png',
+  },
+  {
+    id: 'nanobot',
+    name: 'Nanobot',
+    by: 'HKUDS',
+    desc: 'Ultra-lightweight personal AI agent (Python) with WebUI, tools, memory, MCP and chat apps. Low resource usage.',
+    docs: 'https://github.com/HKUDS/nanobot',
+    api: '/api/agents/nanobot',
+    logo: '/agents/nanobot.svg',
+  },
+  {
+    id: 'openclaw',
+    name: 'OpenClaw',
+    by: 'OpenClaw Foundation',
+    desc: 'Self-hosted multi-channel AI agent gateway (Node) — Discord, Telegram, WhatsApp, Slack & more via one Gateway on port 18789.',
+    docs: 'https://docs.openclaw.ai/',
+    api: '/api/agents/openclaw',
+    logo: '/agents/openclaw.png',
+  },
+  {
+    id: 'zeroclaw',
+    name: 'ZeroClaw',
+    by: 'ZeroClaw Labs',
+    desc: 'Fast, small, fully autonomous AI assistant infrastructure (Rust) — channels + gateway on port 42617, SOP engine, deploy anywhere.',
+    docs: 'https://github.com/zeroclaw-labs/zeroclaw',
+    api: '/api/agents/zeroclaw',
+    logo: '/agents/zeroclaw.jpg',
+  },
+  // Future agents — add entries here:
+];
+
+export default function AIAgentsApp({ apiFetch }) {
+  const { state, connectionsReady } = useApp();
+  const doFetch = apiFetch || fetch;
+  const connections = (state?.connections || []).filter(c => c.type !== 'database');
+
+  const [agentId, setAgentId] = useState('hermes');
+  const [target, setTarget] = useState('');
+  const [tab, setTab] = useState('overview'); // overview | config | skills
+  const [details, setDetails] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [busyMsg, setBusyMsg] = useState('');
+  const [notice, setNotice] = useState(null); // {ok, text}
+  // auto-dismiss the banner after 5s so it never blocks the UI
+  useEffect(() => {
+    if (!notice) return;
+    const t = setTimeout(() => setNotice(null), 5000);
+    return () => clearTimeout(t);
+  }, [notice]);
+  const [showWizard, setShowWizard] = useState(false);
+  const [purge, setPurge] = useState(false);
+  const [showUninstallModal, setShowUninstallModal] = useState(false);
+  // env tab
+  const [envDraft, setEnvDraft] = useState([]); // [{ key, value, masked }]
+  const [envNewKey, setEnvNewKey] = useState('');
+  const [envNewVal, setEnvNewVal] = useState('');
+  useEffect(() => {
+    if (tab !== 'env' || !details) return;
+    const known = (details.envKeys || []).map(k => ({ key: k, value: '', masked: true }));
+    setEnvDraft(known);
+    setEnvNewKey(''); setEnvNewVal('');
+  }, [tab, details?.configJson, details?.configYaml]); // eslint-disable-line react-hooks/exhaustive-deps
+  const saveEnv = () => {
+    // build the env object: only include rows where the value has been entered
+    const env = {};
+    for (const r of envDraft) {
+      if (r.value && r.value.trim()) env[r.key] = r.value.trim();
+    }
+    if (envNewKey.trim() && envNewVal.trim()) env[envNewKey.trim()] = envNewVal.trim();
+    if (Object.keys(env).length === 0) {
+      setNotice({ ok: false, text: 'No env keys to save — enter at least one value.' });
+      return;
+    }
+    act('Save env', () => call('reconfigure', { config: { env, restart: restartAfterSave } })).then(() => {
+      // clear the values after save (keep keys visible)
+      setEnvDraft(prev => prev.map(r => ({ ...r, value: '', masked: true })));
+      setEnvNewKey(''); setEnvNewVal('');
+      loadDetails();
+    });
+  };
+  // config tab
+  const [yamlDraft, setYamlDraft] = useState('');
+  const [restartAfterSave, setRestartAfterSave] = useState(true);
+  const [backups, setBackups] = useState([]);
+  // prompt tab & personality markdown files
+  const [promptDraft, setPromptDraft] = useState('');
+  const [promptActiveFile, setPromptActiveFile] = useState('PROMPT.md');
+  const [promptFilesMap, setPromptFilesMap] = useState({});
+  // skills tab & live autocomplete
+  const [skillInput, setSkillInput] = useState('');
+  const [skillCat, setSkillCat] = useState('all');
+  const [acOpen, setAcOpen] = useState(false);
+  const [acIndex, setAcIndex] = useState(-1);
+  const [catalogExpanded, setCatalogExpanded] = useState(false);
+  const [sharedExpanded, setSharedExpanded] = useState(false);
+  const skillSearchBoxRef = useRef(null);
+  // logs tab
+  const [logText, setLogText] = useState('');
+  const [logCursor, setLogCursor] = useState(0);
+  const [logPause, setLogPause] = useState(false);
+  const [autoHeal, setAutoHeal] = useState(false);
+  const autoHealRef = useRef(false);
+  // userStopped persists across page refresh via sessionStorage
+  const stoppedKey = `agent-stopped:${agentId}:${target || ''}`;
+  const [userStopped, setUserStoppedState] = useState(() => {
+    try { return sessionStorage.getItem(`agent-stopped:${agentId}:${target || ''}`) === '1'; } catch { return false; }
+  });
+  const userStoppedRef = useRef(userStopped);
+  const setUserStopped = (v) => {
+    userStoppedRef.current = v;
+    setUserStoppedState(v);
+    try { if (v) sessionStorage.setItem(stoppedKey, '1'); else sessionStorage.removeItem(stoppedKey); } catch { /* ignore */ }
+  };
+  const [health, setHealth] = useState(null);
+  // skills multi-select
+  const [selSkills, setSelSkills] = useState(new Set());
+  // searches
+  const [logSearch, setLogSearch] = useState('');
+  const [cfgSearch, setCfgSearch] = useState('');
+  const [logNav, setLogNav] = useState(0);
+  const [cfgNav, setCfgNav] = useState(0);
+  const cfgTaRef = useRef(null);
+
+  useEffect(() => {
+    if (connectionsReady && !target && connections.length > 0) setTarget(connections[0]._id);
+  }, [connectionsReady, connections, target]);
+
+  const agent = AGENTS.find(a => a.id === agentId) || AGENTS[0];
+  const call = useCallback(async (action, extra = {}) => {
+    const res = await doFetch(agent.api, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ connectionId: target, action, ...extra }),
+    });
+    return res.json();
+  }, [doFetch, agent.api, target]);
+
+  // Live action logs — global on/off setting (persisted). When ON, long-running
+  // actions run as background jobs; their log streams into busyMsg as they run.
+  const [liveLogs, setLiveLogs] = useState(true);
+  useEffect(() => {
+    try { setLiveLogs(localStorage.getItem('ssh_monitor_live_logs') !== 'off'); } catch { /* default on */ }
+  }, []);
+  const toggleLiveLogs = () => setLiveLogs(v => {
+    const nv = !v;
+    try { localStorage.setItem('ssh_monitor_live_logs', nv ? 'on' : 'off'); } catch { /* ignore */ }
+    return nv;
+  });
+
+  const callLive = useCallback(async (action, extra, onLine) => {
+    const start = await call(action, { ...extra, live: true });
+    if (!start?.jobId) return start;
+    let cursor = 0;
+    // Cap at 20 min — beyond that, the job likely hung server-side.
+    const deadline = Date.now() + 20 * 60 * 1000;
+    while (Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 1200));
+      let upd = null;
+      try { upd = await call('job', { jobId: start.jobId, cursor }); }
+      catch (e) { /* transient network — keep polling */ continue; }
+      if (upd?.lines?.length) upd.lines.forEach(onLine);
+      cursor = upd?.cursor ?? cursor;
+      if (upd?.done) return upd.result || { success: false, error: 'Job ended without a result' };
+    }
+    return { success: false, error: 'Client timeout: the action took longer than 20 minutes' };
+  }, [call]);
+
+  const loadDetails = useCallback(async () => {
+    if (!target) return;
+    setLoading(true);
+    try {
+      const d = await call('details');
+      setDetails(d);
+      const draftText = ['nanobot', 'openclaw', 'zeroclaw'].includes(agent.id) ? (d.configJson || '') : (d.configYaml || '');
+      setYamlDraft(draftText);
+      const pFiles = d.promptFiles || {
+        'PROMPT.md': d.systemPrompt || '',
+        'SOUL.md': '',
+        'USER.md': '',
+        'AGENTS.md': '',
+        'MEMORY.md': '',
+      };
+      setPromptFilesMap(pFiles);
+      setPromptDraft(pFiles[promptActiveFile] ?? pFiles['PROMPT.md'] ?? '');
+    } catch { setDetails(null); }
+    finally { setLoading(false); }
+  }, [target, call, promptActiveFile]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => { setYamlDraft(''); setPromptDraft(''); setPromptActiveFile('PROMPT.md'); setDetails(null); setTab('overview'); if (target) loadDetails(); }, [target, agentId]); // eslint-disable-line react-hooks/exhaustive-deps
+  // When fresh details arrive (e.g. after wizard install), refresh the config draft
+  // so the Config tab shows the new values, not the old ones.
+  useEffect(() => {
+    if (!details) return;
+    const draftText = ['nanobot', 'openclaw', 'zeroclaw'].includes(agent.id) ? (details.configJson || '') : (details.configYaml || '');
+    setYamlDraft(draftText);
+    const pFiles = details.promptFiles || {
+      'PROMPT.md': details.systemPrompt || '',
+      'SOUL.md': '',
+      'USER.md': '',
+      'AGENTS.md': '',
+      'MEMORY.md': '',
+    };
+    setPromptFilesMap(pFiles);
+    setPromptDraft(pFiles[promptActiveFile] ?? pFiles['PROMPT.md'] ?? '');
+  }, [details, agent.id, promptActiveFile]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const act = async (label, fn) => {
+    setBusyMsg(label); setNotice(null);
+    try {
+      const r = await fn();
+      if (r?.output) setNotice({ ok: r.success !== false, text: `${label}: ${String(r.output).slice(-400)}` });
+      else setNotice({ ok: r?.success !== false, text: `${label}: ${r?.error || 'done'}` });
+      await loadDetails();
+      return r;
+    } catch (e) {
+      setNotice({ ok: false, text: `${label}: ${e.message}` });
+    } finally { setBusyMsg(''); }
+  };
+
+  const gatewayOp = (op) => {
+    if (op === 'stop') setUserStopped(true);
+    if (op === 'start' || op === 'restart') setUserStopped(false);
+    return act(`Gateway ${op}`, () => call('gateway', { config: { op } }));
+  };
+  const saveConfig = () => act('Save config', async () => {
+    const isJson = ['nanobot', 'openclaw'].includes(agent.id);
+    const r = await call('save-config', isJson ? { config: { configJson: yamlDraft, restart: restartAfterSave } } : { config: { configYaml: yamlDraft, restart: restartAfterSave } });
+    return { success: r.success, output: r.restarted ? 'saved & gateway restarted' : r.error || 'saved' };
+  });
+  const savePrompt = () => act(`Save ${promptActiveFile}`, async () => {
+    const r = await call('save-prompt', { config: { file: promptActiveFile, prompt: promptDraft, restart: restartAfterSave } });
+    setPromptFilesMap(prev => ({ ...prev, [promptActiveFile]: promptDraft }));
+    return { success: r?.success !== false, output: `${promptActiveFile} saved & applied` };
+  });
+  const switchPromptFile = (fileKey) => {
+    setPromptFilesMap(prev => ({ ...prev, [promptActiveFile]: promptDraft }));
+    setPromptActiveFile(fileKey);
+    setPromptDraft(promptFilesMap[fileKey] ?? details?.promptFiles?.[fileKey] ?? '');
+  };
+  const removeSkill = (name) => act(`Remove skill ${name}`, () => call('skills', { config: { op: 'remove', name } }));
+  const installSkill = () => { if (skillInput.trim()) { const id = skillInput.trim(); setSkillInput(''); return act(`Install skill ${id}`, () => call('skills', { config: { op: 'install', id } })); } };
+  const toggleBundled = (optOut) => act(optOut ? 'Disable bundled skills' : 'Re-enable bundled skills', () => call('skills', { config: { op: optOut ? 'opt-out' : 'opt-in' } }));
+  const uninstall = () => {
+    // open a proper modal instead of window.confirm which gets auto-accepted
+    setShowUninstallModal(true);
+  };
+  const doUninstall = (wantsPurge) => {
+    setShowUninstallModal(false);
+    setPurge(wantsPurge);
+    return act('Uninstall', () => {
+      if (!liveLogs) return call('uninstall', { purge: wantsPurge });
+      return callLive('uninstall', { purge: wantsPurge }, (line) => {
+        const last = line.split('\n').filter(Boolean).pop() || line;
+        setBusyMsg(`Uninstall — ${last.slice(0, 80)}`);
+      });
+    });
+  };
+
+  // ── search helpers: highlight + count + navigate ──
+  const logPreRef = useRef(null);
+  const logLinesAll = useMemo(() => logText.split('\n'), [logText]);
+  const logLineIdx = useMemo(() => {
+    const q = logSearch.trim().toLowerCase();
+    if (!q) return [];
+    return logLinesAll.map((l, i) => (l.toLowerCase().includes(q) ? i : -1)).filter(i => i >= 0);
+  }, [logLinesAll, logSearch]);
+  const logMatches = logLineIdx;
+  useEffect(() => { setLogNav(0); }, [logSearch]);
+  const navLog = (dir) => {
+    if (!logLineIdx.length) return;
+    const n = (logNav + dir + logLineIdx.length) % logLineIdx.length;
+    setLogNav(n);
+    const lineNo = logLineIdx[n];
+    requestAnimationFrame(() => document.getElementById(`log-line-${lineNo}`)?.scrollIntoView({ block: 'center' }));
+  };
+  const cfgOccurrences = useMemo(() => {
+    const q = cfgSearch.trim().toLowerCase();
+    if (!q || !yamlDraft) return [];
+    const low = yamlDraft.toLowerCase();
+    const res = []; let idx = low.indexOf(q);
+    while (idx !== -1 && res.length < 2000) { res.push(idx); idx = low.indexOf(q, idx + q.length); }
+    return res;
+  }, [yamlDraft, cfgSearch]);
+  useEffect(() => { setCfgNav(0); }, [cfgSearch]);
+  const curLineNo = useMemo(
+    () => cfgOccurrences.length
+      ? yamlDraft.slice(0, cfgOccurrences[Math.min(cfgNav, cfgOccurrences.length - 1)]).split('\n').length
+      : -1,
+    [cfgOccurrences, cfgNav, yamlDraft]
+  );
+  const gotoCfg = (dir) => {
+    if (!cfgOccurrences.length) return;
+    const n = (cfgNav + dir + cfgOccurrences.length) % cfgOccurrences.length;
+    setCfgNav(n);
+    const ta = cfgTaRef.current; if (!ta) return;
+    ta.focus();
+    ta.setSelectionRange(cfgOccurrences[n], cfgOccurrences[n] + cfgSearch.trim().length);
+    const before = yamlDraft.slice(0, cfgOccurrences[n]);
+    const lineNo = before.split('\n').length;
+    ta.scrollTop = Math.max(0, (lineNo - 4) * 16);
+  };
+
+  const highlightText = (text, query) => {
+    const q = query.trim(); if (!q) return text;
+    const parts = []; let rest = text; let k = 0;
+    let idx = rest.toLowerCase().indexOf(q.toLowerCase());
+    while (idx !== -1 && k < 30) {
+      parts.push(rest.slice(0, idx));
+      parts.push(<mark key={k++} className="bg-amber-400/70 text-black rounded px-0.5">{rest.slice(idx, idx + q.length)}</mark>);
+      rest = rest.slice(idx + q.length);
+      idx = rest.toLowerCase().indexOf(q.toLowerCase());
+    }
+    parts.push(rest); return parts;
+  };
+
+  // load config backups when Config tab opens
+  useEffect(() => {
+    if (tab !== 'config' || !target) return;
+    call('backups').then(r => setBackups(r?.backups || [])).catch(() => {});
+  }, [tab, target]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Live logs ──
+  const pollLogs = useCallback(async () => {
+    if (!target) return;
+    try {
+      const r = await call('logs', { config: { cursor: logCursor } });
+      if (r?.data) {
+        setLogText(t => (t + r.data).slice(-60000));
+        setLogCursor(r.size || logCursor);
+      }
+    } catch { /* transient */ }
+  }, [call, logCursor, target]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (tab !== 'logs' || !target) return;
+    setLogText(''); setLogCursor(0);
+    pollLogs();
+    const iv = setInterval(() => { if (!logPause) pollLogs(); }, 3000);
+    return () => clearInterval(iv);
+  }, [tab, target]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // keep refs in sync so interval closure always reads latest values
+  useEffect(() => { autoHealRef.current = autoHeal; }, [autoHeal]);
+  useEffect(() => { userStoppedRef.current = userStopped; }, [userStopped]);
+
+  // re-sync userStopped from sessionStorage when agent/target changes
+  useEffect(() => {
+    try {
+      const v = sessionStorage.getItem(`agent-stopped:${agentId}:${target || ''}`) === '1';
+      userStoppedRef.current = v;
+      setUserStoppedState(v);
+    } catch { /* ignore */ }
+  }, [agentId, target]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Health watchdog (abnormal-state detection) ──
+  useEffect(() => {
+    if (!details?.installed || !target) return;
+    let cancelled = false;
+    const check = async () => {
+      try {
+        const h = await call('health');
+        if (!cancelled) setHealth(h);
+        // auto-heal: dead gateway → bring it back up (only if user did not explicitly stop it)
+        // use refs to avoid stale closure capturing old values
+        if (!cancelled && autoHealRef.current && !userStoppedRef.current && h && !h.alive && h.installed !== false) {
+          setNotice({ ok: false, text: `⚠ ${agent.name} gateway died unexpectedly — auto-restarting…` });
+          const r = await call('gateway', { config: { op: 'start' } });
+          if (r?.success) setNotice({ ok: true, text: `✓ ${agent.name} gateway was down — automatically restarted.` });
+        }
+      } catch { /* transient */ }
+    };
+    // skip the immediate-mount check so the user sees the real state first
+    const t0 = setTimeout(check, 5000);
+    const iv = setInterval(check, 20000);
+    return () => { cancelled = true; clearTimeout(t0); clearInterval(iv); };
+  }, [details?.installed, target, agentId, agent.name, call]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const inputCls = 'w-full bg-black/30 border border-[var(--border-color)] rounded-lg px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-400/50';
+  const btn = 'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-bold transition cursor-pointer disabled:opacity-40';
+
+  return (
+    <div className="h-full overflow-y-auto p-4 md:p-6 max-w-4xl mx-auto space-y-4">
+      <style>{`select option { background-color: #16162a; color: #fff; }`}</style>
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2.5">
+          {agent.logo
+            ? <img src={agent.logo} alt="" className="w-6 h-6 rounded object-contain" />
+            : <Bot size={22} className="text-[var(--accent-indigo)]" />}
+          <div>
+            <h1 className="text-base font-bold">AI Agents</h1>
+            <p className="text-[11px] text-[var(--text-muted)]">Install & manage autonomous agents on your servers</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={toggleLiveLogs} title={liveLogs ? 'Live action logs: ON (click to disable)' : 'Live action logs: OFF (click to enable)'}
+            className={`${btn} ${liveLogs ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-white/5 border border-[var(--border-color)] text-[var(--text-muted)] hover:text-white'}`}>
+            <span className={`inline-block w-1.5 h-1.5 rounded-full ${liveLogs ? 'bg-emerald-400 animate-pulse' : 'bg-[var(--text-muted)]'}`} /> Live logs {liveLogs ? 'on' : 'off'}
+          </button>
+          <button onClick={loadDetails} disabled={loading || !target} className={`${btn} bg-white/5 border border-[var(--border-color)] text-[var(--text-muted)] hover:text-white`}>
+            {loading ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />} Refresh
+          </button>
+        </div>
+      </div>
+
+      {/* Server picker */}
+      <div className="rounded-xl border border-[var(--border-color)] bg-[var(--bg-secondary)] p-4">
+        <label className="text-[10px] uppercase tracking-wider font-bold text-[var(--text-muted)]">Server</label>
+        <ThemeSelect
+          value={target}
+          onChange={setTarget}
+          options={connections.map(c => ({ value: c._id, label: `${c.name || c.host} (${c.host})` }))}
+          placeholder="— select a server —"
+          icon={ServerIcon}
+          size="sm"
+          className="mt-1 w-full"
+        />
+
+        {/* Agent catalog */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-3">
+          {AGENTS.map(a => (
+            <button key={a.id} onClick={() => setAgentId(a.id)}
+              className={`text-left flex items-start gap-2.5 rounded-xl border px-3 py-2.5 transition cursor-pointer ${agentId === a.id ? 'border-indigo-500/40 bg-indigo-500/10' : 'border-[var(--border-color)] bg-black/20 hover:bg-white/5'}`}>
+              {a.logo ? (
+                <img src={a.logo} alt="" className="mt-0.5 w-4 h-4 shrink-0 rounded object-contain bg-black/20 p-px" />
+              ) : (
+                <Bot size={16} className={`mt-0.5 shrink-0 ${agentId === a.id ? 'text-indigo-400' : 'text-[var(--text-muted)]'}`} />
+              )}
+              <span className="min-w-0">
+                <span className="block text-xs font-bold">{a.name} <span className="text-[9px] font-normal text-[var(--text-muted)]">by {a.by}</span></span>
+                <span className="block text-[10px] text-[var(--text-muted)] line-clamp-2">{a.desc}</span>
+              </span>
+            </button>
+          ))}
+          <div className="flex items-center gap-2 rounded-xl border border-dashed border-[var(--border-color)] px-3 py-2.5 opacity-50">
+            <Plus size={14} className="text-[var(--text-muted)] shrink-0" />
+            <span className="text-[10px] text-[var(--text-muted)]">More agents coming soon</span>
+          </div>
+        </div>
+      </div>
+
+      {notice && (
+        <div className={`rounded-lg border px-3 py-2 text-xs ${notice.ok ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-300' : 'border-red-500/25 bg-red-500/10 text-red-300'}`}>
+          {notice.text}
+        </div>
+      )}
+
+      {!target ? (
+        <div className="rounded-xl border border-dashed border-[var(--border-color)] p-8 text-center text-xs text-[var(--text-muted)]">Select a server to begin</div>
+      ) : loading ? (
+        <div className="flex items-center justify-center gap-2 p-8 text-xs text-[var(--text-muted)]"><Loader2 size={14} className="animate-spin" /> Reading agent state…</div>
+      ) : !details?.installed ? (
+        /* Not installed → install card */
+        <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/10 p-5 text-center">
+          {agent.logo
+            ? <img src={agent.logo} alt="" className="w-8 h-8 mx-auto mb-2 rounded object-contain" />
+            : <Bot size={26} className="mx-auto mb-2 text-indigo-400" />}
+          <p className="text-sm font-bold mb-1">No agent installed on this server</p>
+          <p className="text-[11px] text-[var(--text-muted)] mb-4">Install {agent.name} with one click — chat with it from Telegram, LINE, Discord &amp; more.</p>
+          <button onClick={() => setShowWizard(true)} className={`${btn} bg-indigo-500 hover:bg-indigo-400 text-white text-xs px-5 py-2.5`}>
+            <Send size={13} /> One-Click Install
+          </button>
+          <a href={agent.docs} target="_blank" rel="noreferrer" className="ml-2 inline-flex items-center gap-1 text-[10px] text-indigo-300 hover:text-indigo-200 align-middle">
+            Docs <ExternalLink size={9} />
+          </a>
+        </div>
+      ) : (
+        /* Installed → management panel */
+        <div className="rounded-xl border border-[var(--border-color)] bg-[var(--bg-secondary)] overflow-hidden">
+          {/* Status bar */}
+          <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-[var(--border-color)] bg-black/20">
+            <span className={`flex items-center gap-1.5 text-xs font-bold ${details.running ? 'text-emerald-400' : 'text-amber-400'}`}>
+              {details.running ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
+              {details.running ? 'Gateway running' : 'Gateway stopped'}
+            </span>
+            {details.version && <span className="text-[10px] text-[var(--text-muted)]">v{details.version}</span>}
+            {details.model && <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-300">🧠 {details.model}</span>}
+            {details.service && <span className="text-[10px] text-[var(--text-muted)]">{details.service} service</span>}
+            <span className="ml-auto flex items-center gap-1">
+              {!details.running && <button onClick={() => gatewayOp('start')} disabled={!!busyMsg} className={`${btn} bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20`}><Play size={11} /> Start</button>}
+              {details.running && <button onClick={() => gatewayOp('stop')} disabled={!!busyMsg} className={`${btn} bg-red-500/10 text-red-400 hover:bg-red-500/20`}><Square size={11} /> Stop</button>}
+              <button onClick={() => gatewayOp('restart')} disabled={!!busyMsg} className={`${btn} bg-white/5 border border-[var(--border-color)] text-[var(--text-muted)] hover:text-white`}><RotateCw size={11} /> Restart</button>
+              <button onClick={uninstall} disabled={!!busyMsg} title="Uninstall agent" className={`${btn} bg-red-500/10 text-red-400 hover:bg-red-500/20`}>
+                <Trash2 size={11} /> Uninstall
+              </button>
+            </span>
+          </div>
+
+          {/* Abnormal-state banner */}
+          {details.running === false && (
+            <div className="flex flex-wrap items-center gap-2 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-xs text-red-300">
+              <XCircle size={14} /> Gateway is DOWN — your bot is not responding.
+              <button onClick={() => gatewayOp('start')} disabled={!!busyMsg} className={`${btn} !py-1 !px-2 ml-auto bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30`}>
+                <Play size={11} /> Start it now
+              </button>
+            </div>
+          )}
+          {health && details.running && health.telegram !== 'connected' && (
+            <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-xs text-amber-300">
+              ⚠ Telegram status: <b>{health.telegram}</b> — if this persists, check the bot token or network on the server.
+            </div>
+          )}
+
+          <div className="flex gap-1 px-3 pt-3 bg-black/10 overflow-x-auto">
+            {[
+              ['overview', 'Overview'],
+              ['skills', `Skills (${(details.skills || []).length})`],
+              ['prompt', 'Personality & Prompt'],
+              ['config', 'Config'],
+              ['env', `Env (${(details.envKeys || []).length})`],
+              ['logs', 'Logs (live)'],
+            ].map(([id, label]) => (
+              <button key={id} onClick={() => setTab(id)} className={`px-3 py-1.5 rounded-t-lg text-[11px] font-bold transition cursor-pointer whitespace-nowrap ${tab === id ? 'bg-[var(--bg-secondary)] text-[var(--accent-indigo)] border-t border-x border-[var(--border-color)]' : 'text-[var(--text-muted)] hover:text-white'}`}>
+                {label}
+              </button>
+            ))}
+          </div>
+
+          <div className="p-4">
+            {tab === 'overview' && (
+              <div className="space-y-3 text-xs">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {[['Version', details.version || '—'], ['Model', details.model || '—'], ['Service', details.service || '—'], ['Skills', String((details.skills || []).length)]].map(([k, v]) => (
+                    <div key={k} className="rounded-lg bg-black/30 border border-[var(--border-color)] px-3 py-2">
+                      <div className="text-[9px] uppercase tracking-wider font-bold text-[var(--text-muted)]">{k}</div>
+                      <div className="text-xs font-bold mt-0.5 truncate" title={v}>{v}</div>
+                    </div>
+                  ))}
+                </div>
+                <div>
+                  <div className="text-[9px] uppercase tracking-wider font-bold text-[var(--text-muted)] mb-1.5">Configured credentials ({(details.envKeys || []).length})</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {(details.envKeys || []).map(k => <span key={k} className="px-2 py-0.5 rounded-md bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-[10px] font-mono">{k}</span>)}
+                    {(details.envKeys || []).length === 0 && <span className="text-[10px] text-[var(--text-muted)]">none yet — use the install wizard to add API keys / messenger tokens</span>}
+                  </div>
+                </div>
+                <label className="flex items-center gap-1.5 text-[10px] text-[var(--text-muted)] cursor-pointer">
+                  <input type="checkbox" checked={autoHeal} onChange={e => setAutoHeal(e.target.checked)} className="accent-emerald-500" />
+                  Auto-restart gateway if it dies unexpectedly (watchdog)
+                </label>
+                <button onClick={() => setShowWizard(true)} className={`${btn} bg-indigo-500/15 text-indigo-300 hover:bg-indigo-500/25`}>
+                  <Settings2 size={11} /> Reconfigure / Update settings
+                </button>
+              </div>
+            )}
+
+            {tab === 'logs' && (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <input value={logSearch} onChange={e => { setLogSearch(e.target.value); setLogNav(0); }} placeholder="Search log (e.g. error)…" className={`${inputCls} flex-1 !py-1.5 font-mono`} />
+                  {logSearch.trim() && (
+                    <>
+                      <span className="text-[10px] font-bold text-indigo-300 whitespace-nowrap">{logMatches.length ? `${logNav + 1}/${logMatches.length}` : '0 found'}</span>
+                      <button onClick={() => navLog(-1)} disabled={!logMatches.length} className={`${btn} bg-white/5 border border-[var(--border-color)] !py-1 !px-2`}>↑</button>
+                      <button onClick={() => navLog(1)} disabled={!logMatches.length} className={`${btn} bg-white/5 border border-[var(--border-color)] !py-1 !px-2`}>↓</button>
+                    </>
+                  )}
+                  <button onClick={() => setLogPause(p => !p)} className={`${btn} bg-white/5 border border-[var(--border-color)] text-[var(--text-muted)] hover:text-white !py-1 !px-2`}>
+                    {logPause ? '▶ Resume tail' : '⏸ Pause'}
+                  </button>
+                </div>
+                <pre ref={logPreRef}
+                  className="bg-black/50 rounded-lg p-3 text-[10px] font-mono whitespace-pre-wrap h-80 overflow-y-auto text-emerald-200/90 border border-[var(--border-color)]">
+                  {(() => {
+                    const q = logSearch.trim().toLowerCase();
+                    if (!logText) return 'Waiting for log output…';
+                    if (!q) return logText.slice(-20000);
+                    return logText.split('\n').map((l, i) => {
+                      const isMatch = l.toLowerCase().includes(q);
+                      const isCur = isMatch && logLineIdx[logNav % Math.max(logLineIdx.length, 1)] === i;
+                      return (
+                        <div key={i} id={`log-line-${i}`} className={isCurrent ? 'bg-indigo-500/40 rounded' : isMatch ? 'bg-amber-500/15 rounded' : ''}>
+                          {highlightText(l, logSearch)}
+                        </div>
+                      );
+                    });
+                  })()}
+                </pre>
+                {health?.errorCount > 0 && (
+                  <div className="rounded-lg border border-red-500/25 bg-red-500/10 px-3 py-2 text-[11px] text-red-300">
+                    {health.errorCount} recent ERROR lines detected — check the log above.
+                  </div>
+                )}
+              </div>
+            )}
+
+            {tab === 'config' && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <label className="text-[10px] uppercase tracking-wider font-bold text-[var(--text-muted)]">~/.hermes/config.yaml</label>
+                  <label className="flex items-center gap-1.5 text-[10px] text-[var(--text-muted)] cursor-pointer">
+                    <input type="checkbox" checked={restartAfterSave} onChange={e => setRestartAfterSave(e.target.checked)} className="accent-indigo-500" />
+                    restart gateway after save
+                  </label>
+                </div>
+                <div className="flex items-center gap-2 flex-wrap"><input value={cfgSearch} onChange={e => { setCfgSearch(e.target.value); setCfgNav(0); }} placeholder="Search config.." className={`${inputCls} flex-1 !py-1.5 font-mono`} />
+          {cfgSearch.trim() && (<><span className="text-[10px] font-bold text-indigo-300">{cfgOccurrences.length ? cfgNav + 1 + "/" + cfgOccurrences.length : "0 found"}</span><button onClick={() => gotoCfg(-1)} disabled={!cfgOccurrences.length} className={`${btn} bg-white/5 border border-[var(--border-color)] !py-1 !px-2`}>Up</button><button onClick={() => gotoCfg(1)} disabled={!cfgOccurrences.length} className={`${btn} bg-white/5 border border-[var(--border-color)] !py-1 !px-2`}>Down</button></>)}</div>
+                <textarea className={`${inputCls} font-mono h-72`} value={yamlDraft} onChange={e => setYamlDraft(e.target.value)} spellCheck={false} />
+                {cfgSearch.trim() && (
+                  <div className="rounded-lg bg-black/40 border border-[var(--border-color)] p-2 max-h-32 overflow-y-auto text-[10px] font-mono">
+                    {yamlDraft.split('\n').map((l, i) => ({ l, i })).filter(x => x.l.toLowerCase().includes(cfgSearch.toLowerCase()))
+                      .map(x => <div key={x.i} className={x.i + 1 === curLineNo ? 'bg-indigo-500/30 rounded text-indigo-200' : 'text-emerald-300/90'}>{x.i + 1}: {x.l || ' '}</div>)}
+                  </div>
+                )}
+                <button onClick={saveConfig} disabled={!!busyMsg || !yamlDraft.trim()} className={`${btn} bg-indigo-500 hover:bg-indigo-400 text-white`}>
+                  {busyMsg === 'Save config.yaml' ? <Loader2 size={11} className="animate-spin" /> : <CheckCircle2 size={11} />} Save config.yaml
+                </button>
+                <p className="text-[9px] text-[var(--text-muted)]">A timestamped backup is kept automatically. If a saved config breaks the gateway, the previous one is restored for you.</p>
+                {backups.length > 0 && (
+                  <div className="rounded-lg border border-[var(--border-color)] bg-black/20 p-2.5">
+                    <div className="text-[9px] uppercase tracking-wider font-bold text-[var(--text-muted)] mb-1.5">Restore a backup</div>
+                    <ThemeSelect
+                      value=""
+                      onChange={(n) => {
+                        if (n) act(`Restore ${n}`, () => call('restore-backup', { config: { name: n } })).then(loadDetails);
+                      }}
+                      options={backups.map(b => ({
+                        value: b.name,
+                        label: `${b.name} — ${b.date} (${Math.round(b.size / 1024)} KB)`
+                      }))}
+                      placeholder="Select backup…"
+                      size="xs"
+                      className="mt-1"
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+
+            {tab === 'env' && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <label className="text-[10px] uppercase tracking-wider font-bold text-[var(--text-muted)]">
+                    {agent.id === 'hermes' ? '~/.hermes/.env' : agent.id === 'nanobot' ? '~/.nanobot/.env' : agent.id === 'openclaw' ? '~/.openclaw/.env' : agent.id === 'zeroclaw' ? '~/.zeroclaw/.env' : '~/' + agent.id + '/.env'}
+                  </label>
+                  <label className="flex items-center gap-1.5 text-[10px] text-[var(--text-muted)] cursor-pointer">
+                    <input type="checkbox" checked={restartAfterSave} onChange={e => setRestartAfterSave(e.target.checked)} className="accent-indigo-500" />
+                    restart gateway after save
+                  </label>
+                </div>
+                <p className="text-[9px] text-[var(--text-muted)]">Existing keys shown below — type a new value to overwrite. Saved values are masked on the next load.</p>
+                <div className="space-y-1.5">
+                  {envDraft.map((r, i) => (
+                    <div key={r.key} className="flex items-center gap-2">
+                      <span className="text-[10px] font-mono w-44 truncate text-[var(--text-muted)]">{r.key}</span>
+                      <input
+                        type={r.masked && !r.value ? 'password' : 'text'}
+                        placeholder={r.masked ? '••••••' : ''}
+                        value={r.value}
+                        onChange={e => setEnvDraft(prev => prev.map((x, j) => j === i ? { ...x, value: e.target.value, masked: false } : x))}
+                        onFocus={() => setEnvDraft(prev => prev.map((x, j) => j === i ? { ...x, masked: false } : x))}
+                        className={`${inputCls} !py-1.5 font-mono flex-1`}
+                        autoComplete="off"
+                        spellCheck={false}
+                      />
+                      <button
+                        onClick={() => setEnvDraft(prev => prev.filter((_, j) => j !== i))}
+                        className={`${btn} bg-red-500/10 text-red-400 hover:bg-red-500/20 !py-1 !px-2`}
+                        title="Remove this key from the list"
+                      ><Trash2 size={10} /></button>
+                    </div>
+                  ))}
+                  {envDraft.length === 0 && (
+                    <p className="text-[10px] text-[var(--text-muted)] italic py-2">No env keys detected on the server yet. Add one below.</p>
+                  )}
+                  <div className="flex items-center gap-2 pt-1">
+                    <input
+                      type="text"
+                      placeholder="NEW_KEY_NAME"
+                      value={envNewKey}
+                      onChange={e => setEnvNewKey(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, '_'))}
+                      className={`${inputCls} !py-1.5 font-mono flex-1`}
+                      spellCheck={false}
+                    />
+                    <input
+                      type="text"
+                      placeholder="value"
+                      value={envNewVal}
+                      onChange={e => setEnvNewVal(e.target.value)}
+                      className={`${inputCls} !py-1.5 font-mono flex-1`}
+                      autoComplete="off"
+                    />
+                  </div>
+                </div>
+                <button onClick={saveEnv} disabled={!!busyMsg} className={`${btn} bg-indigo-500 hover:bg-indigo-400 text-white`}>
+                  {busyMsg === 'Save env' ? <Loader2 size={11} className="animate-spin" /> : <CheckCircle2 size={11} />} Save env + restart
+                </button>
+                <p className="text-[9px] text-[var(--text-muted)]">Saved keys go to <span className="font-mono">~/.{agent.id}/.env</span>. The gateway is restarted (if checked) and the gateway log will reflect the new keys.</p>
+              </div>
+            )}
+
+            {tab === 'prompt' && (() => {
+              const PROMPT_TEMPLATES = [
+                {
+                  id: 'sysadmin',
+                  name: 'DevOps & Linux Sysadmin',
+                  icon: '🛠️',
+                  desc: 'Specialized in Linux shell, systemd, docker, network diagnostics and server health',
+                  prompt: `You are an expert DevOps engineer and Linux system administrator.
+- Always provide safe, robust, and verified bash commands.
+- Explain potential risks before executing high-impact actions (deletions, service stops, firewall changes).
+- Format all terminal commands and code in clear code blocks with explanations.
+- Proactively check logs and service health statuses when diagnosing issues.`,
+                },
+                {
+                  id: 'fullstack',
+                  name: 'Senior Fullstack Engineer',
+                  icon: '💻',
+                  desc: 'Clean code architecture, API design, Node.js, Python, and frontend performance',
+                  prompt: `You are a Senior Fullstack Software Architect.
+- Write clean, modular, maintainable, and type-safe code.
+- Prioritize best practices, modern frameworks, and robust error handling.
+- Suggest unit tests and security considerations for any code you generate.
+- Be direct, structured, and deliver production-ready solutions.`,
+                },
+                {
+                  id: 'concise',
+                  name: 'Concise Terminal Operator',
+                  icon: '⚡',
+                  desc: 'Ultra-fast, direct, minimal fluff, straight to execution commands and results',
+                  prompt: `You are a concise, high-efficiency AI terminal assistant.
+- Give short, direct answers without unnecessary pleasantries.
+- Provide the exact shell commands needed immediately.
+- Only explain when explicitly requested or when a command carries data loss risk.`,
+                },
+                {
+                  id: 'security',
+                  name: 'Security & Hardening Auditor',
+                  icon: '🛡️',
+                  desc: 'Audits permissions, SSH security, firewall rules, and vulnerability fixes',
+                  prompt: `You are a Cybersecurity & Server Hardening Specialist.
+- Always review security implications of commands, open ports, and file permissions.
+- Follow the principle of least privilege in all configurations.
+- Alert the user immediately if any insecure settings or weak credentials are detected.`,
+                },
+                {
+                  id: 'autonomous',
+                  name: 'Autonomous Problem Solver',
+                  icon: '🧠',
+                  desc: 'Breaks down complex multi-step goals, executes subtasks, and self-verifies',
+                  prompt: `You are an autonomous AI problem solver.
+- When given a complex goal, break it into clear, logical milestones.
+- Execute steps methodically, verify results after each step, and pivot if unexpected errors occur.
+- Provide concise progress updates to the user.`,
+                },
+              ];
+
+              const WORKSPACE_FILES = [
+                {
+                  key: 'PROMPT.md',
+                  name: 'PROMPT.md',
+                  icon: '📜',
+                  label: 'System Prompt',
+                  desc: 'Core instructions and behavioral rules',
+                  path: agent.id === 'hermes' ? '~/.hermes/custom_instructions.txt' : `~/.${agent.id}/workspace/PROMPT.md`,
+                },
+                {
+                  key: 'SOUL.md',
+                  name: 'SOUL.md',
+                  icon: '🎭',
+                  label: 'Personality & Voice',
+                  desc: 'Persona identity, tone of voice, empathy, and character traits',
+                  path: agent.id === 'hermes' ? '~/.hermes/SOUL.md' : `~/.${agent.id}/workspace/SOUL.md`,
+                },
+                {
+                  key: 'USER.md',
+                  name: 'USER.md',
+                  icon: '👤',
+                  label: 'User Profile',
+                  desc: 'User bio, preferences, language style, and background',
+                  path: agent.id === 'hermes' ? '~/.hermes/USER.md' : `~/.${agent.id}/workspace/USER.md`,
+                },
+                {
+                  key: 'AGENTS.md',
+                  name: 'AGENTS.md',
+                  icon: '🛡️',
+                  label: 'Rules & Safety',
+                  desc: 'Operational safety boundaries and constraints',
+                  path: agent.id === 'hermes' ? '~/.hermes/AGENTS.md' : `~/.${agent.id}/workspace/AGENTS.md`,
+                },
+                {
+                  key: 'MEMORY.md',
+                  name: 'MEMORY.md',
+                  icon: '🧠',
+                  label: 'Long-Term Memory',
+                  desc: 'Persistent knowledge notes, facts, and saved context',
+                  path: agent.id === 'hermes' ? '~/.hermes/memories/MEMORY.md' : `~/.${agent.id}/workspace/MEMORY.md`,
+                },
+              ];
+
+              const curFileMeta = WORKSPACE_FILES.find(f => f.key === promptActiveFile) || WORKSPACE_FILES[0];
+              const words = promptDraft.trim() ? promptDraft.trim().split(/\s+/).length : 0;
+              const chars = promptDraft.length;
+              const lines = promptDraft ? promptDraft.split('\n').length : 0;
+
+              return (
+                <div className="space-y-3">
+                  {/* File Selector Tabs */}
+                  <div>
+                    <div className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1.5 flex items-center justify-between">
+                      <span>Personality &amp; Workspace Files</span>
+                      <span className="text-[9px] text-indigo-400 font-normal">Click a file to edit</span>
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5">
+                      {WORKSPACE_FILES.map(f => {
+                        const isActive = promptActiveFile === f.key;
+                        const hasContent = !!(promptFilesMap[f.key]?.trim() || (isActive && promptDraft.trim()));
+                        return (
+                          <button
+                            key={f.key}
+                            onClick={() => switchPromptFile(f.key)}
+                            className={`p-2 rounded-xl border text-left transition cursor-pointer flex flex-col justify-between ${
+                              isActive
+                                ? 'bg-indigo-500/20 border-indigo-500/40 text-white shadow-sm'
+                                : 'bg-black/20 border-[var(--border-color)] text-[var(--text-muted)] hover:bg-white/5 hover:text-white'
+                            }`}
+                          >
+                            <div className="flex items-center gap-1.5 font-mono text-xs font-bold truncate">
+                              <span>{f.icon}</span>
+                              <span className={isActive ? 'text-indigo-300' : ''}>{f.name}</span>
+                            </div>
+                            <div className="text-[9px] truncate mt-1 text-[var(--text-muted)]">{f.label}</div>
+                            <div className="mt-1 flex items-center gap-1">
+                              <span className={`w-1.5 h-1.5 rounded-full ${hasContent ? 'bg-emerald-400' : 'bg-zinc-600'}`} />
+                              <span className="text-[8px] text-[var(--text-muted)]">{hasContent ? 'Configured' : 'Empty'}</span>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Target File Info & Restart Checkbox */}
+                  <div className="flex items-center justify-between gap-2 flex-wrap pt-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] uppercase tracking-wider font-bold text-[var(--text-muted)]">Target Path:</span>
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-indigo-500/10 border border-indigo-500/20 text-indigo-300">{curFileMeta.path}</span>
+                      <span className="text-[10px] text-[var(--text-muted)]">({curFileMeta.desc})</span>
+                    </div>
+                    <label className="flex items-center gap-1.5 text-[10px] text-[var(--text-muted)] cursor-pointer">
+                      <input type="checkbox" checked={restartAfterSave} onChange={e => setRestartAfterSave(e.target.checked)} className="accent-indigo-500" />
+                      restart gateway after save
+                    </label>
+                  </div>
+
+                  {/* Preset Persona Quick Templates (only on PROMPT.md / SOUL.md) */}
+                  {(promptActiveFile === 'PROMPT.md' || promptActiveFile === 'SOUL.md') && (
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">
+                        <span className="flex items-center gap-1"><Sparkles size={11} className="text-indigo-400" /> Quick Persona Templates (1-Click Insert)</span>
+                        {promptDraft && (
+                          <button
+                            onClick={() => setPromptDraft('')}
+                            className="text-[9px] text-red-400 hover:text-red-300 cursor-pointer font-normal"
+                          >
+                            Clear editor
+                          </button>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                        {PROMPT_TEMPLATES.map(tmpl => (
+                          <div
+                            key={tmpl.id}
+                            onClick={() => setPromptDraft(tmpl.prompt)}
+                            className="p-2.5 rounded-xl border border-[var(--border-color)] bg-black/20 hover:border-indigo-400/40 hover:bg-white/5 transition cursor-pointer flex flex-col justify-between group"
+                          >
+                            <div className="flex items-start gap-2 mb-1.5">
+                              <span className="text-lg shrink-0 p-1 rounded bg-white/5">{tmpl.icon}</span>
+                              <div className="min-w-0">
+                                <div className="text-xs font-bold text-white group-hover:text-indigo-300 transition truncate">{tmpl.name}</div>
+                                <div className="text-[9px] text-[var(--text-muted)] line-clamp-2 mt-0.5 leading-tight">{tmpl.desc}</div>
+                              </div>
+                            </div>
+                            <div className="pt-1.5 border-t border-[var(--border-color)] flex items-center justify-between text-[9px] text-indigo-400 font-bold">
+                              <span>Insert template</span>
+                              <span>→</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Custom Prompt Textarea */}
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between text-[10px] text-[var(--text-muted)] font-mono">
+                      <span>Editing <b className="text-white">{curFileMeta.name}</b> — {curFileMeta.label}</span>
+                      <span>{lines} lines · {words} words · {chars} chars</span>
+                    </div>
+                    <textarea
+                      className={`${inputCls} font-mono h-64 text-xs leading-relaxed`}
+                      placeholder={
+                        promptActiveFile === 'SOUL.md'
+                          ? `# SOUL.md\nDescribe ${agent.name}'s character, voice, and demeanor...\n\nExample:\n- Voice: direct, technical, calm, concise.\n- Identity: an experienced DevOps assistant who values clean code.`
+                          : promptActiveFile === 'USER.md'
+                          ? `# USER.md\nDescribe yourself and your preferences for ${agent.name}...\n\nExample:\n- Name: Admin\n- Language: English & Thai\n- Style: Provide command lines first, brief explanations after.`
+                          : promptActiveFile === 'AGENTS.md'
+                          ? `# AGENTS.md\nOperational guidelines & boundaries...\n\nExample:\n- Do not delete production databases without confirmation.\n- Always check disk space before creating backups.`
+                          : promptActiveFile === 'MEMORY.md'
+                          ? `# MEMORY.md\nLong-term knowledge & context notes...\n\nExample:\n- Server 1: Web server on port 3000\n- Server 2: Postgres cluster`
+                          : `Enter system instructions for ${agent.name} here...`
+                      }
+                      value={promptDraft}
+                      onChange={e => setPromptDraft(e.target.value)}
+                      spellCheck={false}
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-2 pt-1">
+                    <button
+                      onClick={savePrompt}
+                      disabled={!!busyMsg}
+                      className={`${btn} bg-indigo-500 hover:bg-indigo-400 text-white px-5`}
+                    >
+                      {busyMsg.startsWith('Save') ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />} Save {curFileMeta.name}
+                    </button>
+                    <button
+                      onClick={loadDetails}
+                      disabled={!!busyMsg}
+                      className={`${btn} bg-white/5 border border-[var(--border-color)] text-[var(--text-muted)] hover:text-white`}
+                    >
+                      <RotateCw size={11} /> Reload from Server
+                    </button>
+                  </div>
+                  <p className="text-[9px] text-[var(--text-muted)]">
+                    Saved directly to <span className="font-mono">{curFileMeta.path}</span>. When saved, the agent gateway is restarted (if checked) to immediately load your updated personality and behavioral rules.
+                  </p>
+                </div>
+              );
+            })()}
+
+            {tab === 'skills' && (() => {
+              // Universal skills available on every agent via custom skill clone
+              const SHARED_SKILLS = [
+                { id: 'web-search', name: 'Web Search', cat: 'tools', icon: '🌐', desc: 'Live Google & DuckDuckGo web search with URL extraction', tags: ['search', 'google', 'browse', 'web', 'internet'] },
+                { id: 'github-assistant', name: 'GitHub Assistant', cat: 'tools', icon: '🐙', desc: 'Manage repositories, search code, issues & pull requests', tags: ['git', 'github', 'repo', 'code', 'pr'] },
+                { id: 'weather', name: 'Weather Forecast', cat: 'tools', icon: '☀️', desc: 'Global live weather forecasts and atmospheric data', tags: ['weather', 'climate', 'temperature', 'forecast'] },
+                { id: 'crypto-tracker', name: 'Crypto Tracker', cat: 'tools', icon: '📈', desc: 'Real-time cryptocurrency prices & market data', tags: ['crypto', 'bitcoin', 'eth', 'prices', 'finance'] },
+                { id: 'code-interpreter', name: 'Python Code Sandbox', cat: 'tools', icon: '🐍', desc: 'Execute Python scripts in an isolated sandbox environment', tags: ['python', 'code', 'sandbox', 'exec'] },
+                { id: 'notion-sync', name: 'Notion Sync', cat: 'tools', icon: '📓', desc: 'Read and update Notion databases and workspaces', tags: ['notion', 'notes', 'docs', 'database'] },
+                { id: 'cron-scheduler', name: 'Cron Automation Engine', cat: 'devops', icon: '⏱️', desc: 'Schedule periodic AI background tasks and wake-up jobs', tags: ['cron', 'schedule', 'periodic', 'timer'] },
+                { id: 'sql-database', name: 'SQL Query Assistant', cat: 'devops', icon: '🗄️', desc: 'Direct Postgres / MySQL querying, schemas & analysis', tags: ['sql', 'database', 'postgres', 'mysql'] },
+                { id: 'arxiv-search', name: 'ArXiv Research Explorer', cat: 'ai', icon: '📚', desc: 'Search and summarize latest academic papers on ArXiv', tags: ['arxiv', 'paper', 'research', 'pdf', 'science'] },
+                { id: 'browser-use', name: 'Browser Agent (Playwright)', cat: 'tools', icon: '🧭', desc: 'Autonomous web browsing, form filling, and scraping', tags: ['browser', 'playwright', 'automation', 'dom'] },
+              ];
+
+              const CATALOG = {
+                hermes: [
+                  { id: 'skill-creator', name: 'Skill Creator', cat: 'ai', icon: '✨', desc: 'Auto-create & train new custom skills from plain English', tags: ['create', 'generator', 'ai', 'custom'] },
+                  { id: 'web-search', name: 'Web Search', cat: 'tools', icon: '🌐', desc: 'Live Google & DuckDuckGo web search with URL extraction', tags: ['search', 'google', 'browse', 'web', 'internet'] },
+                  { id: 'github-assistant', name: 'GitHub Assistant', cat: 'tools', icon: '🐙', desc: 'Manage repositories, search code, issues & pull requests', tags: ['git', 'github', 'repo', 'code', 'pr'] },
+                  { id: 'weather', name: 'Weather Forecast', cat: 'tools', icon: '☀️', desc: 'Global live weather forecasts and atmospheric data', tags: ['weather', 'climate', 'temperature', 'forecast'] },
+                  { id: 'crypto-tracker', name: 'Crypto Tracker', cat: 'tools', icon: '📈', desc: 'Real-time cryptocurrency metrics, prices & market data', tags: ['crypto', 'bitcoin', 'eth', 'prices', 'finance'] },
+                  { id: 'telegram-broadcast', name: 'Telegram Broadcaster', cat: 'channels', icon: '📢', desc: 'Automated multi-chat and channel announcement tools', tags: ['telegram', 'broadcast', 'channel', 'notify'] },
+                  { id: 'browser-use', name: 'Browser Agent (Playwright)', cat: 'tools', icon: '🧭', desc: 'Autonomous web browsing, form filling, and scraping', tags: ['browser', 'playwright', 'automation', 'dom'] },
+                  { id: 'notion-sync', name: 'Notion Sync', cat: 'tools', icon: '📓', desc: 'Read and update Notion databases and workspaces', tags: ['notion', 'notes', 'docs', 'database'] },
+                  { id: 'code-interpreter', name: 'Python Code Sandbox', cat: 'tools', icon: '🐍', desc: 'Execute Python scripts in an isolated sandbox environment', tags: ['python', 'code', 'sandbox', 'exec'] },
+                  { id: 'cron-scheduler', name: 'Cron Automation Engine', cat: 'devops', icon: '⏱️', desc: 'Schedule periodic AI background tasks and wake-up jobs', tags: ['cron', 'schedule', 'periodic', 'timer'] },
+                  { id: 'arxiv-search', name: 'ArXiv Research Explorer', cat: 'ai', icon: '📚', desc: 'Search and summarize latest academic papers on ArXiv', tags: ['arxiv', 'paper', 'research', 'pdf', 'science'] },
+                  { id: 'sql-database', name: 'SQL Query Assistant', cat: 'devops', icon: '🗄️', desc: 'Direct Postgres / MySQL querying, schemas & analysis', tags: ['sql', 'database', 'postgres', 'mysql'] },
+                ],
+                nanobot: [
+                  { id: 'discord', name: 'Discord Gateway', cat: 'channels', icon: '🎮', desc: 'Full Discord server bot, channels, threads & mentions', tags: ['discord', 'chat', 'bot', 'gaming'] },
+                  { id: 'slack', name: 'Slack Workspace Bot', cat: 'channels', icon: '💬', desc: 'Real-time workplace channel assistant and DM bot', tags: ['slack', 'workspace', 'work', 'chat'] },
+                  { id: 'matrix', name: 'Matrix Encrypted Chat', cat: 'channels', icon: '🔒', desc: 'Decentralized end-to-end encrypted messaging bridge', tags: ['matrix', 'element', 'crypto', 'decentralized'] },
+                  { id: 'feishu', name: 'Feishu / Lark Gateway', cat: 'channels', icon: '🕊️', desc: 'Enterprise workplace automation, cards & webhooks', tags: ['feishu', 'lark', 'enterprise', 'bytedance'] },
+                  { id: 'email', name: 'Email Gateway (SMTP/IMAP)', cat: 'channels', icon: '✉️', desc: 'Inbound / outbound email processing and drafting', tags: ['email', 'mail', 'smtp', 'imap', 'gmail'] },
+                  { id: 'langfuse', name: 'Langfuse Observability', cat: 'ai', icon: '📊', desc: 'Deep LLM trace telemetry, token costs & latency logs', tags: ['langfuse', 'telemetry', 'trace', 'monitoring'] },
+                  { id: 'azure', name: 'Azure OpenAI Endpoints', cat: 'ai', icon: '☁️', desc: 'Connect enterprise Microsoft Azure OpenAI deployments', tags: ['azure', 'microsoft', 'openai', 'cloud'] },
+                  { id: 'bedrock', name: 'AWS Bedrock Integration', cat: 'ai', icon: '📦', desc: 'Amazon Bedrock Claude, Llama & Titan model support', tags: ['aws', 'amazon', 'bedrock', 'claude'] },
+                  { id: 'dingtalk', name: 'DingTalk Channel', cat: 'channels', icon: '📱', desc: 'Alibaba DingTalk enterprise bot & webhook integration', tags: ['dingtalk', 'alibaba', 'enterprise'] },
+                  { id: 'whatsapp', name: 'WhatsApp Business API', cat: 'channels', icon: '💬', desc: 'WhatsApp messaging bridge for mobile conversations', tags: ['whatsapp', 'meta', 'phone', 'chat'] },
+                  { id: 'signal', name: 'Signal Messenger Bridge', cat: 'channels', icon: '🛡️', desc: 'Private Signal protocol encrypted bot channel', tags: ['signal', 'privacy', 'chat'] },
+                  { id: 'olostep', name: 'Olostep Web Scraper', cat: 'tools', icon: '🕷️', desc: 'High-speed anti-bot headless scraping & extraction', tags: ['olostep', 'scrape', 'crawl', 'web'] },
+                  { id: 'msteams', name: 'Microsoft Teams Channel', cat: 'channels', icon: '🏢', desc: 'Enterprise Microsoft Teams bot & channel integrations', tags: ['msteams', 'microsoft', 'teams', 'office'] },
+                  { id: 'wecom', name: 'WeCom / WeChat Work', cat: 'channels', icon: '💼', desc: 'Tencent WeChat enterprise work assistant gateway', tags: ['wecom', 'wechat', 'tencent', 'work'] },
+                  { id: 'weixin', name: 'WeChat Official Account', cat: 'channels', icon: '💬', desc: 'Tencent WeChat public platform messaging channel', tags: ['weixin', 'wechat', 'tencent'] },
+                  { id: 'qq', name: 'QQ Channel Gateway', cat: 'channels', icon: '🐧', desc: 'Tencent QQ group bot and channel integration', tags: ['qq', 'tencent', 'bot'] },
+                  { id: 'mattermost', name: 'Mattermost Channel', cat: 'channels', icon: '💬', desc: 'Open-source self-hosted Mattermost workspace chat', tags: ['mattermost', 'chat', 'selfhosted'] },
+                  { id: 'api', name: 'OpenAI API Server (/v1)', cat: 'ai', icon: '⚡', desc: 'Serve local Nanobot as standard OpenAI-compatible API', tags: ['api', 'openai', 'v1', 'serve', 'http'] },
+                  { id: 'napcat', name: 'NapCat OneBot Bridge', cat: 'tools', icon: '🐱', desc: 'OneBot 11 standard protocol bridge for Nanobot', tags: ['napcat', 'onebot', 'qq'] },
+                  { id: 'mochat', name: 'Mochat Customer Service', cat: 'channels', icon: '🎧', desc: 'Multi-tenant live customer chat & support dashboard', tags: ['mochat', 'support', 'helpdesk'] },
+                ],
+                openclaw: [
+                  { id: 'filesystem', name: 'Filesystem MCP', cat: 'mcp', icon: '📁', desc: 'Secure local host file reading, writing, and navigation', tags: ['filesystem', 'files', 'disk', 'local'] },
+                  { id: 'github', name: 'GitHub MCP', cat: 'mcp', icon: '🐙', desc: 'Repository manipulation, branch ops, PRs & git commits', tags: ['github', 'git', 'repo', 'prs', 'issues'] },
+                  { id: 'fetch', name: 'Web Fetch MCP', cat: 'mcp', icon: '🌐', desc: 'High-speed markdown web page extraction & parser', tags: ['fetch', 'web', 'http', 'html', 'scrape'] },
+                  { id: 'brave-search', name: 'Brave Search MCP', cat: 'mcp', icon: '🔍', desc: 'Privacy-first global search engine indexing', tags: ['brave', 'search', 'privacy', 'google'] },
+                  { id: 'puppeteer', name: 'Puppeteer Browser MCP', cat: 'mcp', icon: '🧭', desc: 'Full headless Chromium browser automation & screenshots', tags: ['puppeteer', 'chrome', 'browser', 'dom'] },
+                  { id: 'postgres', name: 'PostgreSQL MCP', cat: 'mcp', icon: '🐘', desc: 'Direct SQL database exploration, queries & migrations', tags: ['postgres', 'database', 'sql', 'query'] },
+                  { id: 'memory', name: 'Knowledge Graph Memory MCP', cat: 'ai', icon: '🧠', desc: 'Persistent hierarchical entity & graph memory store', tags: ['memory', 'graph', 'knowledge', 'entities'] },
+                  { id: 'slack', name: 'Slack MCP Server', cat: 'mcp', icon: '💬', desc: 'Send messages, listen to channels, and query threads', tags: ['slack', 'mcp', 'chat'] },
+                  { id: 'docker', name: 'Docker MCP Server', cat: 'devops', icon: '🐳', desc: 'Inspect containers, view logs, and manage Docker services', tags: ['docker', 'containers', 'devops'] },
+                  { id: 'sqlite', name: 'SQLite MCP Server', cat: 'devops', icon: '💾', desc: 'Local embedded database query and manipulation tool', tags: ['sqlite', 'database', 'embedded'] },
+                ],
+                zeroclaw: [
+                  { id: 'cron-monitor', name: 'Cron & Uptime Monitor', cat: 'devops', icon: '⏱️', desc: 'Automated periodic health auditing and status triggers', tags: ['cron', 'uptime', 'monitor', 'schedule'] },
+                  { id: 'system-diagnostics', name: 'System Diagnostics SOP', cat: 'devops', icon: '🩺', desc: 'Automated CPU, RAM, disk & IO bottleneck analysis', tags: ['system', 'cpu', 'ram', 'disk', 'audit'] },
+                  { id: 'database-backup', name: 'Database Backup SOP', cat: 'devops', icon: '💾', desc: 'Scheduled automated database exports and rotations', tags: ['backup', 'database', 'snapshot', 'cron'] },
+                  { id: 'web-scraper', name: 'Web Scraper SOP', cat: 'tools', icon: '🕸️', desc: 'Structured data extraction & headless crawling pipeline', tags: ['scrape', 'crawler', 'web', 'data'] },
+                  { id: 'api-health-check', name: 'API Health Alerts', cat: 'devops', icon: '📡', desc: 'HTTP endpoint monitoring with instant webhook alerts', tags: ['api', 'ping', 'alerts', 'http'] },
+                  { id: 'docker-prune', name: 'Docker Cleanup SOP', cat: 'devops', icon: '🐳', desc: 'Auto-prune dangling images, builder cache & containers', tags: ['docker', 'cleanup', 'prune', 'disk'] },
+                  { id: 'ssl-cert-renewal', name: 'SSL Renewal SOP', cat: 'devops', icon: '🔐', desc: 'Automated Let’s Encrypt Certbot SSL renewal check', tags: ['ssl', 'https', 'certbot', 'security'] },
+                  { id: 'log-rotator', name: 'Log Rotation SOP', cat: 'devops', icon: '📜', desc: 'Compress and archive bulky server log files', tags: ['logs', 'rotate', 'compress', 'storage'] },
+                ],
+              };
+
+              const agentCatalog = CATALOG[agent.id] || CATALOG.hermes;
+              const fullCatalog = [...agentCatalog];
+              const installedList = details.skills || [];
+              const q = skillInput.trim().toLowerCase();
+
+              // Filtered shared skills
+              const filteredShared = SHARED_SKILLS.filter(item => {
+                const matchesCat = skillCat === 'all' || item.cat === skillCat;
+                const matchesQuery = !q || item.id.toLowerCase().includes(q) || item.name.toLowerCase().includes(q) || item.desc.toLowerCase().includes(q) || item.tags.some(t => t.toLowerCase().includes(q));
+                return matchesCat && matchesQuery;
+              });
+
+              // Filtered presets for grid
+              const filteredGrid = fullCatalog.filter(item => {
+                const matchesCat = skillCat === 'all' || item.cat === skillCat;
+                const matchesQuery = !q || item.id.toLowerCase().includes(q) || item.name.toLowerCase().includes(q) || item.desc.toLowerCase().includes(q) || item.tags.some(t => t.toLowerCase().includes(q));
+                return matchesCat && matchesQuery;
+              });
+
+              // Autocomplete suggestions from both shared + agent catalog (up to 8)
+              const allForSearch = [...SHARED_SKILLS.filter(s => !fullCatalog.find(f => f.id === s.id)), ...fullCatalog];
+              const autocompleteMatches = q ? allForSearch.filter(item => {
+                return item.id.toLowerCase().includes(q) || item.name.toLowerCase().includes(q) || item.desc.toLowerCase().includes(q) || item.tags.some(t => t.toLowerCase().includes(q));
+              }).slice(0, 8) : [];
+
+              const CATEGORIES = [
+                { id: 'all', label: 'All', icon: '⚡' },
+                { id: 'channels', label: 'Channels', icon: '💬' },
+                { id: 'tools', label: 'Tools', icon: '🛠️' },
+                { id: 'mcp', label: 'MCP Servers', icon: '🔌' },
+                { id: 'devops', label: 'DevOps & SOPs', icon: '⏱️' },
+                { id: 'ai', label: 'AI & Cloud', icon: '🧠' },
+              ];
+
+              const selectAutocompleteItem = (item) => {
+                setSkillInput(item.id);
+                setAcOpen(false);
+                setAcIndex(-1);
+                act(`Install skill ${item.id}`, () => call('skills', { config: { op: 'install', id: item.id } }));
+              };
+
+              const handleKeyDown = (e) => {
+                if (acOpen && autocompleteMatches.length > 0) {
+                  if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    setAcIndex(i => (i + 1) % autocompleteMatches.length);
+                    return;
+                  }
+                  if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    setAcIndex(i => (i - 1 + autocompleteMatches.length) % autocompleteMatches.length);
+                    return;
+                  }
+                  if (e.key === 'Enter' && acIndex >= 0 && acIndex < autocompleteMatches.length) {
+                    e.preventDefault();
+                    selectAutocompleteItem(autocompleteMatches[acIndex]);
+                    return;
+                  }
+                  if (e.key === 'Escape') {
+                    setAcOpen(false);
+                    return;
+                  }
+                }
+                if (e.key === 'Enter') {
+                  setAcOpen(false);
+                  installSkill();
+                }
+              };
+
+              return (
+                <div className="space-y-4">
+                  {/* Search Bar & Autocomplete */}
+                  <div className="relative" ref={skillSearchBoxRef}>
+                    <div className="flex gap-2">
+                      <div className="relative flex-1">
+                        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)] pointer-events-none" />
+                        <input
+                          className={`${inputCls} !pl-9 flex-1`}
+                          placeholder={`Search ${agent.name} skills, tools, MCP servers... (e.g. search, discord, github)`}
+                          value={skillInput}
+                          onChange={e => {
+                            setSkillInput(e.target.value);
+                            setAcOpen(true);
+                            setAcIndex(-1);
+                          }}
+                          onFocus={() => { if (skillInput.trim()) setAcOpen(true); }}
+                          onBlur={() => { setTimeout(() => setAcOpen(false), 200); }}
+                          onKeyDown={handleKeyDown}
+                        />
+                        {skillInput && (
+                          <button
+                            onClick={() => { setSkillInput(''); setAcOpen(false); }}
+                            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] text-[var(--text-muted)] hover:text-white px-1.5 py-0.5 rounded bg-white/5 cursor-pointer"
+                          >
+                            esc
+                          </button>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => { setAcOpen(false); installSkill(); }}
+                        disabled={!!busyMsg || !skillInput.trim()}
+                        className={`${btn} bg-indigo-500 hover:bg-indigo-400 text-white whitespace-nowrap px-4`}
+                      >
+                        {busyMsg.startsWith('Install skill') ? <Loader2 size={11} className="animate-spin" /> : <Plus size={11} />} Install
+                      </button>
+                    </div>
+
+                    {/* Live Autocomplete Dropdown Popover */}
+                    {acOpen && skillInput.trim().length > 0 && (
+                      <div className="absolute left-0 right-0 top-full mt-1.5 z-50 rounded-xl border border-[var(--border-color)] bg-[var(--bg-primary)] shadow-2xl backdrop-blur-xl overflow-hidden max-h-80 overflow-y-auto divide-y divide-[var(--border-color)]">
+                        <div className="px-3 py-1.5 bg-black/40 text-[9px] uppercase tracking-wider font-bold text-[var(--text-muted)] flex items-center justify-between">
+                          <span className="flex items-center gap-1"><Sparkles size={10} className="text-indigo-400" /> Live Autocomplete Suggestions ({autocompleteMatches.length})</span>
+                          <span>↑↓ to navigate, Enter to install</span>
+                        </div>
+                        {autocompleteMatches.map((item, idx) => {
+                          const isInstalled = installedList.some(s => s.toLowerCase() === item.id.toLowerCase() || s.toLowerCase().includes(item.id.toLowerCase()));
+                          const isFocused = idx === acIndex;
+                          return (
+                            <div
+                              key={item.id}
+                              onMouseDown={(e) => { e.preventDefault(); selectAutocompleteItem(item); }}
+                              className={`flex items-center justify-between gap-3 px-3.5 py-2.5 transition cursor-pointer ${
+                                isFocused ? 'bg-indigo-500/20 text-white' : 'hover:bg-white/5'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2.5 min-w-0">
+                                <span className="text-base shrink-0 p-1 rounded-md bg-white/5">{item.icon}</span>
+                                <div className="min-w-0">
+                                  <div className="text-xs font-bold text-white flex items-center gap-2">
+                                    <span>{item.name}</span>
+                                    <span className="text-[9px] font-mono text-[var(--text-muted)]">{item.id}</span>
+                                    {isInstalled && <span className="text-[8px] px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 font-normal">Installed</span>}
+                                  </div>
+                                  <div className="text-[10px] text-[var(--text-muted)] truncate">{item.desc}</div>
+                                </div>
+                              </div>
+                              <div className="shrink-0 flex items-center gap-1.5">
+                                <span className="text-[9px] px-1.5 py-0.5 rounded bg-white/5 text-[var(--text-muted)] uppercase tracking-wider">{item.cat}</span>
+                                <button
+                                  onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); isInstalled ? removeSkill(item.id) : selectAutocompleteItem(item); }}
+                                  className={`text-[10px] font-bold px-2 py-1 rounded transition flex items-center gap-1 cursor-pointer ${
+                                    isInstalled
+                                      ? 'bg-red-500/15 text-red-300 hover:bg-red-500/25'
+                                      : 'bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/30'
+                                  }`}
+                                >
+                                  {isInstalled ? <Trash2 size={10} /> : <Plus size={10} />}
+                                  {isInstalled ? 'Remove' : '1-Click'}
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                        {autocompleteMatches.length === 0 && (
+                          <div
+                            onMouseDown={(e) => { e.preventDefault(); installSkill(); }}
+                            className="px-4 py-3 text-xs text-[var(--text-muted)] hover:bg-white/5 cursor-pointer flex items-center justify-between"
+                          >
+                            <span>Install custom skill: <b className="text-indigo-300 font-mono">"{skillInput}"</b></span>
+                            <span className="text-[10px] text-indigo-400 font-bold flex items-center gap-1"><Plus size={10} /> Click to Install</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Category Filter Chips */}
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {CATEGORIES.map(c => (
+                      <button
+                        key={c.id}
+                        onClick={() => setSkillCat(c.id)}
+                        className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-bold transition cursor-pointer ${
+                          skillCat === c.id
+                            ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
+                            : 'bg-white/5 border border-[var(--border-color)] text-[var(--text-muted)] hover:text-white'
+                        }`}
+                      >
+                        <span>{c.icon}</span> {c.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Universal Skills (shared across all agents) */}
+                  {filteredShared.length > 0 && (
+                    <div>
+                      <button
+                        onClick={() => setSharedExpanded(x => !x)}
+                        className="w-full flex items-center justify-between text-[11px] font-bold text-[var(--text-muted)] mb-2 uppercase tracking-wider hover:text-white transition cursor-pointer group"
+                      >
+                        <span className="flex items-center gap-1.5">
+                          <span>🌍</span> Universal Skills
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-300 font-normal normal-case tracking-normal">works on all agents</span>
+                          <span className="text-[9px] text-[var(--text-muted)] font-normal normal-case">({filteredShared.length})</span>
+                        </span>
+                        <span className="text-[9px] text-indigo-400 flex items-center gap-1">
+                          {sharedExpanded ? '▲ Collapse' : `▼ Show ${filteredShared.length}`}
+                        </span>
+                      </button>
+                      {sharedExpanded && (
+                        <>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 mb-1">
+                            {(q ? filteredShared : filteredShared.slice(0, 5)).map(preset => {
+                              const isInstalled = installedList.some(s => s.toLowerCase() === preset.id.toLowerCase() || s.toLowerCase().includes(preset.id.toLowerCase()));
+                              return (
+                                <div
+                                  key={preset.id}
+                                  className={`flex flex-col justify-between p-3 rounded-xl border transition ${
+                                    isInstalled
+                                      ? 'border-emerald-500/30 bg-emerald-500/5'
+                                      : 'border-[var(--border-color)] bg-black/20 hover:border-indigo-400/40 hover:bg-white/5'
+                                  }`}
+                                >
+                                  <div className="flex items-start gap-2.5 mb-2">
+                                    <span className="text-xl shrink-0 p-1.5 rounded-lg bg-white/5 border border-[var(--border-color)]">{preset.icon}</span>
+                                    <div className="min-w-0">
+                                      <div className="text-xs font-bold text-white truncate flex items-center gap-1.5">
+                                        {preset.name}
+                                        {isInstalled && <span className="text-[8px] px-1 py-0.2 rounded bg-emerald-500/20 text-emerald-300 font-normal">Installed</span>}
+                                      </div>
+                                      <div className="text-[10px] text-[var(--text-muted)] leading-tight mt-0.5 line-clamp-2">{preset.desc}</div>
+                                    </div>
+                                  </div>
+                                  <div className="mt-auto pt-2 border-t border-[var(--border-color)] flex items-center justify-between">
+                                    <span className="text-[9px] font-mono text-[var(--text-muted)]">{preset.id}</span>
+                                    {isInstalled ? (
+                                      <button onClick={() => removeSkill(preset.id)} disabled={!!busyMsg} className="text-[10px] text-red-400 hover:text-red-300 font-bold flex items-center gap-1 cursor-pointer"><Trash2 size={10} /> Remove</button>
+                                    ) : (
+                                      <button onClick={() => act(`Install skill ${preset.id}`, () => call('skills', { config: { op: 'install', id: preset.id } }))} disabled={!!busyMsg} className="text-[10px] text-indigo-300 hover:text-indigo-200 font-bold flex items-center gap-1 cursor-pointer"><Plus size={10} /> 1-Click Install</button>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                          {!q && filteredShared.length > 5 && (
+                            <button onClick={() => {}} className="w-full text-center text-[10px] text-indigo-400 hover:text-indigo-300 py-1 cursor-pointer">
+                              + {filteredShared.length - 5} more universal skills
+                            </button>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Agent-Specific Skill Hub Grid */}
+                  <div>
+                    <button
+                      onClick={() => setCatalogExpanded(x => !x)}
+                      className="w-full flex items-center justify-between text-[11px] font-bold text-[var(--text-muted)] mb-2 uppercase tracking-wider hover:text-white transition cursor-pointer"
+                    >
+                      <span className="flex items-center gap-1.5">
+                        <span>⚡</span> {agent.name} Skills Catalog
+                        <span className="text-[9px] text-[var(--text-muted)] font-normal normal-case">({filteredGrid.length})</span>
+                        {q && <span className="text-indigo-300 text-[10px] font-normal normal-case tracking-normal">· filtered</span>}
+                      </span>
+                      <span className="text-[9px] text-indigo-400 flex items-center gap-1">
+                        {catalogExpanded ? '▲ Collapse' : `▼ Show ${Math.min(filteredGrid.length, 5)} of ${filteredGrid.length}`}
+                      </span>
+                    </button>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                      {(q || catalogExpanded ? filteredGrid : filteredGrid.slice(0, 5)).map(preset => {
+                        const isInstalled = installedList.some(s => s.toLowerCase() === preset.id.toLowerCase() || s.toLowerCase().includes(preset.id.toLowerCase()));
+                        return (
+                          <div
+                            key={preset.id}
+                            className={`flex flex-col justify-between p-3 rounded-xl border transition ${
+                              isInstalled
+                                ? 'border-emerald-500/30 bg-emerald-500/5'
+                                : 'border-[var(--border-color)] bg-black/20 hover:border-indigo-400/40 hover:bg-white/5'
+                            }`}
+                          >
+                            <div className="flex items-start gap-2.5 mb-2">
+                              <span className="text-xl shrink-0 p-1.5 rounded-lg bg-white/5 border border-[var(--border-color)]">{preset.icon}</span>
+                              <div className="min-w-0">
+                                <div className="text-xs font-bold text-white truncate flex items-center gap-1.5">
+                                  {preset.name}
+                                  {isInstalled && <span className="text-[8px] px-1 py-0.2 rounded bg-emerald-500/20 text-emerald-300 font-normal">Installed</span>}
+                                </div>
+                                <div className="text-[10px] text-[var(--text-muted)] leading-tight mt-0.5 line-clamp-2">{preset.desc}</div>
+                              </div>
+                            </div>
+                            <div className="mt-auto pt-2 border-t border-[var(--border-color)] flex items-center justify-between">
+                              <span className="text-[9px] font-mono text-[var(--text-muted)]">{preset.id}</span>
+                              {isInstalled ? (
+                                <button
+                                  onClick={() => removeSkill(preset.id)}
+                                  disabled={!!busyMsg}
+                                  className="text-[10px] text-red-400 hover:text-red-300 font-bold flex items-center gap-1 cursor-pointer"
+                                >
+                                  <Trash2 size={10} /> Remove
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={() => act(`Install skill ${preset.id}`, () => call('skills', { config: { op: 'install', id: preset.id } }))}
+                                  disabled={!!busyMsg}
+                                  className="text-[10px] text-indigo-300 hover:text-indigo-200 font-bold flex items-center gap-1 cursor-pointer"
+                                >
+                                  <Plus size={10} /> 1-Click Install
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {!q && filteredGrid.length > 5 && (
+                      <button
+                        onClick={() => setCatalogExpanded(x => !x)}
+                        className="w-full mt-2 py-2 rounded-xl border border-dashed border-[var(--border-color)] text-[10px] text-indigo-400 hover:text-indigo-300 hover:border-indigo-500/40 hover:bg-indigo-500/5 transition cursor-pointer flex items-center justify-center gap-1.5"
+                      >
+                        {catalogExpanded
+                          ? <><span>▲</span> Collapse catalog</>
+                          : <><span>▼</span> Show all {filteredGrid.length} {agent.name} skills</>
+                        }
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Installed Skills List */}
+                  <div className="space-y-2 pt-2">
+                    <div className="flex items-center justify-between">
+                      <div className="text-[11px] font-bold text-[var(--text-muted)] uppercase tracking-wider">
+                        Installed Skills ({installedList.length})
+                      </div>
+                      {installedList.length > 0 && (
+                        <div className="flex items-center gap-2">
+                          <button onClick={() => setSelSkills(new Set())} disabled={selSkills.size === 0} className={`${btn} bg-white/5 border border-[var(--border-color)] text-[var(--text-muted)] hover:text-white !py-1 !px-2`}>Clear</button>
+                          <button onClick={() => { const s = new Set(); installedList.forEach(x => selSkills.has(x) ? null : s.add(x)); setSelSkills(s); }} className={`${btn} bg-white/5 border border-[var(--border-color)] text-[var(--text-muted)] hover:text-white !py-1 !px-2`}>Select all</button>
+                          {selSkills.size > 0 && (
+                            <button onClick={async () => { for (const s of selSkills) await call('skills', { config: { op: 'remove', name: s } }); setSelSkills(new Set()); loadDetails(); }} disabled={!!busyMsg} className={`${btn} bg-red-500/15 text-red-300 hover:bg-red-500/25 !py-1 !px-2`}>
+                              <Trash2 size={11} /> Remove ({selSkills.size})
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="rounded-xl divide-y divide-[var(--border-color)] bg-black/20 border border-[var(--border-color)] max-h-72 overflow-y-auto">
+                      {installedList.map(s => (
+                        <div key={s} className="flex items-center gap-2.5 px-3.5 py-2.5 hover:bg-white/[0.02] transition">
+                          <input type="checkbox" checked={selSkills.has(s)} onChange={e => { const n = new Set(selSkills); e.target.checked ? n.add(s) : n.delete(s); setSelSkills(n); }} className="accent-indigo-500" />
+                          <Puzzle size={13} className="text-indigo-400 shrink-0" />
+                          <span className="text-xs font-mono font-medium text-white truncate flex-1">{s}</span>
+                          {agent.id === 'hermes' && (
+                            <button onClick={() => act(`Reset skill ${s}`, () => call('skills', { config: { op: 'reset', name: s } }))} disabled={!!busyMsg} className="text-[9px] text-[var(--text-muted)] hover:text-white cursor-pointer px-2 py-1 rounded bg-white/5 border border-[var(--border-color)]">reset</button>
+                          )}
+                          <button onClick={() => removeSkill(s)} disabled={!!busyMsg} title="Uninstall skill" className="p-1 rounded text-red-400/70 hover:text-red-400 hover:bg-red-500/10 cursor-pointer transition"><Trash2 size={13} /></button>
+                        </div>
+                      ))}
+                      {installedList.length === 0 && (
+                        <div className="px-4 py-8 text-center text-xs text-[var(--text-muted)] space-y-1">
+                          <Puzzle size={20} className="mx-auto text-[var(--text-muted)] opacity-50 mb-2" />
+                          <div>No extra skills currently active.</div>
+                          <div className="text-[10px] text-[var(--text-muted)]">Use the search box above or click <b>1-Click Install</b> on any preset.</div>
+                        </div>
+                      )}
+                    </div>
+
+                    {agent.id === 'hermes' && (
+                      <div className="flex items-center gap-2 pt-1">
+                        <button onClick={() => toggleBundled(true)} disabled={!!busyMsg} className={`${btn} bg-white/5 border border-[var(--border-color)] text-[var(--text-muted)] hover:text-white`}>Opt out of bundled seeding</button>
+                        <button onClick={() => toggleBundled(false)} disabled={!!busyMsg} className={`${btn} bg-white/5 border border-[var(--border-color)] text-[var(--text-muted)] hover:text-white`}>Re-enable & sync</button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+        </div>
+      )}
+
+      {/* busy strip */}
+      {busyMsg && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[999] flex items-center gap-2 rounded-xl bg-[var(--bg-secondary)] border border-[var(--border-color)] shadow-2xl px-4 py-2.5 text-xs">
+          <Loader2 size={13} className="animate-spin text-indigo-400" /> {busyMsg}…
+        </div>
+      )}
+
+      <HermesAgentWizard
+        isOpen={showWizard}
+        onClose={() => { setShowWizard(false); loadDetails(); setTab('overview'); }}
+        connections={connections}
+        selectedId={target}
+        apiFetch={doFetch}
+        agentApi={agent.api}
+        agent={{ id: agent.id, name: agent.name, by: agent.by, docsUrl: agent.docs, logo: agent.logo }}
+      />
+
+      {/* ── Uninstall Confirmation Modal ── */}
+      {showUninstallModal && (() => {
+        const home = { hermes: '~/.hermes', nanobot: '~/.nanobot', openclaw: '~/.openclaw', zeroclaw: '~/.zeroclaw' }[agent.id] || ('~/' + agent.id);
+        return (
+          <div className="fixed inset-0 z-[2000] flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(6px)' }}>
+            <div className="relative w-full max-w-md rounded-2xl border border-red-500/30 bg-[var(--bg-primary)] shadow-2xl overflow-hidden">
+              {/* top accent */}
+              <div className="h-1 w-full bg-gradient-to-r from-red-500 via-orange-500 to-red-500" />
+              <div className="p-6 space-y-4">
+                <div className="flex items-center gap-3">
+                  <div className="flex-shrink-0 w-10 h-10 rounded-full bg-red-500/15 border border-red-500/30 flex items-center justify-center text-lg">🗑️</div>
+                  <div>
+                    <h2 className="text-base font-bold text-white">Uninstall {agent.name}</h2>
+                    <p className="text-[11px] text-[var(--text-muted)] mt-0.5">Choose how much to remove from the server</p>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  {/* Option A — binary only */}
+                  <button
+                    onClick={() => doUninstall(false)}
+                    className="w-full text-left rounded-xl border border-[var(--border-color)] bg-white/5 hover:bg-white/10 hover:border-indigo-400/40 transition p-4 group cursor-pointer"
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-sm font-bold text-white group-hover:text-indigo-300 transition">Remove binary only</span>
+                      <span className="ml-auto text-[9px] px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 font-bold">SAFE</span>
+                    </div>
+                    <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">
+                      Removes the <span className="font-mono text-white/70">{agent.name.toLowerCase()}</span> binary only.{' '}
+                      <span className="text-emerald-400">{home} config, memories &amp; sessions are kept</span> — you can reinstall anytime and pick up where you left off.
+                    </p>
+                  </button>
+
+                  {/* Option B — full purge */}
+                  <button
+                    onClick={() => doUninstall(true)}
+                    className="w-full text-left rounded-xl border border-red-500/20 bg-red-500/5 hover:bg-red-500/10 hover:border-red-500/40 transition p-4 group cursor-pointer"
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-sm font-bold text-white group-hover:text-red-300 transition">Full purge</span>
+                      <span className="ml-auto text-[9px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-300 font-bold">DESTRUCTIVE</span>
+                    </div>
+                    <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">
+                      Removes the binary <span className="text-red-400">and deletes {home}</span> including all config, memories &amp; sessions. This cannot be undone.
+                    </p>
+                  </button>
+                </div>
+
+                <div className="pt-1">
+                  <button
+                    onClick={() => setShowUninstallModal(false)}
+                    className="w-full py-2 rounded-xl text-[11px] font-bold text-[var(--text-muted)] hover:text-white border border-[var(--border-color)] hover:border-white/20 transition cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+    </div>
+  );
+}

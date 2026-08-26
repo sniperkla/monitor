@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useOS } from '@/context/OSContext';
-import { Terminal, Settings, LayoutGrid, Monitor, Wifi, Volume2, Search, Power, User, X, StickyNote, Book, Layers, Columns, StickyNote as NoteIcon, BookOpen, FolderClosed, Cpu, Clock, ChevronLeft, ChevronRight, Grid3x3, Keyboard, Server, Rocket, MonitorPlay, Database, CloudCog, ShieldCheck, Activity, BrickWallShield, History } from 'lucide-react';
+import { Bot, Terminal, Settings, LayoutGrid, Monitor, Wifi, Volume2, Search, Power, User, X, StickyNote, Book, Layers, Columns, StickyNote as NoteIcon, BookOpen, FolderClosed, Cpu, Clock, ChevronLeft, ChevronRight, Grid3x3, Keyboard, Server, Rocket, MonitorPlay, Database, CloudCog, ShieldCheck, Activity, BrickWallShield, History } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import SSHApp from '@/apps/SSHApp';
 import SettingsApp from '@/apps/SettingsApp';
@@ -11,6 +11,7 @@ import WikiApp from '@/apps/WikiApp';
 import DockerApp from '@/apps/DockerApp';
 import AutoDeployApp from '@/apps/AutoDeployApp';
 import TmuxApp from '@/apps/TmuxApp';
+import AIAgentsApp from '@/apps/AIAgentsApp';
 import dynamic from 'next/dynamic';
 
 const MongoBackupApp = dynamic(() => import('@/apps/MongoBackupApp'), { ssr: false });
@@ -163,6 +164,7 @@ export default function Taskbar() {
     { id: 'rclone', title: 'Rclone Sync', icon: CloudCog, component: <RcloneApp />, initialWidth: 1100, initialHeight: 720 },
     { id: 'server-backup', title: 'Server Backup', icon: ShieldCheck, component: <ServerBackupApp />, initialWidth: 1200, initialHeight: 780 },
     { id: 'server-monitor', title: 'Server Monitor', icon: Activity, component: <ServerMonitorApp />, initialWidth: 1300, initialHeight: 800 },
+    { id: 'ai-agents', title: 'AI Agents', icon: Bot, component: <AIAgentsApp />, initialWidth: 1100, initialHeight: 760 },
     { id: 'firewall-blocklist', title: 'Firewall Blocklist', icon: BrickWallShield, component: <FirewallBlocklistApp />, initialWidth: 1180, initialHeight: 780 },
     { id: 'activity', title: 'Activity', icon: History, component: <ActivityApp />, initialWidth: 900, initialHeight: 640 },
     { id: 'settings', title: t('apps.settings'), icon: Settings, component: <SettingsApp />, initialWidth: 700, initialHeight: 500 },

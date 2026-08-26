@@ -42,7 +42,11 @@ if free -b >/dev/null 2>&1; then emit mem_free pass "ok"; else emit mem_free fai
 df -Pk / >/dev/null 2>&1 && emit df_pk pass "ok" || emit df_pk fail "missing"
 [ -r /proc/uptime ] && emit proc_uptime pass "ok" || emit proc_uptime fail "unreadable"
 [ -r /proc/net/dev ] && emit net_dev pass "ok" || emit net_dev fail "unreadable"
-hostname >/dev/null 2>&1 && emit hostname_cmd pass "ok" || emit hostname_cmd fail "missing"
+# The hostname binary is missing on some minimal images (e.g. Arch containers);
+# uname -n reports the same nodename and is always present on Linux.
+if hostname >/dev/null 2>&1; then emit hostname_cmd pass "ok"
+elif uname -n >/dev/null 2>&1; then emit hostname_cmd pass "ok (uname -n fallback)"
+else emit hostname_cmd fail "missing"; fi
 uname -r >/dev/null 2>&1 && emit uname pass "ok" || emit uname fail "missing"
 
 if grep -m1 "model name" /proc/cpuinfo >/dev/null 2>&1; then

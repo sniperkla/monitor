@@ -527,7 +527,7 @@ app.prepare().then(async () => {
           style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https:;
           img-src 'self' blob: data: https://ui-avatars.com https://images.unsplash.com https://lh3.googleusercontent.com https:;
           font-src 'self' data: https://fonts.gstatic.com https:;
-          connect-src 'self' ws: wss: https://ui-avatars.com https:;
+          connect-src 'self' ws: wss: https://ui-avatars.com https: http://127.0.0.1:* http://localhost:*;
           frame-src 'none';
           object-src 'none';
           base-uri 'self';
