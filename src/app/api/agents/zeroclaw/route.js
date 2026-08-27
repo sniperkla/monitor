@@ -122,13 +122,15 @@ async function handleAgentAction(body, session, log = []) {
       const BP = JSON.stringify(bp);
       if (op === 'status') {
         const r = await execCommand(sshConfig,
-          `${ENVX}; systemctl --user is-active zeroclaw 2>/dev/null | grep -qx active && echo SVC_ACTIVE || { timeout 15 pgrep -f '[z]eroclaw dae[m]on' >/dev/null && echo PROC_ACTIVE || echo NO_PROC; }`,
+          // detect both daemon and gateway (gateway doesn't poll Telegram but it runs)
+          `${ENVX}; systemctl --user is-active zeroclaw 2>/dev/null | grep -qx active && echo SVC_ACTIVE || { pgrep -f '[z]eroclaw.*dae[m]on' >/dev/null 2>&1 && echo PROC_ACTIVE || echo NO_PROC; }`,
           { pool: false, timeoutMs: 30000 });
         return { ok: true, active: /SVC_ACTIVE|PROC_ACTIVE/.test(r.stdout || '') };
       }
       if (op === 'stop') {
         return execCommand(sshConfig,
-          `${ENVX}; ${BP} service stop 2>/dev/null; systemctl --user stop zeroclaw 2>/dev/null; timeout 15 pkill -f '[z]eroclaw dae[m]on' 2>/dev/null; sleep 1; pkill -9 -f '[z]eroclaw' 2>/dev/null || true; echo GW_STOPPED`,
+          // kill both daemon and gateway modes
+          `${ENVX}; ${BP} service stop 2>/dev/null; systemctl --user stop zeroclaw 2>/dev/null; pkill -f '[z]eroclaw.*(dae[m]on|gate[w]ay)' 2>/dev/null; sleep 1; pkill -9 -f '[z]eroclaw' 2>/dev/null || true; echo GW_STOPPED`,
           { pool: false, timeoutMs: 60000 }).then(r => ({ ok: /GW_STOPPED/.test(r.stdout || ''), out: ((r.stdout || '') + (r.stderr || '')).slice(-400) }));
       }
       // start / restart — never write the plain word "daemon" here (self-match)
@@ -136,9 +138,12 @@ async function handleAgentAction(body, session, log = []) {
       const startCmd = `
         mkdir -p "$HOME/.zeroclaw/logs" "$HOME/.config/systemd/user"
         ${ENVX}; set -a; [ -f "$HOME/.zeroclaw/.env" ] && . "$HOME/.zeroclaw/.env"; set +a
+        # IMPORTANT: Kill any running gateway process first — gateway does NOT poll Telegram
+        pkill -f '[z]eroclaw.*(gate[w]ay)' 2>/dev/null || true
+        sleep 1
         # Enable lingering on Fedora / RHEL so user systemd stays active after SSH disconnects
         loginctl enable-linger $(whoami) 2>/dev/null || sudo -n loginctl enable-linger $(whoami) 2>/dev/null || true
-        # Write systemd service file with EnvironmentFile and persistent log redirection if systemctl available
+        # Write systemd service file — ExecStart uses 'daemon' (Telegram-polling mode)
         if command -v systemctl >/dev/null 2>&1; then
           cat <<'EOF' > "$HOME/.config/systemd/user/zeroclaw.service"
 [Unit]
@@ -161,13 +166,14 @@ EOF
           systemctl --user daemon-reload 2>/dev/null || true
           systemctl --user enable zeroclaw 2>/dev/null || true
           systemctl --user restart zeroclaw 2>/dev/null || systemctl --user start zeroclaw 2>/dev/null || true
-        fi
-        sleep 1
-        if ! pgrep -f '[z]eroclaw dae[m]on' >/dev/null 2>&1; then
-          setsid nohup ${BP} dae""mon >> "$HOME/.zeroclaw/logs/daemon.log" 2>&1 < /dev/null &
           sleep 2
         fi
-        timeout 15 pgrep -f '[z]eroclaw dae[m]on' >/dev/null && echo GW_UP || echo GW_DOWN
+        # Nohup fallback (also uses daemon mode)
+        if ! pgrep -f '[z]eroclaw.*dae[m]on' >/dev/null 2>&1; then
+          setsid nohup ${BP} dae""mon >> "$HOME/.zeroclaw/logs/daemon.log" 2>&1 < /dev/null &
+          sleep 3
+        fi
+        pgrep -f '[z]eroclaw.*dae[m]on' >/dev/null && echo GW_UP || echo GW_DOWN
       `;
       return execCommand(sshConfig, startCmd, { pool: false, timeoutMs: 120000 })
         .then(r => ({ ok: /GW_UP/.test(r.stdout || ''), out: (r.stdout || '').slice(-200) }));
