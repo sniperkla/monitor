@@ -612,14 +612,24 @@ echo "TG=$TG"
     }
 
     // ── PAIRING / USER ACCESS APPROVAL ──
-    // ZeroClaw has NO `pairing` CLI subcommand. Access is granted by adding the
-    // Telegram user ID (the "code" shown by the bot) to:
-    //   [channels_config.telegram] allowed_users = ["123456"]  in config.toml
-    // The code field here is the Telegram numeric user ID to authorize.
+    // ZeroClaw supports two types of pairing:
+    // 1. HTTP Gateway pairing code (e.g. 018875) via POST http://127.0.0.1:42617/pair -H "X-Pairing-Code: 018875"
+    // 2. Telegram user ID allowlist in config.toml: [channels_config.telegram] allowed_users = ["..."]
     if (action === 'pairing-approve') {
       const code = String(config.code || '').trim();
       if (!code) return NextResponse.json({ success: false, error: 'User ID / pairing code is required' }, { status: 400 });
-      // Append this user ID to allowed_users in config.toml and ~/.zeroclaw/.env
+
+      // 1. Try HTTP Gateway pairing (for dashboard / API / webhook access)
+      const httpPairR = await execCommand(sshConfig, `
+        curl -s -w "\\nHTTP_CODE:%{http_code}" -X POST http://127.0.0.1:42617/pair \
+          -H "X-Pairing-Code: ${code}" \
+          -H "Content-Type: application/json" \
+          -d '{}' 2>/dev/null || true
+      `, { pool: false, timeoutMs: 15000 });
+      const httpOut = (httpPairR.stdout || '').trim();
+      const httpPaired = /HTTP_CODE:20[0-9]/.test(httpOut) || /token|session|paired|success/i.test(httpOut);
+
+      // 2. Append this user ID / code to allowed_users in config.toml and ~/.zeroclaw/.env
       const r = await execCommand(sshConfig, `
 python3 -c "
 import os, re, json
@@ -664,39 +674,57 @@ open(env_p, 'w').write(env_text)
 print('ADDED_TO_ALLOWED_USERS')
 " 2>&1`, { pool: false, timeoutMs: 30000 });
       const out = ((r.stdout || '') + (r.stderr || '')).trim();
-      const ok = /ADDED_TO_ALLOWED_USERS/.test(out);
-      if (!ok) return NextResponse.json({ success: false, error: `Failed to add user to allowed_users: ${out}`, log });
-      // Restart so zeroclaw reloads the config with new env
+      const ok = /ADDED_TO_ALLOWED_USERS/.test(out) || httpPaired;
+      if (!ok) return NextResponse.json({ success: false, error: `Failed to approve code: ${out}`, log });
+      
+      // Restart so zeroclaw reloads the config with new env and allowed_users
       const g = await gwCtl('restart');
       return NextResponse.json({
         success: true,
-        output: `Telegram user ID "${code}" added to allowed_users. Gateway restarted: ${g.ok}`,
+        output: httpPaired
+          ? `Gateway paired successfully with code "${code}" and added to allowed_users. Gateway restarted: ${g.ok}`
+          : `Code / user ID "${code}" added to allowed_users. Gateway restarted: ${g.ok}`,
         restarted: g.ok,
         log,
       });
     }
 
     if (action === 'pairing-list') {
-      // ZeroClaw shows unauthorized user IDs in logs when they try to message the bot.
-      // Scan daemon logs for "unauthorized user" or "unknown user" entries.
+      // Scan daemon logs for:
+      // 1. HTTP Gateway pairing code: "X-Pairing-Code: 018875" or "│  018875  │"
+      // 2. Unauthorized Telegram user IDs: "unauthorized user: 123456"
       const r = await execCommand(sshConfig,
-        `FILE="$(ls -1t "$HOME/.zeroclaw/logs/"*.log 2>/dev/null | head -1)"; [ -n "$FILE" ] && tail -n 200 "$FILE" || true`,
+        `FILE="$(ls -1t "$HOME/.zeroclaw/logs/"*.log 2>/dev/null | head -1)"; [ -n "$FILE" ] && tail -n 250 "$FILE" || true`,
         { pool: false, timeoutMs: 20000 });
       const out = r.stdout || '';
-      // Match patterns like: "unauthorized user: 123456789", "user 123456789 not allowed",
-      // "unknown user id: 123456789", "access denied for 123456789"
-      const matches = [
+      const pending = [];
+
+      // 1. One-time gateway pairing codes
+      const gwMatches = [
+        ...out.matchAll(/X-Pairing-Code:\s*([0-9]{6})/gi),
+        ...out.matchAll(/[│|]\s*([0-9]{6})\s*[│|]/g),
+        ...out.matchAll(/pairing\s+code\s+is\s+([0-9]{6})/gi),
+      ];
+      for (const m of gwMatches) {
+        const code = m[1];
+        if (code && !pending.some(p => p.code === code)) {
+          pending.push({ code, platform: 'gateway' });
+        }
+      }
+
+      // 2. Telegram unauthorized user attempts
+      const tgMatches = [
         ...out.matchAll(/(?:unauthorized|unknown|denied|not allowed)[^\d]*(\d{5,12})/gi),
         ...out.matchAll(/user[_\s]?id[:\s]+(\d{5,12})/gi),
         ...out.matchAll(/from user[:\s]+(\d{5,12})/gi),
       ];
-      const pending = [];
-      for (const m of matches) {
+      for (const m of tgMatches) {
         const code = m[1];
         if (code && !pending.some(p => p.code === code)) {
           pending.push({ code, platform: 'telegram' });
         }
       }
+
       return NextResponse.json({ success: true, pending, raw: out.slice(-1000) });
     }
 
