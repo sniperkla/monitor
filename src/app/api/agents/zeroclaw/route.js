@@ -555,17 +555,16 @@ PID=$(pgrep -f '[z]eroclaw dae[m]on' | head -1)
 UP=0; [ -n "$PID" ] && UP=$(ps -o etimes= -p "$PID" 2>/dev/null | tr -d ' ')
 [ -z "$UP" ] && UP=0
 echo "UPTIME_SEC=$UP"
-TG=unknown
-LOGL=""
-for f in "$HOME/.zeroclaw/logs/daemon.log" "$HOME/.zeroclaw/logs/dae""mon-nohup.log" "$HOME/.zeroclaw/logs/gateway.log"; do
-  [ -f "$f" ] && [ -s "$f" ] && LOGL="$f" && break
-done
+TG=not_configured
+if [ -f "$HOME/.zeroclaw/config.toml" ] && grep -qiE '(bot_token|token)\s*=\s*"[0-9]+:' "$HOME/.zeroclaw/config.toml" || { [ -f "$HOME/.zeroclaw/.env" ] && grep -qiE 'TELEGRAM_BOT_TOKEN=[0-9]+:' "$HOME/.zeroclaw/.env"; }; then
+  TG=connected
+fi
+LOGL="$(ls -1t "$HOME/.zeroclaw/logs/"*.log 2>/dev/null | head -1)"
 if [ -n "$LOGL" ]; then
-  if tail -n 300 "$LOGL" | grep -qiE 'telegram.*(bot.*connected|polling mode|channel enabled|connected)'; then
-    TG=connected
-  fi
-  if tail -n 50 "$LOGL" | grep -qiE 'telegram.*(invalid token|unauthorized|failed to connect|login error|connection rejected)'; then
+  if tail -n 100 "$LOGL" | grep -qiE 'telegram.*(invalid token|unauthorized|failed to connect|login error|connection rejected|Unauthorized)'; then
     TG=error
+  elif tail -n 300 "$LOGL" | grep -qiE 'telegram.*(bot.*connected|polling|channel enabled|started|ready|connected|ok|listening)'; then
+    TG=connected
   fi
 fi
 echo "TG=$TG"

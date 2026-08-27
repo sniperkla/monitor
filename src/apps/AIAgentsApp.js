@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Bot, Server as ServerIcon, RefreshCw, Loader2, CheckCircle2, XCircle, Settings2, Puzzle, Trash2, Play, Square, RotateCw, Plus, ExternalLink, Send, Search, Sparkles, Check, FileText, Copy, Lock, Radio, Zap, Shield, Cable, ChevronRight, Flame, Heart, Terminal, ChevronDown, ChevronUp, X, Minus, Maximize2, Minimize2, GripHorizontal, Eye, EyeOff } from 'lucide-react';
+import { Bot, Server as ServerIcon, RefreshCw, Loader2, CheckCircle2, XCircle, AlertCircle, Settings2, Puzzle, Trash2, Play, Square, RotateCw, Plus, ExternalLink, Send, Search, Sparkles, Check, FileText, Copy, Lock, Radio, Zap, Shield, Cable, ChevronRight, Flame, Heart, Terminal, ChevronDown, ChevronUp, X, Minus, Maximize2, Minimize2, GripHorizontal, Eye, EyeOff } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 import { useSupporter } from '@/hooks/useSupporter';
 import SupporterModal from '@/components/common/SupporterModal';
@@ -983,9 +983,10 @@ export default function AIAgentsApp({ apiFetch }) {
               </button>
             </div>
           )}
-          {health && details.running && health.telegram !== 'connected' && (
-            <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-xs text-amber-300">
-              ⚠ Telegram status: <b>{health.telegram}</b> — if this persists, check the bot token or network on the server.
+          {health && details.running && (health.telegram === 'error' || health.telegram === 'disconnected') && (
+            <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-2.5 text-xs text-red-300 flex items-center gap-2">
+              <AlertCircle size={14} className="shrink-0" />
+              <span>Telegram bot error — check your bot token or server network.</span>
             </div>
           )}
 
