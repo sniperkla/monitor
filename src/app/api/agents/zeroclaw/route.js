@@ -70,7 +70,7 @@ VER=NONE
 echo "VERSION=$VER"
 CFG=0; [ -f "$HOME/.zeroclaw/config.toml" ] && CFG=1
 echo "CONFIG=$CFG"
-PROC=0; pgrep -f '[z]eroclaw dae[m]on' >/dev/null 2>&1 && PROC=1
+PROC=0; (pgrep -x zeroclaw >/dev/null 2>&1 || pgrep -f '[z]eroclaw' >/dev/null 2>&1) && PROC=1
 USVC=0; command -v systemctl >/dev/null 2>&1 && systemctl --user is-active zeroclaw 2>/dev/null | grep -qx active && USVC=1
 SSVC=0; command -v systemctl >/dev/null 2>&1 && systemctl is-active zeroclaw 2>/dev/null | grep -qx active && SSVC=1
 PORT=0; (command -v ss >/dev/null 2>&1 && ss -ltn 2>/dev/null | grep -q 42617 || command -v netstat >/dev/null 2>&1 && netstat -ltn 2>/dev/null | grep -q 42617) && PORT=1
@@ -122,15 +122,13 @@ async function handleAgentAction(body, session, log = []) {
       const BP = JSON.stringify(bp);
       if (op === 'status') {
         const r = await execCommand(sshConfig,
-          // detect both daemon and gateway (gateway doesn't poll Telegram but it runs)
-          `${ENVX}; systemctl --user is-active zeroclaw 2>/dev/null | grep -qx active && echo SVC_ACTIVE || { pgrep -f '[z]eroclaw.*dae[m]on' >/dev/null 2>&1 && echo PROC_ACTIVE || echo NO_PROC; }`,
+          `${ENVX}; systemctl --user is-active zeroclaw 2>/dev/null | grep -qx active && echo SVC_ACTIVE || { (pgrep -x zeroclaw >/dev/null 2>&1 || pgrep -f '[z]eroclaw' >/dev/null 2>&1) && echo PROC_ACTIVE || echo NO_PROC; }`,
           { pool: false, timeoutMs: 30000 });
         return { ok: true, active: /SVC_ACTIVE|PROC_ACTIVE/.test(r.stdout || '') };
       }
       if (op === 'stop') {
         return execCommand(sshConfig,
-          // kill both daemon and gateway modes
-          `${ENVX}; ${BP} service stop 2>/dev/null; systemctl --user stop zeroclaw 2>/dev/null; pkill -f '[z]eroclaw.*(dae[m]on|gate[w]ay)' 2>/dev/null; sleep 1; pkill -9 -f '[z]eroclaw' 2>/dev/null || true; echo GW_STOPPED`,
+          `${ENVX}; ${BP} service stop 2>/dev/null; systemctl --user stop zeroclaw 2>/dev/null; pkill -9 -f '[z]eroclaw' 2>/dev/null || true; echo GW_STOPPED`,
           { pool: false, timeoutMs: 60000 }).then(r => ({ ok: /GW_STOPPED/.test(r.stdout || ''), out: ((r.stdout || '') + (r.stderr || '')).slice(-400) }));
       }
       // start / restart — never write the plain word "daemon" here (self-match)
@@ -138,12 +136,14 @@ async function handleAgentAction(body, session, log = []) {
       const startCmd = `
         mkdir -p "$HOME/.zeroclaw/logs" "$HOME/.config/systemd/user"
         ${ENVX}; set -a; [ -f "$HOME/.zeroclaw/.env" ] && . "$HOME/.zeroclaw/.env"; set +a
-        # IMPORTANT: Kill any running gateway process first — gateway does NOT poll Telegram
-        pkill -f '[z]eroclaw.*(gate[w]ay)' 2>/dev/null || true
+        systemctl --user stop zeroclaw 2>/dev/null || true
+        pkill -9 -f '[z]eroclaw' 2>/dev/null || true
         sleep 1
         # Enable lingering on Fedora / RHEL so user systemd stays active after SSH disconnects
         loginctl enable-linger $(whoami) 2>/dev/null || sudo -n loginctl enable-linger $(whoami) 2>/dev/null || true
-        # Write systemd service file — ExecStart uses 'daemon' (Telegram-polling mode)
+        
+        STARTED_VIA=""
+        # 1. Write and start systemd user service file if systemctl is available
         if command -v systemctl >/dev/null 2>&1; then
           cat <<'EOF' > "$HOME/.config/systemd/user/zeroclaw.service"
 [Unit]
@@ -167,16 +167,31 @@ EOF
           systemctl --user enable zeroclaw 2>/dev/null || true
           systemctl --user restart zeroclaw 2>/dev/null || systemctl --user start zeroclaw 2>/dev/null || true
           sleep 2
+          if systemctl --user is-active zeroclaw 2>/dev/null | grep -qx active; then
+            STARTED_VIA="systemd"
+          fi
         fi
-        # Nohup fallback (also uses daemon mode)
-        if ! pgrep -f '[z]eroclaw.*dae[m]on' >/dev/null 2>&1; then
+
+        # 2. Nohup fallback if systemd user unit is not running
+        if [ -z "$STARTED_VIA" ] && ! pgrep -x zeroclaw >/dev/null 2>&1 && ! pgrep -f '[z]eroclaw' >/dev/null 2>&1; then
           setsid nohup ${BP} dae""mon >> "$HOME/.zeroclaw/logs/daemon.log" 2>&1 < /dev/null &
           sleep 3
+          if pgrep -x zeroclaw >/dev/null 2>&1 || pgrep -f '[z]eroclaw' >/dev/null 2>&1; then
+            STARTED_VIA="nohup"
+          fi
         fi
-        pgrep -f '[z]eroclaw.*dae[m]on' >/dev/null && echo GW_UP || echo GW_DOWN
+
+        if (systemctl --user is-active zeroclaw 2>/dev/null | grep -qx active) || pgrep -x zeroclaw >/dev/null 2>&1 || pgrep -f '[z]eroclaw' >/dev/null 2>&1; then
+          echo "GW_UP ($STARTED_VIA)"
+        else
+          echo "GW_DOWN"
+          echo "=== RECENT_LOG ==="
+          tail -n 25 "$HOME/.zeroclaw/logs/daemon.log" 2>/dev/null || true
+          command -v journalctl >/dev/null 2>&1 && journalctl --user -u zeroclaw -n 20 --no-pager 2>/dev/null || true
+        fi
       `;
       return execCommand(sshConfig, startCmd, { pool: false, timeoutMs: 120000 })
-        .then(r => ({ ok: /GW_UP/.test(r.stdout || ''), out: (r.stdout || '').slice(-200) }));
+        .then(r => ({ ok: /GW_UP/.test(r.stdout || ''), out: (r.stdout || '').slice(-600) }));
     };
 
     // The daemon can take a few seconds to appear after start — poll.
@@ -215,7 +230,7 @@ base64 < "$HOME/.zeroclaw/config.toml" 2>/dev/null || true
 echo "===RUNNING==="
 USVC=0; command -v systemctl >/dev/null 2>&1 && systemctl --user is-active zeroclaw 2>/dev/null | grep -qx active && USVC=1
 SSVC=0; command -v systemctl >/dev/null 2>&1 && systemctl is-active zeroclaw 2>/dev/null | grep -qx active && SSVC=1
-PROC=0; pgrep -f '[z]eroclaw dae[m]on' >/dev/null 2>&1 && PROC=1
+PROC=0; (pgrep -x zeroclaw >/dev/null 2>&1 || pgrep -f '[z]eroclaw' >/dev/null 2>&1) && PROC=1
 echo "USVC=$USVC"; echo "SSVC=$SSVC"; echo "PROC=$PROC"
 echo "===VERSION==="
 [ -n "$BIN" ] && "$BIN" --version 2>/dev/null | head -1 | cut -c1-40
@@ -600,11 +615,11 @@ print('ZEROCLAW_CONFIG_MERGED')
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:$PATH"
 USVC=0; command -v systemctl >/dev/null 2>&1 && systemctl --user is-active zeroclaw 2>/dev/null | grep -qx active && USVC=1
 SSVC=0; command -v systemctl >/dev/null 2>&1 && systemctl is-active zeroclaw 2>/dev/null | grep -qx active && SSVC=1
-PROC=0; pgrep -f '[z]eroclaw dae[m]on' >/dev/null 2>&1 && PROC=1
+PROC=0; (pgrep -x zeroclaw >/dev/null 2>&1 || pgrep -f '[z]eroclaw' >/dev/null 2>&1) && PROC=1
 PORT=0; (command -v ss >/dev/null 2>&1 && ss -ltn 2>/dev/null | grep -q 42617) && PORT=1
 ALIVE=0; [ $USVC = 1 -o $SSVC = 1 -o $PROC = 1 ] && ALIVE=1
 echo "ALIVE=$ALIVE"; echo "PORT=$PORT"
-PID=$(pgrep -f '[z]eroclaw dae[m]on' | head -1)
+PID=$(pgrep -x zeroclaw 2>/dev/null | head -1 || pgrep -f '[z]eroclaw' 2>/dev/null | head -1)
 UP=0; [ -n "$PID" ] && UP=$(ps -o etimes= -p "$PID" 2>/dev/null | tr -d ' ')
 [ -z "$UP" ] && UP=0
 echo "UPTIME_SEC=$UP"
