@@ -607,43 +607,85 @@ echo "TG=$TG"
     }
 
 
-    // ── PAIRING APPROVAL (zeroclaw pairing approve <platform> <code>) ──
+    // ── PAIRING / USER ACCESS APPROVAL ──
+    // ZeroClaw has NO `pairing` CLI subcommand. Access is granted by adding the
+    // Telegram user ID (the "code" shown by the bot) to:
+    //   [channels_config.telegram] allowed_users = ["123456"]  in config.toml
+    // The code field here is the Telegram numeric user ID to authorize.
     if (action === 'pairing-approve') {
-      const platform = String(config.platform || 'telegram').trim();
       const code = String(config.code || '').trim();
-      if (!code) return NextResponse.json({ success: false, error: 'Pairing code is required' }, { status: 400 });
-      const ENVX = `export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:$PATH"; set -a; [ -f "$HOME/.zeroclaw/.env" ] && . "$HOME/.zeroclaw/.env"; set +a`;
-      // ZeroClaw pairing syntax: zeroclaw pairing approve <platform> <code>
-      // or fallback: zeroclaw pairing approve <code>
-      const runCmd = platform && platform !== 'auto'
-        ? `${ENVX}; zeroclaw pairing approve ${JSON.stringify(platform)} ${JSON.stringify(code)} 2>&1 || zeroclaw pairing approve ${JSON.stringify(code)} 2>&1`
-        : `${ENVX}; zeroclaw pairing approve telegram ${JSON.stringify(code)} 2>&1 || zeroclaw pairing approve ${JSON.stringify(code)} 2>&1`;
-      const r = await execCommand(sshConfig, runCmd, { pool: false, timeoutMs: 30000 });
+      if (!code) return NextResponse.json({ success: false, error: 'User ID / pairing code is required' }, { status: 400 });
+      // Append this user ID to allowed_users in config.toml via python3
+      const r = await execCommand(sshConfig, `
+python3 -c "
+import os, re, json
+
+p = os.path.expanduser('~/.zeroclaw/config.toml')
+if not os.path.exists(p):
+    open(p, 'w').close()
+text = open(p).read()
+uid = '${code.replace(/'/g, "")}'
+
+# Try to find and update [channels_config.telegram] allowed_users
+# Pattern 1: already has allowed_users line under [channels_config.telegram]
+def add_to_list(text, uid):
+    # Insert into existing allowed_users = [...] line if present
+    m = re.search(r'(allowed_users\\s*=\\s*\\[)([^\\]]*)(\\])', text)
+    if m:
+        existing = [x.strip().strip('\"\\' ') for x in m.group(2).split(',') if x.strip().strip('\"\\' ')]
+        if uid not in existing:
+            existing.append(uid)
+        new_val = ', '.join(f'\"{x}\"' for x in existing)
+        return text[:m.start()] + f'allowed_users = [{new_val}]' + text[m.end():]
+    return None
+
+updated = add_to_list(text, uid)
+if updated:
+    open(p, 'w').write(updated)
+    print('ADDED_TO_ALLOWED_USERS')
+else:
+    # No existing allowed_users — inject under [channels_config.telegram] section
+    if '[channels_config.telegram]' in text:
+        text = text.replace('[channels_config.telegram]', f'[channels_config.telegram]\\nallowed_users = [\"{uid}\"]')
+    elif '[telegram]' in text:
+        text = text.replace('[telegram]', f'[telegram]\\nallowed_users = [\"{uid}\"]')
+    else:
+        text += f'\\n[channels_config.telegram]\\nenabled = true\\nallowed_users = [\"{uid}\"]\\n'
+    open(p, 'w').write(text)
+    print('ADDED_TO_ALLOWED_USERS')
+" 2>&1`, { pool: false, timeoutMs: 30000 });
       const out = ((r.stdout || '') + (r.stderr || '')).trim();
-      const ok = !/error|failed|invalid/i.test(out) || /approved|success|paired|ok/i.test(out);
-      return NextResponse.json({ success: ok, output: out || 'Pairing command executed', log });
+      const ok = /ADDED_TO_ALLOWED_USERS/.test(out);
+      if (!ok) return NextResponse.json({ success: false, error: `Failed to add user to allowed_users: ${out}`, log });
+      // Restart so zeroclaw reloads the config
+      const g = await gwCtl('restart');
+      return NextResponse.json({
+        success: true,
+        output: `User ID "${code}" added to allowed_users in config.toml. Gateway restarted: ${g.ok}`,
+        restarted: g.ok,
+        log,
+      });
     }
 
     if (action === 'pairing-list') {
-      const ENVX = `export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:$PATH"; set -a; [ -f "$HOME/.zeroclaw/.env" ] && . "$HOME/.zeroclaw/.env"; set +a`;
-      // Try `zeroclaw pairing list`, then fall back to scanning daemon logs for pending codes
+      // ZeroClaw shows unauthorized user IDs in logs when they try to message the bot.
+      // Scan daemon logs for "unauthorized user" or "unknown user" entries.
       const r = await execCommand(sshConfig,
-        `${ENVX}; zeroclaw pairing list 2>&1 || true; { FILE="$(ls -1t "$HOME/.zeroclaw/logs/"*.log 2>/dev/null | head -1)"; [ -n "$FILE" ] && tail -n 80 "$FILE"; } || true`,
+        `FILE="$(ls -1t "$HOME/.zeroclaw/logs/"*.log 2>/dev/null | head -1)"; [ -n "$FILE" ] && tail -n 200 "$FILE" || true`,
         { pool: false, timeoutMs: 20000 });
       const out = r.stdout || '';
-      // Match patterns: "zeroclaw pairing approve telegram 2VXNGUEH", "pairing code: 2VXNGUEH", etc.
+      // Match patterns like: "unauthorized user: 123456789", "user 123456789 not allowed",
+      // "unknown user id: 123456789", "access denied for 123456789"
       const matches = [
-        ...out.matchAll(/pairing\s+approve\s+(?:(\w+)\s+)?([A-Z0-9]{6,12})/gi),
-        ...out.matchAll(/code[:\s]+([A-Z0-9]{6,12})/gi),
-        ...out.matchAll(/pairing\s+code\s+is\s+([A-Z0-9]{6,12})/gi),
-        ...out.matchAll(/Pairing:\s+([A-Z0-9]{6,12})/gi),
+        ...out.matchAll(/(?:unauthorized|unknown|denied|not allowed)[^\d]*(\d{5,12})/gi),
+        ...out.matchAll(/user[_\s]?id[:\s]+(\d{5,12})/gi),
+        ...out.matchAll(/from user[:\s]+(\d{5,12})/gi),
       ];
       const pending = [];
       for (const m of matches) {
-        const code = m[2] || m[1];
-        const platform = m[2] ? m[1] : 'telegram';
+        const code = m[1];
         if (code && !pending.some(p => p.code === code)) {
-          pending.push({ code, platform: platform || 'telegram' });
+          pending.push({ code, platform: 'telegram' });
         }
       }
       return NextResponse.json({ success: true, pending, raw: out.slice(-1000) });
