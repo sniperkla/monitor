@@ -72,7 +72,7 @@ ENVF=0; [ -f "$HOME/.hermes/.env" ] && ENVF=1
 echo "ENVFILE=$ENVF"
 USVC=0; command -v systemctl >/dev/null 2>&1 && systemctl --user is-active hermes-gate""way 2>/dev/null | grep -qx active && USVC=1
 SSVC=0; command -v systemctl >/dev/null 2>&1 && systemctl is-active hermes-gate""way 2>/dev/null | grep -qx active && SSVC=1
-PROC=0; pgrep -f '[h]ermes.*gatew[a]y' >/dev/null 2>&1 && PROC=1
+PROC=0; { pgrep -f '[h]ermes.*gatew[a]y' || pgrep -f '[h]ermes gateway' || pgrep -f 'hermes_cli.*gateway'; } >/dev/null 2>&1 && PROC=1
 SYSTEMD=0; command -v systemctl >/dev/null 2>&1 && SYSTEMD=1
 SUDO=0; sudo -n true 2>/dev/null && SUDO=1
 GIT=$(git --version 2>/dev/null | awk '{print $3}')
@@ -818,17 +818,32 @@ fi
     }
     if (!svcOk) {
       await run('start gateway (background daemon)',
-        `${ENVPREFIX}; mkdir -p "$HOME/.hermes/logs"; setsid nohup sh -c 'exec ${HB} gateway run || exec ${HB} gateway' >> "$HOME/.hermes/logs/gateway-nohup.log" 2>&1 < /dev/null & sleep 3; pgrep -f '[h]ermes.*gatew[a]y' >/dev/null && echo GW_RUNNING || echo GW_PENDING`,
+        `${ENVPREFIX}; mkdir -p "$HOME/.hermes/logs"; setsid nohup sh -c 'set -a; [ -f "$HOME/.hermes/.env" ] && . "$HOME/.hermes/.env"; set +a; export PATH="${BIN_DIR}:$HOME/.local/bin:/usr/local/bin:$PATH"; exec ${HB} gateway run || exec ${HB} gateway' >> "$HOME/.hermes/logs/gateway-nohup.log" 2>&1 < /dev/null & sleep 3; { pgrep -f '[h]ermes.*gatew[a]y' || pgrep -f '[h]ermes gateway'; } >/dev/null 2>&1 && echo GW_RUNNING || echo GW_PENDING`,
         { timeoutMs: 30000 });
     }
 
     // 7. Verify (inside the container for docker installs)
-    await new Promise(res => setTimeout(res, 4000));
+    await new Promise(res => setTimeout(res, 3000));
     const verify = await execCommand(sshConfig, wrap(STATUS_SCRIPT), { pool: false, timeoutMs: 60000 });
     const vp = (k) => (verify.stdout || '').match(new RegExp(`${k}=(.*)`))?.[1]?.trim();
     const running = dockerMode
       ? vp('PROC') === '1'
       : vp('SSVC') === '1' || vp('USVC') === '1' || vp('PROC') === '1';
+
+    let errorMsg = null;
+    if (!running) {
+      const errR = await execCommand(sshConfig, wrap(
+        `{ [ -f "$HOME/.hermes/logs/gateway-nohup.log" ] && tail -n 25 "$HOME/.hermes/logs/gateway-nohup.log"; } || { [ -f "$HOME/.hermes/logs/gateway.log" ] && tail -n 25 "$HOME/.hermes/logs/gateway.log"; } || ls -1t "$HOME/.hermes/logs/"*.log 2>/dev/null | head -1 | xargs -r tail -n 25 2>/dev/null || true`
+      ), { pool: false, timeoutMs: 15000 });
+      const rawLog = (errR.stdout || '').trim();
+      if (rawLog) {
+        log.push(`\n=== RECENT GATEWAY LOG ===\n${rawLog}`);
+        const lastLine = rawLog.split('\n').filter(Boolean).pop() || '';
+        errorMsg = `Gateway stopped shortly after launch: ${lastLine.slice(0, 150)}`;
+      } else {
+        errorMsg = 'Gateway did not stay running. Check ~/.hermes/logs/ on the server — most often the LLM API key or messenger token needs attention.';
+      }
+    }
 
     return NextResponse.json({
       success: running,
@@ -836,7 +851,7 @@ fi
       startMethod: dockerMode ? 'docker' : startMethod,
       docker: dockerMode ? { image: dockerImage, name: 'hermes-agent', dataDir: '~/.hermes-docker' } : undefined,
       version: vp('VERSION'),
-      error: running ? null : 'Gateway did not stay running. Check ~/.hermes/logs/ on the server — most often the LLM API key or messenger token needs attention.',
+      error: errorMsg,
       log,
     });
   } catch (e) {
