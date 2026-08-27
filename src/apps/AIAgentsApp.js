@@ -73,6 +73,7 @@ export default function AIAgentsApp({ apiFetch }) {
   const [tab, setTab] = useState('overview'); // overview | config | skills
   const [details, setDetails] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [busyMsg, setBusyMsg] = useState('');
   // Floating Draggable Live Log window state
   const [liveLogLines, setLiveLogLines] = useState([]);
   const [liveLogOpen, setLiveLogOpen] = useState(false);
