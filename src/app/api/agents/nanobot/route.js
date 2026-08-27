@@ -264,7 +264,7 @@ tail -n 30 "$LOG" 2>/dev/null | tail -5
       envText = envText.trim();
       return NextResponse.json({
         success: true,
-        installed: !!binR || !!configJson,
+        installed: !!binR,
         version: sec('VERSION', 'BINPATH') || null,
         model,
         binPath: binR || null,
@@ -310,12 +310,13 @@ tail -n 30 "$LOG" 2>/dev/null | tail -5
 
     // ── UNINSTALL ──
     if (action === 'uninstall') {
-      await run('stop gateway', `pkill -f '[n]anobot.*gatew[a]y' 2>/dev/null; pkill -f '[n]anobot webui' 2>/dev/null; true`);
+      await run('stop gateway', `pkill -f '[n]anobot.*gatew[a]y' 2>/dev/null; pkill -f '[n]anobot webui' 2>/dev/null; sleep 1; pkill -9 -f '[n]anobot' 2>/dev/null; true`);
       const rmCmd = purge
-        ? `rm -rf "$HOME/.nanobot" /home/*/.nanobot 2>/dev/null; pipx uninstall nanobot-ai 2>/dev/null; echo REMOVED_ALL`
-        : `pipx uninstall nanobot-ai 2>/dev/null; echo REMOVED_PKG`;
-      const r = await run(purge ? 'remove nanobot & all data' : 'remove package', `export PATH="$HOME/.local/bin:$HOME/.nanobot/venv/bin:/usr/local/bin:$PATH"; ${rmCmd}`);
-      return NextResponse.json({ success: true, purged: purge, output: (r.stdout || '').slice(-500) });
+        ? `rm -f "$HOME/.local/bin/nanobot" "$HOME/.nanobot/venv/bin/nanobot" /usr/local/bin/nanobot /usr/bin/nanobot 2>/dev/null; rm -rf "$HOME/.nanobot" /home/*/.nanobot "$HOME/.cache/nanobot" /tmp/.nb* 2>/dev/null; pipx uninstall nanobot-ai 2>/dev/null; pipx uninstall nanobot 2>/dev/null; echo REMOVED_ALL`
+        : `rm -f "$HOME/.local/bin/nanobot" "$HOME/.nanobot/venv/bin/nanobot" /usr/local/bin/nanobot /usr/bin/nanobot 2>/dev/null; rm -rf "$HOME/.nanobot/venv" "$HOME/.cache/nanobot" "$HOME/.nanobot/logs" 2>/dev/null; pipx uninstall nanobot-ai 2>/dev/null; pipx uninstall nanobot 2>/dev/null; echo REMOVED_CODE`;
+      const r = await run(purge ? 'remove nanobot binary & all data' : 'remove nanobot binary & venv (config kept)', `export PATH="$HOME/.local/bin:$HOME/.nanobot/venv/bin:/usr/local/bin:$PATH"; ${rmCmd}`);
+      const ok = /REMOVED/.test(r.stdout || '');
+      return NextResponse.json({ success: ok, purged: purge, output: (r.stdout || '').slice(-500), log });
     }
 
     // ── INSTALL ──
