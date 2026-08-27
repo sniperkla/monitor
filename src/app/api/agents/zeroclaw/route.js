@@ -297,7 +297,7 @@ echo "===ENVKEYS==="
 
       return NextResponse.json({
         success: true,
-        installed: !!binR || !!configJson,
+        installed: !!binR,
         version: section('VERSION', 'MODEL') || null,
         model: section('MODEL', 'BINPATH') || null,
         running,

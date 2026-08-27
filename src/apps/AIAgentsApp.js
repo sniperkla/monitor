@@ -975,7 +975,15 @@ export default function AIAgentsApp({ apiFetch }) {
           </div>
 
           {/* Abnormal-state banner */}
-          {details.running === false && (
+          {!details.binPath && (
+            <div className="flex flex-wrap items-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-300">
+              <AlertCircle size={14} /> ZeroClaw binary is not found on this server.
+              <button onClick={() => setShowWizard(true)} disabled={!!busyMsg} className={`${btn} !py-1 !px-2.5 ml-auto bg-indigo-500 text-white hover:bg-indigo-400 font-bold`}>
+                <Send size={11} /> 1-Click Install ZeroClaw
+              </button>
+            </div>
+          )}
+          {details.binPath && details.running === false && (
             <div className="flex flex-wrap items-center gap-2 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-xs text-red-300">
               <XCircle size={14} /> Gateway is DOWN — your bot is not responding.
               <button onClick={() => gatewayOp('start')} disabled={!!busyMsg} className={`${btn} !py-1 !px-2 ml-auto bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30`}>
