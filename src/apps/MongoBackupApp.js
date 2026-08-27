@@ -834,8 +834,14 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
     }
   };
 
-  // Load configuration and data
+  // Load configuration and data on mount
+  // Guard against re-mount / fast-refresh double-fires: StrictMode-like mounts
+  // (e.g. the user closes and re-opens the window in the same tick) would
+  // otherwise issue 2× /api/mongo-sync/gdrive/status and 2× /api/mongo-sync/jobs.
+  const initialLoadRef = useRef(false);
   useEffect(() => {
+    if (initialLoadRef.current) return;
+    initialLoadRef.current = true;
     fetchGDriveStatus();
     fetchJobs();
   }, []);

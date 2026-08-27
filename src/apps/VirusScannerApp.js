@@ -249,6 +249,13 @@ export default function VirusScannerApp({ windowId }) {
         setScan(data.latest || null);
         setHistory(data.history || []);
         setError(null);
+        // A completed scan in history means this connection just
+        // transitioned from "interesting" to "idle-ish" — re-probe the
+        // desktop poller so the global notification banner can show the
+        // summary right away.
+        if (typeof window !== 'undefined' && data.latest && data.latest.status !== 'running') {
+          try { window.dispatchEvent(new Event('virus-scan:recheck')); } catch (_) {}
+        }
       } else {
         setError(data?.error || 'Failed to load results');
       }
@@ -271,6 +278,15 @@ export default function VirusScannerApp({ windowId }) {
           setEngines(prev => ({ ...prev, [eng.id]: { available: !!data.available, version: data.version, extra: data.extra } }));
         }
       } catch (_) {}
+    }
+    // Also notify the desktop-wide GlobalScanNotifications poller. The
+    // Virus Scanner app is the canonical trigger for "this connection
+    // now has something interesting" (the user just opened the app
+    // for it, or we just installed/uninstalled an engine). Without this
+    // dispatch, the desktop poller would wait up to 5 min before
+    // discovering the new state.
+    if (typeof window !== 'undefined') {
+      try { window.dispatchEvent(new Event('virus-scan:recheck')); } catch (_) {}
     }
   }, [apiFetch]);
 
@@ -361,8 +377,13 @@ export default function VirusScannerApp({ windowId }) {
       } catch (_) {}
     };
 
+    // Start polling. `scheduleNext` is the SOLE owner of `iv` — never assign
+    // `iv` outside of it, otherwise the previous interval leaks and produces
+    // 2× duplicate API calls per cycle (this was the original bug).
+    // Kick off with a slow 30s tick; `pollSessions` will re-schedule adaptively
+    // (5s when a scan is running, 30s when idle) on its very first response.
     pollSessions();
-    iv = setInterval(pollSessions, 30000); // Start slow; adapts after first poll
+    scheduleNext(false);
     return () => { cancelled = true; if (iv) clearInterval(iv); };
   }, [selectedConn, apiFetch]);
 
@@ -441,6 +462,13 @@ export default function VirusScannerApp({ windowId }) {
       }
     } catch (e) {
       setError(e?.message || 'Install failed');
+    }
+    // Notify the desktop poller — installing an engine changes whether
+    // this connection is "interesting" (wazuh becomes non-null, scan
+    // states start cycling). Without this dispatch the user might
+    // wait up to 5 min before the poller picks up the new state.
+    if (typeof window !== 'undefined') {
+      try { window.dispatchEvent(new Event('virus-scan:recheck')); } catch (_) {}
     }
   };
 
@@ -533,6 +561,13 @@ export default function VirusScannerApp({ windowId }) {
     } finally {
       setScanningMode(null);
       setProgressLabel('');
+      // Notify the desktop-wide poller that a scan just started/finished
+      // on this connection. The poller resets its interest set and
+      // re-probes immediately, so the user gets the next state update
+      // without waiting for the 5-min idle backoff.
+      if (typeof window !== 'undefined') {
+        try { window.dispatchEvent(new Event('virus-scan:recheck')); } catch (_) {}
+      }
     }
   };
 

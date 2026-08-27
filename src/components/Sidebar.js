@@ -447,9 +447,17 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
 
 
   // Proactively fetch connections when Sidebar mounts (ensures re-opening works)
+  // IMPORTANT: depend on a stable signal, NOT on `fetchConnections` itself —
+  // the function identity changes whenever the apiFetch callback or dbConfig
+  // changes, which previously caused this effect to re-fire `fetchConnections()`
+  // on every vault unlock / dbConfig update, duplicating the call that
+  // AppContext already makes. We only want to refetch once at mount.
+  const didInitialFetchRef = useRef(false);
   useEffect(() => {
+    if (didInitialFetchRef.current) return;
+    didInitialFetchRef.current = true;
     fetchConnections();
-  }, [fetchConnections]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Position Hover Action Panel dynamically within safe boundaries
   useEffect(() => {

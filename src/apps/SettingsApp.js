@@ -30,6 +30,7 @@ import { useIsMobile } from '@/hooks/useIsMobile';
 import { useSupporter } from '@/hooks/useSupporter';
 import SupporterModal from '@/components/common/SupporterModal';
 import SupportersAdminPanel from '@/components/common/SupportersAdminPanel';
+import { clearDedupCache } from '@/utils/requestDedup';
 
 import { motion, AnimatePresence } from 'framer-motion';
 import ShortcutInput from '@/components/Desktop/ShortcutInput';
@@ -1627,6 +1628,9 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                     try { await saveSettings(); } catch(e) { console.error(e); }
                     sessionStorage.removeItem('_vault_uri');
                     sessionStorage.removeItem('_vault_tunnel');
+                    // Clear the API dedup cache so a new session doesn't
+                    // accidentally re-use a cached response from the old one.
+                    clearDedupCache();
                     signOut();
                   }}
                   className="shrink-0 p-1 rounded text-[var(--text-muted)] hover:text-red-400 hover:bg-red-500/10 transition-all"

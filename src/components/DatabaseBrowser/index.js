@@ -188,36 +188,45 @@ export default function DatabaseBrowser({ initialConnection, initialConnectionId
   // Use the restored connection for the rest of the logic
   const connToUse = restoredConnection;
 
-  // Auto-open current connection if provided (for standalone mode)
+  // Auto-open current connection if provided (for standalone mode).
+  // IMPORTANT: this effect reads `activeDatabaseBrowsers` and
+  // `standaloneDatabaseBrowsers` from `state` but only declared `connToUse` in
+  // its deps. Whenever those arrays changed (e.g. user closed a tab) the
+  // effect re-ran, redundantly dispatching OPEN_STANDALONE_DATABASE_BROWSER and
+  // calling setActiveTab. We track which connection has already been
+  // auto-opened so the heavy work runs at most once per connection.
+  const autoOpenedForRef = useRef(null);
   useEffect(() => {
-    if (connToUse) {
-      // Close matching manager tab if it exists
-      const existingInManager = activeDatabaseBrowsers.find(b => b.connectionId === connToUse._id);
-      if (existingInManager) {
-        dispatch({ type: 'CLOSE_DATABASE_BROWSER', payload: existingInManager.id });
-      }
+    if (!connToUse) return;
+    if (autoOpenedForRef.current === connToUse._id) return;
+    autoOpenedForRef.current = connToUse._id;
 
-      // Check if already open in standalone
-      const existing = standaloneDatabaseBrowsers.find(b => b.connectionId === connToUse._id);
-      if (!existing) {
-        const dbId = `db-${connToUse._id}-${Date.now()}`;
-        dispatch({
-          type: 'OPEN_STANDALONE_DATABASE_BROWSER',
-          payload: {
-            id: dbId,
-            connectionId: connToUse._id,
-            connectionName: connToUse.name,
-            color: connToUse.color,
-            connection: connToUse,
-          },
-        });
-        setActiveTab(dbId);
-      } else {
-        setActiveTab(existing.id);
-      }
-      setIsOpening(false);
+    // Close matching manager tab if it exists
+    const existingInManager = activeDatabaseBrowsers.find(b => b.connectionId === connToUse._id);
+    if (existingInManager) {
+      dispatch({ type: 'CLOSE_DATABASE_BROWSER', payload: existingInManager.id });
     }
-  }, [connToUse]);
+
+    // Check if already open in standalone
+    const existing = standaloneDatabaseBrowsers.find(b => b.connectionId === connToUse._id);
+    if (!existing) {
+      const dbId = `db-${connToUse._id}-${Date.now()}`;
+      dispatch({
+        type: 'OPEN_STANDALONE_DATABASE_BROWSER',
+        payload: {
+          id: dbId,
+          connectionId: connToUse._id,
+          connectionName: connToUse.name,
+          color: connToUse.color,
+          connection: connToUse,
+        },
+      });
+      setActiveTab(dbId);
+    } else {
+      setActiveTab(existing.id);
+    }
+    setIsOpening(false);
+  }, [connToUse, activeDatabaseBrowsers, standaloneDatabaseBrowsers, dispatch]);
 
   const handleCloseTab = (id) => {
     if (isStandalone) {

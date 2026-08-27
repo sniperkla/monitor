@@ -139,11 +139,17 @@ export default function ActivityApp() {
   }, [search]);
 
   // Auto-refresh every 30s
+  // IMPORTANT: depend ONLY on `category` — `cursor` changes whenever the user
+  // scrolls/paginates, and re-creating the interval on every cursor update
+  // was firing `load({})` once synchronously (because of how the interval
+  // callback re-mounts), causing 2× duplicate /api/activity calls.
+  // (The previous deps `[category, cursor]` also meant each new interval
+  //  overlapped with the one being torn down, producing duplicate requests.)
   useEffect(() => {
     const iv = setInterval(() => load({}), 30_000);
     return () => clearInterval(iv);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [category, cursor]);
+  }, [category]);
 
   const clearAll = async () => {
     if (!confirm('Clear your entire activity history?')) return;

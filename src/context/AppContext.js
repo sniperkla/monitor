@@ -4,6 +4,7 @@ import { createContext, useContext, useReducer, useCallback, useEffect, useRef }
 import { useSession, signIn } from 'next-auth/react';
 import { useVault } from '@/context/VaultContext';
 import { getLocalConnections } from '@/utils/localConnections';
+import { dedupedFetch, clearDedupCache } from '@/utils/requestDedup';
 
 const AppContext = createContext();
 
@@ -256,27 +257,38 @@ export function AppProvider({ children }) {
         headers['x-ssh-mode'] = sshMode;
       }
     }
-    const res = await fetch(url, { ...options, headers, credentials: 'include' });
-    
-    // Check for explicit 401 Unauthorized
-    if (res.status === 401) {
-      console.warn('[apiFetch] 401 Unauthorized for:', url);
-      throw new Error('SESSION_EXPIRED');
-    }
-    
-    // Check if response is HTML (likely a redirect to sign-in page or error page)
-    const contentType = res.headers.get('content-type') || '';
-    if (contentType.includes('text/html')) {
-      const resUrl = res.url || '';
-      console.warn('[apiFetch] HTML response received:', { url, status: res.status, responseUrl: resUrl });
-      // If redirected to auth pages, it's a session issue
-      if (resUrl.includes('/api/auth/signin') || resUrl.includes('/api/auth/callback') || res.status === 401) {
-        throw new Error('SESSION_EXPIRED');
-      }
-      // Otherwise it's a server error
-      throw new Error('SERVER_ERROR');
-    }
-    
+    // Route through the request-dedup layer so duplicate GETs (and
+    // overlapping in-flight requests of any method) are coalesced at the
+    // network layer. Callers can opt out per-call with `{ dedup: false }`.
+    const res = await dedupedFetch(
+      url,
+      { ...options, headers, credentials: 'include' },
+      async (u, o) => {
+        const r = await fetch(u, o);
+
+        // Check for explicit 401 Unauthorized
+        if (r.status === 401) {
+          console.warn('[apiFetch] 401 Unauthorized for:', u);
+          throw new Error('SESSION_EXPIRED');
+        }
+
+        // Check if response is HTML (likely a redirect to sign-in page or error page)
+        const contentType = r.headers.get('content-type') || '';
+        if (contentType.includes('text/html')) {
+          const resUrl = r.url || '';
+          console.warn('[apiFetch] HTML response received:', { url: u, status: r.status, responseUrl: resUrl });
+          // If redirected to auth pages, it's a session issue
+          if (resUrl.includes('/api/auth/signin') || resUrl.includes('/api/auth/callback') || r.status === 401) {
+            throw new Error('SESSION_EXPIRED');
+          }
+          // Otherwise it's a server error
+          throw new Error('SERVER_ERROR');
+        }
+
+        return r;
+      },
+    );
+
     return res;
   }, [state.dbConfig]);
 

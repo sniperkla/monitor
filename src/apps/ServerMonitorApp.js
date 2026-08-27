@@ -1477,6 +1477,7 @@ export default function ServerMonitorApp() {
   const inFlightProcRef = useRef(false);
   const inFlightStatusRef = useRef(false);
   const inFlightAppsRef = useRef(false);
+  const inFlightHistoryRef = useRef(false);
 
   const socketRef = useRef(null);
   const peerRef = useRef(null);
@@ -1834,6 +1835,11 @@ export default function ServerMonitorApp() {
   // Fetch history from DB for a given range
   const fetchHistory = useCallback(async (range, connId) => {
     if (!connId || range === 'live') { setHistoryData(null); return; }
+    // Guard against overlapping fetches: the immediate "on range change" useEffect
+    // and the polling interval can both fire within milliseconds of each other,
+    // causing 2× duplicate /api/server-monitor/history calls.
+    if (inFlightHistoryRef.current) return;
+    inFlightHistoryRef.current = true;
     setHistoryLoading(true);
     try {
       const res = await apiFetch(`/api/server-monitor/history?connectionId=${connId}&range=${range}`);
@@ -1844,6 +1850,7 @@ export default function ServerMonitorApp() {
     } catch (err) {
       console.error('[fetchHistory]', err);
     } finally {
+      inFlightHistoryRef.current = false;
       setHistoryLoading(false);
     }
   }, [apiFetch]);
@@ -2132,22 +2139,36 @@ export default function ServerMonitorApp() {
     };
   }, [selectedConnection, autoRefresh, refreshInterval, isTabVisible, fetchMetrics, isSocketStreaming, isP2PStreaming]);
 
-  // Fetch apps on-demand when switching to 'apps' tab
+  // Mirror fetchApps / fetchProcesses into refs so the tabs below don't have
+  // to depend on the (often-changing) callback identity, which would otherwise
+  // re-fire them on every render of this component.
+  const fetchAppsRef = useRef(fetchApps);
+  useEffect(() => { fetchAppsRef.current = fetchApps; }, [fetchApps]);
+  const fetchProcessesRef = useRef(fetchProcesses);
+  useEffect(() => { fetchProcessesRef.current = fetchProcesses; }, [fetchProcesses]);
+
+  // Fetch apps on-demand when switching to 'apps' tab.
+  // Depend ONLY on the user-visible inputs (activeTab, selectedConnection).
+  // Including `fetchApps` in the deps caused it to refire whenever the
+  // apiFetch callback identity changed (dbConfig updates etc.), producing
+  // duplicate /api/server-monitor/apps calls on every connection change.
   useEffect(() => {
     if (activeTab === 'apps' && selectedConnection) {
-      fetchApps();
+      fetchAppsRef.current();
     }
-  }, [activeTab, selectedConnection, fetchApps]);
+  }, [activeTab, selectedConnection]);
 
-  // Fetch and poll processes when switching to 'processes' tab
+  // Fetch and poll processes when switching to 'processes' tab.
+  // Same reasoning: `fetchProcesses` is read via ref so the effect only
+  // re-runs on tab/connection/refresh-rate changes — not on callback churn.
   useEffect(() => {
     if (activeTab === 'processes' && selectedConnection) {
-      fetchProcesses(true);
+      fetchProcessesRef.current(true);
 
       let procInterval = null;
       if (autoRefresh && isTabVisible) {
         procInterval = setInterval(() => {
-          fetchProcesses(true);
+          fetchProcessesRef.current(true);
         }, Math.max(3000, refreshInterval));
       }
 
@@ -2155,7 +2176,7 @@ export default function ServerMonitorApp() {
         if (procInterval) clearInterval(procInterval);
       };
     }
-  }, [activeTab, selectedConnection, autoRefresh, refreshInterval, isTabVisible, fetchProcesses]);
+  }, [activeTab, selectedConnection, autoRefresh, refreshInterval, isTabVisible]);
 
   const selectedConn = connections.find(c => c._id === selectedConnection);
   const currentApps = appsData[selectedConnection]?.apps || null;

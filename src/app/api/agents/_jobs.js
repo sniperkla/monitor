@@ -71,10 +71,10 @@ export function getJobUpdate(jobId, cursor = 0) {
 }
 
 /**
- * True when the request asks for live streaming of a streamable action.
+ * True when the request asks for live streaming of an action.
  */
 export const isLiveAction = (body) =>
-  !!body?.live && ['install', 'uninstall'].includes(body?.action);
+  !!body?.live && !['status', 'details', 'health', 'backups', 'logs', 'job'].includes(body?.action);
 
 /**
  * Dispatch helper used by every agent route:

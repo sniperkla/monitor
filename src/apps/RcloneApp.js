@@ -750,34 +750,40 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Fetch Rclone status whenever selected connection changes & clear stale data
+  // Fetch Rclone status whenever selected connection changes & clear stale data.
+  // Depend ONLY on `selectedConnId` — depending on `vaultStatus` too caused the
+  // effect to fire 2× when the vault went from `locked` → `unlocked` (once for
+  // the connection, once for the vault), producing 2× of every /api/rclone/*
+  // call below. Vault status is read here as a guard, not as a trigger — the
+  // user is expected to re-pick a connection after unlocking if one wasn't
+  // already selected.
   useEffect(() => {
-    if (selectedConnId) {
-      // Persist so we can restore on reopen without needing SSH Manager
-      if (typeof window !== 'undefined') localStorage.setItem('rclone-selected-conn', selectedConnId);
+    if (!selectedConnId) return;
+    if (vaultStatus !== 'unlocked') return;
 
-      if (vaultStatus === 'unlocked') {
-        setRcloneStatus(null);
-        setInstallJob(null);
-        setInstallLog('');
-        setIsInstalling(false);
-        setActiveJob(null);
-        setJobLog('');
-        setIsJobRunning(false);
-        setRemoteItems([]);
-        setBrowseRemote('');
-        setBrowsePath('');
-        setTargetPath('');
-        setServerCrons([]);
-        setCollapsedProjects({});
-        setExpandedLogIdx(null);
-        setHistoryFilter('all');
-        fetchRcloneStatus();
-        fetchCrons();
-        fetchHistory();
-      }
-    }
-  }, [selectedConnId, vaultStatus]);
+    // Persist so we can restore on reopen without needing SSH Manager
+    if (typeof window !== 'undefined') localStorage.setItem('rclone-selected-conn', selectedConnId);
+
+    setRcloneStatus(null);
+    setInstallJob(null);
+    setInstallLog('');
+    setIsInstalling(false);
+    setActiveJob(null);
+    setJobLog('');
+    setIsJobRunning(false);
+    setRemoteItems([]);
+    setBrowseRemote('');
+    setBrowsePath('');
+    setTargetPath('');
+    setServerCrons([]);
+    setCollapsedProjects({});
+    setExpandedLogIdx(null);
+    setHistoryFilter('all');
+    fetchRcloneStatus();
+    fetchCrons();
+    fetchHistory();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedConnId]);
 
   // 🛑 Abort / Terminate Running Rclone Process
   const handleKillProcess = async (pid = null, logFile = null) => {
@@ -870,7 +876,10 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
   // Poll most-recently-modified rclone log for Schedules tab (covers cron-triggered jobs)
   useEffect(() => {
     if (!selectedConnId || activeTab !== 'crons') return;
-    // If a manual job is already feeding cronLiveLog via the effect above, skip independent polling
+    // If a manual job is already feeding cronLiveLog via the effect above, skip
+    // independent polling — otherwise the two intervals fight each other and
+    // every poll produces a duplicate /api/rclone/history call.
+    if (activeJob && isJobRunning) return;
     let interval = null;
     interval = setInterval(async () => {
       try {
@@ -888,7 +897,7 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
       } catch (_) {}
     }, 3000);
     return () => { if (interval) clearInterval(interval); };
-  }, [selectedConnId, activeTab, apiFetch, targetPath]);
+  }, [selectedConnId, activeTab, apiFetch, targetPath, activeJob, isJobRunning]);
 
   const selectedConn = connections?.find(c => (c.id || c._id) === selectedConnId);
 

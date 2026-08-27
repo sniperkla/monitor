@@ -105,18 +105,33 @@ export default function HermesAgentWizard({ isOpen, onClose, connections = [], s
     let cursor = 0;
     // Cap at 20 min — beyond that, the job likely hung server-side.
     const deadline = Date.now() + 20 * 60 * 1000;
+    // Surface a "no progress" warning after 90s of silence so the user
+    // isn't left staring at a frozen terminal. Install/uninstall can
+    // legitimately be slow (e.g. compiling venv, downloading binaries),
+    // but a long stretch of zero log lines usually means we're stuck.
+    let lastProgressAt = Date.now();
+    const noProgressWarnMs = 90_000;
     while (Date.now() < deadline) {
       await new Promise(r => setTimeout(r, 1200));
       let upd = null;
       try { upd = await call('job', { jobId: start.jobId, cursor }); }
       catch (e) { /* transient network — keep polling */ continue; }
-      if (upd?.lines?.length) upd.lines.forEach(onLine);
+      if (upd?.lines?.length) {
+        upd.lines.forEach(onLine);
+        lastProgressAt = Date.now();
+      }
       cursor = upd?.cursor ?? cursor;
       if (upd?.done) return upd.result || { success: false, error: 'Job ended without a result' };
       // transient "Unknown or expired job" — happens when the dev server hot-reloaded
       // the agent route mid-install. Wait a tick and retry instead of failing.
       if (upd?.error && /Unknown or expired job/i.test(upd.error)) continue;
       if (upd?.error) throw new Error(upd.error);
+      // Stuck detection — only warn, don't abort (the server may
+      // genuinely be doing something slow).
+      if (Date.now() - lastProgressAt > noProgressWarnMs) {
+        onLine?.(`\n⚠ No new output for ${Math.round((Date.now() - lastProgressAt) / 1000)}s — the install may be stuck on a network call or large download.\n`);
+        lastProgressAt = Date.now();
+      }
     }
     return { success: false, error: 'Client timeout: the action took longer than 20 minutes' };
   }, [call]);

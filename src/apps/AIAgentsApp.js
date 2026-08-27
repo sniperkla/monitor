@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Bot, Server as ServerIcon, RefreshCw, Loader2, CheckCircle2, XCircle, Settings2, Puzzle, Trash2, Play, Square, RotateCw, Plus, ExternalLink, Send, Search, Sparkles, Check, FileText, Copy, Lock, Radio, Zap, Shield, Cable, ChevronRight, Flame, Heart } from 'lucide-react';
+import { Bot, Server as ServerIcon, RefreshCw, Loader2, CheckCircle2, XCircle, Settings2, Puzzle, Trash2, Play, Square, RotateCw, Plus, ExternalLink, Send, Search, Sparkles, Check, FileText, Copy, Lock, Radio, Zap, Shield, Cable, ChevronRight, Flame, Heart, Terminal, ChevronDown, ChevronUp, X, Minus, Maximize2, Minimize2, GripHorizontal, Eye, EyeOff } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 import { useSupporter } from '@/hooks/useSupporter';
 import SupporterModal from '@/components/common/SupporterModal';
@@ -73,7 +73,43 @@ export default function AIAgentsApp({ apiFetch }) {
   const [tab, setTab] = useState('overview'); // overview | config | skills
   const [details, setDetails] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [busyMsg, setBusyMsg] = useState('');
+  // Floating Draggable Live Log window state
+  const [liveLogLines, setLiveLogLines] = useState([]);
+  const [liveLogOpen, setLiveLogOpen] = useState(false);
+  const [liveLogMinimized, setLiveLogMinimized] = useState(false);
+  const [liveLogMaximized, setLiveLogMaximized] = useState(false);
+  const [liveLogAction, setLiveLogAction] = useState('');
+  const [logPos, setLogPos] = useState({ x: null, y: null });
+  const liveLogBoxRef = useRef(null);
+  const isDraggingLogRef = useRef(false);
+  const dragOffsetRef = useRef({ x: 0, y: 0 });
+
+  const handleLogDragStart = (e) => {
+    if (e.target.closest('button')) return;
+    isDraggingLogRef.current = true;
+    const panel = e.currentTarget.closest('[data-log-panel]');
+    if (panel) {
+      const rect = panel.getBoundingClientRect();
+      dragOffsetRef.current = {
+        x: e.clientX - rect.left,
+        y: e.clientY - rect.top,
+      };
+    }
+    const handleMouseMove = (ev) => {
+      if (!isDraggingLogRef.current) return;
+      const newX = Math.max(10, Math.min(window.innerWidth - 320, ev.clientX - dragOffsetRef.current.x));
+      const newY = Math.max(10, Math.min(window.innerHeight - 80, ev.clientY - dragOffsetRef.current.y));
+      setLogPos({ x: newX, y: newY });
+    };
+    const handleMouseUp = () => {
+      isDraggingLogRef.current = false;
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+  };
+
   const [notice, setNotice] = useState(null); // {ok, text}
   // auto-dismiss the banner after 5s so it never blocks the UI
   useEffect(() => {
@@ -81,34 +117,58 @@ export default function AIAgentsApp({ apiFetch }) {
     const t = setTimeout(() => setNotice(null), 5000);
     return () => clearTimeout(t);
   }, [notice]);
+  // Auto-scroll the live-log box to the bottom whenever new lines arrive.
+  useEffect(() => {
+    if (!liveLogBoxRef.current) return;
+    liveLogBoxRef.current.scrollTop = liveLogBoxRef.current.scrollHeight;
+  }, [liveLogLines]);
   const [showWizard, setShowWizard] = useState(false);
   const [purge, setPurge] = useState(false);
   const [showUninstallModal, setShowUninstallModal] = useState(false);
-  // env tab
+  // env tab (unmasked)
   const [envDraft, setEnvDraft] = useState([]); // [{ key, value, masked }]
   const [envNewKey, setEnvNewKey] = useState('');
   const [envNewVal, setEnvNewVal] = useState('');
+
   useEffect(() => {
     if (tab !== 'env' || !details) return;
-    const known = (details.envKeys || []).map(k => ({ key: k, value: '', masked: true }));
-    setEnvDraft(known);
-    setEnvNewKey(''); setEnvNewVal('');
-  }, [tab, details?.configJson, details?.configYaml]); // eslint-disable-line react-hooks/exhaustive-deps
+    const parsed = {};
+    if (details.envText) {
+      for (const line of String(details.envText).split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) continue;
+        const eqIdx = trimmed.indexOf('=');
+        if (eqIdx > 0) {
+          const k = trimmed.slice(0, eqIdx).trim();
+          const v = trimmed.slice(eqIdx + 1).trim();
+          parsed[k] = v;
+        }
+      }
+    }
+    const allKeys = Array.from(new Set([...(details.envKeys || []), ...Object.keys(parsed)]));
+    const draft = allKeys.map(k => ({
+      key: k,
+      value: parsed[k] ?? '',
+      masked: false,
+    }));
+    setEnvDraft(draft);
+    setEnvNewKey('');
+    setEnvNewVal('');
+  }, [tab, details?.envText, details?.configJson, details?.configYaml]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const saveEnv = () => {
-    // build the env object: only include rows where the value has been entered
     const env = {};
     for (const r of envDraft) {
-      if (r.value && r.value.trim()) env[r.key] = r.value.trim();
+      if (r.key && r.value !== undefined && r.value !== null && r.value.trim() !== '') {
+        env[r.key] = r.value.trim();
+      }
     }
     if (envNewKey.trim() && envNewVal.trim()) env[envNewKey.trim()] = envNewVal.trim();
     if (Object.keys(env).length === 0) {
       setNotice({ ok: false, text: 'No env keys to save — enter at least one value.' });
       return;
     }
-    act('Save env', () => call('reconfigure', { config: { env, restart: restartAfterSave } })).then(() => {
-      // clear the values after save (keep keys visible)
-      // Note: act() already calls loadDetails() internally — no second call needed here
-      setEnvDraft(prev => prev.map(r => ({ ...r, value: '', masked: true })));
+    callAction('Save env', 'reconfigure', { config: { env, restart: restartAfterSave } }).then(() => {
       setEnvNewKey(''); setEnvNewVal('');
     });
   };
@@ -190,14 +250,33 @@ export default function AIAgentsApp({ apiFetch }) {
     let cursor = 0;
     // Cap at 20 min — beyond that, the job likely hung server-side.
     const deadline = Date.now() + 20 * 60 * 1000;
+    // Surface a "no progress" warning after 90s of silence. Uninstall can
+    // legitimately be slow (e.g. waiting on `pkill` or `systemctl stop`),
+    // but a long stretch of zero log lines usually means we're stuck on a
+    // single remote command — better to warn the user than to sit there
+    // silently.
+    let lastLineCount = 0;
+    let lastProgressAt = Date.now();
+    const noProgressWarnMs = 90_000;
     while (Date.now() < deadline) {
       await new Promise(r => setTimeout(r, 1200));
       let upd = null;
       try { upd = await call('job', { jobId: start.jobId, cursor }); }
       catch (e) { /* transient network — keep polling */ continue; }
-      if (upd?.lines?.length) upd.lines.forEach(onLine);
+      if (upd?.lines?.length) {
+        upd.lines.forEach(onLine);
+        lastLineCount += upd.lines.length;
+        lastProgressAt = Date.now();
+      }
       cursor = upd?.cursor ?? cursor;
       if (upd?.done) return upd.result || { success: false, error: 'Job ended without a result' };
+      // Detect "stuck" — server is alive but no log progress for >90s.
+      // (The server-side job may genuinely be slow, so we only emit a
+      //  warning, not abort.)
+      if (Date.now() - lastProgressAt > noProgressWarnMs) {
+        onLine?.(`\n⚠ No new output for ${Math.round((Date.now() - lastProgressAt) / 1000)}s — the server may be stuck on a single command.\n`);
+        lastProgressAt = Date.now(); // throttle further warnings
+      }
     }
     return { success: false, error: 'Client timeout: the action took longer than 20 minutes' };
   }, [call]);
@@ -258,25 +337,84 @@ export default function AIAgentsApp({ apiFetch }) {
     setPromptDraft(pFiles[promptActiveFile] ?? pFiles['PROMPT.md'] ?? '');
   }, [details, agent.id, promptActiveFile]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const act = async (label, fn) => {
+  const callAction = async (label, action, extra = {}) => {
     setBusyMsg(label); setNotice(null);
+    setLiveLogLines([]); setLiveLogAction(label); setLiveLogOpen(true); setLiveLogMinimized(false);
+    const startTs = Date.now();
     try {
-      const r = await fn();
+      let r;
+      if (liveLogs) {
+        r = await callLive(action, extra, (line) => {
+          const parts = String(line).split('\n');
+          setLiveLogLines(prev => [...prev, ...parts]);
+          const last = parts.filter(Boolean).pop() || parts[0] || '';
+          setBusyMsg(`${label} — ${last.slice(0, 80)}`);
+        });
+      } else {
+        r = await call(action, extra);
+      }
+      const elapsed = ((Date.now() - startTs) / 1000).toFixed(1);
+      if (Array.isArray(r?.log) && r.log.length) {
+        setLiveLogLines(prev => {
+          const set = new Set(prev);
+          const added = r.log.filter(l => !set.has(l));
+          return [...prev, ...added, `— done in ${elapsed}s —`];
+        });
+      } else {
+        const ok = r?.success !== false;
+        const msg = r?.output ? String(r.output).trim() : (ok ? 'done' : (r?.error || 'failed'));
+        setLiveLogLines(prev => prev.length ? [...prev, `— done in ${elapsed}s —`] : [`${ok ? '✓' : '✗'} ${label}: ${msg}  (${elapsed}s)`]);
+      }
       if (r?.output) setNotice({ ok: r.success !== false, text: `${label}: ${String(r.output).slice(-400)}` });
       else setNotice({ ok: r?.success !== false, text: `${label}: ${r?.error || 'done'}` });
       await loadDetails();
       return r;
     } catch (e) {
+      setLiveLogLines(prev => [...prev, `✗ ERROR: ${e.message}`]);
       setNotice({ ok: false, text: `${label}: ${e.message}` });
-    } finally { setBusyMsg(''); }
+    } finally {
+      setBusyMsg('');
+    }
+  };
+
+  const act = async (label, fn) => {
+    setBusyMsg(label); setNotice(null);
+    setLiveLogLines([]); setLiveLogAction(label); setLiveLogOpen(true); setLiveLogMinimized(false);
+    const startTs = Date.now();
+    try {
+      const r = await fn();
+      const elapsed = ((Date.now() - startTs) / 1000).toFixed(1);
+      if (Array.isArray(r?.log) && r.log.length) {
+        setLiveLogLines(prev => {
+          const set = new Set(prev);
+          const added = r.log.filter(l => !set.has(l));
+          return [...prev, ...added, `— done in ${elapsed}s —`];
+        });
+      } else {
+        const ok = r?.success !== false;
+        const msg = r?.output
+          ? String(r.output).trim()
+          : (ok ? 'done' : (r?.error || 'failed'));
+        setLiveLogLines(prev => prev.length ? [...prev, `— done in ${elapsed}s —`] : [`${ok ? '✓' : '✗'} ${label}: ${msg}  (${elapsed}s)`]);
+      }
+      if (r?.output) setNotice({ ok: r.success !== false, text: `${label}: ${String(r.output).slice(-400)}` });
+      else setNotice({ ok: r?.success !== false, text: `${label}: ${r?.error || 'done'}` });
+      await loadDetails();
+      return r;
+    } catch (e) {
+      setLiveLogLines(prev => [...prev, `✗ ERROR: ${e.message}`]);
+      setNotice({ ok: false, text: `${label}: ${e.message}` });
+    } finally {
+      setBusyMsg('');
+    }
   };
 
   const gatewayOp = (op) => {
     if (op === 'stop') setUserStopped(true);
     if (op === 'start' || op === 'restart') setUserStopped(false);
-    return act(`Gateway ${op}`, () => call('gateway', { config: { op } }));
+    return callAction(`Gateway ${op}`, 'gateway', { config: { op } });
   };
-  const saveConfig = () => act('Save config', async () => {
+  const saveConfig = () => {
     const isJson = ['nanobot', 'openclaw'].includes(agent.id);
     const isToml = agent.id === 'zeroclaw';
     const configPayload = isJson
@@ -284,36 +422,28 @@ export default function AIAgentsApp({ apiFetch }) {
       : isToml
       ? { configJson: yamlDraft, configToml: yamlDraft, restart: restartAfterSave }
       : { configYaml: yamlDraft, restart: restartAfterSave };
-    const r = await call('save-config', { config: configPayload });
-    return { success: r.success, output: r.restarted ? 'saved & gateway restarted' : r.error || 'saved' };
-  });
-  const savePrompt = () => act(`Save ${promptActiveFile}`, async () => {
-    const r = await call('save-prompt', { config: { file: promptActiveFile, prompt: promptDraft, restart: restartAfterSave } });
-    setPromptFilesMap(prev => ({ ...prev, [promptActiveFile]: promptDraft }));
-    return { success: r?.success !== false, output: `${promptActiveFile} saved & applied` };
-  });
+    return callAction('Save config', 'save-config', { config: configPayload });
+  };
+  const savePrompt = () => {
+    return callAction(`Save ${promptActiveFile}`, 'save-prompt', { config: { file: promptActiveFile, prompt: promptDraft, restart: restartAfterSave } }).then(() => {
+      setPromptFilesMap(prev => ({ ...prev, [promptActiveFile]: promptDraft }));
+    });
+  };
   const switchPromptFile = (fileKey) => {
     setPromptFilesMap(prev => ({ ...prev, [promptActiveFile]: promptDraft }));
     setPromptActiveFile(fileKey);
     setPromptDraft(promptFilesMap[fileKey] ?? details?.promptFiles?.[fileKey] ?? '');
   };
-  const removeSkill = (name) => act(`Remove skill ${name}`, () => call('skills', { config: { op: 'remove', name } }));
-  const installSkill = () => { if (skillInput.trim()) { const id = skillInput.trim(); setSkillInput(''); return act(`Install skill ${id}`, () => call('skills', { config: { op: 'install', id } })); } };
-  const toggleBundled = (optOut) => act(optOut ? 'Disable bundled skills' : 'Re-enable bundled skills', () => call('skills', { config: { op: optOut ? 'opt-out' : 'opt-in' } }));
+  const removeSkill = (name) => callAction(`Remove skill ${name}`, 'skills', { config: { op: 'remove', name } });
+  const installSkill = () => { if (skillInput.trim()) { const id = skillInput.trim(); setSkillInput(''); return callAction(`Install skill ${id}`, 'skills', { config: { op: 'install', id } }); } };
+  const toggleBundled = (optOut) => callAction(optOut ? 'Disable bundled skills' : 'Re-enable bundled skills', 'skills', { config: { op: optOut ? 'opt-out' : 'opt-in' } });
   const uninstall = () => {
-    // open a proper modal instead of window.confirm which gets auto-accepted
     setShowUninstallModal(true);
   };
   const doUninstall = (wantsPurge) => {
     setShowUninstallModal(false);
     setPurge(wantsPurge);
-    return act('Uninstall', () => {
-      if (!liveLogs) return call('uninstall', { purge: wantsPurge });
-      return callLive('uninstall', { purge: wantsPurge }, (line) => {
-        const last = line.split('\n').filter(Boolean).pop() || line;
-        setBusyMsg(`Uninstall — ${last.slice(0, 80)}`);
-      });
-    });
+    return callAction('Uninstall', 'uninstall', { purge: wantsPurge });
   };
 
   // ── search helpers: highlight + count + navigate ──
@@ -1056,21 +1186,26 @@ fi'\n`;
                     restart gateway after save
                   </label>
                 </div>
-                <p className="text-[9px] text-[var(--text-muted)]">Existing keys shown below — type a new value to overwrite. Saved values are masked on the next load.</p>
+                <p className="text-[9px] text-[var(--text-muted)]">Environment keys & values loaded directly from <span className="font-mono">~/.{agent.id}/.env</span>. Edit any value and save to apply immediately.</p>
                 <div className="space-y-1.5">
                   {envDraft.map((r, i) => (
                     <div key={r.key} className="flex items-center gap-2">
-                      <span className="text-[10px] font-mono w-44 truncate text-[var(--text-muted)]">{r.key}</span>
+                      <span className="text-[10px] font-mono w-48 truncate text-[var(--text-primary)] font-semibold">{r.key}</span>
                       <input
-                        type={r.masked && !r.value ? 'password' : 'text'}
-                        placeholder={r.masked ? '••••••' : ''}
-                        value={r.value}
-                        onChange={e => setEnvDraft(prev => prev.map((x, j) => j === i ? { ...x, value: e.target.value, masked: false } : x))}
-                        onFocus={() => setEnvDraft(prev => prev.map((x, j) => j === i ? { ...x, masked: false } : x))}
+                        type={r.masked ? 'password' : 'text'}
+                        value={r.value ?? ''}
+                        onChange={e => setEnvDraft(prev => prev.map((x, j) => j === i ? { ...x, value: e.target.value } : x))}
                         className={`${inputCls} !py-1.5 font-mono flex-1`}
                         autoComplete="off"
                         spellCheck={false}
                       />
+                      <button
+                        onClick={() => setEnvDraft(prev => prev.map((x, j) => j === i ? { ...x, masked: !x.masked } : x))}
+                        className={`${btn} bg-white/5 text-[var(--text-muted)] hover:text-white !py-1 !px-2`}
+                        title={r.masked ? "Show plain text" : "Hide plain text"}
+                      >
+                        {r.masked ? <Eye size={11} /> : <EyeOff size={11} />}
+                      </button>
                       <button
                         onClick={() => setEnvDraft(prev => prev.filter((_, j) => j !== i))}
                         className={`${btn} bg-red-500/10 text-red-400 hover:bg-red-500/20 !py-1 !px-2`}
@@ -1796,11 +1931,114 @@ fi'\n`;
         </div>
       )}
 
-      {/* busy strip */}
+      {/* Busy strip + live log panel.
+          The strip shows the current action's label and spinner; the
+          expandable panel below reveals the full server-side log so the
+          user can see exactly what the install/uninstall script is
+          doing. The previous version only had the strip (no log view),
+          which made long-running actions look "stuck". */}
       {busyMsg && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[999] flex items-center gap-2 rounded-xl bg-[var(--bg-secondary)] border border-[var(--border-color)] shadow-2xl px-4 py-2.5 text-xs">
           <Loader2 size={13} className="animate-spin text-indigo-400" /> {busyMsg}…
         </div>
+      )}
+      {/* Floating / Draggable Live Log Panel */}
+      {liveLogOpen && liveLogLines.length > 0 && (
+        liveLogMinimized ? (
+          <div
+            className="fixed bottom-6 right-6 z-[998] flex items-center gap-2.5 px-3.5 py-2 rounded-xl bg-[var(--bg-primary)]/95 border border-[var(--border-color)] shadow-2xl backdrop-blur text-xs cursor-pointer hover:border-indigo-500/50 transition-all select-none"
+            onClick={() => setLiveLogMinimized(false)}
+            title="Click to restore live log window"
+          >
+            <Terminal size={13} className="text-indigo-400" />
+            <span className="font-bold text-white">{liveLogAction || 'Live log'}</span>
+            <span className="text-[10px] text-[var(--text-muted)]">
+              ({liveLogLines.length} line{liveLogLines.length === 1 ? '' : 's'})
+            </span>
+            {busyMsg && <Loader2 size={11} className="animate-spin text-amber-400" />}
+            <button
+              onClick={(e) => { e.stopPropagation(); setLiveLogMinimized(false); }}
+              className="p-1 rounded text-[var(--text-muted)] hover:text-white"
+              title="Expand window"
+            >
+              <Maximize2 size={11} />
+            </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); setLiveLogOpen(false); setLiveLogLines([]); setLiveLogAction(''); }}
+              className="p-1 rounded text-[var(--text-muted)] hover:text-white"
+              title="Close log"
+            >
+              <X size={11} />
+            </button>
+          </div>
+        ) : (
+          <div
+            data-log-panel="true"
+            className={`fixed z-[998] rounded-xl border border-[var(--border-color)] bg-[var(--bg-primary)]/95 backdrop-blur-xl shadow-2xl overflow-hidden flex flex-col transition-all ${
+              liveLogMaximized
+                ? 'inset-6 w-auto h-auto'
+                : 'w-[min(640px,calc(100vw-2rem))]'
+            }`}
+            style={
+              !liveLogMaximized && logPos.x !== null && logPos.y !== null
+                ? { left: `${logPos.x}px`, top: `${logPos.y}px` }
+                : !liveLogMaximized
+                ? { bottom: '4rem', right: '1rem' }
+                : {}
+            }
+          >
+            {/* Draggable Titlebar */}
+            <div
+              onMouseDown={!liveLogMaximized ? handleLogDragStart : undefined}
+              className="flex items-center gap-2 px-3 py-2 border-b border-[var(--border-color)] bg-black/40 text-[11px] cursor-grab active:cursor-grabbing select-none"
+            >
+              <GripHorizontal size={13} className="text-[var(--text-muted)] opacity-60" />
+              <Terminal size={12} className="text-indigo-400" />
+              <span className="font-bold text-white">{liveLogAction || 'Live log'}</span>
+              <span className="text-[10px] text-[var(--text-muted)] ml-1">
+                ({liveLogLines.length} line{liveLogLines.length === 1 ? '' : 's'})
+              </span>
+              {busyMsg && <Loader2 size={11} className="animate-spin text-amber-400 ml-1" />}
+              
+              <div className="ml-auto flex items-center gap-1">
+                {/* Minimize button (minimizes to background badge) */}
+                <button
+                  onClick={() => setLiveLogMinimized(true)}
+                  title="Minimize as background badge"
+                  className="p-1 rounded text-[var(--text-muted)] hover:text-white hover:bg-white/10 transition-colors"
+                >
+                  <Minus size={12} />
+                </button>
+                {/* Maximize toggle */}
+                <button
+                  onClick={() => setLiveLogMaximized(v => !v)}
+                  title={liveLogMaximized ? 'Restore size' : 'Maximize window'}
+                  className="p-1 rounded text-[var(--text-muted)] hover:text-white hover:bg-white/10 transition-colors"
+                >
+                  {liveLogMaximized ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
+                </button>
+                {/* Close button */}
+                <button
+                  onClick={() => { setLiveLogOpen(false); setLiveLogLines([]); setLiveLogAction(''); }}
+                  title="Close log"
+                  className="p-1 rounded text-[var(--text-muted)] hover:text-red-400 hover:bg-red-500/10 transition-colors"
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            </div>
+
+            {/* Log output stream */}
+            <pre
+              ref={liveLogBoxRef}
+              className={`bg-black/60 text-[10.5px] font-mono leading-relaxed text-[var(--text-muted)] whitespace-pre-wrap break-words p-3.5 overflow-y-auto ${
+                liveLogMaximized ? 'flex-1' : 'max-h-80'
+              }`}
+            >
+              {liveLogLines.join('\n')}
+            </pre>
+          </div>
+        )
       )}
 
       <HermesAgentWizard

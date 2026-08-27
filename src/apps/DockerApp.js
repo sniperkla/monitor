@@ -1157,8 +1157,14 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
   }, [selectedConnection?._id, dbConfig?.uri, emitDockerLs]);
 
   // Poll for pulling and deploying tasks (every 1s for fast live log stream)
+  // IMPORTANT: depend on the SET of active task names, not the whole pullingTasks
+  // object. The object mutates on every docker:stream chunk, and re-creating
+  // this interval on each mutation caused a brief overlap of the old and new
+  // intervals — producing duplicate `docker:command` emissions per second.
+  // The interval body already reads the latest task via `pullingTasksRef.current`.
+  const activeTaskNames = Object.keys(pullingTasks).filter(name => !pullingTasks[name].isFinished);
+  const activeTaskKey = activeTaskNames.slice().sort().join('|');
   useEffect(() => {
-    const activeTaskNames = Object.keys(pullingTasks).filter(name => !pullingTasks[name].isFinished);
     if (activeTaskNames.length === 0 || !socketRef.current) return;
 
     const interval = setInterval(() => {
@@ -1173,7 +1179,8 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [pullingTasks]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTaskKey]);
 
   // Debounced Auto-Search
   useEffect(() => {

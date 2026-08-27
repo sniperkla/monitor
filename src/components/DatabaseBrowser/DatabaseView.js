@@ -3,9 +3,10 @@ import { useTranslation } from 'react-i18next';
 import { useApp } from '@/context/AppContext';
 import { useOS } from '@/context/OSContext';
 import { getLocalConnections, saveLocalConnections } from '@/utils/localConnections';
+import { isPermanentAuthError } from '@/utils/authErrors';
 import MacOSModalWindow from '@/components/MacOSModalWindow';
-import { 
-  Search, RefreshCw, Layers, Table, Code, Activity, Save, LoaderCircle, 
+import {
+  Search, RefreshCw, Layers, Table, Code, Activity, Save, LoaderCircle,
   Trash2, Pen, Plus, Download, Upload, X, Check, AlertCircle, Sparkles,
   Clock, ChevronDown, Shield, Archive, Settings2, TriangleAlert, PenLine,
   PlusCircle, Terminal, ShieldCheck, Eye, Copy, Maximize2, CircleHelp, Wifi
@@ -48,7 +49,25 @@ export default function DatabaseView({ connection, onClose }) {
   const [lastAiUpdate, setLastAiUpdate] = useState(0);
   const [localAiPrefs, setLocalAiPrefs] = useState({ aiEndpoint: '', aiApiKey: '', aiCustomModel: '' });
   const [connectRetryCount, setConnectRetryCount] = useState(0);
+  const connectRetryCountRef = useRef(0);
   const connectRetryTimerRef = useRef(null);
+  // Hard cap on automatic reconnect attempts. After this many failed tries,
+  // the polling stops and the user must click "Retry" to start over. The UI
+  // already displays "Attempt X/10" — keep these numbers in sync.
+  const MAX_RETRY_ATTEMPTS = 10;
+  // Set to true when we encounter a permanent failure (e.g. auth error).
+  // Once set, all future scheduleConnectRetry() calls become no-ops until
+  // the user explicitly clicks "Retry" (which resets the flag).
+  const retryAbortedRef = useRef(false);
+  // In-flight guard for fetchSchema so duplicate callers (mount useEffect
+  // + window-focus handler + retry loop) don't issue overlapping
+  // /api/connections/{id}/schema requests.
+  const schemaInFlightRef = useRef(false);
+  // In-flight guard for fetchData so the selectedSchema useEffect and the
+  // explicit "Run" button don't double-fire /api/connections/{id}/query.
+  const dataInFlightRef = useRef(false);
+  // In-flight guard for the relay-token health check.
+  const relayCheckInFlightRef = useRef(false);
   const [relayRequired, setRelayRequired] = useState(false);
   const [relayConnected, setRelayConnected] = useState(false);
   const socketRef = useRef(null);
@@ -99,13 +118,17 @@ export default function DatabaseView({ connection, onClose }) {
     return () => {
       clearInterval(interval);
       socket.disconnect();
-      // Update local status to offline if no other component is using it
-      // Note: Full multi-session ref-counting could be added to AppContext,
-      // but this handles the most common 'one window' case.
-      dispatch({ 
-        type: 'UPDATE_CONNECTION', 
-        payload: { _id: connection._id, status: 'offline' } 
-      });
+      socketRef.current = null;
+      // NOTE: We intentionally do NOT dispatch `status: 'offline'` here.
+      // The previous code did, which flickered the connection to 'offline'
+      // for a few hundred ms every time dbConfig changed (vault unlock,
+      // switch db, etc.) — this effect's deps include `appState.dbConfig?.uri`,
+      // so the cleanup ran synchronously and dispatched offline before
+      // the new socket could re-establish. The canonical source of online
+      // status is `fetchSchema`'s success path. Closing this tab does
+      // not mean the underlying SSH connection is down — it may still
+      // be active in other tabs/windows, and the status is now lazy:
+      // it updates on the next explicit ping, schema fetch, or test.
     };
   }, [appState.dbConfig?.uri]);
 
@@ -204,8 +227,19 @@ export default function DatabaseView({ connection, onClose }) {
 
   useEffect(() => {
     if (connection?._id) {
+      // Reset retry state whenever the user switches to a different
+      // connection — the previous connection's failure (and any
+      // permanent-error abort) must not leak into the new one.
+      connectRetryCountRef.current = 0;
+      retryAbortedRef.current = false;
+      setConnectRetryCount(0);
+      if (connectRetryTimerRef.current) {
+        clearTimeout(connectRetryTimerRef.current);
+        connectRetryTimerRef.current = null;
+      }
       fetchSchema();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connection?._id]);
 
   useEffect(() => {
@@ -214,10 +248,17 @@ export default function DatabaseView({ connection, onClose }) {
       setRelayConnected(false);
       return;
     }
-    fetch('/api/relay/token')
+    // In-flight guard + use apiFetch for consistent error handling.
+    // The previous version used raw `fetch` (bypassing 401/HTML validation
+    // and the global dedup layer) and had no in-flight protection —
+    // re-renders during connection changes could fire this 2-3 times.
+    if (relayCheckInFlightRef.current) return;
+    relayCheckInFlightRef.current = true;
+    apiFetch('/api/relay/token')
       .then(r => r.json())
       .then(d => { if (d.success) setRelayConnected(!!d.connected); })
-      .catch(() => setRelayConnected(false));
+      .catch(() => setRelayConnected(false))
+      .finally(() => { relayCheckInFlightRef.current = false; });
   }, [connection?.host]);
 
   useEffect(() => {
@@ -307,7 +348,13 @@ export default function DatabaseView({ connection, onClose }) {
   }, [retryCountdown, autoRetry]);
 
   const fetchSchema = async () => {
-    if (!connection?._id || isSubmitting) return; 
+    if (!connection?._id || isSubmitting) return;
+    // Guard against overlapping fetches: the mount useEffect, the window-focus
+    // handler and the retry timer can all fire `fetchSchema` in the same tick
+    // when the schema endpoint is slow. Without this guard, 2-3 identical
+    // /api/connections/{id}/schema POSTs are issued back-to-back.
+    if (schemaInFlightRef.current) return;
+    schemaInFlightRef.current = true;
     setLoading(true);
     setError(null);
     setRelayRequired(false);
@@ -319,7 +366,7 @@ export default function DatabaseView({ connection, onClose }) {
          headers: { 'Content-Type': 'application/json' },
          body: JSON.stringify({ connection })
       });
-      
+
       const text = await res.text();
       let resData;
       try {
@@ -331,14 +378,20 @@ export default function DatabaseView({ connection, onClose }) {
       if (resData.success) {
         setSchema(resData.data);
         if (resData.data.length > 0 && !selectedSchema) setSelectedSchema(resData.data[0]);
-        
-        // Success: Reset retry count
+
+        // Success: reset retry count + clear the "permanent failure" flag.
+        // (The latter is important — if the user previously hit an auth
+        //  error, then fixed their credentials, then triggered a manual
+        //  retry that succeeded, the abort flag must be cleared so a
+        //  future transient failure can retry normally again.)
+        connectRetryCountRef.current = 0;
+        retryAbortedRef.current = false;
         setConnectRetryCount(0);
 
         // Mark as online in global state
-        dispatch({ 
-            type: 'UPDATE_CONNECTION', 
-            payload: { _id: connection._id, status: 'online' } 
+        dispatch({
+            type: 'UPDATE_CONNECTION',
+            payload: { _id: connection._id, status: 'online' }
         });
 
         // If local storage, also persist the online status
@@ -354,33 +407,70 @@ export default function DatabaseView({ connection, onClose }) {
         const errMsg = resData.error || t('database.notifications.fetchFail');
         setError(errMsg);
         setRelayRequired(!!resData.relayRequired);
-        scheduleConnectRetry(!!resData.relayRequired);
+        scheduleConnectRetry(!!resData.relayRequired, errMsg);
       }
     } catch (err) {
       setError(err.message);
-      scheduleConnectRetry();
+      scheduleConnectRetry(false, err?.message);
     } finally {
+      schemaInFlightRef.current = false;
       setLoading(false);
     }
   };
 
-  const scheduleConnectRetry = (needsRelay = false) => {
+  // Errors that will never recover on their own — retrying just hammers the
+  // server. The user must fix their credentials and click "Retry" manually.
+  // The actual detection is in @/utils/authErrors for testability.
+
+  const scheduleConnectRetry = (needsRelay = false, errorMsg = null) => {
     if (needsRelay || !connection?._id) return;
-    // Cap at 2 retries to prevent network request spamming
-    if (connectRetryCount >= 2) return;
-    
-    const delay = Math.min(Math.pow(2, connectRetryCount + 1) * 2000, 15000);
-    console.log(`🗄 [DatabaseView] Reconnect attempt #${connectRetryCount + 1} in ${delay/1000}s...`);
-    
+    // Stop polling immediately for permanent auth errors. Without this guard,
+    // a typo'd username (e.g. "uoteru" instead of "root") would generate an
+    // unbounded stream of /api/connections/{id}/schema 500s every few
+    // seconds, hammering both the API and the upstream MongoDB.
+    if (errorMsg && isPermanentAuthError(errorMsg)) {
+      console.warn(`🗄 [DatabaseView] Permanent auth error — stopping automatic retry. Error: ${errorMsg}`);
+      retryAbortedRef.current = true;
+      if (connectRetryTimerRef.current) {
+        clearTimeout(connectRetryTimerRef.current);
+        connectRetryTimerRef.current = null;
+      }
+      // Reflect the cap in state so the UI's "Attempt X/10" message stops.
+      setConnectRetryCount(MAX_RETRY_ATTEMPTS);
+      return;
+    }
+    if (retryAbortedRef.current) return;
+    // Use the ref instead of state — the previous code read `connectRetryCount`
+    // from a closure that was stale across synchronous setTimeout callbacks,
+    // so the "cap at 2 retries" check never actually triggered. Each retry
+    // kept firing `fetchSchema`, which re-failed, which scheduled another
+    // retry from the same stale closure — producing 10+ requests with no
+    // end. Now we use the ref which is always live.
+    if (connectRetryCountRef.current >= MAX_RETRY_ATTEMPTS) return;
+
+    const delay = Math.min(Math.pow(2, connectRetryCountRef.current + 1) * 2000, 15000);
+    console.log(`🗄 [DatabaseView] Reconnect attempt #${connectRetryCountRef.current + 1} in ${delay/1000}s...`);
+
     if (connectRetryTimerRef.current) clearTimeout(connectRetryTimerRef.current);
     connectRetryTimerRef.current = setTimeout(() => {
-      setConnectRetryCount(prev => prev + 1);
+      connectRetryCountRef.current += 1;
+      setConnectRetryCount(connectRetryCountRef.current);
       fetchSchema();
     }, delay);
   };
 
   const fetchData = async (schemaName, customFilter = null) => {
     if (!schemaName) return { success: false, error: 'No schema' };
+    // Guard against overlapping fetches: the selectedSchema useEffect, the
+    // "Run query" button, the "Clear filter" button and the post-action
+    // refresh can all fire `fetchData` within the same tick. Without this
+    // guard, multiple /api/connections/{id}/query POSTs race each other.
+    // (Action queries are intentionally NOT skipped — those are user-initiated
+    // and have their own confirm dialog.)
+    if (!customFilter && dataInFlightRef.current) {
+      return { success: false, error: 'Already fetching' };
+    }
+    if (!customFilter) dataInFlightRef.current = true;
     setLoading(true);
     try {
       let filterObj = {};
@@ -480,6 +570,7 @@ export default function DatabaseView({ connection, onClose }) {
       addNotification({ title: 'Error', message: err.message, type: 'error' });
       return { success: false, error: err.message };
     } finally {
+      dataInFlightRef.current = false;
       setLoading(false);
     }
   };
@@ -1282,19 +1373,37 @@ export default function DatabaseView({ connection, onClose }) {
                   )}
                 </div>
               )}
-                <button 
-                  onClick={() => { setConnectRetryCount(0); fetchSchema(); }}
+                <button
+                  onClick={() => {
+                    // Reset both the ref and the state (the ref drives the
+                    // retry cap, the state drives the UI message), and clear
+                    // the "permanent failure" flag so the next retry can
+                    // proceed normally. This is the only sanctioned way to
+                    // re-arm automatic retries after a permanent auth error
+                    // or a hard cap.
+                    connectRetryCountRef.current = 0;
+                    retryAbortedRef.current = false;
+                    setConnectRetryCount(0);
+                    fetchSchema();
+                  }}
                   className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-indigo-500/20 mb-4"
                 >
                   {t('database.errors.retry')}
                 </button>
-                {connectRetryCount > 0 && connectRetryCount < 10 && (
+                {retryAbortedRef.current && (
+                   <p className="text-[10px] text-red-400 font-bold mb-2">
+                      ⚠ Automatic retry stopped — this looks like a credentials problem
+                      (bad username, wrong password, or insufficient permissions). Fix the
+                      connection and click Retry above.
+                   </p>
+                )}
+                {!retryAbortedRef.current && connectRetryCount > 0 && connectRetryCount < MAX_RETRY_ATTEMPTS && (
                    <div className="flex items-center gap-2 text-[10px] text-amber-500/80 font-bold animate-pulse">
                       <LoaderCircle size={12} className="animate-spin" />
-                      Retrying automatically (Attempt {connectRetryCount}/10)...
+                      Retrying automatically (Attempt {connectRetryCount}/{MAX_RETRY_ATTEMPTS})...
                    </div>
                 )}
-                {connectRetryCount >= 10 && (
+                {!retryAbortedRef.current && connectRetryCount >= MAX_RETRY_ATTEMPTS && (
                    <p className="text-[10px] text-red-400 font-bold">
                       Automatic retry limit reached. Please check your connection and try again manually.
                    </p>
