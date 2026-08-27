@@ -1138,7 +1138,7 @@ fi'\n`;
                       </span>
                     )}
                     <span className="text-[10px] text-[var(--text-muted)] hidden sm:inline">
-                      {logPause ? 'Stream paused' : 'Streaming ~/.hermes / daemon logs'}
+                      {logPause ? 'Stream paused' : `Streaming ~/.${agent.id} / daemon logs`}
                     </span>
                   </div>
 
@@ -1257,7 +1257,9 @@ fi'\n`;
             {tab === 'config' && (
               <div className="space-y-2">
                 <div className="flex items-center justify-between gap-2 flex-wrap">
-                  <label className="text-[10px] uppercase tracking-wider font-bold text-[var(--text-muted)]">~/.hermes/config.yaml</label>
+                  <label className="text-[10px] uppercase tracking-wider font-bold text-[var(--text-muted)]">
+                    {agent.id === 'hermes' ? '~/.hermes/config.yaml' : agent.id === 'nanobot' ? '~/.nanobot/config.json' : agent.id === 'openclaw' ? '~/.openclaw/config.json' : agent.id === 'zeroclaw' ? '~/.zeroclaw/config.toml' : `~/.${agent.id}/config`}
+                  </label>
                   <label className="flex items-center gap-1.5 text-[10px] text-[var(--text-muted)] cursor-pointer">
                     <input type="checkbox" checked={restartAfterSave} onChange={e => setRestartAfterSave(e.target.checked)} className="accent-indigo-500" />
                     restart gateway after save
@@ -1273,7 +1275,7 @@ fi'\n`;
                   </div>
                 )}
                 <button onClick={saveConfig} disabled={!!busyMsg || !yamlDraft.trim()} className={`${btn} bg-indigo-500 hover:bg-indigo-400 text-white`}>
-                  {busyMsg === 'Save config.yaml' ? <Loader2 size={11} className="animate-spin" /> : <CheckCircle2 size={11} />} Save config.yaml
+                  {busyMsg.startsWith('Save') ? <Loader2 size={11} className="animate-spin" /> : <CheckCircle2 size={11} />} Save {agent.id === 'hermes' ? 'config.yaml' : agent.id === 'zeroclaw' ? 'config.toml' : 'config.json'}
                 </button>
                 <p className="text-[9px] text-[var(--text-muted)]">A timestamped backup is kept automatically. If a saved config breaks the gateway, the previous one is restored for you.</p>
                 {backups.length > 0 && (

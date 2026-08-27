@@ -431,8 +431,9 @@ echo "===ENVKEYS==="
           return NextResponse.json({ success: false, error: 'Failed to write ~/.zeroclaw/.env', log });
         }
       }
-      if (hasSettings && settings.model) {
+      if (hasSettings || env.TELEGRAM_BOT_TOKEN || env.TELEGRAM_ALLOWED_USERS) {
         const setB64 = b64(JSON.stringify(settings));
+        const envB64 = b64(JSON.stringify(env));
         await run('merge ~/.zeroclaw/config.toml settings', `
           python3 -c "
 import json, os, re, base64
@@ -440,14 +441,38 @@ p = os.path.expanduser('~/.zeroclaw/config.toml')
 if not os.path.exists(p):
     open(p, 'w').close()
 s = json.loads(base64.b64decode('${setB64}').decode('utf8'))
+e = json.loads(base64.b64decode('${envB64}').decode('utf8'))
+text = open(p).read()
+
+# Update model
 m = s.get('model')
 if m:
-    text = open(p).read()
     if re.search(r'^(model|default_model)\s*=', text, re.M):
         text = re.sub(r'^(model|default_model)\s*=.*$', f'model = \"{m}\"', text, flags=re.M)
     else:
         text = f'model = \"{m}\"\n' + text
-    open(p, 'w').write(text)
+
+# Update telegram configuration if passed in settings or env
+tg_token = e.get('TELEGRAM_BOT_TOKEN') or s.get('telegram.bot_token') or s.get('telegram_token')
+tg_allowed = e.get('TELEGRAM_ALLOWED_USERS') or s.get('telegram.allowed_users') or s.get('telegram_allowed_users')
+
+if tg_token or tg_allowed:
+    if '[telegram]' not in text:
+        text += '\n[telegram]\nenabled = true\n'
+    if tg_token:
+        if re.search(r'^\s*(bot_token|token)\s*=', text, re.M):
+            text = re.sub(r'^\s*(bot_token|token)\s*=.*$', f'bot_token = \"{tg_token}\"', text, flags=re.M)
+        else:
+            text = text.replace('[telegram]', f'[telegram]\nbot_token = \"{tg_token}\"')
+    if tg_allowed:
+        ids = [x.strip() for x in str(tg_allowed).split(',') if x.strip()]
+        ids_toml = json.dumps(ids)
+        if re.search(r'^\s*(allowed_users|allowed_user_ids|allowed_ids)\s*=', text, re.M):
+            text = re.sub(r'^\s*(allowed_users|allowed_user_ids|allowed_ids)\s*=.*$', f'allowed_users = {ids_toml}', text, flags=re.M)
+        else:
+            text = text.replace('[telegram]', f'[telegram]\nallowed_users = {ids_toml}')
+
+open(p, 'w').write(text)
 print('ZEROCLAW_CONFIG_MERGED')
 " 2>/dev/null || true`);
       }
