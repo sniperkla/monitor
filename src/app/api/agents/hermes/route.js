@@ -173,16 +173,15 @@ true`,
             `${ENVX}; ${sysd ? `timeout 25 systemctl stop hermes-gate""way 2>/dev/null; timeout 25 systemctl --user stop hermes-gate""way 2>/dev/null;` : ''} timeout 15 pkill -f '[h]ermes.*gatew[a]y' 2>/dev/null; sleep 1; pkill -9 -f '[h]ermes.*gatew[a]y' 2>/dev/null || true; echo GW_STOPPED`,
             { pool: false, timeoutMs: 60000 }).then(r => ({ ok: /GW_STOPPED/.test(r.stdout || ''), out: ((r.stdout || '') + (r.stderr || '')).slice(-400) }));
         }
-        const verb = operation === 'restart' ? null : operation; // restart handled as stop+start by caller? keep simple:
+        const startBackground = `mkdir -p "$HOME/.hermes/logs" && setsid nohup sh -c 'exec ${JSON.stringify(binPath)} gateway run || exec ${JSON.stringify(binPath)} gateway' >> "$HOME/.hermes/logs/gateway-nohup.log" 2>&1 < /dev/null & sleep 3; timeout 15 pgrep -f '[h]ermes.*gatew[a]y' >/dev/null && echo GW_UP || echo GW_DOWN`;
         if (sysd) {
           const v2 = op === 'restart' ? 'try-restart' : 'start';
           return execCommand(sshConfig,
-            `${ENVX}; timeout 40 systemctl ${op === 'restart' ? 'try-restart' : verb === 'start' ? 'start' : 'start'} hermes-gate""way 2>/dev/null || timeout 40 systemctl --user ${verb} hermes-gate""way 2>/dev/null || mkdir -p "$HOME/.hermes/logs" && setsid nohup ${JSON.stringify(binPath)} gateway >> "$HOME/.hermes/logs/gatew""ay-nohup.log" 2>&1 < /dev/null & sleep 3; timeout 15 pgrep -f '[h]ermes.*gatew[a]y' >/dev/null && echo GW_UP || echo GW_DOWN`,
+            `${ENVX}; timeout 40 systemctl ${v2} hermes-gate""way 2>/dev/null || timeout 40 systemctl --user ${verb || 'start'} hermes-gate""way 2>/dev/null || ${startBackground}`,
             { pool: false, timeoutMs: 120000 }).then(r => ({ ok: /GW_UP/.test(r.stdout || ''), out: (r.stdout || '').slice(-200) }));
         }
-        return execCommand(sshConfig,
-          `${ENVX}; mkdir -p "$HOME/.hermes/logs"; setsid nohup ${JSON.stringify(binPath)} gateway >> "$HOME/.hermes/logs/gatew""ay-nohup.log" 2>&1 < /dev/null & sleep 3; timeout 15 pgrep -f '[h]ermes.*gatew[a]y' >/dev/null && echo GW_UP || echo GW_DOWN`,
-          { pool: false, timeoutMs: 90000 }).then(r => ({ ok: /GW_UP/.test(r.stdout || ''), out: (r.stdout || '').slice(-200) }));
+        return execCommand(sshConfig, `${ENVX}; ${startBackground}`, { pool: false, timeoutMs: 90000 })
+          .then(r => ({ ok: /GW_UP/.test(r.stdout || ''), out: (r.stdout || '').slice(-200) }));
       }
       async function gwCtlExec(operation, cbin) {
         const CB = JSON.stringify(cbin);
@@ -191,14 +190,14 @@ true`,
           return { ok: true, active: /ACTIVE/.test(r.stdout || '') };
         }
         if (operation === 'stop') {
-          const r = await execCommand(sshConfig, `timeout 15 docker exec hermes-agent pkill -f '[h]ermes gateway'; echo GW_STOPPED`, { pool: false, timeoutMs: 45000 });
+          const r = await execCommand(sshConfig, `timeout 15 docker exec hermes-agent pkill -f '[h]ermes.*gatew[a]y'; echo GW_STOPPED`, { pool: false, timeoutMs: 45000 });
           return { ok: /GW_STOPPED/.test(r.stdout || ''), out: (r.stdout || '').slice(-300) };
         }
         if (operation === 'restart') {
-          await execCommand(sshConfig, `docker exec hermes-agent pkill -f '[h]ermes gateway' 2>/dev/null; sleep 2; echo KILLED`, { pool: false, timeoutMs: 45000 });
+          await execCommand(sshConfig, `docker exec hermes-agent pkill -f '[h]ermes.*gatew[a]y' 2>/dev/null; sleep 2; echo KILLED`, { pool: false, timeoutMs: 45000 });
         }
         const r = await execCommand(sshConfig,
-          `docker exec -d hermes-agent bash -c 'mkdir -p /root/.hermes/logs && PATH=/usr/local/bin:/usr/bin:/bin:$PATH nohup ${JSON.stringify(cbin)} gateway >> /root/.hermes/logs/gateway-nohup.log 2>&1 < /dev/null &' && echo GW_STARTED`,
+          `docker exec -d hermes-agent bash -c 'mkdir -p /root/.hermes/logs && PATH=/usr/local/bin:/usr/bin:/bin:$PATH nohup sh -c "exec ${JSON.stringify(cbin)} gateway run || exec ${JSON.stringify(cbin)} gateway" >> /root/.hermes/logs/gateway-nohup.log 2>&1 < /dev/null &' && sleep 3 && docker exec hermes-agent pgrep -f '[h]ermes.*gatew[a]y' >/dev/null && echo GW_STARTED`,
           { pool: false, timeoutMs: 60000 });
         return { ok: /GW_STARTED/.test(r.stdout || ''), out: (r.stdout || '').slice(-200) };
       }
@@ -795,29 +794,31 @@ fi
         { timeoutMs: 60000 });
     }
 
-    // 6. Gateway service (system > user+linger > nohup)
+    // 6. Gateway service (system > user+linger > background daemon)
     let startMethod = method;
     if (startMethod === 'auto') startMethod = hasSystemd ? (hasSudo ? 'system' : 'user') : 'nohup';
 
     let svcOk = false;
-    if (startMethod === 'system' && hasSystemd) {
+    if (startMethod === 'system' && hasSystemd && !dockerMode) {
       const S = hasSudo ? 'sudo -n -E' : '';
-      const r = await run('install boot-time system service',
+      await run('install boot-time system service',
         `${ENVPREFIX}; $S ${HB} gateway install --system 2>&1 | tail -6; $S ${HB} gateway start --system 2>&1 | tail -3; echo SVC_DONE`,
         { timeoutMs: 120000 });
-      svcOk = (r.stdout || '').includes('SVC_DONE');
-      if (!svcOk) log.push('system service failed — falling back to user service');
+      const chk = await execCommand(sshConfig, wrap('systemctl is-active hermes-gateway 2>/dev/null || systemctl is-active hermes 2>/dev/null'), { pool: false, timeoutMs: 15000 });
+      svcOk = /active/.test(chk.stdout || '');
+      if (!svcOk) log.push('> Systemd service not active on this environment — falling back to background daemon...');
     }
-    if (!svcOk && (startMethod === 'user' || (startMethod === 'system' && hasSystemd)) && hasSystemd) {
-      const r = await run('install user service + enable lingering',
+    if (!svcOk && (startMethod === 'user' || (startMethod === 'system' && hasSystemd)) && hasSystemd && !dockerMode) {
+      await run('install user service + enable lingering',
         `${ENVPREFIX}; ${HB} gateway install 2>&1 | tail -5; ${HB} gateway start 2>&1 | tail -3; ${hasSudo ? `sudo -n loginctl enable-linger "$(id -un)" 2>/dev/null;` : ''} echo SVC_DONE`,
         { timeoutMs: 120000 });
-      svcOk = (r.stdout || '').includes('SVC_DONE');
-      if (!svcOk) log.push('user service failed — falling back to nohup');
+      const chk = await execCommand(sshConfig, wrap('systemctl --user is-active hermes-gateway 2>/dev/null || systemctl --user is-active hermes 2>/dev/null'), { pool: false, timeoutMs: 15000 });
+      svcOk = /active/.test(chk.stdout || '');
+      if (!svcOk) log.push('> User service not active — falling back to background daemon...');
     }
     if (!svcOk) {
-      await run('start gateway (nohup)',
-        `${ENVPREFIX}; mkdir -p "$HOME/.hermes/logs"; nohup ${HB} gateway >> "$HOME/.hermes/logs/gatew""ay-nohup.log" 2>&1 & echo NOHUP_PID=$!`,
+      await run('start gateway (background daemon)',
+        `${ENVPREFIX}; mkdir -p "$HOME/.hermes/logs"; setsid nohup sh -c 'exec ${HB} gateway run || exec ${HB} gateway' >> "$HOME/.hermes/logs/gateway-nohup.log" 2>&1 < /dev/null & sleep 3; pgrep -f '[h]ermes.*gatew[a]y' >/dev/null && echo GW_RUNNING || echo GW_PENDING`,
         { timeoutMs: 30000 });
     }
 
