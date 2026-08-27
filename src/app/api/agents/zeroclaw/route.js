@@ -133,7 +133,40 @@ async function handleAgentAction(body, session, log = []) {
       }
       // start / restart — never write the plain word "daemon" here (self-match)
       if (op === 'restart') await gwCtl('stop');
-      const startCmd = `${ENVX}; set -a; [ -f "$HOME/.zeroclaw/.env" ] && . "$HOME/.zeroclaw/.env"; set +a; { ${BP} service start 2>/dev/null || systemctl --user start zeroclaw 2>/dev/null || { mkdir -p ${LOGD}; setsid nohup ${BP} dae""mon >> "$HOME/.zeroclaw/logs/daemon.log" 2>&1 < /dev/null & sleep 3; }; }; sleep 2; timeout 15 pgrep -f '[z]eroclaw dae[m]on' >/dev/null && echo GW_UP || echo GW_DOWN`;
+      const startCmd = `
+        mkdir -p "$HOME/.zeroclaw/logs" "$HOME/.config/systemd/user"
+        ${ENVX}; set -a; [ -f "$HOME/.zeroclaw/.env" ] && . "$HOME/.zeroclaw/.env"; set +a
+        # Write systemd service file with EnvironmentFile and persistent log redirection if systemctl available
+        if command -v systemctl >/dev/null 2>&1; then
+          cat <<'EOF' > "$HOME/.config/systemd/user/zeroclaw.service"
+[Unit]
+Description=ZeroClaw AI Assistant Daemon
+After=network.target
+
+[Service]
+Type=simple
+EnvironmentFile=-%h/.zeroclaw/.env
+Environment=PATH=%h/.local/bin:%h/.cargo/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/bin/sh -c 'exec $(command -v zeroclaw || echo "$HOME/.cargo/bin/zeroclaw") daemon'
+Restart=on-failure
+RestartSec=3
+StandardOutput=append:%h/.zeroclaw/logs/daemon.log
+StandardError=append:%h/.zeroclaw/logs/daemon.log
+
+[Install]
+WantedBy=default.target
+EOF
+          systemctl --user daemon-reload 2>/dev/null || true
+          systemctl --user enable zeroclaw 2>/dev/null || true
+          systemctl --user restart zeroclaw 2>/dev/null || systemctl --user start zeroclaw 2>/dev/null || true
+        fi
+        sleep 1
+        if ! pgrep -f '[z]eroclaw dae[m]on' >/dev/null 2>&1; then
+          setsid nohup ${BP} dae""mon >> "$HOME/.zeroclaw/logs/daemon.log" 2>&1 < /dev/null &
+          sleep 2
+        fi
+        timeout 15 pgrep -f '[z]eroclaw dae[m]on' >/dev/null && echo GW_UP || echo GW_DOWN
+      `;
       return execCommand(sshConfig, startCmd, { pool: false, timeoutMs: 120000 })
         .then(r => ({ ok: /GW_UP/.test(r.stdout || ''), out: (r.stdout || '').slice(-200) }));
     };
@@ -444,7 +477,7 @@ s = json.loads(base64.b64decode('${setB64}').decode('utf8'))
 e = json.loads(base64.b64decode('${envB64}').decode('utf8'))
 text = open(p).read()
 
-# Update model
+# Update model and api_key
 m = s.get('model')
 if m:
     if re.search(r'^(model|default_model)\s*=', text, re.M):
@@ -452,12 +485,19 @@ if m:
     else:
         text = f'model = \"{m}\"\n' + text
 
+api_key = e.get('OPENROUTER_API_KEY') or e.get('OPENAI_API_KEY') or e.get('ANTHROPIC_API_KEY') or e.get('API_KEY') or s.get('api_key')
+if api_key:
+    if re.search(r'^\s*api_key\s*=', text, re.M):
+        text = re.sub(r'^\s*api_key\s*=.*$', f'api_key = \"{api_key}\"', text, flags=re.M)
+    else:
+        text = f'api_key = \"{api_key}\"\n' + text
+
 # Update telegram configuration if passed in settings or env
 tg_token = e.get('TELEGRAM_BOT_TOKEN') or s.get('telegram.bot_token') or s.get('telegram_token')
 tg_allowed = e.get('TELEGRAM_ALLOWED_USERS') or s.get('telegram.allowed_users') or s.get('telegram_allowed_users')
 
 if tg_token or tg_allowed:
-    ids = [x.strip() for x in str(tg_allowed or '').split(',') if x.strip()] if tg_allowed else []
+    ids = [x.strip() for x in str(tg_allowed or '').split(',') if x.strip()] if tg_allowed else ["*"]
     ids_toml = json.dumps(ids)
 
     if '[channels_config.telegram]' not in text and '[telegram]' not in text:
@@ -471,16 +511,21 @@ if tg_token or tg_allowed:
                     text = text[:m_tok.start(1)] + m_tok.group(1) + json.dumps(tg_token) + text[m_tok.end():]
                 else:
                     text = text.replace(sec, sec + '\\nbot_token = ' + json.dumps(tg_token))
-            if tg_allowed:
-                m_ids = re.search(r'(' + re.escape(sec) + r'[\\s\\S]*?^\\s*(?:allowed_users|allowed_user_ids)\\s*=\\s*).*$', text, re.M)
-                if m_ids:
-                    text = text[:m_ids.start(1)] + m_ids.group(1) + ids_toml + text[m_ids.end():]
-                else:
-                    text = text.replace(sec, sec + '\\nallowed_users = ' + ids_toml)
+            m_ids = re.search(r'(' + re.escape(sec) + r'[\\s\\S]*?^\\s*(?:allowed_users|allowed_user_ids)\\s*=\\s*).*$', text, re.M)
+            if m_ids:
+                text = text[:m_ids.start(1)] + m_ids.group(1) + ids_toml + text[m_ids.end():]
+            else:
+                text = text.replace(sec, sec + '\\nallowed_users = ' + ids_toml)
 
 open(p, 'w').write(text)
 print('ZEROCLAW_CONFIG_MERGED')
-" 2>/dev/null || true`);
+" 2>/dev/null || true
+          # Flush any pending Telegram webhook
+          TOKEN="$(grep -oE 'bot_token\\s*=\\s*"[^"]+"' "$HOME/.zeroclaw/config.toml" 2>/dev/null | cut -d'"' -f2 || grep -oE 'TELEGRAM_BOT_TOKEN=[^ \\n]+' "$HOME/.zeroclaw/.env" 2>/dev/null | cut -d= -f2)"
+          if [ -n "$TOKEN" ]; then
+            curl -s "https://api.telegram.org/bot\${TOKEN}/deleteWebhook?drop_pending_updates=true" >/dev/null 2>&1 || true
+          fi
+        `);
       }
       // restart gateway
       const g = await gwCtl('restart');
