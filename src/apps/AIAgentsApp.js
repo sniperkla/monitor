@@ -1332,7 +1332,26 @@ export default function AIAgentsApp({ apiFetch }) {
                     </div>
                   ))}
                   {envDraft.length === 0 && (
-                    <p className="text-[10px] text-[var(--text-muted)] italic py-2">No env keys detected on the server yet. Add one below.</p>
+                    <div className="py-2 space-y-2">
+                      <p className="text-[10px] text-[var(--text-muted)] italic">No env keys configured in <span className="font-mono">~/.{agent.id}/.env</span> yet.</p>
+                      <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                        <span className="text-[9px] text-[var(--text-muted)]">Quick add:</span>
+                        {['OPENROUTER_API_KEY', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_ALLOWED_USERS', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY'].map(k => (
+                          <button
+                            key={k}
+                            type="button"
+                            onClick={() => {
+                              if (!envDraft.some(x => x.key === k)) {
+                                setEnvDraft(prev => [...prev, { key: k, value: k === 'TELEGRAM_ALLOWED_USERS' ? '5436398702' : '', masked: false }]);
+                              }
+                            }}
+                            className="px-2 py-0.5 text-[9px] font-mono rounded bg-white/5 hover:bg-white/10 text-indigo-300 border border-indigo-500/20"
+                          >
+                            + {k}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   )}
                   <div className="flex items-center gap-2 pt-1">
                     <input
