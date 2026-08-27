@@ -571,6 +571,12 @@ print('ZEROCLAW_CONFIG_MERGED')
         restarted = g.ok;
         const up = g.ok ? await waitActive(24) : false;
         if (!up) {
+          // Capture the exact daemon error from logs
+          const errR = await execCommand(sshConfig,
+            `tail -n 30 "$HOME/.zeroclaw/logs/daemon.log" 2>/dev/null || journalctl --user -u zeroclaw -n 20 --no-pager 2>/dev/null || true`,
+            { pool: false, timeoutMs: 15000 });
+          const daemonErr = (errR.stdout || '').trim();
+
           const rbk = await execCommand(sshConfig,
             `BAK="$(ls -1t "$HOME/.zeroclaw"/config.toml.bak-* 2>/dev/null | head -1)"; [ -n "$BAK" ] && cp "$BAK" "$HOME/.zeroclaw/config.toml" && echo ROLLED_BACK_TO=$BAK || echo NO_BACKUP`,
             { pool: false, timeoutMs: 30000 });
@@ -579,9 +585,9 @@ print('ZEROCLAW_CONFIG_MERGED')
             await gwCtl('restart');
             const up2 = await waitActive(24);
             return NextResponse.json({
-              success: up2, restarted: up2, rolledBack: true,
-              error: up2 ? null : 'Rolled back previous config but daemon still down — check logs',
-              log: [`Your saved config broke the daemon — automatically restored ${((rbk.stdout || '').match(/ROLLED_BACK_TO=(.*)/) || [])[1] || 'last backup'}`],
+              success: false, restarted: up2, rolledBack: true,
+              error: `Your saved config caused the daemon to crash (rolled back to backup). Error:\n${daemonErr.slice(-600)}`,
+              log: [`Daemon crashed with saved config: ${daemonErr.slice(-300)}`, `Automatically restored ${((rbk.stdout || '').match(/ROLLED_BACK_TO=(.*)/) || [])[1] || 'last backup'}`],
             });
           }
         }
