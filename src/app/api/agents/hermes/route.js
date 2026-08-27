@@ -529,6 +529,49 @@ fi
       });
     }
 
+    // ── PAIRING APPROVAL ──
+    if (action === 'pairing-approve') {
+      const platform = String(config.platform || '').trim();
+      const code = String(config.code || '').trim();
+      if (!code) return NextResponse.json({ success: false, error: 'Pairing code is required' }, { status: 400 });
+      const binR = await execCommand(sshConfig,
+        `p="$(export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"; command -v hermes 2>/dev/null)"; [ -z "$p" ] && for q in "$HOME/.local/bin/hermes" "/usr/local/bin/hermes" "$HOME/.hermes/hermes-agent/venv/bin/hermes"; do [ -x "$q" ] && p="$q" && break; done; echo "BIN=$p"`,
+        { pool: false, timeoutMs: 15000 });
+      const bp = (binR.stdout || '').match(/BIN=(.*)/)?.[1]?.trim() || 'hermes';
+      const BP = JSON.stringify(bp);
+      const ENVX = `export PATH="$HOME/.hermes/hermes-agent/venv/bin:$HOME/.local/bin:/usr/local/bin:$PATH"; set -a; [ -f "$HOME/.hermes/.env" ] && . "$HOME/.hermes/.env"; set +a`;
+      const runCmd = platform && platform !== 'auto'
+        ? `${ENVX}; ${BP} pairing approve ${JSON.stringify(platform)} ${JSON.stringify(code)} 2>&1 || ${BP} pairing approve ${JSON.stringify(code)} 2>&1`
+        : `${ENVX}; ${BP} pairing approve ${JSON.stringify(code)} 2>&1 || ${BP} pairing approve telegram ${JSON.stringify(code)} 2>&1`;
+      const r = await run(`pairing approve ${platform ? platform + ' ' : ''}${code}`, runCmd);
+      const out = ((r.stdout || '') + (r.stderr || '')).trim();
+      const ok = !/error|failed|invalid/i.test(out) || /approved|success|paired/i.test(out);
+      return NextResponse.json({ success: ok, output: out || 'Pairing command executed', log });
+    }
+
+    if (action === 'pairing-list') {
+      const binR = await execCommand(sshConfig,
+        `p="$(export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"; command -v hermes 2>/dev/null)"; [ -z "$p" ] && for q in "$HOME/.local/bin/hermes" "/usr/local/bin/hermes" "$HOME/.hermes/hermes-agent/venv/bin/hermes"; do [ -x "$q" ] && p="$q" && break; done; echo "BIN=$p"`,
+        { pool: false, timeoutMs: 15000 });
+      const bp = (binR.stdout || '').match(/BIN=(.*)/)?.[1]?.trim() || 'hermes';
+      const BP = JSON.stringify(bp);
+      const ENVX = `export PATH="$HOME/.hermes/hermes-agent/venv/bin:$HOME/.local/bin:/usr/local/bin:$PATH"`;
+      const r = await execCommand(sshConfig,
+        `${ENVX}; ${BP} pairing list 2>&1 || true; { [ -f "$HOME/.hermes/logs/gateway-nohup.log" ] && tail -n 60 "$HOME/.hermes/logs/gateway-nohup.log"; } || { [ -f "$HOME/.hermes/logs/gateway.log" ] && tail -n 60 "$HOME/.hermes/logs/gateway.log"; } || true`,
+        { pool: false, timeoutMs: 20000 });
+      const out = (r.stdout || '');
+      const matches = [...out.matchAll(/pairing\s+approve\s+(?:(\w+)\s+)?([A-Z0-9]{6,12})/gi), ...out.matchAll(/code[:\s]+([A-Z0-9]{6,12})/gi), ...out.matchAll(/pairing\s+code\s+is\s+([A-Z0-9]{6,12})/gi)];
+      const pending = [];
+      for (const m of matches) {
+        const code = m[2] || m[1];
+        const platform = m[2] ? m[1] : 'telegram';
+        if (code && !pending.some(p => p.code === code)) {
+          pending.push({ code, platform: platform || 'telegram' });
+        }
+      }
+      return NextResponse.json({ success: true, pending, raw: out.slice(-1000) });
+    }
+
     // ── CONFIG BACKUPS — list & restore ─────────────────────────────────────
     if (action === 'backups') {
       const r = await execCommand(sshConfig,

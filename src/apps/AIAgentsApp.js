@@ -220,6 +220,11 @@ export default function AIAgentsApp({ apiFetch }) {
   const [cfgNav, setCfgNav] = useState(0);
   const cfgTaRef = useRef(null);
 
+  const [pairingCode, setPairingCode] = useState('');
+  const [pairingPlatform, setPairingPlatform] = useState('telegram');
+  const [pairingLoading, setPairingLoading] = useState(false);
+  const [pendingPairings, setPendingPairings] = useState([]);
+
   const agent = AGENTS.find(a => a.id === agentId) || AGENTS[0];
 
   const call = useCallback(async (action, extra = {}) => {
@@ -447,6 +452,36 @@ export default function AIAgentsApp({ apiFetch }) {
     setShowUninstallModal(false);
     setPurge(wantsPurge);
     return callAction('Uninstall', 'uninstall', { purge: wantsPurge });
+  };
+
+  const fetchPairings = useCallback(async () => {
+    if (!target || !details?.installed) return;
+    try {
+      const res = await call('pairing-list');
+      if (res?.pending && Array.isArray(res.pending)) {
+        setPendingPairings(res.pending);
+      }
+    } catch { /* ignore */ }
+  }, [call, target, details?.installed]);
+
+  useEffect(() => {
+    if (tab === 'overview' && details?.installed) {
+      fetchPairings();
+    }
+  }, [tab, details?.installed, fetchPairings]);
+
+  const handleApprovePairing = async (codeToApprove, platToApprove) => {
+    const c = (codeToApprove || pairingCode).trim();
+    const p = platToApprove || pairingPlatform;
+    if (!c) return;
+    setPairingLoading(true);
+    try {
+      await callAction(`Approve pairing code ${c}`, 'pairing-approve', { config: { code: c, platform: p } });
+      setPairingCode('');
+      fetchPairings();
+    } finally {
+      setPairingLoading(false);
+    }
   };
 
   // ── search helpers: highlight + count + navigate ──
@@ -994,6 +1029,90 @@ fi'\n`;
                     {(details.envKeys || []).length === 0 && <span className="text-[10px] text-[var(--text-muted)]">none yet — use the install wizard to add API keys / messenger tokens</span>}
                   </div>
                 </div>
+                {/* ── Pairing & Access Approval Card ── */}
+                <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/5 p-4 space-y-3">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div className="flex items-center gap-2">
+                      <div className="w-7 h-7 rounded-lg bg-indigo-500/20 text-indigo-400 flex items-center justify-center font-bold text-sm">
+                        🔑
+                      </div>
+                      <div>
+                        <div className="font-bold text-white text-xs">Pairing &amp; User Access Approval</div>
+                        <div className="text-[10px] text-[var(--text-muted)]">
+                          Approve Telegram, Discord, LINE or Slack user pairing codes without using SSH
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      onClick={fetchPairings}
+                      className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-[10px] font-bold text-[var(--text-muted)] hover:text-white border border-[var(--border-color)] flex items-center gap-1 cursor-pointer transition"
+                    >
+                      <RotateCw size={10} /> Scan Pending Requests
+                    </button>
+                  </div>
+
+                  {/* Pending detected pairing chips */}
+                  {pendingPairings.length > 0 && (
+                    <div className="rounded-lg bg-black/40 border border-indigo-500/30 p-2.5 space-y-2">
+                      <div className="text-[10px] font-bold text-indigo-300 flex items-center gap-1.5">
+                        <Sparkles size={11} className="text-amber-400 animate-pulse" /> Pending pairing request(s) detected:
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {pendingPairings.map((p, idx) => (
+                          <div key={idx} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-500/20 border border-indigo-500/40 text-xs">
+                            <span className="font-mono font-bold text-white tracking-wider">{p.code}</span>
+                            <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-indigo-500/30 text-indigo-200 font-bold">{p.platform}</span>
+                            <button
+                              onClick={() => handleApprovePairing(p.code, p.platform)}
+                              disabled={pairingLoading || !!busyMsg}
+                              className="px-2 py-0.5 rounded bg-emerald-500 hover:bg-emerald-400 text-white font-bold text-[10px] transition cursor-pointer flex items-center gap-1"
+                            >
+                              <Check size={10} /> Approve
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Manual Pairing Form */}
+                  <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap pt-1">
+                    <div className="w-32 shrink-0">
+                      <ThemeSelect
+                        value={pairingPlatform}
+                        onChange={setPairingPlatform}
+                        options={[
+                          { value: 'telegram', label: 'Telegram' },
+                          { value: 'discord', label: 'Discord' },
+                          { value: 'line', label: 'LINE' },
+                          { value: 'slack', label: 'Slack' },
+                          { value: 'auto', label: 'Auto (any)' },
+                        ]}
+                        size="xs"
+                        className="w-full"
+                      />
+                    </div>
+                    <div className="relative flex-1 min-w-[160px]">
+                      <input
+                        type="text"
+                        placeholder="Enter pairing code (e.g. 2VXNGUEH)"
+                        value={pairingCode}
+                        onChange={e => setPairingCode(e.target.value.toUpperCase())}
+                        onKeyDown={e => { if (e.key === 'Enter' && pairingCode.trim()) handleApprovePairing(); }}
+                        className="w-full bg-black/40 border border-[var(--border-color)] rounded-lg px-3 py-1.5 text-xs text-white placeholder:text-[var(--text-muted)] font-mono uppercase tracking-wider focus:outline-none focus:border-indigo-400"
+                      />
+                    </div>
+                    <button
+                      onClick={() => handleApprovePairing()}
+                      disabled={!pairingCode.trim() || pairingLoading || !!busyMsg}
+                      className={`${btn} bg-emerald-500 hover:bg-emerald-400 text-white !py-1.5 !px-3.5 font-bold disabled:opacity-40 disabled:cursor-not-allowed`}
+                    >
+                      {pairingLoading ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
+                      Approve Code
+                    </button>
+                  </div>
+                </div>
+
                 <label className="flex items-center gap-1.5 text-[10px] text-[var(--text-muted)] cursor-pointer">
                   <input type="checkbox" checked={autoHeal} onChange={e => setAutoHeal(e.target.checked)} className="accent-emerald-500" />
                   Auto-restart gateway if it dies unexpectedly (watchdog)
