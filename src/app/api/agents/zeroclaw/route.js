@@ -61,9 +61,10 @@ function maskEnvText(text) {
 }
 
 const STATUS_SCRIPT = `
-export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$HOME/bin:/root/.local/bin:/root/.cargo/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin:$PATH"
 BIN="$(command -v zeroclaw 2>/dev/null || true)"
-[ -z "$BIN" ] && for p in "$HOME/.local/bin/zeroclaw" "$HOME/.cargo/bin/zeroclaw" "/usr/local/bin/zeroclaw" "/usr/bin/zeroclaw" "/usr/sbin/zeroclaw"; do [ -x "$p" ] && BIN="$p" && break; done
+[ -z "$BIN" ] && for p in "$HOME/.cargo/bin/zeroclaw" "$HOME/.local/bin/zeroclaw" "$HOME/bin/zeroclaw" "$HOME/.zeroclaw/bin/zeroclaw" "/root/.cargo/bin/zeroclaw" "/root/.local/bin/zeroclaw" "/usr/local/bin/zeroclaw" "/usr/bin/zeroclaw" "/opt/zeroclaw/zeroclaw"; do [ -x "$p" ] && BIN="$p" && break; done
+[ -z "$BIN" ] && BIN="$(find "$HOME" /root /usr /opt -maxdepth 4 -name zeroclaw -type f -perm -111 2>/dev/null | head -1 || true)"
 if [ -n "$BIN" ]; then echo "BIN=SET"; else echo "BIN=UNSET"; fi
 VER=NONE
 [ -n "$BIN" ] && VER="$($BIN --version 2>/dev/null | head -1 | cut -c1-40)"
@@ -111,14 +112,20 @@ async function handleAgentAction(body, session, log = []) {
       return r;
     };
     const b64 = (s) => Buffer.from(String(s), 'utf8').toString('base64');
-    const binPath = () => `p="$(export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:/usr/bin:/usr/sbin:$PATH"; command -v zeroclaw 2>/dev/null)"; [ -z "$p" ] && for q in "$HOME/.local/bin/zeroclaw" "$HOME/.cargo/bin/zeroclaw" "/usr/local/bin/zeroclaw" "/usr/bin/zeroclaw" "/usr/sbin/zeroclaw"; do [ -x "$q" ] && p="$q" && break; done; echo "BIN=$p"`;
-    const ENVX = `export XDG_RUNTIME_DIR="/run/user/$(id -u)" 2>/dev/null; export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus" 2>/dev/null; export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:$PATH"`;
+    const binPath = () => `
+      export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$HOME/bin:/root/.local/bin:/root/.cargo/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin:$PATH"
+      p="$(command -v zeroclaw 2>/dev/null || true)"
+      [ -z "$p" ] && for q in "$HOME/.cargo/bin/zeroclaw" "$HOME/.local/bin/zeroclaw" "$HOME/bin/zeroclaw" "$HOME/.zeroclaw/bin/zeroclaw" "/root/.cargo/bin/zeroclaw" "/root/.local/bin/zeroclaw" "/usr/local/bin/zeroclaw" "/usr/bin/zeroclaw" "/opt/zeroclaw/zeroclaw"; do [ -x "$q" ] && p="$q" && break; done
+      [ -z "$p" ] && p="$(find "$HOME" /root /usr /opt -maxdepth 4 -name zeroclaw -type f -perm -111 2>/dev/null | head -1 || true)"
+      echo "BIN=$p"
+    `;
+    const ENVX = `export XDG_RUNTIME_DIR="/run/user/$(id -u)" 2>/dev/null; export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus" 2>/dev/null; export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$HOME/bin:/root/.local/bin:/root/.cargo/bin:/usr/local/bin:/usr/bin:/usr/sbin:$PATH"`;
 
     // ── Gateway control — zeroclaw service CLI, systemd user unit, else nohup ──
     const gwCtl = async (op) => {
       const binR = await execCommand(sshConfig, binPath(), { pool: false, timeoutMs: 15000 });
       const bp = (binR.stdout || '').match(/BIN=(.*)/)?.[1]?.trim();
-      if (!bp) return { ok: false, out: 'zeroclaw binary not found' };
+      if (!bp) return { ok: false, out: 'zeroclaw binary not found. Please click "Install ZeroClaw" in the Overview tab.' };
       const BP = JSON.stringify(bp);
       if (op === 'status') {
         const r = await execCommand(sshConfig,
@@ -222,9 +229,10 @@ EOF
     // ── DETAILS ──
     if (action === 'details') {
       const D = `
-export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:$PATH"
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$HOME/bin:/root/.local/bin:/root/.cargo/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin:$PATH"
 BIN="$(command -v zeroclaw 2>/dev/null || true)"
-[ -z "$BIN" ] && for p in "$HOME/.local/bin/zeroclaw" "$HOME/.cargo/bin/zeroclaw" "/usr/local/bin/zeroclaw" "/usr/bin/zeroclaw" "/usr/sbin/zeroclaw"; do [ -x "$p" ] && BIN="$p" && break; done
+[ -z "$BIN" ] && for p in "$HOME/.cargo/bin/zeroclaw" "$HOME/.local/bin/zeroclaw" "$HOME/bin/zeroclaw" "$HOME/.zeroclaw/bin/zeroclaw" "/root/.cargo/bin/zeroclaw" "/root/.local/bin/zeroclaw" "/usr/local/bin/zeroclaw" "/usr/bin/zeroclaw" "/opt/zeroclaw/zeroclaw"; do [ -x "$p" ] && BIN="$p" && break; done
+[ -z "$BIN" ] && BIN="$(find "$HOME" /root /usr /opt -maxdepth 4 -name zeroclaw -type f -perm -111 2>/dev/null | head -1 || true)"
 echo "===TOML_B64==="
 base64 < "$HOME/.zeroclaw/config.toml" 2>/dev/null || true
 echo "===RUNNING==="
