@@ -41,7 +41,7 @@ const DISTROS = [
 
 const THEMED_SELECT_CLS = 'w-full bg-black/40 border border-[var(--border-color)] rounded-lg px-3 py-2 text-[11px] text-[var(--text-primary)] cursor-pointer focus:outline-none focus:border-indigo-400/50 [&>option]:bg-[#1a1a2e] [&>option]:text-white';
 
-export default function HermesAgentWizard({ isOpen, onClose, connections = [], selectedId, apiFetch, agentApi = '/api/agents/hermes', agent = { id: 'hermes', name: 'Hermes Agent', by: 'Nous Research', docsUrl: 'https://hermes-agent.nousresearch.com/docs/' } }) {
+export default function HermesAgentWizard({ isOpen, onClose, connections = [], selectedId, apiFetch, agentApi = '/api/agents/hermes', agent = { id: 'hermes', name: 'Hermes Agent', by: 'Nous Research', docsUrl: 'https://hermes-agent.nousresearch.com/docs/' }, onLog, onActionStart }) {
   const [mode, setMode] = useState('easy');
   const [target, setTarget] = useState(selectedId || connections[0]?._id || '');
   // easy state
@@ -295,17 +295,15 @@ export default function HermesAgentWizard({ isOpen, onClose, connections = [], s
   const install = async () => {
     setBusy(true); setLog([]); setDone(null); setShowChooser(false);
     try {
-      const append = (line) => setLog(prev => [...prev, line]);
-      // If the agent is already installed, just update settings/env + restart
-      // the gateway instead of re-running the heavy installer. The user is
-      // here to "Reconfigure / Update settings" — re-installing would clobber
-      // memories, skills and any custom config.
       const installed = !!(status && (status.installed || status.running || status.binPath));
       const action = installed ? 'reconfigure' : 'install';
+      const label = installed ? `Reconfigure ${agent.name}` : `Install ${agent.name}`;
+      onActionStart?.(label);
+      const append = (line) => { setLog(prev => [...prev, line]); onLog?.(line); };
       const r = liveLogs
         ? await callLive(action, buildPayload(), append)
         : await call(action, buildPayload());
-      if (r?.log && !liveLogs) setLog(r.log);
+      if (r?.log && !liveLogs) { setLog(r.log); r.log.forEach(l => onLog?.(l)); }
       const detail = r.success
         ? (installed
             ? `${agent.name} reconfigured successfully — gateway restarted.`
@@ -320,6 +318,7 @@ export default function HermesAgentWizard({ isOpen, onClose, connections = [], s
       loadStatus();
     } catch (e) {
       setLog(prev => [...prev, `ERROR: ${e.message}`]);
+      onLog?.(`ERROR: ${e.message}`);
       setDone({ ok: false, detail: e.message });
     } finally { setBusy(false); }
   };
@@ -327,9 +326,10 @@ export default function HermesAgentWizard({ isOpen, onClose, connections = [], s
   const uninstall = async () => {
     setBusy(true);
     try {
-      const append = (line) => setLog(prev => [...prev, line]);
+      onActionStart?.(`Uninstall ${agent.name}`);
+      const append = (line) => { setLog(prev => [...prev, line]); onLog?.(line); };
       const r = liveLogs ? await callLive('uninstall', { purge }, append) : await call('uninstall', { purge });
-      if (r?.log && !liveLogs) setLog(r.log || ['uninstalled']);
+      if (r?.log && !liveLogs) { setLog(r.log || ['uninstalled']); (r.log || []).forEach(l => onLog?.(l)); }
       setDone(null);
       loadStatus();
     } finally { setBusy(false); }

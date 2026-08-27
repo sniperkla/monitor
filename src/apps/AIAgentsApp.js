@@ -2050,6 +2050,19 @@ fi'\n`;
         apiFetch={doFetch}
         agentApi={agent.api}
         agent={{ id: agent.id, name: agent.name, by: agent.by, docsUrl: agent.docs, logo: agent.logo }}
+        onActionStart={(label) => {
+          setLiveLogLines([]);
+          setLiveLogAction(label);
+          setLiveLogOpen(true);
+          setLiveLogMinimized(false);
+          setBusyMsg(label);
+        }}
+        onLog={(line) => {
+          const parts = String(line).split('\n');
+          setLiveLogLines(prev => [...prev, ...parts]);
+          const last = parts.filter(Boolean).pop() || '';
+          if (last) setBusyMsg(prev => prev ? `${prev.split(' — ')[0]} — ${last.slice(0, 80)}` : last.slice(0, 80));
+        }}
       />
 
       {/* ── Uninstall Confirmation Modal ── */}

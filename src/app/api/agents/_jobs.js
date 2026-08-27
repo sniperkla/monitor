@@ -88,9 +88,9 @@ export const isLiveAction = (body) =>
 export async function dispatchWithLiveLogs(body, handler) {
   const { action } = body;
 
-  // Poll an existing job
+  // Poll an existing job — client sends { jobId, cursor } flat
   if (action === 'job') {
-    const upd = getJobUpdate(body.config?.jobId, body.config?.cursor);
+    const upd = getJobUpdate(body.jobId, body.cursor ?? 0);
     return NextResponse.json(upd);
   }
 
