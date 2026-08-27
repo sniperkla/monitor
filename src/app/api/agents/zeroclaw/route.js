@@ -706,7 +706,7 @@ echo "TG=$TG"
       const httpOut = (httpPairR.stdout || '').trim();
       const httpPaired = /HTTP_CODE:20[0-9]/.test(httpOut) || /token|session|paired|success/i.test(httpOut);
 
-      // 2. Append this user ID / code to allowed_users in config.toml and ~/.zeroclaw/.env
+      // 2. Append this user ID to allowed_users in config.toml and ~/.zeroclaw/.env
       const r = await execCommand(sshConfig, `
 python3 -c "
 import os, re, json
@@ -722,31 +722,37 @@ def add_user(content, u):
         if sec in content:
             m = re.search(r'(' + re.escape(sec) + r'[\\s\\S]*?^\\s*(?:allowed_users|allowed_user_ids)\\s*=\\s*\\[)([^\\]]*)(\\])', content, re.M)
             if m:
-                existing = [x.strip().strip('\\\"\\' ') for x in m.group(2).split(',') if x.strip().strip('\\\"\\' ')]
-                if u not in existing:
-                    existing.append(u)
-                new_val = json.dumps(existing)
+                raw_items = [x.strip().strip('\\\"\\' ') for x in m.group(2).split(',') if x.strip().strip('\\\"\\' ')]
+                unique_items = []
+                for item in raw_items:
+                    if item and item not in unique_items:
+                        unique_items.append(item)
+                if u and u not in unique_items:
+                    unique_items.append(u)
+                new_val = json.dumps(unique_items)
                 content = content[:m.start(1)] + m.group(1) + new_val[1:-1] + m.group(3) + content[m.end():]
             else:
                 content = content.replace(sec, sec + '\\nallowed_users = [' + json.dumps(u) + ']')
             return content
     return content + '\\n[channels_config.telegram]\\nenabled = true\\nallowed_users = [' + json.dumps(u) + ']\\n'
 
-updated = add_user(text, uid)
-open(p, 'w').write(updated)
+if uid:
+    updated = add_user(text, uid)
+    open(p, 'w').write(updated)
 
 # Also update ~/.zeroclaw/.env TELEGRAM_ALLOWED_USERS
 env_p = os.path.expanduser('~/.zeroclaw/.env')
 env_text = open(env_p).read() if os.path.exists(env_p) else ''
-if 'TELEGRAM_ALLOWED_USERS=' in env_text:
-    curr = re.search(r'^TELEGRAM_ALLOWED_USERS=(.*)$', env_text, re.M)
-    existing_env = [x.strip() for x in (curr.group(1) if curr else '').split(',') if x.strip()]
-    if uid not in existing_env:
-        existing_env.append(uid)
-    env_text = re.sub(r'^TELEGRAM_ALLOWED_USERS=.*$', 'TELEGRAM_ALLOWED_USERS=' + ','.join(existing_env), env_text, flags=re.M)
-else:
-    env_text += '\\nTELEGRAM_ALLOWED_USERS=' + uid + '\\n'
-open(env_p, 'w').write(env_text)
+if uid:
+    if 'TELEGRAM_ALLOWED_USERS=' in env_text:
+        curr = re.search(r'^TELEGRAM_ALLOWED_USERS=(.*)$', env_text, re.M)
+        existing_env = [x.strip() for x in (curr.group(1) if curr else '').split(',') if x.strip()]
+        if uid not in existing_env:
+            existing_env.append(uid)
+        env_text = re.sub(r'^TELEGRAM_ALLOWED_USERS=.*$', 'TELEGRAM_ALLOWED_USERS=' + ','.join(existing_env), env_text, flags=re.M)
+    else:
+        env_text += '\\nTELEGRAM_ALLOWED_USERS=' + uid + '\\n'
+    open(env_p, 'w').write(env_text)
 
 print('ADDED_TO_ALLOWED_USERS')
 " 2>&1`, { pool: false, timeoutMs: 30000 });
@@ -758,7 +764,7 @@ print('ADDED_TO_ALLOWED_USERS')
       if (httpPaired) {
         return NextResponse.json({
           success: true,
-          output: `Successfully paired with code "${code}". Gateway session is active and authenticated.`,
+          output: `Successfully paired gateway with code "${code}".`,
           paired: true,
           log,
         });
@@ -768,7 +774,7 @@ print('ADDED_TO_ALLOWED_USERS')
       const g = await gwCtl('restart');
       return NextResponse.json({
         success: true,
-        output: `Code / user ID "${code}" added to allowed_users. Gateway restarted: ${g.ok}`,
+        output: `Telegram user ID "${code}" added to allowed_users. Daemon restarted: ${g.ok}`,
         restarted: g.ok,
         log,
       });
