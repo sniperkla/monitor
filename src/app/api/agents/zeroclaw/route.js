@@ -133,7 +133,7 @@ async function handleAgentAction(body, session, log = []) {
       }
       // start / restart — never write the plain word "daemon" here (self-match)
       if (op === 'restart') await gwCtl('stop');
-      const startCmd = `${ENVX}; { ${BP} service start 2>/dev/null || systemctl --user start zeroclaw 2>/dev/null || { mkdir -p ${LOGD}; setsid nohup ${BP} dae""mon >> "$HOME/.zeroclaw/logs/daemon.log" 2>&1 < /dev/null & sleep 3; }; }; sleep 2; timeout 15 pgrep -f '[z]eroclaw dae[m]on' >/dev/null && echo GW_UP || echo GW_DOWN`;
+      const startCmd = `${ENVX}; set -a; [ -f "$HOME/.zeroclaw/.env" ] && . "$HOME/.zeroclaw/.env"; set +a; { ${BP} service start 2>/dev/null || systemctl --user start zeroclaw 2>/dev/null || { mkdir -p ${LOGD}; setsid nohup ${BP} dae""mon >> "$HOME/.zeroclaw/logs/daemon.log" 2>&1 < /dev/null & sleep 3; }; }; sleep 2; timeout 15 pgrep -f '[z]eroclaw dae[m]on' >/dev/null && echo GW_UP || echo GW_DOWN`;
       return execCommand(sshConfig, startCmd, { pool: false, timeoutMs: 120000 })
         .then(r => ({ ok: /GW_UP/.test(r.stdout || ''), out: (r.stdout || '').slice(-200) }));
     };
@@ -457,20 +457,26 @@ tg_token = e.get('TELEGRAM_BOT_TOKEN') or s.get('telegram.bot_token') or s.get('
 tg_allowed = e.get('TELEGRAM_ALLOWED_USERS') or s.get('telegram.allowed_users') or s.get('telegram_allowed_users')
 
 if tg_token or tg_allowed:
-    if '[telegram]' not in text:
-        text += '\n[telegram]\nenabled = true\n'
-    if tg_token:
-        if re.search(r'^\s*(bot_token|token)\s*=', text, re.M):
-            text = re.sub(r'^\s*(bot_token|token)\s*=.*$', f'bot_token = \"{tg_token}\"', text, flags=re.M)
-        else:
-            text = text.replace('[telegram]', f'[telegram]\nbot_token = \"{tg_token}\"')
-    if tg_allowed:
-        ids = [x.strip() for x in str(tg_allowed).split(',') if x.strip()]
-        ids_toml = json.dumps(ids)
-        if re.search(r'^\s*(allowed_users|allowed_user_ids|allowed_ids)\s*=', text, re.M):
-            text = re.sub(r'^\s*(allowed_users|allowed_user_ids|allowed_ids)\s*=.*$', f'allowed_users = {ids_toml}', text, flags=re.M)
-        else:
-            text = text.replace('[telegram]', f'[telegram]\nallowed_users = {ids_toml}')
+    ids = [x.strip() for x in str(tg_allowed or '').split(',') if x.strip()] if tg_allowed else []
+    ids_toml = json.dumps(ids)
+
+    if '[channels_config.telegram]' not in text and '[telegram]' not in text:
+        text += '\\n[channels_config.telegram]\\nenabled = true\\n'
+
+    for sec in ['[channels_config.telegram]', '[telegram]']:
+        if sec in text:
+            if tg_token:
+                m_tok = re.search(r'(' + re.escape(sec) + r'[\\s\\S]*?^\\s*(?:bot_token|token)\\s*=\\s*).*$', text, re.M)
+                if m_tok:
+                    text = text[:m_tok.start(1)] + m_tok.group(1) + json.dumps(tg_token) + text[m_tok.end():]
+                else:
+                    text = text.replace(sec, sec + '\\nbot_token = ' + json.dumps(tg_token))
+            if tg_allowed:
+                m_ids = re.search(r'(' + re.escape(sec) + r'[\\s\\S]*?^\\s*(?:allowed_users|allowed_user_ids)\\s*=\\s*).*$', text, re.M)
+                if m_ids:
+                    text = text[:m_ids.start(1)] + m_ids.group(1) + ids_toml + text[m_ids.end():]
+                else:
+                    text = text.replace(sec, sec + '\\nallowed_users = ' + ids_toml)
 
 open(p, 'w').write(text)
 print('ZEROCLAW_CONFIG_MERGED')
@@ -606,7 +612,6 @@ echo "TG=$TG"
       return NextResponse.json({ success: false, error: `Unknown skills op: ${op}` }, { status: 400 });
     }
 
-
     // ── PAIRING / USER ACCESS APPROVAL ──
     // ZeroClaw has NO `pairing` CLI subcommand. Access is granted by adding the
     // Telegram user ID (the "code" shown by the bot) to:
@@ -615,7 +620,7 @@ echo "TG=$TG"
     if (action === 'pairing-approve') {
       const code = String(config.code || '').trim();
       if (!code) return NextResponse.json({ success: false, error: 'User ID / pairing code is required' }, { status: 400 });
-      // Append this user ID to allowed_users in config.toml via python3
+      // Append this user ID to allowed_users in config.toml and ~/.zeroclaw/.env
       const r = await execCommand(sshConfig, `
 python3 -c "
 import os, re, json
@@ -624,44 +629,49 @@ p = os.path.expanduser('~/.zeroclaw/config.toml')
 if not os.path.exists(p):
     open(p, 'w').close()
 text = open(p).read()
-uid = '${code.replace(/'/g, "")}'
+uid = ${JSON.stringify(code)}
 
-# Try to find and update [channels_config.telegram] allowed_users
-# Pattern 1: already has allowed_users line under [channels_config.telegram]
-def add_to_list(text, uid):
-    # Insert into existing allowed_users = [...] line if present
-    m = re.search(r'(allowed_users\\s*=\\s*\\[)([^\\]]*)(\\])', text)
-    if m:
-        existing = [x.strip().strip('\"\\' ') for x in m.group(2).split(',') if x.strip().strip('\"\\' ')]
-        if uid not in existing:
-            existing.append(uid)
-        new_val = ', '.join(f'\"{x}\"' for x in existing)
-        return text[:m.start()] + f'allowed_users = [{new_val}]' + text[m.end():]
-    return None
+def add_user(content, u):
+    for sec in ['[channels_config.telegram]', '[telegram]']:
+        if sec in content:
+            m = re.search(r'(' + re.escape(sec) + r'[\\s\\S]*?^\\s*(?:allowed_users|allowed_user_ids)\\s*=\\s*\\[)([^\\]]*)(\\])', content, re.M)
+            if m:
+                existing = [x.strip().strip('\\\"\\' ') for x in m.group(2).split(',') if x.strip().strip('\\\"\\' ')]
+                if u not in existing:
+                    existing.append(u)
+                new_val = json.dumps(existing)
+                content = content[:m.start(1)] + m.group(1) + new_val[1:-1] + m.group(3) + content[m.end():]
+            else:
+                content = content.replace(sec, sec + '\\nallowed_users = [' + json.dumps(u) + ']')
+            return content
+    return content + '\\n[channels_config.telegram]\\nenabled = true\\nallowed_users = [' + json.dumps(u) + ']\\n'
 
-updated = add_to_list(text, uid)
-if updated:
-    open(p, 'w').write(updated)
-    print('ADDED_TO_ALLOWED_USERS')
+updated = add_user(text, uid)
+open(p, 'w').write(updated)
+
+# Also update ~/.zeroclaw/.env TELEGRAM_ALLOWED_USERS
+env_p = os.path.expanduser('~/.zeroclaw/.env')
+env_text = open(env_p).read() if os.path.exists(env_p) else ''
+if 'TELEGRAM_ALLOWED_USERS=' in env_text:
+    curr = re.search(r'^TELEGRAM_ALLOWED_USERS=(.*)$', env_text, re.M)
+    existing_env = [x.strip() for x in (curr.group(1) if curr else '').split(',') if x.strip()]
+    if uid not in existing_env:
+        existing_env.append(uid)
+    env_text = re.sub(r'^TELEGRAM_ALLOWED_USERS=.*$', 'TELEGRAM_ALLOWED_USERS=' + ','.join(existing_env), env_text, flags=re.M)
 else:
-    # No existing allowed_users — inject under [channels_config.telegram] section
-    if '[channels_config.telegram]' in text:
-        text = text.replace('[channels_config.telegram]', f'[channels_config.telegram]\\nallowed_users = [\"{uid}\"]')
-    elif '[telegram]' in text:
-        text = text.replace('[telegram]', f'[telegram]\\nallowed_users = [\"{uid}\"]')
-    else:
-        text += f'\\n[channels_config.telegram]\\nenabled = true\\nallowed_users = [\"{uid}\"]\\n'
-    open(p, 'w').write(text)
-    print('ADDED_TO_ALLOWED_USERS')
+    env_text += '\\nTELEGRAM_ALLOWED_USERS=' + uid + '\\n'
+open(env_p, 'w').write(env_text)
+
+print('ADDED_TO_ALLOWED_USERS')
 " 2>&1`, { pool: false, timeoutMs: 30000 });
       const out = ((r.stdout || '') + (r.stderr || '')).trim();
       const ok = /ADDED_TO_ALLOWED_USERS/.test(out);
       if (!ok) return NextResponse.json({ success: false, error: `Failed to add user to allowed_users: ${out}`, log });
-      // Restart so zeroclaw reloads the config
+      // Restart so zeroclaw reloads the config with new env
       const g = await gwCtl('restart');
       return NextResponse.json({
         success: true,
-        output: `User ID "${code}" added to allowed_users in config.toml. Gateway restarted: ${g.ok}`,
+        output: `Telegram user ID "${code}" added to allowed_users. Gateway restarted: ${g.ok}`,
         restarted: g.ok,
         log,
       });
