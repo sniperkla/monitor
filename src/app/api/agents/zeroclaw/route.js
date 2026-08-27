@@ -677,13 +677,21 @@ print('ADDED_TO_ALLOWED_USERS')
       const ok = /ADDED_TO_ALLOWED_USERS/.test(out) || httpPaired;
       if (!ok) return NextResponse.json({ success: false, error: `Failed to approve code: ${out}`, log });
       
-      // Restart so zeroclaw reloads the config with new env and allowed_users
+      // If HTTP gateway pairing succeeded, do NOT restart daemon (restarting resets the active pairing session)
+      if (httpPaired) {
+        return NextResponse.json({
+          success: true,
+          output: `Successfully paired with code "${code}". Gateway session is active and authenticated.`,
+          paired: true,
+          log,
+        });
+      }
+
+      // Otherwise restart so zeroclaw reloads the config with new env and allowed_users
       const g = await gwCtl('restart');
       return NextResponse.json({
         success: true,
-        output: httpPaired
-          ? `Gateway paired successfully with code "${code}" and added to allowed_users. Gateway restarted: ${g.ok}`
-          : `Code / user ID "${code}" added to allowed_users. Gateway restarted: ${g.ok}`,
+        output: `Code / user ID "${code}" added to allowed_users. Gateway restarted: ${g.ok}`,
         restarted: g.ok,
         log,
       });
