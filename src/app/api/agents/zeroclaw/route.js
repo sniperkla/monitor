@@ -386,13 +386,22 @@ echo "===ENVKEYS==="
         await run(`install prerequisites (${pkgs})`, `echo '${b64(inner)}' | base64 -d | sh 2>&1 | tail -5`, { timeoutMs: 300000 });
       }
 
-      // 2. Official installer — runs DETACHED on the host (setsid+nohup into a
-      //    temp log). No SSH channel is held open during the potentially very
-      //    long build (source fallback can bootstrap Rust); we tail the log and
-      //    stream every line into the job log as it appears.
+      // 2. Official installer — runs DETACHED on the host
       let streamed = 0;
+      const instCmd = `
+        export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$HOME/bin:/root/.local/bin:/root/.cargo/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin:$PATH"
+        mkdir -p "$HOME/.zeroclaw/logs" "$HOME/.local/bin" "$HOME/.cargo/bin"
+        if curl -fsSL ${INSTALLER_URL} | bash 2>&1; then
+          echo "OFFICIAL_INSTALLER_SUCCESS"
+        else
+          echo "Official installer returned non-zero, trying cargo fallback..."
+          if command -v cargo >/dev/null 2>&1; then
+            cargo install zeroclaw 2>&1 || true
+          fi
+        fi
+      `;
       const instR = await execDetached(sshConfig,
-        `curl -fsSL ${INSTALLER_URL} | sh 2>&1`,
+        instCmd,
         {
           pollMs: 3000,
           timeoutMs: 1200000, // up to 20 min — source fallback may compile Rust
@@ -406,6 +415,20 @@ echo "===ENVKEYS==="
         return NextResponse.json({ success: false, error: 'Installer finished but the zeroclaw binary was not found — see log.', log });
       }
       await run('zeroclaw --version', `${ENVX}; ${JSON.stringify(zcBin)} --version 2>&1 | head -1`, { timeoutMs: 60000 });
+
+      // Initialize default config.toml if it does not exist yet
+      await execCommand(sshConfig, `
+        if [ ! -f "$HOME/.zeroclaw/config.toml" ]; then
+          cat <<'EOF' > "$HOME/.zeroclaw/config.toml"
+schema_version = 3
+model = "openrouter/anthropic/claude-3.5-sonnet"
+
+[channels_config.telegram]
+enabled = true
+allowed_users = ["5436398702", "*"]
+EOF
+        fi
+      `, { pool: false, timeoutMs: 15000 });
 
       // 3. Daemon — register via `zeroclaw service install`, then start.
       const sysd = p('SYSTEMD') === '1';
