@@ -2046,7 +2046,7 @@ fi'\n`;
 
       <HermesAgentWizard
         isOpen={showWizard}
-        onClose={() => { setShowWizard(false); loadDetails(); setTab('overview'); }}
+        onClose={() => { setShowWizard(false); setBusyMsg(''); loadDetails(); setTab('overview'); }}
         connections={connections}
         selectedId={target}
         apiFetch={doFetch}
@@ -2065,6 +2065,7 @@ fi'\n`;
           const last = parts.filter(Boolean).pop() || '';
           if (last) setBusyMsg(prev => prev ? `${prev.split(' — ')[0]} — ${last.slice(0, 80)}` : last.slice(0, 80));
         }}
+        onActionEnd={() => setBusyMsg('')}
       />
 
       {/* ── Uninstall Confirmation Modal ── */}

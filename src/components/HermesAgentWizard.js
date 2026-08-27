@@ -41,7 +41,7 @@ const DISTROS = [
 
 const THEMED_SELECT_CLS = 'w-full bg-black/40 border border-[var(--border-color)] rounded-lg px-3 py-2 text-[11px] text-[var(--text-primary)] cursor-pointer focus:outline-none focus:border-indigo-400/50 [&>option]:bg-[#1a1a2e] [&>option]:text-white';
 
-export default function HermesAgentWizard({ isOpen, onClose, connections = [], selectedId, apiFetch, agentApi = '/api/agents/hermes', agent = { id: 'hermes', name: 'Hermes Agent', by: 'Nous Research', docsUrl: 'https://hermes-agent.nousresearch.com/docs/' }, onLog, onActionStart }) {
+export default function HermesAgentWizard({ isOpen, onClose, connections = [], selectedId, apiFetch, agentApi = '/api/agents/hermes', agent = { id: 'hermes', name: 'Hermes Agent', by: 'Nous Research', docsUrl: 'https://hermes-agent.nousresearch.com/docs/' }, onLog, onActionStart, onActionEnd }) {
   const [mode, setMode] = useState('easy');
   const [target, setTarget] = useState(selectedId || connections[0]?._id || '');
   // easy state
@@ -320,7 +320,7 @@ export default function HermesAgentWizard({ isOpen, onClose, connections = [], s
       setLog(prev => [...prev, `ERROR: ${e.message}`]);
       onLog?.(`ERROR: ${e.message}`);
       setDone({ ok: false, detail: e.message });
-    } finally { setBusy(false); }
+    } finally { setBusy(false); onActionEnd?.(); }
   };
 
   const uninstall = async () => {
@@ -332,7 +332,7 @@ export default function HermesAgentWizard({ isOpen, onClose, connections = [], s
       if (r?.log && !liveLogs) { setLog(r.log || ['uninstalled']); (r.log || []).forEach(l => onLog?.(l)); }
       setDone(null);
       loadStatus();
-    } finally { setBusy(false); }
+    } finally { setBusy(false); onActionEnd?.(); }
   };
 
   const switchToAdvanced = () => {
