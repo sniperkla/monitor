@@ -247,12 +247,15 @@ export default function DatabaseView({ connection, onClose }) {
       }
     };
     
-    // Auto-reconnect on window focus
+    // Auto-reconnect on window focus (throttled — at most once per 30s)
+    let lastFocusRetry = 0;
     const handleFocus = () => {
-      if (error) {
-        console.log("🗄 [DatabaseView] Window focused, attempting automatic reconnect...");
-        fetchSchema();
-      }
+      if (!error) return;
+      const now = Date.now();
+      if (now - lastFocusRetry < 30000) return; // 30s cooldown
+      lastFocusRetry = now;
+      console.log("🗄 [DatabaseView] Window focused, attempting automatic reconnect...");
+      fetchSchema();
     };
 
     document.addEventListener('mousedown', handleClickOutside);
@@ -362,11 +365,11 @@ export default function DatabaseView({ connection, onClose }) {
   };
 
   const scheduleConnectRetry = (needsRelay = false) => {
-    if (needsRelay && !relayConnected) return;
-    // Max 10 retries, exponential backoff starting at 2s, 4s, 8s... max 30s
-    if (connectRetryCount >= 10) return;
+    if (needsRelay || !connection?._id) return;
+    // Cap at 2 retries to prevent network request spamming
+    if (connectRetryCount >= 2) return;
     
-    const delay = Math.min(Math.pow(2, connectRetryCount + 1) * 1000, 30000);
+    const delay = Math.min(Math.pow(2, connectRetryCount + 1) * 2000, 15000);
     console.log(`🗄 [DatabaseView] Reconnect attempt #${connectRetryCount + 1} in ${delay/1000}s...`);
     
     if (connectRetryTimerRef.current) clearTimeout(connectRetryTimerRef.current);

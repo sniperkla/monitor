@@ -337,20 +337,33 @@ export default function VirusScannerApp({ windowId }) {
   }, [selectedConn, apiFetch]);
 
   // Poll background scan (tmux) session status — Running / Done badges + notifications
+  // Adaptive: 5s while a scan is running, 30s when idle
   useEffect(() => {
     if (!selectedConn) return;
     let cancelled = false;
+    let iv = null;
+
+    const scheduleNext = (isRunning) => {
+      if (iv) clearInterval(iv);
+      if (cancelled) return;
+      iv = setInterval(pollSessions, isRunning ? 5000 : 30000);
+    };
+
     const pollSessions = async () => {
       try {
         const res = await apiFetch(`/api/virus-scan/engine?tmux=1&connectionId=${encodeURIComponent(selectedConn)}&_=${Date.now()}`);
         const data = res?.json ? await res.json() : res;
         if (cancelled || !data?.success || !data.sessions) return;
         setBgScans(data.sessions);
+        // Adaptive interval: fast while running, slow when done/idle
+        const anyRunning = Object.values(data.sessions).some(v => v === 'running');
+        scheduleNext(anyRunning);
       } catch (_) {}
     };
+
     pollSessions();
-    const iv = setInterval(pollSessions, 5000);
-    return () => { cancelled = true; clearInterval(iv); };
+    iv = setInterval(pollSessions, 30000); // Start slow; adapts after first poll
+    return () => { cancelled = true; if (iv) clearInterval(iv); };
   }, [selectedConn, apiFetch]);
 
   // Badge states:

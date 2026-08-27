@@ -47,14 +47,22 @@ export default function GlobalScanNotifications() {
 
   useEffect(() => {
     let cancelled = false;
-    let busy = false;
+    let iv = null;
+    let isRunningAnywhere = false;
+
+    const scheduleNext = (running) => {
+      if (iv) clearInterval(iv);
+      if (cancelled) return;
+      // Fast poll when a scan is running, slow otherwise
+      iv = setInterval(pollAll, running ? 10000 : 60000);
+    };
 
     const pollAll = async () => {
-      if (busy || cancelled) return;
-      busy = true;
+      if (cancelled) return;
       try {
         const conns = connsRef.current;
         if (!conns.length) return;
+        let anyRunning = false;
         // Poll each connection's tmux status sequentially (one light SSH cmd each)
         for (const conn of conns.slice(0, 10)) {
           if (cancelled) break;
@@ -66,6 +74,7 @@ export default function GlobalScanNotifications() {
               const key = `${conn._id}:${engine}`;
               const now = data.sessions[engine];
               const prev = prevRunningRef.current[key];
+              if (now === 'running') anyRunning = true;
               if (prev === 'running' && now !== 'running') {
                 const prefs = prefsRef.current;
                 if (prefs.enabled && prefs[engine]) {
@@ -96,14 +105,17 @@ export default function GlobalScanNotifications() {
             }
           } catch (_) {}
         }
-      } finally {
-        busy = false;
-      }
+        // Adapt interval based on whether any scan is running
+        if (anyRunning !== isRunningAnywhere) {
+          isRunningAnywhere = anyRunning;
+          scheduleNext(anyRunning);
+        }
+      } catch (_) {}
     };
 
     pollAll();
-    const iv = setInterval(pollAll, 10000);
-    return () => { cancelled = true; clearInterval(iv); };
+    iv = setInterval(pollAll, 60000); // Start slow; adapts after first poll
+    return () => { cancelled = true; if (iv) clearInterval(iv); };
   }, [apiFetch]);
 
   if (notifications.length === 0) return null;

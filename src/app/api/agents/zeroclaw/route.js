@@ -31,6 +31,35 @@ const INSTALLER_URL = 'https://raw.githubusercontent.com/zeroclaw-labs/zeroclaw/
 // command line ("dae""mon", '[z]eroclaw', ...).
 const LOGD = '"$HOME/.zeroclaw/logs"';
 
+function maskSecretString(val) {
+  if (!val || typeof val !== 'string') return val;
+  const trimmed = val.trim();
+  if (trimmed.length <= 8) return '••••••••';
+  return trimmed.slice(0, 4) + '••••••••' + trimmed.slice(-4);
+}
+
+function maskConfigText(text) {
+  if (!text) return '';
+  return text.split('\n').map(line => {
+    const m = line.match(/^(\s*["']?(?:apiKey|api_key|token|botToken|password|secret|accessToken|access_token|clientSecret)["']?\s*[:=]\s*["']?)([^"'\r\n]+)(["']?.*)$/i);
+    if (m) {
+      return `${m[1]}${maskSecretString(m[2])}${m[3]}`;
+    }
+    return line;
+  }).join('\n');
+}
+
+function maskEnvText(text) {
+  if (!text) return '';
+  return text.split('\n').map(line => {
+    const idx = line.indexOf('=');
+    if (idx === -1) return line;
+    const k = line.slice(0, idx).trim();
+    const v = line.slice(idx + 1).trim();
+    return `${k}=${maskSecretString(v)}`;
+  }).join('\n');
+}
+
 const STATUS_SCRIPT = `
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 BIN="$(command -v zeroclaw 2>/dev/null || true)"
@@ -211,8 +240,8 @@ echo "===ENVKEYS==="
         binPath: binR || null,
         service: /SSVC=1/.test(out) ? 'system' : /USVC=1/.test(out) ? 'user' : /PROC=1/.test(out) ? 'process' : null,
         hasSystemd: true,
-        configJson,
-        envText,
+        configJson: maskConfigText(configJson),
+        envText: maskEnvText(envText),
         envKeys: section('ENVKEYS').split('\n').map(s => s.trim()).filter(Boolean),
         skills: [...new Set(skillsList)],
         systemPrompt,

@@ -7,6 +7,12 @@ import { BootSequence } from '@/components/landing/BootSequence';
 import { HyperspaceTransition } from '@/components/landing/HyperspaceTransition';
 import { AnimatePresence, motion } from 'framer-motion';
 
+import dynamic from 'next/dynamic';
+
+const DesktopEnvironment = dynamic(() => import('@/components/Desktop/DesktopEnvironment'), {
+  ssr: false,
+});
+
 class DesktopErrorBoundary extends Component {
   constructor(props) {
     super(props);
@@ -54,35 +60,13 @@ export default function Home() {
 
   // Logged-in boot flow
   const [bootPhase, setBootPhase] = useState('boot'); // 'boot' | 'warp' | 'desktop'
-  const [DesktopEnvironment, setDesktopEnvironment] = useState(null);
-  const desktopLoadStarted = useRef(false);
   const warpFinishedRef = useRef(false);
-
-  // Start loading DesktopEnvironment as soon as session is known OR guest dismissed landing
-  useEffect(() => {
-    if ((session || dismissed) && !desktopLoadStarted.current) {
-      desktopLoadStarted.current = true;
-      import('@/components/Desktop/DesktopEnvironment').then((mod) => {
-        setDesktopEnvironment(() => mod.default);
-      });
-    }
-  }, [session, dismissed]);
 
   // Warp animation completed its first full cycle
   const handleWarpComplete = () => {
     warpFinishedRef.current = true;
-    // Only transition if desktop is also ready
-    if (DesktopEnvironment) {
-      setBootPhase('desktop');
-    }
+    setBootPhase('desktop');
   };
-
-  // If DesktopEnvironment loads after warp finishes, transition
-  useEffect(() => {
-    if (DesktopEnvironment && warpFinishedRef.current && bootPhase === 'warp') {
-      setBootPhase('desktop');
-    }
-  }, [DesktopEnvironment, bootPhase]);
 
   // Safety: force-escape warp phase if it hangs (e.g. OffscreenCanvas crash on mobile)
   useEffect(() => {

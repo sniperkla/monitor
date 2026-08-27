@@ -49,15 +49,6 @@ export default function Taskbar() {
   const contextMenuRef = useRef(null);
   const taskbarContextMenuRef = useRef(null);
 
-  // Use centralized AI usage polling with notification callback for thresholds
-  useAIUsagePolling(60000, ({ percent, used, limit, type }) => {
-    addNotification({
-      title: 'AI usage',
-      message: `${percent}% used (${used.toLocaleString()} / ${limit.toLocaleString()} tokens)`,
-      type,
-    });
-  });
-
   useEffect(() => {
     setMounted(true);
   }, []);

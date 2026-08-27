@@ -419,10 +419,14 @@ export function AppProvider({ children }) {
     detectLocalRelay();
   }, []);
 
-  // 4. Auto-fetch connections when SSH mode or preferred relay changes
+  // 4. Auto-fetch connections when SSH mode or preferred relay changes (deduplicated)
+  const prevModeRef = useRef(typeof window !== 'undefined' ? `${localStorage.getItem('ssh_monitor_ssh_mode') || ''}:${localStorage.getItem('ssh_monitor_preferred_relay') || ''}` : '');
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const handleModeChange = () => {
+      const curMode = `${localStorage.getItem('ssh_monitor_ssh_mode') || ''}:${localStorage.getItem('ssh_monitor_preferred_relay') || ''}`;
+      if (prevModeRef.current === curMode) return;
+      prevModeRef.current = curMode;
       console.log('📡 [AppContext] SSH mode/relay changed — auto-fetching connections');
       fetchConnections();
     };
@@ -554,10 +558,8 @@ export function AppProvider({ children }) {
       }
     };
 
-    // Poll immediately then every 20 seconds
+    // Check health once on initial mount only
     pollHealth();
-    const interval = setInterval(pollHealth, 20000);
-    return () => clearInterval(interval);
   }, []);
 
   // 6. Persistence: Save active workspace state to localStorage when it changes

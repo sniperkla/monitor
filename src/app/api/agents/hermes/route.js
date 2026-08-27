@@ -26,6 +26,35 @@ import { logger } from '@/lib/logger';
 
 const INSTALLER_URL = 'https://hermes-agent.nousresearch.com/install.sh';
 
+function maskSecretString(val) {
+  if (!val || typeof val !== 'string') return val;
+  const trimmed = val.trim();
+  if (trimmed.length <= 8) return '••••••••';
+  return trimmed.slice(0, 4) + '••••••••' + trimmed.slice(-4);
+}
+
+function maskConfigYaml(text) {
+  if (!text) return '';
+  return text.split('\n').map(line => {
+    const m = line.match(/^(\s*["']?(?:apiKey|api_key|token|botToken|password|secret|accessToken|access_token|clientSecret)["']?\s*[:=]\s*["']?)([^"'\r\n]+)(["']?.*)$/i);
+    if (m) {
+      return `${m[1]}${maskSecretString(m[2])}${m[3]}`;
+    }
+    return line;
+  }).join('\n');
+}
+
+function maskEnvText(text) {
+  if (!text) return '';
+  return text.split('\n').map(line => {
+    const idx = line.indexOf('=');
+    if (idx === -1) return line;
+    const k = line.slice(0, idx).trim();
+    const v = line.slice(idx + 1).trim();
+    return `${k}=${maskSecretString(v)}`;
+  }).join('\n');
+}
+
 // POSIX sh probe — works on every supported distro.
 const STATUS_SCRIPT = `
 export PATH="$HOME/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
@@ -290,8 +319,8 @@ echo "===MODEL==="
         binPath: remoteBinPath || null,
         service: /SSVC=1/.test(out) ? 'system' : /USVC=1/.test(out) ? 'user' : /PROC=1/.test(out) ? 'process' : null,
         hasSystemd: /SYSTEMD=1/.test(section('RUNNING', 'VERSION')),
-        configYaml,
-        envText,
+        configYaml: maskConfigYaml(configYaml),
+        envText: maskEnvText(envText),
         envKeys,
         skills,
         systemPrompt,

@@ -1139,7 +1139,7 @@ export function OSProvider({ children }) {
       } catch (error) {
         console.error('Failed to sync settings to DB', error);
       }
-    }, 1000); // 1s debounce for quick persistence to DB
+    }, 15000); // 15s debounce for calm persistence to DB
       
     return () => clearTimeout(timer);
   }, [

@@ -1249,8 +1249,11 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
       } catch {}
     };
     poll();
-    const id = setInterval(poll, interval);
-    return () => clearInterval(id);
+    let id = null;
+    if (isWaiting) {
+      id = setInterval(poll, 2000);
+    }
+    return () => { if (id) clearInterval(id); };
   }, [session, relayModalOpen, relayWaiting]);
 
   // Auto-start relay polling when entering step 2 (no manual "I ran it" button needed)
@@ -2169,7 +2172,9 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                           {/* Server Mode */}
                           <button
                             onClick={() => {
+                              if (sshMode === 'server') return;
                               localStorage.setItem('ssh_monitor_ssh_mode', 'server');
+                              setSshMode('server');
                               window.dispatchEvent(new Event('ssh-mode-changed'));
                               addNotification({ title: 'SSH Mode', message: 'Switched to Server mode', type: 'info' });
                             }}
@@ -2207,8 +2212,10 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                                 addNotification({ title: 'Not Available on Mobile', message: 'Local mode requires a desktop with the relay agent. Use Server mode on mobile.', type: 'warning' });
                                 return;
                               }
+                              if (sshMode === 'local') return;
                               if (relayConnected) {
                                 localStorage.setItem('ssh_monitor_ssh_mode', 'local');
+                                setSshMode('local');
                                 window.dispatchEvent(new Event('ssh-mode-changed'));
                                 addNotification({ title: 'SSH Mode', message: 'Switched to Local mode', type: 'success' });
                               } else {
@@ -2414,6 +2421,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                               <div
                                 key={r.relayId || r.relayName}
                                 onClick={() => {
+                                  if (preferredRelay === relayLabel) return;
                                   localStorage.setItem('ssh_monitor_preferred_relay', relayLabel);
                                   setPreferredRelay(relayLabel);
                                   window.dispatchEvent(new Event('ssh-mode-changed'));

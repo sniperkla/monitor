@@ -20,6 +20,49 @@ import { logger } from '@/lib/logger';
 const INSTALLER_URL = 'https://raw.githubusercontent.com/HKUDS/nanobot/main/scripts/install.sh';
 const LOGF = '"$HOME/.nanobot/logs/gatew""ay.log"';
 
+function maskSecretString(val) {
+  if (!val || typeof val !== 'string') return val;
+  const trimmed = val.trim();
+  if (trimmed.length <= 8) return '••••••••';
+  return trimmed.slice(0, 4) + '••••••••' + trimmed.slice(-4);
+}
+
+function maskConfigJson(jsonStr) {
+  if (!jsonStr) return jsonStr;
+  try {
+    const obj = JSON.parse(jsonStr);
+    const maskObj = (o) => {
+      if (!o || typeof o !== 'object') return o;
+      if (Array.isArray(o)) return o.map(maskObj);
+      const res = {};
+      for (const [k, v] of Object.entries(o)) {
+        if (/^(apiKey|api_key|token|botToken|password|secret|accessToken|access_token|clientSecret)$/i.test(k) && typeof v === 'string') {
+          res[k] = maskSecretString(v);
+        } else if (typeof v === 'object' && v !== null) {
+          res[k] = maskObj(v);
+        } else {
+          res[k] = v;
+        }
+      }
+      return res;
+    };
+    return JSON.stringify(maskObj(obj), null, 2);
+  } catch {
+    return jsonStr;
+  }
+}
+
+function maskEnvText(text) {
+  if (!text) return '';
+  return text.split('\n').map(line => {
+    const idx = line.indexOf('=');
+    if (idx === -1) return line;
+    const k = line.slice(0, idx).trim();
+    const v = line.slice(idx + 1).trim();
+    return `${k}=${maskSecretString(v)}`;
+  }).join('\n');
+}
+
 const STATUS_SCRIPT = `
 export PATH="$HOME/.local/bin:$HOME/.nanobot/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 BIN="$(command -v nanobot 2>/dev/null || true)"
@@ -227,8 +270,8 @@ tail -n 30 "$LOG" 2>/dev/null | tail -5
         binPath: binR || null,
         running: /PROC_ACTIVE/.test(sec('RUNNING', 'VERSION')),
         recentLog: sec('LOG', 'LOGFILE').split('\n').slice(-5).join('\n'),
-        configJson,
-        envText,
+        configJson: maskConfigJson(configJson),
+        envText: maskEnvText(envText),
         envKeys: [...envKeys],
         skills: [...skillsList],
         systemPrompt,

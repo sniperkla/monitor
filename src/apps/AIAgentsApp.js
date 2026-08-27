@@ -107,9 +107,9 @@ export default function AIAgentsApp({ apiFetch }) {
     }
     act('Save env', () => call('reconfigure', { config: { env, restart: restartAfterSave } })).then(() => {
       // clear the values after save (keep keys visible)
+      // Note: act() already calls loadDetails() internally — no second call needed here
       setEnvDraft(prev => prev.map(r => ({ ...r, value: '', masked: true })));
       setEnvNewKey(''); setEnvNewVal('');
-      loadDetails();
     });
   };
   // config tab
@@ -161,29 +161,16 @@ export default function AIAgentsApp({ apiFetch }) {
 
   const agent = AGENTS.find(a => a.id === agentId) || AGENTS[0];
 
-  const doFetchRef = useRef(doFetch);
-  doFetchRef.current = doFetch;
-  const agentRef = useRef(agent);
-  agentRef.current = agent;
-  const targetRef = useRef(target);
-  targetRef.current = target;
-  const detailsRef = useRef(details);
-  detailsRef.current = details;
-
   const call = useCallback(async (action, extra = {}) => {
-    const connId = extra.connectionId || targetRef.current;
-    const api = extra.api || agentRef.current.api;
-    if (!connId || !api) return null;
-    // Strip client-side routing keys so they don't pollute the server-side body
-    const { api: _api, connectionId: _cid, ...bodyExtra } = extra;
-    const res = await doFetchRef.current(api, {
+    if (!target) return null;
+    const res = await doFetch(agent.api, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ connectionId: connId, action, ...bodyExtra }),
+      body: JSON.stringify({ connectionId: target, action, ...extra }),
     });
     return res.json();
-  }, []);
+  }, [doFetch, agent.api, target]);
 
   // Live action logs — global on/off setting (persisted). When ON, long-running
   // actions run as background jobs; their log streams into busyMsg as they run.
@@ -215,16 +202,14 @@ export default function AIAgentsApp({ apiFetch }) {
     return { success: false, error: 'Client timeout: the action took longer than 20 minutes' };
   }, [call]);
 
-  const loadDetails = useCallback(async (forcedTarget, forcedAgent) => {
-    const connId = (typeof forcedTarget === 'string' && forcedTarget.trim() ? forcedTarget.trim() : null) || targetRef.current;
-    const ag = (forcedAgent && typeof forcedAgent === 'object' && forcedAgent.api ? forcedAgent : null) || agentRef.current;
-    if (!connId || !ag) return;
+  const loadDetails = useCallback(async () => {
+    if (!target) return;
     setLoading(true);
     try {
-      const d = await call('details', { connectionId: connId, api: ag.api });
+      const d = await call('details');
       if (d && (d.installed != null || d.success)) {
         setDetails(d);
-        const draftText = ['nanobot', 'openclaw', 'zeroclaw'].includes(ag.id) ? (d?.configJson || '') : (d?.configYaml || '');
+        const draftText = ['nanobot', 'openclaw', 'zeroclaw'].includes(agent.id) ? (d?.configJson || '') : (d?.configYaml || '');
         setYamlDraft(draftText);
         const pFiles = d?.promptFiles || {
           'PROMPT.md': d?.systemPrompt || '',
@@ -234,21 +219,19 @@ export default function AIAgentsApp({ apiFetch }) {
           'MEMORY.md': '',
         };
         setPromptFilesMap(pFiles);
-        setPromptDraft(pFiles['PROMPT.md'] ?? '');
+        setPromptDraft(pFiles[promptActiveFile] ?? pFiles['PROMPT.md'] ?? '');
       } else {
         setDetails(null);
       }
     } catch { setDetails(null); }
     finally { setLoading(false); }
-  }, [call]);
+  }, [target, call, agent.id, promptActiveFile]);
 
   useEffect(() => {
     if (connectionsReady && !target && connections.length > 0) {
-      const firstTarget = connections[0]._id;
-      setTarget(firstTarget);
-      loadDetails(firstTarget, agent);
+      setTarget(connections[0]._id);
     }
-  }, [connectionsReady, connections, target, agent, loadDetails]);
+  }, [connectionsReady, connections, target]);
 
   useEffect(() => {
     setYamlDraft('');
@@ -256,7 +239,7 @@ export default function AIAgentsApp({ apiFetch }) {
     setPromptActiveFile('PROMPT.md');
     setDetails(null);
     setTab('overview');
-    if (target) loadDetails(target, agent);
+    if (target) loadDetails();
   }, [target, agentId]); // eslint-disable-line react-hooks/exhaustive-deps
   // When fresh details arrive (e.g. after wizard install), refresh the config draft
   // so the Config tab shows the new values, not the old ones.
@@ -577,7 +560,11 @@ fi'\n`;
     };
   }, [tab, target, agentId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // keep refs in sync so interval closure always reads latest values
+  // keep refs in sync so interval closures always read latest values
+  const callRef = useRef(call);
+  useEffect(() => { callRef.current = call; }, [call]);
+  const detailsRef = useRef(details);
+  useEffect(() => { detailsRef.current = details; }, [details]);
   useEffect(() => { autoHealRef.current = autoHeal; }, [autoHeal]);
   useEffect(() => { userStoppedRef.current = userStopped; }, [userStopped]);
 
@@ -590,26 +577,26 @@ fi'\n`;
     } catch { /* ignore */ }
   }, [agentId, target]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Health watchdog (runs only once every 30s in the background) ──
+  // ── Health watchdog (only runs when auto-heal is enabled by user) ──
   useEffect(() => {
-    if (!target) return;
+    if (!target || !autoHeal) return;
     let cancelled = false;
     const check = async () => {
-      if (!detailsRef.current?.installed || cancelled) return;
+      if (!detailsRef.current?.installed || !autoHealRef.current || userStoppedRef.current || cancelled) return;
       try {
-        const h = await call('health');
+        const h = await callRef.current('health');
         if (!cancelled && h) setHealth(h);
         if (!cancelled && autoHealRef.current && !userStoppedRef.current && h && !h.alive && h.installed !== false) {
-          setNotice({ ok: false, text: `⚠ ${agentRef.current.name} gateway died unexpectedly — auto-restarting…` });
-          const r = await call('gateway', { config: { op: 'start' } });
-          if (r?.success) setNotice({ ok: true, text: `✓ ${agentRef.current.name} gateway was down — automatically restarted.` });
+          setNotice({ ok: false, text: `⚠ ${agent.name} gateway died unexpectedly — auto-restarting…` });
+          const r = await callRef.current('gateway', { config: { op: 'start' } });
+          if (r?.success) setNotice({ ok: true, text: `✓ ${agent.name} gateway was down — automatically restarted.` });
         }
       } catch { /* transient */ }
     };
-    const t0 = setTimeout(check, 10000);
-    const iv = setInterval(check, 30000);
+    const t0 = setTimeout(check, 15000);
+    const iv = setInterval(check, 60000);
     return () => { cancelled = true; clearTimeout(t0); clearInterval(iv); };
-  }, [target, agentId, call]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [target, agentId, autoHeal]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const inputCls = 'w-full bg-black/30 border border-[var(--border-color)] rounded-lg px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-400/50';
   const btn = 'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-bold transition cursor-pointer disabled:opacity-40';
@@ -748,7 +735,9 @@ fi'\n`;
         {/* Agent catalog */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-3">
           {AGENTS.map(a => (
-            <button key={a.id} onClick={() => setAgentId(a.id)}
+            <button
+              key={a.id}
+              onClick={() => setAgentId(a.id)}
               className={`text-left flex items-start gap-2.5 rounded-xl border px-3 py-2.5 transition cursor-pointer ${agentId === a.id ? 'border-indigo-500/40 bg-indigo-500/10' : 'border-[var(--border-color)] bg-black/20 hover:bg-white/5'}`}>
               {a.logo ? (
                 <img src={a.logo} alt="" className="mt-0.5 w-4 h-4 shrink-0 rounded object-contain bg-black/20 p-px" />
@@ -1041,7 +1030,7 @@ fi'\n`;
                     <ThemeSelect
                       value=""
                       onChange={(n) => {
-                        if (n) act(`Restore ${n}`, () => call('restore-backup', { config: { name: n } })).then(() => loadDetails());
+                        if (n) act(`Restore ${n}`, () => call('restore-backup', { config: { name: n } }));
                       }}
                       options={backups.map(b => ({
                         value: b.name,
@@ -1764,7 +1753,7 @@ fi'\n`;
                           <button onClick={() => setSelSkills(new Set())} disabled={selSkills.size === 0} className={`${btn} bg-white/5 border border-[var(--border-color)] text-[var(--text-muted)] hover:text-white !py-1 !px-2`}>Clear</button>
                           <button onClick={() => { const s = new Set(); installedList.forEach(x => selSkills.has(x) ? null : s.add(x)); setSelSkills(s); }} className={`${btn} bg-white/5 border border-[var(--border-color)] text-[var(--text-muted)] hover:text-white !py-1 !px-2`}>Select all</button>
                           {selSkills.size > 0 && (
-                            <button onClick={async () => { for (const s of selSkills) await call('skills', { config: { op: 'remove', name: s } }); setSelSkills(new Set()); loadDetails(); }} disabled={!!busyMsg} className={`${btn} bg-red-500/15 text-red-300 hover:bg-red-500/25 !py-1 !px-2`}>
+                            <button onClick={async () => { for (const s of selSkills) await call('skills', { config: { op: 'remove', name: s } }); setSelSkills(new Set()); await loadDetails(); }} disabled={!!busyMsg} className={`${btn} bg-red-500/15 text-red-300 hover:bg-red-500/25 !py-1 !px-2`}>
                               <Trash2 size={11} /> Remove ({selSkills.size})
                             </button>
                           )}
