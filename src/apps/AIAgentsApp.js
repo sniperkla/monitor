@@ -1,9 +1,12 @@
-'use client';
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Bot, Server as ServerIcon, RefreshCw, Loader2, CheckCircle2, XCircle, Settings2, Puzzle, Trash2, Play, Square, RotateCw, Plus, ExternalLink, Send, Search, Sparkles, Check, FileText, Sparkle, Copy } from 'lucide-react';
+import { Bot, Server as ServerIcon, RefreshCw, Loader2, CheckCircle2, XCircle, Settings2, Puzzle, Trash2, Play, Square, RotateCw, Plus, ExternalLink, Send, Search, Sparkles, Check, FileText, Copy, Lock, Radio, Zap, Shield, Cable, ChevronRight, Flame, Heart } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
+import { useSupporter } from '@/hooks/useSupporter';
+import SupporterModal from '@/components/common/SupporterModal';
 import HermesAgentWizard from '@/components/HermesAgentWizard';
 import ThemeSelect from '@/components/common/ThemeSelect';
+import { io } from 'socket.io-client';
+import { createRelayPeer, DC } from '@/lib/webrtc-relay';
 
 /**
  * AIAgentsApp — dedicated app for installing and managing AI agents on servers.
@@ -59,7 +62,9 @@ const AGENTS = [
 ];
 
 export default function AIAgentsApp({ apiFetch }) {
-  const { state, connectionsReady } = useApp();
+  const { state, connectionsReady, relayInfo } = useApp();
+  const { isSupporter, isAdmin } = useSupporter({ refreshOnFocus: true });
+  const [supporterModalOpen, setSupporterModalOpen] = useState(false);
   const doFetch = apiFetch || fetch;
   const connections = (state?.connections || []).filter(c => c.type !== 'database');
 
@@ -123,10 +128,14 @@ export default function AIAgentsApp({ apiFetch }) {
   const [catalogExpanded, setCatalogExpanded] = useState(false);
   const [sharedExpanded, setSharedExpanded] = useState(false);
   const skillSearchBoxRef = useRef(null);
-  // logs tab
+  // logs tab & WebRTC streamline
   const [logText, setLogText] = useState('');
   const [logCursor, setLogCursor] = useState(0);
   const [logPause, setLogPause] = useState(false);
+  const [logStreamMode, setLogStreamMode] = useState('connecting'); // 'p2p' | 'relay_ws' | 'http' | 'connecting'
+  const socketRef = useRef(null);
+  const rtcPeerRef = useRef(null);
+  const logPreRef = useRef(null);
   const [autoHeal, setAutoHeal] = useState(false);
   const autoHealRef = useRef(false);
   // userStopped persists across page refresh via sessionStorage
@@ -150,20 +159,31 @@ export default function AIAgentsApp({ apiFetch }) {
   const [cfgNav, setCfgNav] = useState(0);
   const cfgTaRef = useRef(null);
 
-  useEffect(() => {
-    if (connectionsReady && !target && connections.length > 0) setTarget(connections[0]._id);
-  }, [connectionsReady, connections, target]);
-
   const agent = AGENTS.find(a => a.id === agentId) || AGENTS[0];
+
+  const doFetchRef = useRef(doFetch);
+  doFetchRef.current = doFetch;
+  const agentRef = useRef(agent);
+  agentRef.current = agent;
+  const targetRef = useRef(target);
+  targetRef.current = target;
+  const detailsRef = useRef(details);
+  detailsRef.current = details;
+
   const call = useCallback(async (action, extra = {}) => {
-    const res = await doFetch(agent.api, {
+    const connId = extra.connectionId || targetRef.current;
+    const api = extra.api || agentRef.current.api;
+    if (!connId || !api) return null;
+    // Strip client-side routing keys so they don't pollute the server-side body
+    const { api: _api, connectionId: _cid, ...bodyExtra } = extra;
+    const res = await doFetchRef.current(api, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ connectionId: target, action, ...extra }),
+      body: JSON.stringify({ connectionId: connId, action, ...bodyExtra }),
     });
     return res.json();
-  }, [doFetch, agent.api, target]);
+  }, []);
 
   // Live action logs — global on/off setting (persisted). When ON, long-running
   // actions run as background jobs; their log streams into busyMsg as they run.
@@ -195,28 +215,49 @@ export default function AIAgentsApp({ apiFetch }) {
     return { success: false, error: 'Client timeout: the action took longer than 20 minutes' };
   }, [call]);
 
-  const loadDetails = useCallback(async () => {
-    if (!target) return;
+  const loadDetails = useCallback(async (forcedTarget, forcedAgent) => {
+    const connId = (typeof forcedTarget === 'string' && forcedTarget.trim() ? forcedTarget.trim() : null) || targetRef.current;
+    const ag = (forcedAgent && typeof forcedAgent === 'object' && forcedAgent.api ? forcedAgent : null) || agentRef.current;
+    if (!connId || !ag) return;
     setLoading(true);
     try {
-      const d = await call('details');
-      setDetails(d);
-      const draftText = ['nanobot', 'openclaw', 'zeroclaw'].includes(agent.id) ? (d.configJson || '') : (d.configYaml || '');
-      setYamlDraft(draftText);
-      const pFiles = d.promptFiles || {
-        'PROMPT.md': d.systemPrompt || '',
-        'SOUL.md': '',
-        'USER.md': '',
-        'AGENTS.md': '',
-        'MEMORY.md': '',
-      };
-      setPromptFilesMap(pFiles);
-      setPromptDraft(pFiles[promptActiveFile] ?? pFiles['PROMPT.md'] ?? '');
+      const d = await call('details', { connectionId: connId, api: ag.api });
+      if (d && (d.installed != null || d.success)) {
+        setDetails(d);
+        const draftText = ['nanobot', 'openclaw', 'zeroclaw'].includes(ag.id) ? (d?.configJson || '') : (d?.configYaml || '');
+        setYamlDraft(draftText);
+        const pFiles = d?.promptFiles || {
+          'PROMPT.md': d?.systemPrompt || '',
+          'SOUL.md': '',
+          'USER.md': '',
+          'AGENTS.md': '',
+          'MEMORY.md': '',
+        };
+        setPromptFilesMap(pFiles);
+        setPromptDraft(pFiles['PROMPT.md'] ?? '');
+      } else {
+        setDetails(null);
+      }
     } catch { setDetails(null); }
     finally { setLoading(false); }
-  }, [target, call, promptActiveFile]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [call]);
 
-  useEffect(() => { setYamlDraft(''); setPromptDraft(''); setPromptActiveFile('PROMPT.md'); setDetails(null); setTab('overview'); if (target) loadDetails(); }, [target, agentId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (connectionsReady && !target && connections.length > 0) {
+      const firstTarget = connections[0]._id;
+      setTarget(firstTarget);
+      loadDetails(firstTarget, agent);
+    }
+  }, [connectionsReady, connections, target, agent, loadDetails]);
+
+  useEffect(() => {
+    setYamlDraft('');
+    setPromptDraft('');
+    setPromptActiveFile('PROMPT.md');
+    setDetails(null);
+    setTab('overview');
+    if (target) loadDetails(target, agent);
+  }, [target, agentId]); // eslint-disable-line react-hooks/exhaustive-deps
   // When fresh details arrive (e.g. after wizard install), refresh the config draft
   // so the Config tab shows the new values, not the old ones.
   useEffect(() => {
@@ -254,7 +295,13 @@ export default function AIAgentsApp({ apiFetch }) {
   };
   const saveConfig = () => act('Save config', async () => {
     const isJson = ['nanobot', 'openclaw'].includes(agent.id);
-    const r = await call('save-config', isJson ? { config: { configJson: yamlDraft, restart: restartAfterSave } } : { config: { configYaml: yamlDraft, restart: restartAfterSave } });
+    const isToml = agent.id === 'zeroclaw';
+    const configPayload = isJson
+      ? { configJson: yamlDraft, restart: restartAfterSave }
+      : isToml
+      ? { configJson: yamlDraft, configToml: yamlDraft, restart: restartAfterSave }
+      : { configYaml: yamlDraft, restart: restartAfterSave };
+    const r = await call('save-config', { config: configPayload });
     return { success: r.success, output: r.restarted ? 'saved & gateway restarted' : r.error || 'saved' };
   });
   const savePrompt = () => act(`Save ${promptActiveFile}`, async () => {
@@ -287,7 +334,6 @@ export default function AIAgentsApp({ apiFetch }) {
   };
 
   // ── search helpers: highlight + count + navigate ──
-  const logPreRef = useRef(null);
   const logLinesAll = useMemo(() => logText.split('\n'), [logText]);
   const logLineIdx = useMemo(() => {
     const q = logSearch.trim().toLowerCase();
@@ -349,25 +395,187 @@ export default function AIAgentsApp({ apiFetch }) {
     call('backups').then(r => setBackups(r?.backups || [])).catch(() => {});
   }, [tab, target]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Live logs ──
-  const pollLogs = useCallback(async () => {
-    if (!target) return;
-    try {
-      const r = await call('logs', { config: { cursor: logCursor } });
-      if (r?.data) {
-        setLogText(t => (t + r.data).slice(-60000));
-        setLogCursor(r.size || logCursor);
-      }
-    } catch { /* transient */ }
-  }, [call, logCursor, target]); // eslint-disable-line react-hooks/exhaustive-deps
+  const logPauseRef = useRef(logPause);
+  useEffect(() => { logPauseRef.current = logPause; }, [logPause]);
+  const connectionsRef = useRef(connections);
+  useEffect(() => { connectionsRef.current = connections; }, [connections]);
+
+  // Auto-scroll to bottom of log pre when new stream data arrives
+  useEffect(() => {
+    if (logPreRef.current && !logPause && tab === 'logs') {
+      logPreRef.current.scrollTop = logPreRef.current.scrollHeight;
+    }
+  }, [logText, logPause, tab]);
+
+  // ── Agent Live Log Streaming: WebRTC P2P → Dedicated Non-Interactive Exec → HTTP fallback ──
+  const cleanLogStream = (text) => {
+    if (!text) return '';
+    return text
+      .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')
+      .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+      .replace(/^Last login:.*\r?\n?/gm, '')
+      .replace(/^\[root@[^\]]+\]# .*\r?\n?/gm, '')
+      .replace(/^\[[^\]@]+@[^\]]+\][\$#] .*\r?\n?/gm, '');
+  };
+
+  const relayConnectedRef = useRef(relayInfo?.connected);
+  useEffect(() => { relayConnectedRef.current = relayInfo?.connected; }, [relayInfo?.connected]);
 
   useEffect(() => {
-    if (tab !== 'logs' || !target) return;
-    setLogText(''); setLogCursor(0);
-    pollLogs();
-    const iv = setInterval(() => { if (!logPause) pollLogs(); }, 3000);
-    return () => clearInterval(iv);
-  }, [tab, target]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (tab !== 'logs' || !target) {
+      if (socketRef.current) {
+        try { socketRef.current.emit('agent:logs:stop'); } catch {}
+        socketRef.current.removeAllListeners();
+        socketRef.current.disconnect();
+        socketRef.current = null;
+      }
+      if (rtcPeerRef.current) {
+        try { rtcPeerRef.current.close(); } catch {}
+        rtcPeerRef.current = null;
+      }
+      return;
+    }
+
+    let active = true;
+    const selectedConn = connectionsRef.current?.find(c => c._id === target);
+    if (!selectedConn) return;
+
+    setLogText('');
+    setLogStreamMode('connecting');
+
+    // Tear down stale socket from previous server/agent
+    if (socketRef.current) {
+      try { socketRef.current.emit('agent:logs:stop'); } catch {}
+      socketRef.current.removeAllListeners();
+      socketRef.current.disconnect();
+      socketRef.current = null;
+    }
+
+    // Pure tail command per agent — checks primary log files then journalctl
+    const tailCmd = `sh -c '
+FILE=""
+for f in "$HOME/.${agentId}/logs/daemon.log" "$HOME/.${agentId}/logs/gateway.log" "$HOME/.${agentId}/logs/agent.log" "$HOME/.${agentId}/logs/daemon-nohup.log" "$HOME/.${agentId}/logs/gateway-nohup.log"; do
+  [ -f "$f" ] && [ -s "$f" ] && FILE="$f" && break
+done
+if [ -n "$FILE" ]; then
+  tail -n 250 -f "$FILE"
+else
+  journalctl --user -u ${agentId} --no-pager -n 250 -f 2>/dev/null || echo "(waiting for ${agentId} logs...)"
+fi'\n`;
+
+    // ── HTTP snapshot (one-shot, used as initial seed or error fallback) ──
+    const fetchSnapshot = async () => {
+      try {
+        const res = await fetch(agentRef.current.api, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ connectionId: targetRef.current, action: 'logs', config: { lines: 300 } }),
+        });
+        const r = await res.json();
+        if (active && r?.data) setLogText(cleanLogStream(r.data).slice(-100000));
+      } catch {}
+    };
+
+    // Immediately seed with historical logs so output is visible instantly
+    fetchSnapshot();
+
+    const preferredRelay = typeof window !== 'undefined'
+      ? (localStorage.getItem('ssh_monitor_preferred_relay') || undefined)
+      : undefined;
+
+    const socket = io({ path: '/api/socket', transports: ['websocket', 'polling'] });
+    socketRef.current = socket;
+
+    socket.on('connect', () => {
+      if (!active) return;
+      socket.emit('ssh:connect', {
+        connectionId: selectedConn._id,
+        connection: selectedConn,
+        preferredRelay,
+      });
+    });
+
+    // ── Path 1: WebRTC P2P via Local Relay (zero central server load) ──
+    socket.on('relay:rtc:ready', async ({ connId: relayConnId }) => {
+      if (!active) return;
+      try {
+        const peer = await createRelayPeer({ socket, relayConnId });
+        if (!active) { peer.close(); return; }
+        rtcPeerRef.current = peer;
+        setLogStreamMode('p2p');
+
+        peer.channel(DC.SSH).onmessage = (evt) => {
+          if (!active || logPauseRef.current) return;
+          const raw = typeof evt.data === 'string' ? evt.data : new TextDecoder().decode(evt.data);
+          const chunk = cleanLogStream(raw);
+          if (chunk) setLogText(prev => (prev + chunk).slice(-100000));
+        };
+
+        peer.sendControl({ type: 'ssh:start', connId: relayConnId });
+        setTimeout(() => {
+          if (active) try { peer.sendSsh(tailCmd); } catch {}
+        }, 300);
+      } catch (err) {
+        if (!active) return;
+        console.warn('[Agent Logs] WebRTC failed, falling back to WS relay:', err?.message);
+        setLogStreamMode('relay_ws');
+      }
+    });
+
+    // ── Path 2: Dedicated Non-Interactive Stream / Fallback Stream ──
+    socket.on('ssh:connected', () => {
+      if (!active || rtcPeerRef.current) return; // already on WebRTC
+      setLogStreamMode('relay_ws');
+      socket.emit('agent:logs:start', { agentId, lines: 250 });
+      socket.emit('ssh:input', tailCmd);
+    });
+
+    socket.on('agent:logs:data', (data) => {
+      if (!active || logPauseRef.current || rtcPeerRef.current) return;
+      const chunk = cleanLogStream(data);
+      if (chunk) setLogText(prev => (prev + chunk).slice(-100000));
+    });
+
+    socket.on('ssh:data', (data) => {
+      if (!active || logPauseRef.current || rtcPeerRef.current) return;
+      const chunk = cleanLogStream(data);
+      if (chunk) setLogText(prev => (prev + chunk).slice(-100000));
+    });
+
+    // ── Path 3: HTTP snapshot fallback on error ──
+    socket.on('agent:logs:error', () => {
+      if (!active) return;
+      setLogStreamMode('http');
+      fetchSnapshot();
+    });
+
+    socket.on('ssh:error', () => {
+      if (!active) return;
+      setLogStreamMode('http');
+      fetchSnapshot();
+    });
+
+    socket.on('connect_error', () => {
+      if (!active) return;
+      setLogStreamMode('http');
+      fetchSnapshot();
+    });
+
+    return () => {
+      active = false;
+      if (socketRef.current) {
+        try { socketRef.current.emit('agent:logs:stop'); } catch {}
+        socketRef.current.removeAllListeners();
+        socketRef.current.disconnect();
+        socketRef.current = null;
+      }
+      if (rtcPeerRef.current) {
+        try { rtcPeerRef.current.close(); } catch {}
+        rtcPeerRef.current = null;
+      }
+    };
+  }, [tab, target, agentId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // keep refs in sync so interval closure always reads latest values
   useEffect(() => { autoHealRef.current = autoHeal; }, [autoHeal]);
@@ -382,31 +590,115 @@ export default function AIAgentsApp({ apiFetch }) {
     } catch { /* ignore */ }
   }, [agentId, target]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Health watchdog (abnormal-state detection) ──
+  // ── Health watchdog (runs only once every 30s in the background) ──
   useEffect(() => {
-    if (!details?.installed || !target) return;
+    if (!target) return;
     let cancelled = false;
     const check = async () => {
+      if (!detailsRef.current?.installed || cancelled) return;
       try {
         const h = await call('health');
-        if (!cancelled) setHealth(h);
-        // auto-heal: dead gateway → bring it back up (only if user did not explicitly stop it)
-        // use refs to avoid stale closure capturing old values
+        if (!cancelled && h) setHealth(h);
         if (!cancelled && autoHealRef.current && !userStoppedRef.current && h && !h.alive && h.installed !== false) {
-          setNotice({ ok: false, text: `⚠ ${agent.name} gateway died unexpectedly — auto-restarting…` });
+          setNotice({ ok: false, text: `⚠ ${agentRef.current.name} gateway died unexpectedly — auto-restarting…` });
           const r = await call('gateway', { config: { op: 'start' } });
-          if (r?.success) setNotice({ ok: true, text: `✓ ${agent.name} gateway was down — automatically restarted.` });
+          if (r?.success) setNotice({ ok: true, text: `✓ ${agentRef.current.name} gateway was down — automatically restarted.` });
         }
       } catch { /* transient */ }
     };
-    // skip the immediate-mount check so the user sees the real state first
-    const t0 = setTimeout(check, 5000);
-    const iv = setInterval(check, 20000);
+    const t0 = setTimeout(check, 10000);
+    const iv = setInterval(check, 30000);
     return () => { cancelled = true; clearTimeout(t0); clearInterval(iv); };
-  }, [details?.installed, target, agentId, agent.name, call]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [target, agentId, call]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const inputCls = 'w-full bg-black/30 border border-[var(--border-color)] rounded-lg px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-400/50';
   const btn = 'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-bold transition cursor-pointer disabled:opacity-40';
+
+  if (!isSupporter && !isAdmin) {
+    return (
+      <div className="h-full overflow-y-auto p-4 md:p-8 max-w-4xl mx-auto flex flex-col items-center justify-center min-h-[600px] text-center space-y-6">
+        <style>{`select option { background-color: #16162a; color: #fff; }`}</style>
+        
+        {/* Glow ambient background */}
+        <div className="relative">
+          <div className="absolute -inset-4 bg-gradient-to-r from-pink-500/20 via-purple-500/20 to-indigo-500/20 rounded-full blur-2xl opacity-75 animate-pulse" />
+          <div className="relative w-20 h-20 rounded-2xl bg-gradient-to-br from-pink-500/20 to-purple-600/30 border border-pink-500/30 flex items-center justify-center shadow-2xl shadow-pink-500/20">
+            <Lock size={36} className="text-pink-400" />
+          </div>
+        </div>
+
+        <div className="space-y-2 max-w-xl">
+          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold bg-pink-500/10 text-pink-300 border border-pink-500/25">
+            <Sparkles size={12} className="text-pink-400" /> Supporter-Exclusive App
+          </div>
+          <h2 className="text-2xl md:text-3xl font-extrabold tracking-tight bg-gradient-to-r from-white via-white/90 to-pink-200 bg-clip-text text-transparent">
+            AI Autonomous Agent Fleet
+          </h2>
+          <p className="text-xs md:text-sm text-[var(--text-muted)] leading-relaxed">
+            Deploy and manage autonomous AI agents (Hermes, OpenClaw, Nanobot &amp; ZeroClaw) with low-latency WebRTC P2P live log streamline and zero central server overhead.
+          </p>
+        </div>
+
+        {/* Feature Highlights Grid */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-2xl text-left">
+          <div className="p-4 rounded-xl bg-[var(--bg-secondary)]/80 border border-pink-500/15 hover:border-pink-500/30 transition space-y-1.5">
+            <div className="flex items-center gap-2 text-pink-400 font-bold text-xs">
+              <Radio size={15} /> WebRTC P2P Live Logs
+            </div>
+            <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">
+              Stream remote agent logs directly peer-to-peer via Local Relay DataChannels with zero central server bandwidth or CPU usage.
+            </p>
+          </div>
+
+          <div className="p-4 rounded-xl bg-[var(--bg-secondary)]/80 border border-indigo-500/15 hover:border-indigo-500/30 transition space-y-1.5">
+            <div className="flex items-center gap-2 text-indigo-400 font-bold text-xs">
+              <Bot size={15} /> 4 AI Agent Engines
+            </div>
+            <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">
+              1-click cross-distro deployment for Hermes, OpenClaw, Nanobot &amp; ZeroClaw on Ubuntu, Debian, Rocky, Fedora, Arch &amp; OpenSUSE.
+            </p>
+          </div>
+
+          <div className="p-4 rounded-xl bg-[var(--bg-secondary)]/80 border border-emerald-500/15 hover:border-emerald-500/30 transition space-y-1.5">
+            <div className="flex items-center gap-2 text-emerald-400 font-bold text-xs">
+              <Cable size={15} /> Private &amp; NAT Server Tunnel
+            </div>
+            <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">
+              Manage AI agents on home labs and private VPCs via Local Relay without opening any inbound ports.
+            </p>
+          </div>
+
+          <div className="p-4 rounded-xl bg-[var(--bg-secondary)]/80 border border-violet-500/15 hover:border-violet-500/30 transition space-y-1.5">
+            <div className="flex items-center gap-2 text-violet-400 font-bold text-xs">
+              <FileText size={15} /> Personality &amp; Skills Studio
+            </div>
+            <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">
+              Customize SOUL.md, PROMPT.md, and install community skills from the curated live skills catalog.
+            </p>
+          </div>
+        </div>
+
+        {/* Unlock Action Button */}
+        <div className="pt-2 flex flex-col sm:flex-row items-center gap-3">
+          <button
+            onClick={() => setSupporterModalOpen(true)}
+            className="flex items-center justify-center gap-2 px-6 py-3 rounded-2xl bg-gradient-to-r from-pink-500 via-purple-600 to-indigo-600 text-white font-bold text-xs shadow-lg shadow-pink-500/25 hover:shadow-pink-500/40 hover:scale-[1.02] active:scale-[0.98] transition cursor-pointer"
+          >
+            <Sparkles size={14} /> Unlock with Supporter Membership
+          </button>
+        </div>
+
+        <p className="text-[10px] text-[var(--text-muted)] opacity-70">
+          Already a supporter? Click the button above to verify or enter your Ko-fi activation code.
+        </p>
+
+        <SupporterModal
+          open={supporterModalOpen}
+          onClose={() => setSupporterModalOpen(false)}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="h-full overflow-y-auto p-4 md:p-6 max-w-4xl mx-auto space-y-4">
@@ -427,7 +719,7 @@ export default function AIAgentsApp({ apiFetch }) {
             className={`${btn} ${liveLogs ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-white/5 border border-[var(--border-color)] text-[var(--text-muted)] hover:text-white'}`}>
             <span className={`inline-block w-1.5 h-1.5 rounded-full ${liveLogs ? 'bg-emerald-400 animate-pulse' : 'bg-[var(--text-muted)]'}`} /> Live logs {liveLogs ? 'on' : 'off'}
           </button>
-          <button onClick={loadDetails} disabled={loading || !target} className={`${btn} bg-white/5 border border-[var(--border-color)] text-[var(--text-muted)] hover:text-white`}>
+          <button onClick={() => loadDetails()} disabled={loading || !target} className={`${btn} bg-white/5 border border-[var(--border-color)] text-[var(--text-muted)] hover:text-white`}>
             {loading ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />} Refresh
           </button>
         </div>
@@ -435,7 +727,14 @@ export default function AIAgentsApp({ apiFetch }) {
 
       {/* Server picker */}
       <div className="rounded-xl border border-[var(--border-color)] bg-[var(--bg-secondary)] p-4">
-        <label className="text-[10px] uppercase tracking-wider font-bold text-[var(--text-muted)]">Server</label>
+        <div className="flex items-center justify-between mb-1">
+          <label className="text-[10px] uppercase tracking-wider font-bold text-[var(--text-muted)]">Server</label>
+          {relayInfo?.connected && (
+            <span className="flex items-center gap-1 text-[10px] text-pink-300 font-bold bg-pink-500/10 px-2 py-0.5 rounded-full border border-pink-500/20 shadow-[0_0_10px_rgba(236,72,153,0.15)]">
+              <Cable size={10} /> Local Relay Active
+            </span>
+          )}
+        </div>
         <ThemeSelect
           value={target}
           onChange={setTarget}
@@ -503,7 +802,16 @@ export default function AIAgentsApp({ apiFetch }) {
               {details.running ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
               {details.running ? 'Gateway running' : 'Gateway stopped'}
             </span>
-            {details.version && <span className="text-[10px] text-[var(--text-muted)]">v{details.version}</span>}
+            {details.version && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/5 border border-[var(--border-color)] text-[var(--text-muted)] font-mono">
+                {details.version.match(/v?[0-9]+\.[0-9]+(\.[0-9]+)?(-[0-9]+)?/)?.[0] || details.version.split('\n')[0].slice(0, 30)}
+              </span>
+            )}
+            {details.binPath && (
+              <span className="text-[9px] font-mono text-[var(--text-muted)] opacity-70 truncate max-w-[220px] hidden sm:inline" title={`Binary path: ${details.binPath}`}>
+                {details.binPath}
+              </span>
+            )}
             {details.model && <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-300">🧠 {details.model}</span>}
             {details.service && <span className="text-[10px] text-[var(--text-muted)]">{details.service} service</span>}
             <span className="ml-auto flex items-center gap-1">
@@ -576,39 +884,130 @@ export default function AIAgentsApp({ apiFetch }) {
 
             {tab === 'logs' && (
               <div className="space-y-2">
+                {/* Streaming status bar */}
+                <div className="flex items-center justify-between gap-2 flex-wrap bg-black/30 p-2.5 rounded-xl border border-[var(--border-color)]">
+                  <div className="flex items-center gap-2">
+                    {relayInfo?.connected ? (
+                      <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[10px] font-bold bg-pink-500/15 text-pink-300 border border-pink-500/30 shadow-[0_0_12px_rgba(236,72,153,0.2)]">
+                        <Cable size={11} className="text-pink-400" /> Local Relay (Zero Server Hop)
+                      </span>
+                    ) : (
+                      <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 shadow-[0_0_12px_rgba(16,185,129,0.2)]">
+                        <Radio size={11} className="animate-pulse text-emerald-400" /> Live Agent Stream
+                      </span>
+                    )}
+                    <span className="text-[10px] text-[var(--text-muted)] hidden sm:inline">
+                      {logPause ? 'Stream paused' : 'Streaming ~/.hermes / daemon logs'}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => setLogPause(p => !p)}
+                      className={`${btn} ${logPause ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30' : 'bg-white/5 border border-[var(--border-color)] text-[var(--text-muted)] hover:text-white'} !py-1 !px-2`}
+                    >
+                      {logPause ? <Play size={10} /> : <Square size={10} />}
+                      {logPause ? 'Resume Stream' : 'Pause'}
+                    </button>
+                    <button
+                      onClick={() => setLogText('')}
+                      className={`${btn} bg-white/5 border border-[var(--border-color)] text-[var(--text-muted)] hover:text-white !py-1 !px-2`}
+                      title="Clear log buffer"
+                    >
+                      <Trash2 size={10} /> Clear
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (logText) {
+                          navigator.clipboard.writeText(logText);
+                          setNotice({ ok: true, text: 'Logs copied to clipboard' });
+                        }
+                      }}
+                      className={`${btn} bg-white/5 border border-[var(--border-color)] text-[var(--text-muted)] hover:text-white !py-1 !px-2`}
+                      title="Copy all logs"
+                    >
+                      <Copy size={10} /> Copy
+                    </button>
+                  </div>
+                </div>
+
                 <div className="flex items-center gap-2 flex-wrap">
-                  <input value={logSearch} onChange={e => { setLogSearch(e.target.value); setLogNav(0); }} placeholder="Search log (e.g. error)…" className={`${inputCls} flex-1 !py-1.5 font-mono`} />
+                  <input
+                    value={logSearch}
+                    onChange={e => { setLogSearch(e.target.value); setLogNav(0); }}
+                    placeholder="Search live log (e.g. error, gateway, websocket)…"
+                    className={`${inputCls} flex-1 !py-1.5 font-mono`}
+                  />
                   {logSearch.trim() && (
                     <>
-                      <span className="text-[10px] font-bold text-indigo-300 whitespace-nowrap">{logMatches.length ? `${logNav + 1}/${logMatches.length}` : '0 found'}</span>
+                      <span className="text-[10px] font-bold text-indigo-300 whitespace-nowrap">
+                        {logMatches.length ? `${logNav + 1}/${logMatches.length}` : '0 found'}
+                      </span>
                       <button onClick={() => navLog(-1)} disabled={!logMatches.length} className={`${btn} bg-white/5 border border-[var(--border-color)] !py-1 !px-2`}>↑</button>
                       <button onClick={() => navLog(1)} disabled={!logMatches.length} className={`${btn} bg-white/5 border border-[var(--border-color)] !py-1 !px-2`}>↓</button>
                     </>
                   )}
-                  <button onClick={() => setLogPause(p => !p)} className={`${btn} bg-white/5 border border-[var(--border-color)] text-[var(--text-muted)] hover:text-white !py-1 !px-2`}>
-                    {logPause ? '▶ Resume tail' : '⏸ Pause'}
-                  </button>
                 </div>
-                <pre ref={logPreRef}
-                  className="bg-black/50 rounded-lg p-3 text-[10px] font-mono whitespace-pre-wrap h-80 overflow-y-auto text-emerald-200/90 border border-[var(--border-color)]">
+
+                <pre
+                  ref={logPreRef}
+                  className="bg-black/50 rounded-xl p-3.5 text-[10px] font-mono whitespace-pre-wrap h-84 overflow-y-auto text-emerald-200/90 border border-[var(--border-color)] selection:bg-indigo-500/30"
+                >
                   {(() => {
                     const q = logSearch.trim().toLowerCase();
-                    if (!logText) return 'Waiting for log output…';
-                    if (!q) return logText.slice(-20000);
+                    if (!logText) return (
+                      <span className="text-[var(--text-muted)] italic flex items-center gap-2">
+                        <Loader2 size={12} className="animate-spin text-indigo-400" />
+                        Listening for live output from {agent.name} gateway…
+                      </span>
+                    );
+                    if (!q) return logText.slice(-30000);
                     return logText.split('\n').map((l, i) => {
                       const isMatch = l.toLowerCase().includes(q);
                       const isCur = isMatch && logLineIdx[logNav % Math.max(logLineIdx.length, 1)] === i;
                       return (
-                        <div key={i} id={`log-line-${i}`} className={isCurrent ? 'bg-indigo-500/40 rounded' : isMatch ? 'bg-amber-500/15 rounded' : ''}>
+                        <div
+                          key={i}
+                          id={`log-line-${i}`}
+                          className={isCur ? 'bg-indigo-500/40 rounded px-1' : isMatch ? 'bg-amber-500/15 rounded px-1' : ''}
+                        >
                           {highlightText(l, logSearch)}
                         </div>
                       );
                     });
                   })()}
                 </pre>
+
                 {health?.errorCount > 0 && (
-                  <div className="rounded-lg border border-red-500/25 bg-red-500/10 px-3 py-2 text-[11px] text-red-300">
-                    {health.errorCount} recent ERROR lines detected — check the log above.
+                  <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-300 space-y-2">
+                    <div className="flex items-center justify-between font-bold">
+                      <span className="flex items-center gap-1.5">
+                        <XCircle size={14} className="text-red-400 shrink-0" />
+                        <span>{health.errorCount} recent ERROR line(s) detected in gateway log</span>
+                      </span>
+                      {health.telegram === 'error' && (
+                        <span className="text-[10px] px-2 py-0.5 rounded bg-red-500/20 text-red-200 border border-red-500/30">
+                          Telegram Conflict / Auth Error
+                        </span>
+                      )}
+                    </div>
+                    {health.recentErrors && health.recentErrors.length > 0 && (
+                      <div className="p-2.5 rounded-lg bg-black/50 border border-red-500/20 font-mono text-[10px] text-red-200/90 whitespace-pre-wrap max-h-36 overflow-y-auto space-y-1">
+                        {health.recentErrors.map((errLine, idx) => (
+                          <div key={idx} className="leading-relaxed border-b border-red-500/10 last:border-0 pb-1 last:pb-0">{errLine}</div>
+                        ))}
+                      </div>
+                    )}
+                    <div className="flex items-center justify-between pt-1 flex-wrap gap-2">
+                      <span className="text-[10px] text-red-300/70">Check credentials or restart the gateway to clear conflicts.</span>
+                      <button
+                        onClick={() => gatewayOp('restart')}
+                        disabled={!!busyMsg}
+                        className={`${btn} bg-red-500/20 text-red-200 hover:bg-red-500/30 border border-red-500/30 !py-1 !px-2 ml-auto`}
+                      >
+                        <RotateCw size={10} /> Restart Gateway
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
@@ -642,7 +1041,7 @@ export default function AIAgentsApp({ apiFetch }) {
                     <ThemeSelect
                       value=""
                       onChange={(n) => {
-                        if (n) act(`Restore ${n}`, () => call('restore-backup', { config: { name: n } })).then(loadDetails);
+                        if (n) act(`Restore ${n}`, () => call('restore-backup', { config: { name: n } })).then(() => loadDetails());
                       }}
                       options={backups.map(b => ({
                         value: b.name,
@@ -945,7 +1344,7 @@ export default function AIAgentsApp({ apiFetch }) {
                       {busyMsg.startsWith('Save') ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />} Save {curFileMeta.name}
                     </button>
                     <button
-                      onClick={loadDetails}
+                      onClick={() => loadDetails()}
                       disabled={!!busyMsg}
                       className={`${btn} bg-white/5 border border-[var(--border-color)] text-[var(--text-muted)] hover:text-white`}
                     >
@@ -1193,7 +1592,7 @@ export default function AIAgentsApp({ apiFetch }) {
                             onMouseDown={(e) => { e.preventDefault(); installSkill(); }}
                             className="px-4 py-3 text-xs text-[var(--text-muted)] hover:bg-white/5 cursor-pointer flex items-center justify-between"
                           >
-                            <span>Install custom skill: <b className="text-indigo-300 font-mono">"{skillInput}"</b></span>
+                            <span>Install custom skill: <b className="text-indigo-300 font-mono">&quot;{skillInput}&quot;</b></span>
                             <span className="text-[10px] text-indigo-400 font-bold flex items-center gap-1"><Plus size={10} /> Click to Install</span>
                           </div>
                         )}
@@ -1486,6 +1885,11 @@ export default function AIAgentsApp({ apiFetch }) {
           </div>
         );
       })()}
+
+      <SupporterModal
+        open={supporterModalOpen}
+        onClose={() => setSupporterModalOpen(false)}
+      />
     </div>
   );
 }

@@ -34,7 +34,7 @@ const LOGD = '"$HOME/.zeroclaw/logs"';
 const STATUS_SCRIPT = `
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 BIN="$(command -v zeroclaw 2>/dev/null || true)"
-[ -z "$BIN" ] && for p in "$HOME/.local/bin/zeroclaw" "$HOME/.cargo/bin/zeroclaw" "/usr/local/bin/zeroclaw"; do [ -x "$p" ] && BIN="$p" && break; done
+[ -z "$BIN" ] && for p in "$HOME/.local/bin/zeroclaw" "$HOME/.cargo/bin/zeroclaw" "/usr/local/bin/zeroclaw" "/usr/bin/zeroclaw" "/usr/sbin/zeroclaw"; do [ -x "$p" ] && BIN="$p" && break; done
 if [ -n "$BIN" ]; then echo "BIN=SET"; else echo "BIN=UNSET"; fi
 VER=NONE
 [ -n "$BIN" ] && VER="$($BIN --version 2>/dev/null | head -1 | cut -c1-40)"
@@ -82,7 +82,7 @@ async function handleAgentAction(body, session, log = []) {
       return r;
     };
     const b64 = (s) => Buffer.from(String(s), 'utf8').toString('base64');
-    const binPath = () => `p="$(export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:$PATH"; command -v zeroclaw 2>/dev/null)"; [ -z "$p" ] && for q in "$HOME/.local/bin/zeroclaw" "$HOME/.cargo/bin/zeroclaw" "/usr/local/bin/zeroclaw"; do [ -x "$q" ] && p="$q" && break; done; echo "BIN=$p"`;
+    const binPath = () => `p="$(export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:/usr/bin:/usr/sbin:$PATH"; command -v zeroclaw 2>/dev/null)"; [ -z "$p" ] && for q in "$HOME/.local/bin/zeroclaw" "$HOME/.cargo/bin/zeroclaw" "/usr/local/bin/zeroclaw" "/usr/bin/zeroclaw" "/usr/sbin/zeroclaw"; do [ -x "$q" ] && p="$q" && break; done; echo "BIN=$p"`;
     const ENVX = `export XDG_RUNTIME_DIR="/run/user/$(id -u)" 2>/dev/null; export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:$PATH"`;
 
     // ── Gateway control — zeroclaw service CLI, systemd user unit, else nohup ──
@@ -104,7 +104,7 @@ async function handleAgentAction(body, session, log = []) {
       }
       // start / restart — never write the plain word "daemon" here (self-match)
       if (op === 'restart') await gwCtl('stop');
-      const startCmd = `${ENVX}; { ${BP} service start 2>/dev/null || systemctl --user start zeroclaw 2>/dev/null || { mkdir -p ${LOGD}; setsid nohup ${BP} dae""mon >> "$HOME/.zeroclaw/logs/dae""mon-nohup.log" 2>&1 < /dev/null & sleep 3; }; }; sleep 2; timeout 15 pgrep -f '[z]eroclaw dae[m]on' >/dev/null && echo GW_UP || echo GW_DOWN`;
+      const startCmd = `${ENVX}; { ${BP} service start 2>/dev/null || systemctl --user start zeroclaw 2>/dev/null || { mkdir -p ${LOGD}; setsid nohup ${BP} dae""mon >> "$HOME/.zeroclaw/logs/daemon.log" 2>&1 < /dev/null & sleep 3; }; }; sleep 2; timeout 15 pgrep -f '[z]eroclaw dae[m]on' >/dev/null && echo GW_UP || echo GW_DOWN`;
       return execCommand(sshConfig, startCmd, { pool: false, timeoutMs: 120000 })
         .then(r => ({ ok: /GW_UP/.test(r.stdout || ''), out: (r.stdout || '').slice(-200) }));
     };
@@ -139,7 +139,7 @@ async function handleAgentAction(body, session, log = []) {
       const D = `
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:$PATH"
 BIN="$(command -v zeroclaw 2>/dev/null || true)"
-[ -z "$BIN" ] && for p in "$HOME/.local/bin/zeroclaw" "$HOME/.cargo/bin/zeroclaw" "/usr/local/bin/zeroclaw"; do [ -x "$p" ] && BIN="$p" && break; done
+[ -z "$BIN" ] && for p in "$HOME/.local/bin/zeroclaw" "$HOME/.cargo/bin/zeroclaw" "/usr/local/bin/zeroclaw" "/usr/bin/zeroclaw" "/usr/sbin/zeroclaw"; do [ -x "$p" ] && BIN="$p" && break; done
 echo "===TOML_B64==="
 base64 < "$HOME/.zeroclaw/config.toml" 2>/dev/null || true
 echo "===RUNNING==="
@@ -356,16 +356,24 @@ echo "===ENVKEYS==="
       return NextResponse.json({ success: g.ok !== false, op, active, output: g.out || '' });
     }
 
-    // ── LOGS — journalctl first, file logs fallback ──
+    // ── LOGS — journalctl first, then any .log file in ~/.zeroclaw/logs/ ──
     if (action === 'logs') {
       const LINES = Math.min(Number(config.lines || 300), 1000);
       const r = await execCommand(sshConfig,
-        `${ENVX}; journalctl --user -u zeroclaw --no-pager -n ${LINES} 2>/dev/null | tail -n ${LINES} > /tmp/.zc-jl.txt; ` +
+        // journalctl on Docker/no-systemd outputs "-- No entries --" which is non-empty,
+        // so we strip that sentinel before checking file size to force fallback to daemon.log
+        `${ENVX}; journalctl --user -u zeroclaw --no-pager -n ${LINES} 2>/dev/null ` +
+        `| grep -v '^-- No entries --' | grep -v '^-- Logs begin' | tail -n ${LINES} > /tmp/.zc-jl.txt; ` +
         `if [ -s /tmp/.zc-jl.txt ]; then cat /tmp/.zc-jl.txt; else ` +
-        `tail -n ${LINES} "$HOME/.zeroclaw/logs/dae""mon-nohup.log" 2>/dev/null || tail -n ${LINES} "$HOME/.zeroclaw/logs/daem""on.stderr.log" 2>/dev/null || true; fi; rm -f /tmp/.zc-jl.txt`,
+        `tail -n ${LINES} "$HOME/.zeroclaw/logs/daemon.log" 2>/dev/null || ` +
+        `tail -n ${LINES} "$HOME/.zeroclaw/logs/dae""mon-nohup.log" 2>/dev/null || ` +
+        `tail -n ${LINES} "$HOME/.zeroclaw/logs/daem""on.stderr.log" 2>/dev/null || ` +
+        `{ LOG=$(ls -1t "$HOME/.zeroclaw/logs/"*.log 2>/dev/null | head -1); [ -n "$LOG" ] && tail -n ${LINES} "$LOG"; } || ` +
+        `echo "(no log file found in ~/.zeroclaw/logs/ — daemon may have exited early)"; ` +
+        `fi; rm -f /tmp/.zc-jl.txt`,
         { pool: false, timeoutMs: 30000 });
       const data = (r.stdout || '').slice(-200000);
-      return NextResponse.json({ success: true, data, size: data.length, file: 'journal::user/zeroclaw | ~/.zeroclaw/logs/' });
+      return NextResponse.json({ success: true, data, size: data.length, file: 'journal::user/zeroclaw | ~/.zeroclaw/logs/daemon.log' });
     }
 
     // ── SAVE-CONFIG (raw TOML) with auto-rollback ──
@@ -420,7 +428,7 @@ print('ZEROCLAW_CONFIG_MERGED')
     }
 
     if (action === 'save-config') {
-      const tomlText = String(config.configJson ?? '');
+      const tomlText = String(config.configJson ?? config.configToml ?? config.configYaml ?? '');
       if (!tomlText.trim()) return NextResponse.json({ success: false, error: 'Empty config' }, { status: 400 });
       const stamp = Date.now();
       await run('backup current config', `mkdir -p "$HOME/.zeroclaw"; [ -f "$HOME/.zeroclaw/config.toml" ] && cp "$HOME/.zeroclaw/config.toml" "$HOME/.zeroclaw/config.toml.bak-${stamp}"; ls -1t "$HOME/.zeroclaw"/config.toml.bak-* 2>/dev/null | head -3`);

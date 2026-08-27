@@ -30,7 +30,7 @@ const INSTALLER_URL = 'https://hermes-agent.nousresearch.com/install.sh';
 const STATUS_SCRIPT = `
 export PATH="$HOME/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 BIN="$(command -v hermes 2>/dev/null || true)"
-[ -z "$BIN" ] && [ -x "$HOME/.local/bin/hermes" ] && BIN="$HOME/.local/bin/hermes"
+[ -z "$BIN" ] && for p in "$HOME/.local/bin/hermes" "/usr/local/bin/hermes" "/usr/bin/hermes" "$HOME/.hermes/hermes-agent/venv/bin/hermes" "/usr/local/lib/hermes-agent/venv/bin/hermes" "/usr/local/lib/hermes-agent/hermes"; do [ -x "$p" ] && BIN="$p" && break; done
 if [ -n "$BIN" ]; then echo "BIN=SET"; else echo "BIN=UNSET"; fi
 VER=NONE
 [ -n "$BIN" ] && VER="$($BIN --version 2>/dev/null | tail -1 | cut -c1-40)"
@@ -214,7 +214,7 @@ true`,
       const DETAILS_SCRIPT = `
 export PATH="$HOME/.local/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 BIN="$(command -v hermes 2>/dev/null || true)"
-[ -z "$BIN" ] && [ -x "$HOME/.local/bin/hermes" ] && BIN="$HOME/.local/bin/hermes"
+[ -z "$BIN" ] && for p in "$HOME/.local/bin/hermes" "/usr/local/bin/hermes" "/usr/bin/hermes" "$HOME/.hermes/hermes-agent/venv/bin/hermes" "/usr/local/lib/hermes-agent/venv/bin/hermes" "/usr/local/lib/hermes-agent/hermes"; do [ -x "$p" ] && BIN="$p" && break; done
 echo "===CONFIG_B64==="
 base64 < "$HOME/.hermes/config.yaml" 2>/dev/null || true
 echo "===ENV_B64==="
@@ -471,10 +471,14 @@ if [ -n "$LOGL" ]; then
     TG=error
   fi
   echo "TG=$TG"
-  ERRS=$(tail -n 300 "$LOGL" | grep -E 'ERROR|CRITICAL' | tail -5)
-  EC=0; [ -n "$ERRS" ] && EC=$(printf '%s\\n' "$ERRS" | wc -l)
+  ERRS=$(tail -n 300 "$LOGL" 2>/dev/null | grep -E 'ERROR|CRITICAL' | tail -5)
+  EC=0; [ -n "$ERRS" ] && EC=$(printf '%s\n' "$ERRS" | wc -l)
   echo "ERRCOUNT=$EC"
-  [ -n "$ERRS" ] && printf '%s\\n' "$ERRS"
+  if [ -n "$ERRS" ]; then
+    echo "===ERRORS==="
+    printf '%s\n' "$ERRS"
+    echo "===ENDERRORS==="
+  fi
 else
   echo "TG=unknown"; echo "ERRCOUNT=0"
 fi
@@ -482,7 +486,11 @@ fi
       const r = await execCommand(sshConfig, script, { pool: false, timeoutMs: 90000 });
       const out = r.stdout || '';
       const gv = (k) => (out.match(new RegExp(`${k}=([^\\n]*)`)) || [])[1]?.trim();
-      const recentErrors = out.split('\n').filter(l => /ERROR|CRITICAL/.test(l)).slice(-5);
+      let recentErrors = [];
+      const errSection = out.match(/===ERRORS===([\s\S]*?)===ENDERRORS===/);
+      if (errSection && errSection[1]) {
+        recentErrors = errSection[1].trim().split('\n').filter(Boolean);
+      }
       return NextResponse.json({
         success: true,
         alive: gv('ALIVE') === '1',
@@ -658,7 +666,7 @@ fi
         `(command -v apk    >/dev/null 2>&1 && $S apk add --no-cache ${apkPkgs}) < /dev/null ||`,
         `(command -v dnf    >/dev/null 2>&1 && $S dnf install -y --allowerasing ${rpmPkgs}) < /dev/null ||`,
         `(command -v yum    >/dev/null 2>&1 && $S yum install -y ${rpmPkgs}) < /dev/null ||`,
-        `(command -v zypper >/dev/null 2>&1 && { sed -i 's|^gpgcheck.*|gpgcheck = 0|' /etc/zypp/zypp.conf 2>/dev/null || echo 'gpgcheck = 0' >> /etc/zypp/zypp.conf; } && $S zypper --non-interactive --no-gpg-checks install ${zyppPkgs}) < /dev/null ||`,
+        `(command -v zypper >/dev/null 2>&1 && { sed -i 's|^gpgcheck.*|gpgcheck = 0|' /etc/zypp/zypp.conf 2>/dev/null || echo 'gpgcheck = 0' >> /etc/zypp/zypp.conf; } && $S zypper --non-interactive --no-gpg-checks install ${zyppPkgs} && { command -v pip3 >/dev/null 2>&1 && $S pip3 install -q uv 2>/dev/null || true; }) < /dev/null ||`,
         `(command -v pacman >/dev/null 2>&1 && $S pacman -Sy --noconfirm --needed git curl xz libatomic make) < /dev/null ||`,
         'echo PREREQ_SKIPPED',
         'touch /tmp/.prereq-done',
@@ -700,7 +708,7 @@ fi
     await run('launcher recovery check', `
       p="$(export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"; command -v hermes 2>/dev/null)"
       [ -n "$p" ] && echo LAUNCHER_PRESENT && exit 0
-      for v in "$HOME/.hermes/hermes-agent/venv/bin/hermes" /usr/local/lib/hermes-agent/venv/bin/hermes; do
+      for v in "$HOME/.hermes/hermes-agent/venv/bin/hermes" /usr/local/lib/hermes-agent/venv/bin/hermes /usr/local/lib/hermes-agent/hermes; do
         [ -x "$v" ] || continue
         mkdir -p "$HOME/.local/bin"
         ln -sf "$v" /usr/local/bin/hermes 2>/dev/null || ln -sf "$v" "$HOME/.local/bin/hermes"

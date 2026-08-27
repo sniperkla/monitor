@@ -23,7 +23,7 @@ const LOGF = '"$HOME/.nanobot/logs/gatew""ay.log"';
 const STATUS_SCRIPT = `
 export PATH="$HOME/.local/bin:$HOME/.nanobot/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 BIN="$(command -v nanobot 2>/dev/null || true)"
-[ -z "$BIN" ] && for p in "$HOME/.local/bin/nanobot" "$HOME/.nanobot/venv/bin/nanobot"; do [ -x "$p" ] && BIN="$p" && break; done
+[ -z "$BIN" ] && for p in "$HOME/.local/bin/nanobot" "$HOME/.nanobot/venv/bin/nanobot" "/usr/local/bin/nanobot" "/usr/bin/nanobot"; do [ -x "$p" ] && BIN="$p" && break; done
 if [ -n "$BIN" ]; then echo "BIN=SET"; else echo "BIN=UNSET"; fi
 VER=NONE
 [ -n "$BIN" ] && VER="$($BIN --version 2>/dev/null | tail -1 | cut -c1-40)"
@@ -68,7 +68,7 @@ async function handleAgentAction(body, session, log = []) {
     };
     const b64 = (s) => Buffer.from(String(s), 'utf8').toString('base64');
 
-    const binPath = () => `p="$(export PATH="$HOME/.local/bin:$HOME/.nanobot/venv/bin:/usr/local/bin:$PATH"; command -v nanobot 2>/dev/null)"; [ -z "$p" ] && for q in "$HOME/.local/bin/nanobot" "$HOME/.nanobot/venv/bin/nanobot"; do [ -x "$q" ] && p="$q" && break; done; echo "BIN=$p"`;
+    const binPath = () => `p="$(export PATH="$HOME/.local/bin:$HOME/.nanobot/venv/bin:/usr/local/bin:/usr/bin:$PATH"; command -v nanobot 2>/dev/null)"; [ -z "$p" ] && for q in "$HOME/.local/bin/nanobot" "$HOME/.nanobot/venv/bin/nanobot" "/usr/local/bin/nanobot" "/usr/bin/nanobot"; do [ -x "$q" ] && p="$q" && break; done; echo "BIN=$p"`;
 
     const gwCtl = async (op) => {
       const binR = await execCommand(sshConfig, binPath(), { pool: false, timeoutMs: 15000 });
@@ -109,7 +109,7 @@ async function handleAgentAction(body, session, log = []) {
       const D = `
 export PATH="$HOME/.local/bin:$HOME/.nanobot/venv/bin:/usr/local/bin:$PATH"
 BIN="$(command -v nanobot 2>/dev/null || true)"
-[ -z "$BIN" ] && for p in "$HOME/.local/bin/nanobot" "$HOME/.nanobot/venv/bin/nanobot"; do [ -x "$p" ] && BIN="$p" && break; done
+[ -z "$BIN" ] && for p in "$HOME/.local/bin/nanobot" "$HOME/.nanobot/venv/bin/nanobot" "/usr/local/bin/nanobot" "/usr/bin/nanobot"; do [ -x "$p" ] && BIN="$p" && break; done
 echo "===CONFIG_B64==="
 base64 < "$HOME/.nanobot/config.json" 2>/dev/null || true
 echo "===SKILLS==="
@@ -290,7 +290,7 @@ tail -n 30 "$LOG" 2>/dev/null | tail -5
           (command -v apt-get >/dev/null 2>&1 && $S apt-get update -qq 2>/dev/null; $S apt-get install -y python3 python3-venv python3-pip) < /dev/null ||
           (command -v dnf    >/dev/null 2>&1 && { $S dnf install -y python3.11 python3.11-pip 2>/dev/null || $S dnf install -y --allowerasing python3.11 python3.11-pip; }; [ -x /usr/bin/python3.11 ] && ln -sf /usr/bin/python3.11 /usr/local/bin/python3) < /dev/null ||
           (command -v yum    >/dev/null 2>&1 && $S yum install -y python3.11 python3.11-pip) < /dev/null ||
-          (command -v zypper >/dev/null 2>&1 && echo 'gpgcheck = 0' >> /etc/zypp/zypp.conf; $S zypper --non-interactive --no-gpg-checks install python311 python311-pip) < /dev/null ||
+          (command -v zypper >/dev/null 2>&1 && echo 'gpgcheck = 0' >> /etc/zypp/zypp.conf; $S zypper --non-interactive --no-gpg-checks install python311 python311-pip; [ -x /usr/bin/python3.11 ] && ln -sf /usr/bin/python3.11 /usr/local/bin/python3) < /dev/null ||
           (command -v pacman >/dev/null 2>&1 && $S pacman -Sy --noconfirm --needed python) < /dev/null ||
           echo PYTHON_PREREQ_SKIPPED`, { timeoutMs: 300000 });
       }

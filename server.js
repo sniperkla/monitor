@@ -837,6 +837,15 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               sendToRelay({ type: 'ssh:exec', connId: relayConnId, command });
             });
 
+            socket.removeAllListeners('agent:logs:start');
+            socket.on('agent:logs:start', (payload) => {
+              sendToRelay({ type: 'agent:logs:start', connId: relayConnId, ...payload });
+            });
+            socket.removeAllListeners('agent:logs:stop');
+            socket.on('agent:logs:stop', () => {
+              sendToRelay({ type: 'agent:logs:stop', connId: relayConnId });
+            });
+
             // sftp:cross_server_transfer needs srcConnId translated from MongoDB _id → relay connId
             socket.removeAllListeners('sftp:cross_server_transfer');
             socket.on('sftp:cross_server_transfer', (payload) => {
@@ -2239,6 +2248,54 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                   socket.emit('ssh:exec_result', { stdout, stderr, code });
                });
             });
+          });
+
+          // ── Non-Interactive Agent Live Logs Stream (Zero Terminal Banner) ──
+          let activeAgentLogStream = null;
+          socket.removeAllListeners('agent:logs:start');
+          socket.on('agent:logs:start', ({ agentId, lines = 250 }) => {
+            if (!sshClient || sshClient._state === 'closed') {
+              return socket.emit('agent:logs:error', 'SSH Connection Closed');
+            }
+            if (activeAgentLogStream) {
+              try { activeAgentLogStream.close(); } catch {}
+              activeAgentLogStream = null;
+            }
+            const cleanId = String(agentId || 'hermes').replace(/[^a-zA-Z0-9_-]/g, '');
+            const numLines = Math.min(Number(lines || 250), 1000);
+            const cmd = `sh -c '
+FILE=""
+for f in "$HOME/.${cleanId}/logs/daemon.log" "$HOME/.${cleanId}/logs/gateway.log" "$HOME/.${cleanId}/logs/agent.log" "$HOME/.${cleanId}/logs/daemon-nohup.log" "$HOME/.${cleanId}/logs/gateway-nohup.log"; do
+  [ -f "$f" ] && [ -s "$f" ] && FILE="$f" && break
+done
+if [ -n "$FILE" ]; then
+  tail -n ${numLines} -f "$FILE"
+else
+  journalctl --user -u ${cleanId} --no-pager -n ${numLines} -f 2>/dev/null || echo "(waiting for ${cleanId} logs...)"
+fi'`;
+            console.log(`🤖 [${socket.id}] AGENT LOG STREAM: ${cleanId}`);
+            sshClient.exec(cmd, (err, stream) => {
+              if (err) return socket.emit('agent:logs:error', err.message);
+              activeAgentLogStream = stream;
+              stream.on('data', (d) => {
+                socket.emit('agent:logs:data', d.toString('utf-8'));
+              });
+              stream.stderr?.on('data', (d) => {
+                socket.emit('agent:logs:data', d.toString('utf-8'));
+              });
+              stream.on('close', () => {
+                activeAgentLogStream = null;
+                socket.emit('agent:logs:end');
+              });
+            });
+          });
+
+          socket.removeAllListeners('agent:logs:stop');
+          socket.on('agent:logs:stop', () => {
+            if (activeAgentLogStream) {
+              try { activeAgentLogStream.close(); } catch {}
+              activeAgentLogStream = null;
+            }
           });
 
           // ── Global SFTP Search (find across entire filesystem) ──────────────
@@ -4286,6 +4343,14 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           socket.on('docker:command', (payload) => {
             sendToRelay({ type: 'docker:command', connId: relayConnId, ...payload });
           });
+          socket.removeAllListeners('agent:logs:start');
+          socket.on('agent:logs:start', (payload) => {
+            sendToRelay({ type: 'agent:logs:start', connId: relayConnId, ...payload });
+          });
+          socket.removeAllListeners('agent:logs:stop');
+          socket.on('agent:logs:stop', () => {
+            sendToRelay({ type: 'agent:logs:stop', connId: relayConnId });
+          });
 
           // When relay signals ssh:connected (WebSocket fallback path), flush SFTP queue
           if (!global.__relayReadyCallbacks) global.__relayReadyCallbacks = new Map();
@@ -5129,6 +5194,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
             // ── SSH/SFTP relay: forward relay agent responses back to browser socket ──
             const sshSftpTypes = [
               'ssh:connected', 'ssh:data', 'ssh:closed', 'ssh:error', 'ssh:exec_result',
+              'agent:logs:data', 'agent:logs:error', 'agent:logs:end',
               'sftp:list', 'sftp:fileData', 'sftp:file_base64', 'sftp:action_success', 'sftp:error',
               'sftp:download_start', 'sftp:download_chunk', 'sftp:download_done', 'sftp:download_data',
               'sftp:can_upload', 'sftp:upload_ack', 'sftp:upload_complete', 'sftp:progress', 'sftp:searchResult', 'sftp:sizeResult',
@@ -5146,7 +5212,9 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
                   const payload = { ...msg };
                   delete payload.type;
                   delete payload.connId;
-                  if (msg.type === 'telemetry:stream') {
+                  if (msg.type === 'agent:logs:data') {
+                    targetSocket.emit('agent:logs:data', msg.data || msg.chunk || '');
+                  } else if (msg.type === 'telemetry:stream') {
                     targetSocket.emit('telemetry:stream', msg.data || payload);
                   } else if (msg.type === 'ssh:data') {
                     targetSocket.emit('ssh:data', msg.data || '');

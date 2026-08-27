@@ -31,7 +31,7 @@ const LOGL = '"$HOME/.openclaw/logs/gatew""ay.log"';
 const STATUS_SCRIPT = `
 export PATH="$HOME/.openclaw/local/bin:$HOME/.local/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 BIN="$(command -v openclaw 2>/dev/null || true)"
-[ -z "$BIN" ] && for p in "$HOME/.openclaw/local/bin/openclaw" "$HOME/.local/bin/openclaw" "/usr/local/bin/openclaw"; do [ -x "$p" ] && BIN="$p" && break; done
+[ -z "$BIN" ] && for p in "$HOME/.openclaw/local/bin/openclaw" "$HOME/.local/bin/openclaw" "/usr/local/bin/openclaw" "/usr/bin/openclaw" "/usr/sbin/openclaw"; do [ -x "$p" ] && BIN="$p" && break; done
 if [ -n "$BIN" ]; then echo "BIN=SET"; else echo "BIN=UNSET"; fi
 VER=NONE
 [ -n "$BIN" ] && VER="$($BIN --version 2>/dev/null | tail -1 | cut -c1-40)"
@@ -81,7 +81,7 @@ async function handleAgentAction(body, session, log = []) {
       return r;
     };
     const b64 = (s) => Buffer.from(String(s), 'utf8').toString('base64');
-    const binPath = () => `p="$(export PATH="$HOME/.openclaw/local/bin:$HOME/.local/bin:/usr/local/bin:$PATH"; command -v openclaw 2>/dev/null)"; [ -z "$p" ] && for q in "$HOME/.openclaw/local/bin/openclaw" "$HOME/.local/bin/openclaw" "/usr/local/bin/openclaw"; do [ -x "$q" ] && p="$q" && break; done; echo "BIN=$p"`;
+    const binPath = () => `p="$(export PATH="$HOME/.openclaw/local/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/usr/sbin:$PATH"; command -v openclaw 2>/dev/null)"; [ -z "$p" ] && for q in "$HOME/.openclaw/local/bin/openclaw" "$HOME/.local/bin/openclaw" "/usr/local/bin/openclaw" "/usr/bin/openclaw" "/usr/sbin/openclaw"; do [ -x "$q" ] && p="$q" && break; done; echo "BIN=$p"`;
 
     // ── Gateway control — systemd user unit when available, else nohup ──────
     const gwCtl = async (op) => {
@@ -128,7 +128,7 @@ async function handleAgentAction(body, session, log = []) {
       const D = `
 export PATH="$HOME/.openclaw/local/bin:$HOME/.local/bin:/usr/local/bin:$PATH"
 BIN="$(command -v openclaw 2>/dev/null || true)"
-[ -z "$BIN" ] && for p in "$HOME/.openclaw/local/bin/openclaw" "$HOME/.local/bin/openclaw" "/usr/local/bin/openclaw"; do [ -x "$p" ] && BIN="$p" && break; done
+[ -z "$BIN" ] && for p in "$HOME/.openclaw/local/bin/openclaw" "$HOME/.local/bin/openclaw" "/usr/local/bin/openclaw" "/usr/bin/openclaw" "/usr/sbin/openclaw"; do [ -x "$p" ] && BIN="$p" && break; done
 echo "===CONFIG_B64==="
 base64 < "$HOME/.openclaw/openclaw.json" 2>/dev/null || true
 echo "===RUNNING==="
@@ -252,8 +252,8 @@ echo "===ENVKEYS==="
       await run('stop user service', `export XDG_RUNTIME_DIR="/run/user/$(id -u)"; systemctl --user disable --now ${UNIT} 2>/dev/null; true`);
       await run('stop stray processes', `pkill -f '[o]penclaw.*gatew[a]y' 2>/dev/null; pkill -f '[o]penclaw gateway' 2>/dev/null; true`);
       const rmCmd = purge
-        ? `(npm -g rm openclaw 2>/dev/null || true); rm -f "$HOME/.openclaw/local/bin/openclaw" "$HOME/.local/bin/openclaw" /usr/local/bin/openclaw; rm -rf "$HOME/.openclaw"; echo REMOVED_ALL`
-        : `(npm -g rm openclaw 2>/dev/null || true); rm -f "$HOME/.openclaw/local/bin/openclaw" "$HOME/.local/bin/openclaw" /usr/local/bin/openclaw; rm -rf "$HOME/.openclaw/local" "$HOME/.openclaw/logs"; echo REMOVED_CODE`;
+        ? `(npm -g rm openclaw 2>/dev/null || true); rm -f "$HOME/.openclaw/local/bin/openclaw" "$HOME/.local/bin/openclaw" /usr/local/bin/openclaw /usr/bin/openclaw /usr/sbin/openclaw; rm -rf "$HOME/.openclaw"; echo REMOVED_ALL`
+        : `(npm -g rm openclaw 2>/dev/null || true); rm -f "$HOME/.openclaw/local/bin/openclaw" "$HOME/.local/bin/openclaw" /usr/local/bin/openclaw /usr/bin/openclaw /usr/sbin/openclaw; rm -rf "$HOME/.openclaw/local" "$HOME/.openclaw/logs"; echo REMOVED_CODE`;
       const r = await run(purge ? 'remove binary, code & all data' : 'remove binary & code (config kept)', rmCmd);
       const ok = /REMOVED/.test(r.stdout || '');
       return NextResponse.json({ success: ok, purged: purge, log });

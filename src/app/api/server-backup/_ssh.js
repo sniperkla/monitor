@@ -65,12 +65,14 @@ export async function getSshConfig(connectionId, options = {}) {
   // Explicit options.userId wins (internal jobs); otherwise derive from the
   // browser session so every getSshConfig caller is automatically scoped.
   let actingUserId = options.userId || null;
+  let actingUserRole = null;
   if (!actingUserId && !options.skipSessionResolve) {
     try {
       const { getServerSession } = await import('next-auth/next');
       const { authOptions } = await import('@/lib/auth');
       const session = await getServerSession(authOptions);
       actingUserId = session?.user?.id || null;
+      actingUserRole = session?.user?.role || null;
     } catch (_) {}
   }
   await repo.init();
@@ -78,9 +80,9 @@ export async function getSshConfig(connectionId, options = {}) {
   if (!conn) throw new Error('Connection not found');
 
   // Ownership enforcement: if the connection has an owner, the caller must prove
-  // they are that owner. Callers that don't pass userId (internal jobs/cron) can
+  // they are that owner (or be an admin). Callers that don't pass userId (internal jobs/cron) can
   // only access unowned (legacy/global) connections.
-  if (conn.userId && String(conn.userId) !== String(actingUserId || '')) {
+  if (conn.userId && String(conn.userId) !== String(actingUserId || '') && actingUserRole !== 'admin') {
     throw new Error('Access denied: this connection belongs to another user');
   }
 
@@ -111,7 +113,12 @@ export async function getSshConfig(connectionId, options = {}) {
     }
   }
 
-  return resolveSshConfig(baseConfig, options);
+  return resolveSshConfig(baseConfig, {
+    sshMode: conn.sshMode || options.sshMode,
+    preferredRelay: conn.preferredRelay || options.preferredRelay,
+    userId: actingUserId,
+    ...options,
+  });
 }
 
 // SSH Connection Pool for recurring commands and monitoring
