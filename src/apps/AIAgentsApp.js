@@ -340,7 +340,8 @@ export default function AIAgentsApp({ apiFetch }) {
 
   const callAction = async (label, action, extra = {}) => {
     setBusyMsg(label); setNotice(null);
-    setLiveLogLines([]); setLiveLogAction(label); setLiveLogOpen(true); setLiveLogMinimized(false);
+    setLiveLogLines([`> Starting ${label}...`, '> Connecting to remote server...']);
+    setLiveLogAction(label); setLiveLogOpen(true); setLiveLogMinimized(false);
     const startTs = Date.now();
     try {
       let r;
@@ -380,7 +381,8 @@ export default function AIAgentsApp({ apiFetch }) {
 
   const act = async (label, fn) => {
     setBusyMsg(label); setNotice(null);
-    setLiveLogLines([]); setLiveLogAction(label); setLiveLogOpen(true); setLiveLogMinimized(false);
+    setLiveLogLines([`> Starting ${label}...`, '> Connecting to remote server...']);
+    setLiveLogAction(label); setLiveLogOpen(true); setLiveLogMinimized(false);
     const startTs = Date.now();
     try {
       const r = await fn();
@@ -1944,10 +1946,10 @@ fi'\n`;
         </div>
       )}
       {/* Floating / Draggable Live Log Panel */}
-      {liveLogOpen && liveLogLines.length > 0 && (
+      {liveLogOpen && (
         liveLogMinimized ? (
           <div
-            className="fixed bottom-6 right-6 z-[998] flex items-center gap-2.5 px-3.5 py-2 rounded-xl bg-[var(--bg-primary)]/95 border border-[var(--border-color)] shadow-2xl backdrop-blur text-xs cursor-pointer hover:border-indigo-500/50 transition-all select-none"
+            className="fixed bottom-6 right-6 z-[3000] flex items-center gap-2.5 px-3.5 py-2 rounded-xl bg-[var(--bg-primary)]/95 border border-[var(--border-color)] shadow-2xl backdrop-blur text-xs cursor-pointer hover:border-indigo-500/50 transition-all select-none"
             onClick={() => setLiveLogMinimized(false)}
             title="Click to restore live log window"
           >
@@ -1975,7 +1977,7 @@ fi'\n`;
         ) : (
           <div
             data-log-panel="true"
-            className={`fixed z-[998] rounded-xl border border-[var(--border-color)] bg-[var(--bg-primary)]/95 backdrop-blur-xl shadow-2xl overflow-hidden flex flex-col transition-all ${
+            className={`fixed z-[3000] rounded-xl border border-[var(--border-color)] bg-[var(--bg-primary)]/95 backdrop-blur-xl shadow-2xl overflow-hidden flex flex-col transition-all ${
               liveLogMaximized
                 ? 'inset-6 w-auto h-auto'
                 : 'w-[min(640px,calc(100vw-2rem))]'
@@ -2036,7 +2038,7 @@ fi'\n`;
                 liveLogMaximized ? 'flex-1' : 'max-h-80'
               }`}
             >
-              {liveLogLines.join('\n')}
+              {liveLogLines.length ? liveLogLines.join('\n') : '> Initializing live log stream...'}
             </pre>
           </div>
         )
@@ -2051,7 +2053,7 @@ fi'\n`;
         agentApi={agent.api}
         agent={{ id: agent.id, name: agent.name, by: agent.by, docsUrl: agent.docs, logo: agent.logo }}
         onActionStart={(label) => {
-          setLiveLogLines([]);
+          setLiveLogLines([`> Starting ${label}...`, '> Connecting to remote server...']);
           setLiveLogAction(label);
           setLiveLogOpen(true);
           setLiveLogMinimized(false);

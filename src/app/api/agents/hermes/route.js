@@ -617,14 +617,13 @@ fi
       return NextResponse.json({ success: false, error: `Unknown action: ${action}` }, { status: 400 });
     }
 
+    log.push(`> [install] Initializing ${config.docker?.enabled ? 'Docker-isolated' : 'direct'} installation for Hermes Agent...`);
+    log.push(`> [install] Target connection: ${connectionId}`);
+
     const method = ['auto', 'system', 'user', 'nohup'].includes(config.method) ? config.method : 'auto';
     const skipBrowser = config.skipBrowser !== false; // default: headless-safe
 
     // ── 0. Docker-isolated target ────────────────────────────────────────────
-    // Spin up a disposable distro container and run every subsequent step inside
-    // it via `docker exec … sh -s` heredocs. Agent data persists on the host at
-    // ~/.hermes-docker (bind-mounted to /root/.hermes), and the container is
-    // restarted automatically by the Docker daemon (--restart unless-stopped).
     const DOCKER_IMAGES = {
       ubuntu: 'ubuntu:24.04', debian: 'debian:12', alma: 'almalinux:9', rocky: 'rockylinux:9',
       centos: 'quay.io/centos/centos:stream9',
@@ -639,12 +638,15 @@ fi
     }
 
     // 1. Probe HOST (docker availability lives here, not inside the container)
+    log.push(`> [probe] Checking host system capabilities...`);
     const hostProbe = await run('host probe', STATUS_SCRIPT);
+    const hp = (k) => (hostProbe.stdout || '').match(new RegExp(`${k}=(.*)`))?.[1]?.trim();
 
     if (config.docker?.enabled) {
       if (hp('DOCKER') !== '1') {
         return NextResponse.json({ success: false, error: 'Docker is not available on the selected server — choose "directly on server" or install Docker first.', log });
       }
+      log.push(`> [docker] Starting isolated container (${dockerImage})...`);
       await run(`start isolated container (${dockerImage})`, `
         docker rm -f hermes-agent >/dev/null 2>&1 || true
         mkdir -p "$HOME/.hermes-docker"
@@ -662,20 +664,16 @@ fi
     const dockerMode = !!dockerWrap;
 
     // 1b. Probe TARGET (inside container when docker-isolated, else the host)
+    log.push(`> [probe] Checking target environment prerequisites...`);
     const probeR = await execCommand(sshConfig, wrap(STATUS_SCRIPT), { pool: false, timeoutMs: 60000 });
     const p = (k) => (probeR.stdout || '').match(new RegExp(`${k}=(.*)`))?.[1]?.trim();
     const hasSystemd = p('SYSTEMD') === '1';
     const hasSudo = p('SUDO') === '1';
 
     // 2. Best-effort prerequisites (git/curl/xz/libatomic) when missing + sudo available.
-    // NOTE: only request packages that are actually missing — e.g. Alma/RHEL ship
-    // curl-minimal which CONFLICTS with a full curl install and aborts dnf.
-    // libatomic is required by the Hermes-managed Node.js binary (minimal
-    // containers ship without it and the official installer fails silently).
-    // A C++ toolchain is required by native Node modules (node-pty).
     const atomicMissing = p('ATOMIC') !== '1';
     const cxxMissing = p('CXX') !== '1';
-    const tarMissing = p('TAR') !== '1'; // installer unpacks uv/node with tar
+    const tarMissing = p('TAR') !== '1';
     if (p('GIT') === 'NONE' || p('CURL') !== '1' || p('XZ') !== '1' || atomicMissing || cxxMissing || tarMissing) {
       const base = [['git', p('GIT') === 'NONE'], ['curl', p('CURL') !== '1'], ['xz', p('XZ') !== '1'], ['tar', tarMissing]]
         .filter(x => x[1]).map(x => x[0]);
@@ -685,8 +683,8 @@ fi
       const rpmPkgs = mk(['gzip', atomicMissing && 'libatomic', cxxMissing && 'gcc-c++ make', 'procps-ng']);
       const zyppPkgs = mk(['gzip', atomicMissing && 'libatomic1', cxxMissing && 'gcc-c++ make', 'procps']);
       const pacPkgs = mk(['libatomic', cxxMissing && 'base-devel', 'procps']);
-      // Ship as detached base64 script — immune to quoting issues, SSH drops,
-      // and stdin-consuming package managers (zypper).
+
+      log.push(`> [prereqs] Installing missing system packages: ${aptPkgs || rpmPkgs}...`);
       const innerChain = [
         'export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"',
         'export DEBIAN_FRONTEND=noninteractive',
@@ -707,25 +705,29 @@ fi
         sleep 1
         test -f /tmp/prereq.log && echo BG_PREREQ_STARTED`, { timeoutMs: 60000 });
       for (let i = 0; i < 40; i++) {
-        await new Promise(r => setTimeout(r, 15000));
+        await new Promise(r => setTimeout(r, 4000));
         const st = await execCommand(sshConfig, wrap('test -f /tmp/.prereq-done && echo DONE || echo PENDING'), { pool: false, timeoutMs: 20000 });
-        if (/DONE/.test(st.stdout || '')) break;
+        if (/DONE/.test(st.stdout || '')) {
+          log.push('> [prereqs] Prerequisite packages installed.');
+          break;
+        }
+        if ((i + 1) % 3 === 0) {
+          log.push(`> [prereqs] Package manager working in background... (${(i + 1) * 4}s elapsed)`);
+        }
       }
     }
 
     // 3. Official installer — non-interactive, skips setup wizard & heavy extras.
-    // Lightweight mode: --no-skills stops ~90 bundled skills from being seeded,
-    // which dramatically cuts system-prompt size and token usage per message.
     const flags = ['--non-interactive', '--skip-setup', ...(skipBrowser ? ['--skip-browser'] : []), ...(config.lightweight ? ['--no-skills'] : [])].join(' ');
-    // Runs DETACHED on the host (setsid+nohup into a temp log) so no SSH
-    // channel is held open for the whole build; lines stream into the job log.
+    log.push(`> [installer] Running official installer: curl -fsSL ${INSTALLER_URL} | bash -s -- ${flags}`);
+    log.push(`> [installer] Building Python environment and pulling dependencies (this typically takes 1-3 minutes)...`);
     {
       let streamed = 0;
       const instR = await execDetached(sshConfig,
         `curl -fsSL ${INSTALLER_URL} | bash -s -- ${flags} 2>&1`,
         {
-          pollMs: 3000,
-          timeoutMs: 900000, // up to 15 min — builds Python venv, downloads Node etc.
+          pollMs: 2000,
+          timeoutMs: 900000,
           onLine: (ln) => { if (++streamed <= 400) log.push(ln); },
         });
       log.push(`$ official installer (${flags})${instR.code !== 0 ? ` — exited ${instR.code}` : ' — finished'}${streamed > 400 ? ` (${streamed} lines total)` : ''}${instR.stderr ? `\n${instR.stderr.slice(0, 300)}` : ''}`);
