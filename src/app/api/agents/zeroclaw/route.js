@@ -606,6 +606,49 @@ echo "TG=$TG"
       return NextResponse.json({ success: false, error: `Unknown skills op: ${op}` }, { status: 400 });
     }
 
+
+    // ── PAIRING APPROVAL (zeroclaw pairing approve <platform> <code>) ──
+    if (action === 'pairing-approve') {
+      const platform = String(config.platform || 'telegram').trim();
+      const code = String(config.code || '').trim();
+      if (!code) return NextResponse.json({ success: false, error: 'Pairing code is required' }, { status: 400 });
+      const ENVX = `export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:$PATH"; set -a; [ -f "$HOME/.zeroclaw/.env" ] && . "$HOME/.zeroclaw/.env"; set +a`;
+      // ZeroClaw pairing syntax: zeroclaw pairing approve <platform> <code>
+      // or fallback: zeroclaw pairing approve <code>
+      const runCmd = platform && platform !== 'auto'
+        ? `${ENVX}; zeroclaw pairing approve ${JSON.stringify(platform)} ${JSON.stringify(code)} 2>&1 || zeroclaw pairing approve ${JSON.stringify(code)} 2>&1`
+        : `${ENVX}; zeroclaw pairing approve telegram ${JSON.stringify(code)} 2>&1 || zeroclaw pairing approve ${JSON.stringify(code)} 2>&1`;
+      const r = await execCommand(sshConfig, runCmd, { pool: false, timeoutMs: 30000 });
+      const out = ((r.stdout || '') + (r.stderr || '')).trim();
+      const ok = !/error|failed|invalid/i.test(out) || /approved|success|paired|ok/i.test(out);
+      return NextResponse.json({ success: ok, output: out || 'Pairing command executed', log });
+    }
+
+    if (action === 'pairing-list') {
+      const ENVX = `export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:$PATH"; set -a; [ -f "$HOME/.zeroclaw/.env" ] && . "$HOME/.zeroclaw/.env"; set +a`;
+      // Try `zeroclaw pairing list`, then fall back to scanning daemon logs for pending codes
+      const r = await execCommand(sshConfig,
+        `${ENVX}; zeroclaw pairing list 2>&1 || true; { FILE="$(ls -1t "$HOME/.zeroclaw/logs/"*.log 2>/dev/null | head -1)"; [ -n "$FILE" ] && tail -n 80 "$FILE"; } || true`,
+        { pool: false, timeoutMs: 20000 });
+      const out = r.stdout || '';
+      // Match patterns: "zeroclaw pairing approve telegram 2VXNGUEH", "pairing code: 2VXNGUEH", etc.
+      const matches = [
+        ...out.matchAll(/pairing\s+approve\s+(?:(\w+)\s+)?([A-Z0-9]{6,12})/gi),
+        ...out.matchAll(/code[:\s]+([A-Z0-9]{6,12})/gi),
+        ...out.matchAll(/pairing\s+code\s+is\s+([A-Z0-9]{6,12})/gi),
+        ...out.matchAll(/Pairing:\s+([A-Z0-9]{6,12})/gi),
+      ];
+      const pending = [];
+      for (const m of matches) {
+        const code = m[2] || m[1];
+        const platform = m[2] ? m[1] : 'telegram';
+        if (code && !pending.some(p => p.code === code)) {
+          pending.push({ code, platform: platform || 'telegram' });
+        }
+      }
+      return NextResponse.json({ success: true, pending, raw: out.slice(-1000) });
+    }
+
     return NextResponse.json({ success: false, error: `Unknown action: ${action}` }, { status: 400 });
   } catch (e) {
     logger.error('[agents/zeroclaw] action failed:', e?.message);
