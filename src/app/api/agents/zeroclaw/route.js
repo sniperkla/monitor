@@ -617,9 +617,18 @@ echo "TG=$TG"
     // 2. Telegram user ID allowlist in config.toml: [channels_config.telegram] allowed_users = ["..."]
     if (action === 'pairing-approve') {
       const code = String(config.code || '').trim();
-      if (!code) return NextResponse.json({ success: false, error: 'User ID / pairing code is required' }, { status: 400 });
+      // 1. Try ZeroClaw CLI channel bind-telegram if available
+      await execCommand(sshConfig, `
+        export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:$PATH"
+        zeroclaw channel bind-telegram ${JSON.stringify(code)} 2>&1 || true
+        # If bot token exists, clear any stale webhooks so long polling works immediately
+        TOKEN="$(grep -oE 'bot_token\\s*=\\s*"[^"]+"' "$HOME/.zeroclaw/config.toml" 2>/dev/null | cut -d'"' -f2 || grep -oE 'TELEGRAM_BOT_TOKEN=[^ \\n]+' "$HOME/.zeroclaw/.env" 2>/dev/null | cut -d= -f2)"
+        if [ -n "$TOKEN" ]; then
+          curl -s "https://api.telegram.org/bot\${TOKEN}/deleteWebhook?drop_pending_updates=true" >/dev/null 2>&1 || true
+        fi
+      `, { pool: false, timeoutMs: 15000 });
 
-      // 1. Try HTTP Gateway pairing (for dashboard / API / webhook access)
+      // 2. Try HTTP Gateway pairing (for dashboard / API / webhook access)
       const httpPairR = await execCommand(sshConfig, `
         curl -s -w "\\nHTTP_CODE:%{http_code}" -X POST http://127.0.0.1:42617/pair \
           -H "X-Pairing-Code: ${code}" \
