@@ -112,7 +112,7 @@ async function handleAgentAction(body, session, log = []) {
     };
     const b64 = (s) => Buffer.from(String(s), 'utf8').toString('base64');
     const binPath = () => `p="$(export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:/usr/bin:/usr/sbin:$PATH"; command -v zeroclaw 2>/dev/null)"; [ -z "$p" ] && for q in "$HOME/.local/bin/zeroclaw" "$HOME/.cargo/bin/zeroclaw" "/usr/local/bin/zeroclaw" "/usr/bin/zeroclaw" "/usr/sbin/zeroclaw"; do [ -x "$q" ] && p="$q" && break; done; echo "BIN=$p"`;
-    const ENVX = `export XDG_RUNTIME_DIR="/run/user/$(id -u)" 2>/dev/null; export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:$PATH"`;
+    const ENVX = `export XDG_RUNTIME_DIR="/run/user/$(id -u)" 2>/dev/null; export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus" 2>/dev/null; export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:$PATH"`;
 
     // ── Gateway control — zeroclaw service CLI, systemd user unit, else nohup ──
     const gwCtl = async (op) => {
@@ -136,6 +136,8 @@ async function handleAgentAction(body, session, log = []) {
       const startCmd = `
         mkdir -p "$HOME/.zeroclaw/logs" "$HOME/.config/systemd/user"
         ${ENVX}; set -a; [ -f "$HOME/.zeroclaw/.env" ] && . "$HOME/.zeroclaw/.env"; set +a
+        # Enable lingering on Fedora / RHEL so user systemd stays active after SSH disconnects
+        loginctl enable-linger $(whoami) 2>/dev/null || sudo -n loginctl enable-linger $(whoami) 2>/dev/null || true
         # Write systemd service file with EnvironmentFile and persistent log redirection if systemctl available
         if command -v systemctl >/dev/null 2>&1; then
           cat <<'EOF' > "$HOME/.config/systemd/user/zeroclaw.service"
