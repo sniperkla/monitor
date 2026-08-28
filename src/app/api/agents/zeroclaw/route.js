@@ -435,6 +435,90 @@ if os.path.exists(p):
         fi
       `, { pool: false, timeoutMs: 15000 });
 
+      // Apply env & settings if provided in install payload
+      const env = (config && config.env) || {};
+      const settings = (config && config.settings) || {};
+      const envKeys = Object.keys(env).filter(k => env[k] != null && env[k] !== '');
+      const hasSettings = Object.keys(settings).filter(k => settings[k] != null && settings[k] !== '').length > 0;
+
+      if (envKeys.length > 0) {
+        const envLinesB64 = b64(envKeys.map(k => `${k}=${env[k]}`).join('\n'));
+        const envPy = [
+          'import os, base64',
+          `lines_raw = base64.b64decode('${envLinesB64}').decode('utf-8').splitlines()`,
+          `ep = os.path.expanduser('~/.zeroclaw/.env')`,
+          `os.makedirs(os.path.dirname(ep), exist_ok=True)`,
+          `existing = open(ep).read().splitlines() if os.path.exists(ep) else []`,
+          `upsert = {}`,
+          `for ln in lines_raw:`,
+          `    idx = ln.find('=')`,
+          `    if idx > 0: upsert[ln[:idx]] = ln[idx+1:]`,
+          `result = []`,
+          `keys_done = set()`,
+          `for ln in existing:`,
+          `    idx = ln.find('=')`,
+          `    if idx > 0 and ln[:idx] in upsert:`,
+          `        result.append(ln[:idx] + '=' + upsert[ln[:idx]])`,
+          `        keys_done.add(ln[:idx])`,
+          `    else:`,
+          `        result.append(ln)`,
+          `for k, v in upsert.items():`,
+          `    if k not in keys_done: result.append(k + '=' + v)`,
+          `open(ep, 'w').write('\\n'.join(result) + '\\n')`,
+          `os.chmod(ep, 0o600)`,
+          `print('ENV_UPDATED')`,
+        ].join('\n');
+        await run('write ~/.zeroclaw/.env', `echo '${b64(envPy)}' | base64 -d | python3`, { timeoutMs: 30000 });
+      }
+
+      if (hasSettings || env.TELEGRAM_BOT_TOKEN || env.TELEGRAM_ALLOWED_USERS || env.OPENROUTER_API_KEY || env.OPENAI_API_KEY || env.ANTHROPIC_API_KEY || env.MODEL || env.ZEROCLAW_MODEL) {
+        const setB64 = b64(JSON.stringify(settings));
+        const envB64 = b64(JSON.stringify(env));
+        const cfgPy = [
+          'import json, os, re, base64',
+          `s = json.loads(base64.b64decode('${setB64}').decode('utf-8'))`,
+          `e = json.loads(base64.b64decode('${envB64}').decode('utf-8'))`,
+          `p = os.path.expanduser('~/.zeroclaw/config.toml')`,
+          `os.makedirs(os.path.dirname(p), exist_ok=True)`,
+          `text = open(p).read() if os.path.exists(p) else ''`,
+          // model
+          `m = (s.get('model') or s.get('default_model') or e.get('MODEL') or e.get('ZEROCLAW_MODEL') or e.get('DEFAULT_MODEL') or '')`,
+          `if m:`,
+          `    if re.search(r'^(model|default_model)\\s*=', text, re.M):`,
+          `        text = re.sub(r'^(model|default_model)\\s*=.*$', 'model = "' + m + '"', text, flags=re.M)`,
+          `    else:`,
+          `        text = 'model = "' + m + '"\n' + text`,
+          // api_key
+          `api_key = (e.get('OPENROUTER_API_KEY') or e.get('OPENAI_API_KEY') or e.get('ANTHROPIC_API_KEY') or e.get('API_KEY') or s.get('api_key') or '')`,
+          `if api_key:`,
+          `    if re.search(r'^\\s*api_key\\s*=', text, re.M):`,
+          `        text = re.sub(r'^\\s*api_key\\s*=.*$', 'api_key = "' + api_key + '"', text, flags=re.M)`,
+          `    else:`,
+          `        text = 'api_key = "' + api_key + '"\n' + text`,
+          // telegram
+          `tg_token = (e.get('TELEGRAM_BOT_TOKEN') or s.get('telegram_token') or s.get('telegram.bot_token') or '')`,
+          `tg_allowed_raw = (e.get('TELEGRAM_ALLOWED_USERS') or s.get('telegram.allowed_users') or s.get('telegram_allowed_users') or '')`,
+          `if tg_token:`,
+          `    ids = [x.strip() for x in str(tg_allowed_raw).split(',') if x.strip()] if tg_allowed_raw else ['*']`,
+          `    ids_toml = json.dumps(ids)`,
+          `    new_tg_sec = f'[channels_config.telegram]\\nbot_token = "{tg_token}"\\nallowed_users = {ids_toml}\\n'`,
+          `    if '[channels_config.telegram]' in text:`,
+          `        text = re.sub(r'\\[channels_config\\.telegram\\][\\s\\S]*?(?=\\n\\[|$)', new_tg_sec, text)`,
+          `    elif '[telegram]' in text:`,
+          `        text = re.sub(r'\\[telegram\\][\\s\\S]*?(?=\\n\\[|$)', new_tg_sec, text)`,
+          `    else:`,
+          `        text = text.rstrip('\\n') + '\\n\\n' + new_tg_sec`,
+          `elif '[channels_config.telegram]' in text and not re.search(r'bot_token\\s*=\\s*"[^"]+"', text):`,
+          `    text = re.sub(r'\\[channels_config\\.telegram\\][\\s\\S]*?(?=\\n\\[|$)', '', text)`,
+          // ensure schema_version
+          `if 'schema_version' not in text:`,
+          `    text = 'schema_version = 3\n' + text`,
+          `open(p, 'w').write(text.strip() + '\n')`,
+          `print('ZEROCLAW_CONFIG_MERGED')`,
+        ].join('\n');
+        await run('merge ~/.zeroclaw/config.toml', `echo '${b64(cfgPy)}' | base64 -d | python3 2>&1`, { timeoutMs: 30000 });
+      }
+
       // 3. Daemon — register via `zeroclaw service install` only if systemd is PID 1
       const hasInit = p('INITD') === '1';
       if (hasInit) {
