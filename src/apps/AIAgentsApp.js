@@ -562,15 +562,16 @@ export default function AIAgentsApp({ apiFetch }) {
   const cleanLogStream = (text) => {
     if (!text) return '';
     return text
-      .replace(/\x1b\[\??[0-9;]*[a-zA-Z]/g, '')
+      .replace(/\x1b\[\??[0-9;]*[a-zA-Z]/g, '') // ANSI control & bracketed paste
       .replace(/\[\?2004[hl]\]/g, '')
       .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
       .replace(/^Last login:.*\r?\n?/gm, '')
       .replace(/^\[root@[^\]]+\][#\$]?\s*/gm, '')
       .replace(/^\[[^\]@]+@[^\]]+\][\$#]\s*/gm, '')
       .replace(/^[a-zA-Z0-9_.-]+@[a-zA-Z0-9_.-]+:[^$#]*[\$#]\s*/gm, '')
+      .replace(/^stty -echo.*\r?\n?/gm, '')
       .replace(/^sh -c '[\s\S]*?fi'\r?\n?/gm, '')
-      .replace(/^.*(?:for f in|journalctl --user -u|tail -n 250|FILE="").*\r?\n?/gm, '')
+      .replace(/^.*(?:for f in|journalctl --user -u|tail -n [0-9]+|LOGF="").*\r?\n?/gm, '')
       .trimStart();
   };
 
@@ -607,8 +608,8 @@ export default function AIAgentsApp({ apiFetch }) {
       socketRef.current = null;
     }
 
-    // Pure tail command per agent — ensures logs directory exists, then continuously tails active daemon log
-    const tailCmd = `stty -echo 2>/dev/null; mkdir -p "$HOME/.${agentId}/logs"; touch "$HOME/.${agentId}/logs/daemon.log"; LOGF="$(ls -1t "$HOME/.${agentId}/logs/"*.log 2>/dev/null | head -1)"; [ -z "$LOGF" ] && LOGF="$HOME/.${agentId}/logs/daemon.log"; tail -n 250 -F "$LOGF" 2>/dev/null || journalctl --user -u ${agentId} --no-pager -n 250 -f 2>/dev/null\n`;
+    // Single-line tail command that continuously follows daemon logs with -F
+    const tailCmd = `stty -echo 2>/dev/null; mkdir -p "$HOME/.${agentId}/logs"; touch "$HOME/.${agentId}/logs/daemon.log"; LOGF="$(ls -1t "$HOME/.${agentId}/logs/"*.log 2>/dev/null | head -1)"; [ -z "$LOGF" ] && LOGF="$HOME/.${agentId}/logs/daemon.log"; tail -n 100 -F "$LOGF" 2>/dev/null || journalctl --user -u ${agentId} --no-pager -n 100 -f 2>/dev/null\n`;
 
     // ── HTTP snapshot (one-shot, used as initial seed or error fallback) ──
     const fetchSnapshot = async () => {
@@ -620,11 +621,14 @@ export default function AIAgentsApp({ apiFetch }) {
           body: JSON.stringify({ connectionId: targetRef.current, action: 'logs', config: { lines: 300 } }),
         });
         const r = await res.json();
-        if (active && r?.data) setLogText(cleanLogStream(r.data).slice(-100000));
+        if (active && r?.data) {
+          const cleaned = cleanLogStream(r.data);
+          if (cleaned) setLogText(cleaned.slice(-100000));
+        }
       } catch {}
     };
 
-    // Immediately seed with historical logs so output is visible instantly
+    // Immediately seed with historical logs
     fetchSnapshot();
 
     const preferredRelay = typeof window !== 'undefined'
@@ -674,14 +678,7 @@ export default function AIAgentsApp({ apiFetch }) {
     socket.on('ssh:connected', () => {
       if (!active || rtcPeerRef.current) return; // already on WebRTC
       setLogStreamMode('relay_ws');
-      socket.emit('agent:logs:start', { agentId, lines: 250 });
       socket.emit('ssh:input', tailCmd);
-    });
-
-    socket.on('agent:logs:data', (data) => {
-      if (!active || logPauseRef.current || rtcPeerRef.current) return;
-      const chunk = cleanLogStream(data);
-      if (chunk) setLogText(prev => (prev + chunk).slice(-100000));
     });
 
     socket.on('ssh:data', (data) => {
@@ -691,12 +688,6 @@ export default function AIAgentsApp({ apiFetch }) {
     });
 
     // ── Path 3: HTTP snapshot fallback on error ──
-    socket.on('agent:logs:error', () => {
-      if (!active) return;
-      setLogStreamMode('http');
-      fetchSnapshot();
-    });
-
     socket.on('ssh:error', () => {
       if (!active) return;
       setLogStreamMode('http');
@@ -1154,6 +1145,27 @@ export default function AIAgentsApp({ apiFetch }) {
                     >
                       {logPause ? <Play size={10} /> : <Square size={10} />}
                       {logPause ? 'Resume Stream' : 'Pause'}
+                    </button>
+                    <button
+                      onClick={async () => {
+                        try {
+                          const res = await fetch(agent.api, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            credentials: 'include',
+                            body: JSON.stringify({ connectionId: target, action: 'logs', config: { lines: 300 } }),
+                          });
+                          const r = await res.json();
+                          if (r?.data) {
+                            setLogText(cleanLogStream(r.data).slice(-100000));
+                            setNotice({ ok: true, text: 'Logs refreshed' });
+                          }
+                        } catch {}
+                      }}
+                      className={`${btn} bg-white/5 border border-[var(--border-color)] text-[var(--text-muted)] hover:text-white !py-1 !px-2`}
+                      title="Force refresh logs"
+                    >
+                      <RefreshCw size={10} /> Refresh
                     </button>
                     <button
                       onClick={() => setLogText('')}
