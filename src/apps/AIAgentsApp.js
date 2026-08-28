@@ -562,13 +562,16 @@ export default function AIAgentsApp({ apiFetch }) {
   const cleanLogStream = (text) => {
     if (!text) return '';
     return text
-      .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')
+      .replace(/\x1b\[\??[0-9;]*[a-zA-Z]/g, '')
+      .replace(/\[\?2004[hl]\]/g, '')
       .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
       .replace(/^Last login:.*\r?\n?/gm, '')
-      .replace(/^\[root@[^\]]+\]# .*\r?\n?/gm, '')
-      .replace(/^\[[^\]@]+@[^\]]+\][\$#] .*\r?\n?/gm, '')
+      .replace(/^\[root@[^\]]+\][#\$]?\s*/gm, '')
+      .replace(/^\[[^\]@]+@[^\]]+\][\$#]\s*/gm, '')
+      .replace(/^[a-zA-Z0-9_.-]+@[a-zA-Z0-9_.-]+:[^$#]*[\$#]\s*/gm, '')
       .replace(/^sh -c '[\s\S]*?fi'\r?\n?/gm, '')
-      .replace(/^.*(?:for f in|journalctl --user -u|tail -n 250 -f|FILE="").*\r?\n?/gm, '');
+      .replace(/^.*(?:for f in|journalctl --user -u|tail -n 250|FILE="").*\r?\n?/gm, '')
+      .trimStart();
   };
 
   const relayConnectedRef = useRef(relayInfo?.connected);
@@ -604,8 +607,8 @@ export default function AIAgentsApp({ apiFetch }) {
       socketRef.current = null;
     }
 
-    // Pure tail command per agent — checks latest log file then journalctl
-    const tailCmd = `stty -echo 2>/dev/null; FILE="$(ls -1t "$HOME/.${agentId}/logs/"*.log 2>/dev/null | head -1)"; if [ -n "$FILE" ] && [ -s "$FILE" ]; then tail -n 250 -f "$FILE"; else journalctl --user -u ${agentId} --no-pager -n 250 -f 2>/dev/null || journalctl -u ${agentId} --no-pager -n 250 -f 2>/dev/null || echo "(waiting for ${agentId} logs...)"; fi\n`;
+    // Pure tail command per agent — ensures logs directory exists, then continuously tails active daemon log
+    const tailCmd = `stty -echo 2>/dev/null; mkdir -p "$HOME/.${agentId}/logs"; touch "$HOME/.${agentId}/logs/daemon.log"; LOGF="$(ls -1t "$HOME/.${agentId}/logs/"*.log 2>/dev/null | head -1)"; [ -z "$LOGF" ] && LOGF="$HOME/.${agentId}/logs/daemon.log"; tail -n 250 -F "$LOGF" 2>/dev/null || journalctl --user -u ${agentId} --no-pager -n 250 -f 2>/dev/null\n`;
 
     // ── HTTP snapshot (one-shot, used as initial seed or error fallback) ──
     const fetchSnapshot = async () => {
