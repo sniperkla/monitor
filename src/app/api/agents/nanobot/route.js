@@ -5,6 +5,7 @@ import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
 import { dispatchWithLiveLogs } from '@/app/api/agents/_jobs';
 import { execDetached } from '@/app/api/agents/_remote-bg';
 import { logger } from '@/lib/logger';
+import { parseInst, homeDir, instancePort, listInstances, cloneDefaultHome, pidAlive } from '../_multi-instance';
 
 /**
  * Nanobot (HKUDS) one-click installer — deploys https://github.com/HKUDS/nanobot
@@ -111,6 +112,12 @@ async function handleAgentAction(body, session, log = []) {
     };
     const b64 = (s) => Buffer.from(String(s), 'utf8').toString('base64');
 
+    // -- Multi-instance support (hermes blueprint) --
+    const inst = parseInst(body);
+    const HH = homeDir('nanobot', inst);        // ${HH} or ${HH}-<tag>
+    const GW_PORT = instancePort(inst);          // distinct port for instances (null for default)
+    const PIDF = `${HH}/daemon.pid`;
+
     const binPath = () => `p="$(export PATH="$HOME/.local/bin:$HOME/.nanobot/venv/bin:/usr/local/bin:/usr/bin:$PATH"; command -v nanobot 2>/dev/null)"; [ -z "$p" ] && for q in "$HOME/.local/bin/nanobot" "$HOME/.nanobot/venv/bin/nanobot" "/usr/local/bin/nanobot" "/usr/bin/nanobot"; do [ -x "$q" ] && p="$q" && break; done; echo "BIN=$p"`;
 
     const gwCtl = async (op) => {
@@ -119,16 +126,24 @@ async function handleAgentAction(body, session, log = []) {
       if (!bp) return { ok: false, out: 'nanobot binary not found' };
       const BP = JSON.stringify(bp);
       const ENVX = `export PATH="$HOME/.local/bin:$HOME/.nanobot/venv/bin:/usr/local/bin:$PATH"`;
+      // Instance-aware launch: explicit config/workspace/port so multiple
+      // gateways on the same server never share a data dir or bind port.
+      const GW_FLAGS = inst
+        ? ` --config "${HH}/config.json" --workspace "${HH}/workspace"${GW_PORT ? ` --port ${GW_PORT}` : ''}`
+        : '';
+      const pidScan = `${ENVX}; res=0; if [ -f "${PIDF}" ] && kill -0 $(cat "${PIDF}") 2>/dev/null; then res=1; fi; echo "PROC=$res"`;
       if (op === 'status') {
-        const r = await execCommand(sshConfig, `${ENVX}; timeout 15 pgrep -f '[n]anobot.*gatew[a]y' >/dev/null && echo PROC_ACTIVE || echo NO_PROC`, { pool: false, timeoutMs: 30000 });
-        return { ok: true, active: /PROC_ACTIVE/.test(r.stdout || '') };
+        const r = await execCommand(sshConfig, pidScan, { pool: false, timeoutMs: 30000 });
+        return { ok: true, active: /PROC=1/.test(r.stdout || '') };
       }
       if (op === 'stop') {
-        return execCommand(sshConfig, `${ENVX}; timeout 15 pkill -f '[n]anobot.*gatew[a]y' 2>/dev/null; sleep 1; pkill -9 -f '[n]anobot.*gatew[a]y' 2>/dev/null || true; echo GW_STOPPED`, { pool: false, timeoutMs: 60000 })
+        return execCommand(sshConfig,
+          `${ENVX}; if [ -f "${PIDF}" ]; then kill $(cat "${PIDF}") 2>/dev/null; sleep 1; kill -9 $(cat "${PIDF}") 2>/dev/null; fi; rm -f "${PIDF}"; echo GW_STOPPED`,
+          { pool: false, timeoutMs: 60000 })
           .then(r => ({ ok: /GW_STOPPED/.test(r.stdout || ''), out: ((r.stdout || '') + (r.stderr || '')).slice(-400) }));
       }
       if (op === 'restart') await gwCtl('stop');
-      const startCmd = `${ENVX}; mkdir -p "$HOME/.nanobot/logs"; setsid nohup ${BP} gateway >> "$HOME/.nanobot/logs/gateway.log" 2>&1 < /dev/null & sleep 4; timeout 15 pgrep -f '[n]anobot.*gatew[a]y' >/dev/null && echo GW_UP || echo GW_DOWN`;
+      const startCmd = `${ENVX}; set -a; [ -f "${HH}/.env" ] && . "${HH}/.env"; set +a; mkdir -p "${HH}/logs" "${HH}/workspace"; setsid nohup ${BP} gateway${GW_FLAGS} >> "${HH}/logs/gateway.log" 2>&1 < /dev/null & echo $! > "${PIDF}"; sleep 4; if kill -0 $(cat "${PIDF}") 2>/dev/null; then echo GW_UP; else echo GW_DOWN; fi`;
       return execCommand(sshConfig, startCmd, { pool: false, timeoutMs: 90000 })
         .then(r => ({ ok: /GW_UP/.test(r.stdout || ''), out: (r.stdout || '').slice(-200) }));
     };
@@ -147,6 +162,36 @@ async function handleAgentAction(body, session, log = []) {
       });
     }
 
+    // ── INSTANCES — list every installed nanobot home + running state ───────
+    if (action === 'instances') {
+      const list = await listInstances(sshConfig, 'nanobot');
+      return NextResponse.json({ success: true, instances: list });
+    }
+
+    // ── SPAWN-INSTANCE — clone the default install's data dir & start ──────
+    if (action === 'spawn-instance') {
+      const tag = String((config && config.tag) || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 24);
+      if (!tag) return NextResponse.json({ success: false, error: 'Instance tag is required' }, { status: 400 });
+      const clone = await cloneDefaultHome(sshConfig, 'nanobot', tag, [
+        'config.json', '.env', 'workspace/config.json', 'workspace/PROMPT.md', 'workspace/SOUL.md',
+        'workspace/IDENTITY.md', 'workspace/USER.md', 'workspace/AGENTS.md', 'workspace/MEMORY.md',
+        'prompt.txt', 'workspace/custom_instructions.md',
+      ]);
+      if (!clone.ok) {
+        return NextResponse.json({ success: false, error: 'Failed to clone nanobot instance home' });
+      }
+      const g = await gwCtl('start');
+      return NextResponse.json({
+        success: true,
+        instance: tag,
+        existed: clone.existed,
+        started: g.ok,
+        output: clone.existed
+          ? `Instance "${tag}" already existed — gateway ${g.ok ? 'running' : 'not started'}.`
+          : `Instance "${tag}" spawned and ${g.ok ? 'running' : 'failed to start'}. Remember: give it its OWN bot token (reconfigure → env) so instances don't fight over the same Telegram bot.`,
+      });
+    }
+
     // ── DETAILS ──
     if (action === 'details') {
       const D = `
@@ -154,35 +199,36 @@ export PATH="$HOME/.local/bin:$HOME/.nanobot/venv/bin:/usr/local/bin:$PATH"
 BIN="$(command -v nanobot 2>/dev/null || true)"
 [ -z "$BIN" ] && for p in "$HOME/.local/bin/nanobot" "$HOME/.nanobot/venv/bin/nanobot" "/usr/local/bin/nanobot" "/usr/bin/nanobot"; do [ -x "$p" ] && BIN="$p" && break; done
 echo "===CONFIG_B64==="
-base64 < "$HOME/.nanobot/config.json" 2>/dev/null || true
+base64 < "${HH}/config.json" 2>/dev/null || true
 echo "===SKILLS==="
-[ -d "$HOME/.nanobot/workspace/skills" ] && ls -1 "$HOME/.nanobot/workspace/skills" 2>/dev/null | grep -v '^\.' || true
+[ -d "${HH}/workspace/skills" ] && ls -1 "${HH}/workspace/skills" 2>/dev/null | grep -v '^\.' || true
 echo "===PLUGINS==="
 [ -n "$BIN" ] && "$BIN" plugins list 2>/dev/null || true
 echo "===PROMPT_B64==="
-{ base64 < "$HOME/.nanobot/workspace/PROMPT.md" || base64 < "$HOME/.nanobot/prompt.txt" || base64 < "$HOME/.nanobot/workspace/custom_instructions.md"; } 2>/dev/null || true
+{ base64 < "${HH}/workspace/PROMPT.md" || base64 < "${HH}/prompt.txt" || base64 < "${HH}/workspace/custom_instructions.md"; } 2>/dev/null || true
 echo "===SOUL_B64==="
-{ base64 < "$HOME/.nanobot/workspace/SOUL.md" || base64 < "$HOME/.nanobot/workspace/IDENTITY.md"; } 2>/dev/null || true
+{ base64 < "${HH}/workspace/SOUL.md" || base64 < "${HH}/workspace/IDENTITY.md"; } 2>/dev/null || true
 echo "===USER_B64==="
-base64 < "$HOME/.nanobot/workspace/USER.md" 2>/dev/null || true
+base64 < "${HH}/workspace/USER.md" 2>/dev/null || true
 echo "===AGENTS_B64==="
-base64 < "$HOME/.nanobot/workspace/AGENTS.md" 2>/dev/null || true
+base64 < "${HH}/workspace/AGENTS.md" 2>/dev/null || true
 echo "===MEMORY_B64==="
-{ base64 < "$HOME/.nanobot/workspace/MEMORY.md" || base64 < "$HOME/.nanobot/workspace/memory/MEMORY.md"; } 2>/dev/null || true
+{ base64 < "${HH}/workspace/MEMORY.md" || base64 < "${HH}/workspace/memory/MEMORY.md"; } 2>/dev/null || true
 echo "===RUNNING==="
-pgrep -f '[n]anobot.*gatew[a]y' >/dev/null 2>&1 && echo PROC_ACTIVE || echo NO_PROC
+res=0; [ -f "${PIDF}" ] && kill -0 $(cat "${PIDF}") 2>/dev/null && res=1
+[ "$res" = 1 ] && echo PROC_ACTIVE || echo NO_PROC
 echo "===VERSION==="
 [ -n "$BIN" ] && "$BIN" --version 2>/dev/null | tail -1 | cut -c1-40
 echo "===BINPATH==="
 [ -n "$BIN" ] && echo "$BIN"
 echo "===LOG==="
 LOG=""
-for f in "$HOME/.nanobot/logs/gatew""ay.log" "$HOME/.nanobot-gatew""ay.log"; do [ -f "$f" ] && [ -s "$f" ] && LOG="$f" && break; done
+for f in "${HH}/logs/gatew""ay.log" "${HH}-gatew""ay.log"; do [ -f "$f" ] && [ -s "$f" ] && LOG="$f" && break; done
 [ -n "$LOGLAST" ] || true
 echo "===LOGFILE==="
 LOG=""
-for f in "$HOME/.nanobot/logs/gatew""ay.log" "$HOME/.nanobot-gatew""ay.log"; do [ -f "$f" ] && [ -s "$f" ] && LOG="$f" && break; done
-[ -z "$LOG" ] && LOG="$HOME/.nanobot/logs/gatew""ay.log"
+for f in "${HH}/logs/gatew""ay.log" "${HH}-gatew""ay.log"; do [ -f "$f" ] && [ -s "$f" ] && LOG="$f" && break; done
+[ -z "$LOG" ] && LOG="${HH}/logs/gatew""ay.log"
 echo "$LOG"
 tail -n 30 "$LOG" 2>/dev/null | tail -5
 `;
@@ -216,7 +262,7 @@ tail -n 30 "$LOG" 2>/dev/null | tail -5
       const envKeys = new Set();
       let envText = '';
       try {
-        const envR = await execCommand(sshConfig, `[ -f "$HOME/.nanobot/.env" ] && cat "$HOME/.nanobot/.env" 2>/dev/null || true`, { pool: false, timeoutMs: 15000 });
+        const envR = await execCommand(sshConfig, `[ -f "${HH}/.env" ] && cat "${HH}/.env" 2>/dev/null || true`, { pool: false, timeoutMs: 15000 });
         envText = envR.stdout || '';
         for (const k of envText.split('\n')) {
           const name = k.split('=')[0]?.trim();
@@ -289,17 +335,17 @@ tail -n 30 "$LOG" 2>/dev/null | tail -5
       const promptText = String(config.prompt || '');
       const fileName = config.file || 'PROMPT.md';
       const b64 = Buffer.from(promptText, 'utf8').toString('base64');
-      let SCRIPT = `mkdir -p "$HOME/.nanobot/workspace"\n`;
+      let SCRIPT = `mkdir -p "${HH}/workspace"\n`;
       if (fileName === 'SOUL.md' || fileName === 'IDENTITY.md') {
-        SCRIPT += `echo "${b64}" | base64 -d > "$HOME/.nanobot/workspace/SOUL.md"\necho "${b64}" | base64 -d > "$HOME/.nanobot/workspace/IDENTITY.md"\n`;
+        SCRIPT += `echo "${b64}" | base64 -d > "${HH}/workspace/SOUL.md"\necho "${b64}" | base64 -d > "${HH}/workspace/IDENTITY.md"\n`;
       } else if (fileName === 'USER.md') {
-        SCRIPT += `echo "${b64}" | base64 -d > "$HOME/.nanobot/workspace/USER.md"\n`;
+        SCRIPT += `echo "${b64}" | base64 -d > "${HH}/workspace/USER.md"\n`;
       } else if (fileName === 'AGENTS.md') {
-        SCRIPT += `echo "${b64}" | base64 -d > "$HOME/.nanobot/workspace/AGENTS.md"\n`;
+        SCRIPT += `echo "${b64}" | base64 -d > "${HH}/workspace/AGENTS.md"\n`;
       } else if (fileName === 'MEMORY.md') {
-        SCRIPT += `echo "${b64}" | base64 -d > "$HOME/.nanobot/workspace/MEMORY.md"\n`;
+        SCRIPT += `echo "${b64}" | base64 -d > "${HH}/workspace/MEMORY.md"\n`;
       } else {
-        SCRIPT += `echo "${b64}" | base64 -d > "$HOME/.nanobot/workspace/PROMPT.md"\necho "${b64}" | base64 -d > "$HOME/.nanobot/prompt.txt"\necho "${b64}" | base64 -d > "$HOME/.nanobot/workspace/custom_instructions.md"\n`;
+        SCRIPT += `echo "${b64}" | base64 -d > "${HH}/workspace/PROMPT.md"\necho "${b64}" | base64 -d > "${HH}/prompt.txt"\necho "${b64}" | base64 -d > "${HH}/workspace/custom_instructions.md"\n`;
       }
       await execCommand(sshConfig, SCRIPT, { pool: false, timeoutMs: 30000 });
       if (config.restart !== false) {
@@ -312,8 +358,8 @@ tail -n 30 "$LOG" 2>/dev/null | tail -5
     if (action === 'uninstall') {
       await run('stop gateway', `pkill -f '[n]anobot.*gatew[a]y' 2>/dev/null; pkill -f '[n]anobot webui' 2>/dev/null; sleep 1; pkill -9 -f '[n]anobot' 2>/dev/null; true`);
       const rmCmd = purge
-        ? `rm -f "$HOME/.local/bin/nanobot" "$HOME/.nanobot/venv/bin/nanobot" /usr/local/bin/nanobot /usr/bin/nanobot 2>/dev/null; rm -rf "$HOME/.nanobot" /home/*/.nanobot "$HOME/.cache/nanobot" /tmp/.nb* 2>/dev/null; pipx uninstall nanobot-ai 2>/dev/null; pipx uninstall nanobot 2>/dev/null; echo REMOVED_ALL`
-        : `rm -f "$HOME/.local/bin/nanobot" "$HOME/.nanobot/venv/bin/nanobot" /usr/local/bin/nanobot /usr/bin/nanobot 2>/dev/null; rm -rf "$HOME/.nanobot/venv" "$HOME/.cache/nanobot" "$HOME/.nanobot/logs" 2>/dev/null; pipx uninstall nanobot-ai 2>/dev/null; pipx uninstall nanobot 2>/dev/null; echo REMOVED_CODE`;
+        ? `rm -f "$HOME/.local/bin/nanobot" "$HOME/.nanobot/venv/bin/nanobot" /usr/local/bin/nanobot /usr/bin/nanobot 2>/dev/null; rm -rf "${HH}" /home/*/.nanobot "$HOME/.cache/nanobot" /tmp/.nb* 2>/dev/null; pipx uninstall nanobot-ai 2>/dev/null; pipx uninstall nanobot 2>/dev/null; echo REMOVED_ALL`
+        : `rm -f "$HOME/.local/bin/nanobot" "$HOME/.nanobot/venv/bin/nanobot" /usr/local/bin/nanobot /usr/bin/nanobot 2>/dev/null; rm -rf "$HOME/.nanobot/venv" "$HOME/.cache/nanobot" "${HH}/logs" 2>/dev/null; pipx uninstall nanobot-ai 2>/dev/null; pipx uninstall nanobot 2>/dev/null; echo REMOVED_CODE`;
       const r = await run(purge ? 'remove nanobot binary & all data' : 'remove nanobot binary & venv (config kept)', `export PATH="$HOME/.local/bin:$HOME/.nanobot/venv/bin:/usr/local/bin:$PATH"; ${rmCmd}`);
       const ok = /REMOVED/.test(r.stdout || '');
       return NextResponse.json({ success: ok, purged: purge, output: (r.stdout || '').slice(-500), log });
@@ -391,11 +437,11 @@ tail -n 30 "$LOG" 2>/dev/null | tail -5
       const cfg = typeof config.configJson === 'object' && config.configJson ? config.configJson : {};
       const cfgB64 = b64(JSON.stringify(cfg));
       await run('merge ~/.nanobot/config.json', [
-        'mkdir -p "$HOME/.nanobot"',
+        'export NB_HOME="${HH}"; mkdir -p "${HH}"',
         `echo '${b64(JSON.stringify(cfg))}' | base64 -d > /tmp/.nb-new.json`,
         `cat > /tmp/.nb-merge.py <<'PYEOF'`,
         'import json, os, sys',
-        "path = os.path.expanduser('~/.nanobot/config.json')",
+        "path = os.environ.get('NB_HOME') or os.path.expanduser('~/.nanobot/config.json')",
         'new = json.load(open(sys.argv[1]))',
         'cur = {}',
         'if os.path.exists(path):',
@@ -409,7 +455,7 @@ tail -n 30 "$LOG" 2>/dev/null | tail -5
         'json.dump(deep_merge(cur, new), open(path, \"w\"), indent=2)',
         "print('CONFIG_MERGED')",
         'PYEOF',
-        '(command -v python3 >/dev/null 2>&1 && python3 /tmp/.nb-merge.py /tmp/.nb-new.json || cp /tmp/.nb-new.json "$HOME/.nanobot/config.json")',
+        '(command -v python3 >/dev/null 2>&1 && python3 /tmp/.nb-merge.py /tmp/.nb-new.json || cp /tmp/.nb-new.json "${HH}/config.json")',
         'rm -f /tmp/.nb-new.json /tmp/.nb-merge.py',
         'echo NB_CFG_MERGED',
       ].join('\n'), { timeoutMs: 60000 });
@@ -421,8 +467,8 @@ tail -n 30 "$LOG" 2>/dev/null | tail -5
 
       // 6. Start gateway detached
       await run('start gateway', [
-        'mkdir -p "$HOME/.nanobot/logs"',
-        `setsid nohup $(export PATH="$(dirname ${NBE}):$HOME/.local/bin:$HOME/.nanobot/venv/bin:/usr/local/bin:$PATH"; command -v nanobot) gateway >> "$HOME/.nanobot/logs/gatew""ay.log" 2>&1 < /dev/null &`,
+        'mkdir -p "${HH}/logs"',
+        `setsid nohup $(export PATH="$(dirname ${NBE}):$HOME/.local/bin:$HOME/.nanobot/venv/bin:/usr/local/bin:$PATH"; command -v nanobot) gateway >> "${HH}/logs/gatew""ay.log" 2>&1 < /dev/null &`,
         'sleep 4',
         "timeout 15 pgrep -f '[n]anobot.*gatew[a]y' >/dev/null && echo GW_UP || echo GW_DOWN",
       ].join('\n'), { timeoutMs: 90000 });
@@ -481,12 +527,12 @@ tail -n 30 "$LOG" 2>/dev/null | tail -5
       const cfgB64 = b64(JSON.stringify(newConfig));
       const sidecarB64 = b64(sidecarKeys.map(([k, v]) => `${k}=${v}`).join('\n'));
       const w = await run('merge ~/.nanobot/config.json', [
-        'mkdir -p "$HOME/.nanobot"',
+        'export NB_HOME="${HH}"; mkdir -p "${HH}"',
         `echo '${cfgB64}' | base64 -d > /tmp/.nb-cfg-new.json`,
-        sidecarKeys.length ? `echo '${sidecarB64}' | base64 -d > "$HOME/.nanobot/.env"; chmod 600 "$HOME/.nanobot/.env"` : 'true',
+        sidecarKeys.length ? `echo '${sidecarB64}' | base64 -d > "${HH}/.env"; chmod 600 "${HH}/.env"` : 'true',
         `cat > /tmp/.nb-merge.py <<'PYEOF'
 import json, os, sys
-p = os.path.expanduser('~/.nanobot/config.json')
+p = os.environ.get('NB_HOME') or os.path.expanduser('~/.nanobot/config.json')
 new = json.load(open(sys.argv[1]))
 cur = {}
 if os.path.exists(p):
@@ -500,7 +546,7 @@ dm(cur, new)
 json.dump(cur, open(p, 'w'), indent=2)
 print('MERGED')
 PYEOF`,
-        '(command -v python3 >/dev/null 2>&1 && python3 /tmp/.nb-merge.py /tmp/.nb-cfg-new.json || cp /tmp/.nb-cfg-new.json "$HOME/.nanobot/config.json")',
+        '(command -v python3 >/dev/null 2>&1 && python3 /tmp/.nb-merge.py /tmp/.nb-cfg-new.json || cp /tmp/.nb-cfg-new.json "${HH}/config.json")',
         'rm -f /tmp/.nb-cfg-new.json /tmp/.nb-merge.py',
         'echo RECONFIGURED',
       ].join('\n'), { timeoutMs: 30000 });
@@ -516,9 +562,9 @@ PYEOF`,
       const jsonText = String(config.configJson ?? '');
       if (!jsonText.trim()) return NextResponse.json({ success: false, error: 'config.json content is empty' }, { status: 400 });
       await execCommand(sshConfig, `
-        cp "$HOME/.nanobot/config.json" "$HOME/.nanobot/config.json.bak-$(date +%s)" 2>/dev/null || true
-        echo '${b64(jsonText)}' | base64 -d > "$HOME/.nanobot/config.json.new"
-        mv "$HOME/.nanobot/config.json.new" "$HOME/.nanobot/config.json"
+        cp "${HH}/config.json" "${HH}/config.json.bak-$(date +%s)" 2>/dev/null || true
+        echo '${b64(jsonText)}' | base64 -d > "${HH}/config.json.new"
+        mv "${HH}/config.json.new" "${HH}/config.json"
         echo CONFIG_SAVED`, { pool: false, timeoutMs: 30000 });
       let restarted = false;
       let rolledBack = false;
@@ -527,7 +573,7 @@ PYEOF`,
         restarted = g.ok;
         if (!g.ok) {
           const rbk = await execCommand(sshConfig,
-            `BAK="$(ls -1t "$HOME/.nanobot"/config.json.bak-* 2>/dev/null | head -1)"; [ -n "$BAK" ] && cp "$BAK" "$HOME/.nanobot/config.json" && echo ROLLED_BACK=$BAK || echo NO_BACKUP`,
+            `BAK="$(ls -1t "${HH}"/config.json.bak-* 2>/dev/null | head -1)"; [ -n "$BAK" ] && cp "$BAK" "${HH}/config.json" && echo ROLLED_BACK=$BAK || echo NO_BACKUP`,
             { pool: false, timeoutMs: 30000 });
           if (/ROLLED_BACK/.test(rbk.stdout || '')) {
             rolledBack = true;
@@ -542,7 +588,7 @@ PYEOF`,
     // ── CONFIG BACKUPS ──
     if (action === 'backups') {
       const r = await execCommand(sshConfig,
-        `ls -1t "$HOME/.nanobot"/config.json.bak-* 2>/dev/null | head -10 | while read f; do echo "$(basename "$f")|$(stat -c %y "$f" 2>/dev/null | cut -d. -f1)|$(wc -c < "$f")"; done`,
+        `ls -1t "${HH}"/config.json.bak-* 2>/dev/null | head -10 | while read f; do echo "$(basename "$f")|$(stat -c %y "$f" 2>/dev/null | cut -d. -f1)|$(wc -c < "$f")"; done`,
         { pool: false, timeoutMs: 30000 });
       const backups = (r.stdout || '').split('\n').filter(Boolean).map(l => {
         const parts = l.split('|');
@@ -557,7 +603,7 @@ PYEOF`,
         return NextResponse.json({ success: false, error: 'Invalid backup name' }, { status: 400 });
       }
       const r = await execCommand(sshConfig,
-        `[ -f "$HOME/.nanobot/${name}" ] && cp "$HOME/.nanobot/${name}" "$HOME/.nanobot/config.json" && echo RESTORED || echo NOT_FOUND`,
+        `[ -f "${HH}/${name}" ] && cp "${HH}/${name}" "${HH}/config.json" && echo RESTORED || echo NOT_FOUND`,
         { pool: false, timeoutMs: 30000 });
       let restarted = false;
       if (/RESTORED/.test(r.stdout || '')) {
@@ -591,7 +637,7 @@ PYEOF`,
       const BP = JSON.stringify(bp);
       const ENVX = `export PATH="$HOME/.local/bin:$HOME/.nanobot/venv/bin:/usr/local/bin:$PATH"`;
       const r = await execCommand(sshConfig,
-        `${ENVX}; ${BP} pairing list 2>&1 || true; { [ -f "$HOME/.nanobot/logs/gateway.log" ] && tail -n 60 "$HOME/.nanobot/logs/gateway.log"; } || true`,
+        `${ENVX}; ${BP} pairing list 2>&1 || true; { [ -f "${HH}/logs/gateway.log" ] && tail -n 60 "${HH}/logs/gateway.log"; } || true`,
         { pool: false, timeoutMs: 20000 });
       const out = (r.stdout || '');
       const matches = [...out.matchAll(/pairing\s+approve\s+(?:(\w+)\s+)?([A-Z0-9]{6,12})/gi), ...out.matchAll(/code[:\s]+([A-Z0-9]{6,12})/gi), ...out.matchAll(/pairing\s+code\s+is\s+([A-Z0-9]{6,12})/gi)];
@@ -619,7 +665,7 @@ PYEOF`,
       const LINES = Math.min(Number(config.lines || 300), 1000);
       const script = `
 LOG=""
-for f in "$HOME/.nanobot/logs/gatew""ay.log" "$HOME/.nanobot-gatew""ay.log" "$HOME/.nanobot/logs/webui.log"; do
+for f in "${HH}/logs/gatew""ay.log" "${HH}-gatew""ay.log" "${HH}/logs/webui.log"; do
   [ -f "$f" ] && [ -s "$f" ] && LOG="$f" && break
 done
 if [ -z "$LOG" ]; then echo "SIZE=0"; echo "===DATA==="; exit 0; fi
@@ -641,15 +687,15 @@ if [ ${cursor} -gt 0 ] && [ ${cursor} -le $SZ ]; then tail -c +$((cursor + 1)) "
     // ── HEALTH ──
     if (action === 'health') {
       const script = `
-ALIVE=0; pgrep -f '[n]anobot.*gatew[a]y' >/dev/null 2>&1 && ALIVE=1
+ALIVE=0; [ -f "${PIDF}" ] && kill -0 $(cat "${PIDF}") 2>/dev/null && ALIVE=1
 echo "ALIVE=$ALIVE"
-PID=$(pgrep -f '[n]anobot.*gatew[a]y' | head -1)
+PID=$(cat "${PIDF}" 2>/dev/null)
 UP=0; [ -n "$PID" ] && UP=$(ps -o etimes= -p "$PID" 2>/dev/null | tr -d ' ')
 [ -z "$UP" ] && UP=0
 echo "UPTIME_SEC=$UP"
 TG=unknown
 LOGL=""
-for f in "$HOME/.nanobot/logs/gatew""ay.log" "$HOME/.nanobot-gatew""ay.log"; do [ -f "$f" ] && [ -s "$f" ] && LOGL="$f" && break; done
+for f in "${HH}/logs/gatew""ay.log" "${HH}-gatew""ay.log"; do [ -f "$f" ] && [ -s "$f" ] && LOGL="$f" && break; done
 if [ -n "$LOGL" ]; then
   if tail -n 300 "$LOGL" | grep -qiE 'telegram.*(bot.*connected|polling mode|channel enabled|connected)'; then
     TG=connected
@@ -679,7 +725,7 @@ echo "TG=$TG"
         if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(name)) {
           return NextResponse.json({ success: false, error: 'Invalid skill/plugin name' }, { status: 400 });
         }
-        await execCommand(sshConfig, `${ENVX}; ${BP} plugins disable ${JSON.stringify(name)} 2>/dev/null; rm -rf "$HOME/.nanobot/workspace/skills/${name}" 2>/dev/null; true`, { pool: false, timeoutMs: 30000 });
+        await execCommand(sshConfig, `${ENVX}; ${BP} plugins disable ${JSON.stringify(name)} 2>/dev/null; rm -rf "${HH}/workspace/skills/${name}" 2>/dev/null; true`, { pool: false, timeoutMs: 30000 });
         const g = await gwCtl('restart');
         return NextResponse.json({ success: true, restarted: g.ok, log: [`Removed skill/plugin ${name}`] });
       }
@@ -695,7 +741,7 @@ echo "TG=$TG"
           const r = await execCommand(sshConfig, `${ENVX}; ${BP} plugins enable ${id.toLowerCase()} 2>&1`, { pool: false, timeoutMs: 120000 });
           logMsg = r.stdout || r.stderr;
         } else {
-          await execCommand(sshConfig, `mkdir -p "$HOME/.nanobot/workspace/skills"; cd "$HOME/.nanobot/workspace/skills"; git clone --depth 1 "${id}" 2>/dev/null || (mkdir -p "${id.replace(/[^a-zA-Z0-9_-]/g, '_')}" && echo '# ${id}' > "${id.replace(/[^a-zA-Z0-9_-]/g, '_')}/SKILL.md")`, { pool: false, timeoutMs: 120000 });
+          await execCommand(sshConfig, `mkdir -p "${HH}/workspace/skills"; cd "${HH}/workspace/skills"; git clone --depth 1 "${id}" 2>/dev/null || (mkdir -p "${id.replace(/[^a-zA-Z0-9_-]/g, '_')}" && echo '# ${id}' > "${id.replace(/[^a-zA-Z0-9_-]/g, '_')}/SKILL.md")`, { pool: false, timeoutMs: 120000 });
           logMsg = `Installed custom skill ${id}`;
         }
         const g = await gwCtl('restart');

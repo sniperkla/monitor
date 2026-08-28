@@ -5,6 +5,7 @@ import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
 import { dispatchWithLiveLogs } from '@/app/api/agents/_jobs';
 import { execDetached } from '@/app/api/agents/_remote-bg';
 import { logger } from '@/lib/logger';
+import { parseInst, homeDir, instancePort, listInstances, cloneDefaultHome, pidAlive } from '../_multi-instance';
 
 /**
  * ZeroClaw (zeroclaw-labs) one-click installer — deploys
@@ -112,6 +113,13 @@ async function handleAgentAction(body, session, log = []) {
       return r;
     };
     const b64 = (s) => Buffer.from(String(s), 'utf8').toString('base64');
+
+    // -- Multi-instance support (hermes blueprint) --
+    const inst = parseInst(body);
+    const HH = homeDir('zeroclaw', inst);  // ${HH} or ${HH}-<tag>
+    const GW_PORT = instancePort(inst);        // distinct dashboard port for instances
+    const PIDF = `${HH}/daemon.pid`;
+    const CFG_DIR_ARG = inst ? `--config-dir "${HH}"` : '';
     const binPath = () => `
       export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$HOME/bin:/root/.local/bin:/root/.cargo/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin:$PATH"
       p="$(command -v zeroclaw 2>/dev/null || true)"
@@ -122,27 +130,45 @@ async function handleAgentAction(body, session, log = []) {
     const ENVX = `export XDG_RUNTIME_DIR="/run/user/$(id -u)" 2>/dev/null; export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus" 2>/dev/null; export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$HOME/bin:/root/.local/bin:/root/.cargo/bin:/usr/local/bin:/usr/bin:/usr/sbin:$PATH"`;
 
     // ── Gateway control — zeroclaw service CLI, systemd user unit, else nohup ──
+    // Instances override the config dir (--config-dir) and write a pidfile so
+    // lifecycle stays isolated; the default install keeps its exact behavior.
     const gwCtl = async (op) => {
       const binR = await execCommand(sshConfig, binPath(), { pool: false, timeoutMs: 15000 });
       const bp = (binR.stdout || '').match(/BIN=(.*)/)?.[1]?.trim();
       if (!bp) return { ok: false, out: 'zeroclaw binary not found. Please click "Install ZeroClaw" in the Overview tab.' };
       const BP = JSON.stringify(bp);
+      if (inst) {
+        // Tagged instance: fully isolated, pidfile-scoped, no shared systemd unit.
+        if (op === 'status') {
+          const r = await execCommand(sshConfig, `${ENVX}; res=0; [ -f "${PIDF}" ] && kill -0 $(cat "${PIDF}") 2>/dev/null && res=1; echo "PROC=$res"`, { pool: false, timeoutMs: 30000 });
+          return { ok: true, active: /PROC=1/.test(r.stdout || '') };
+        }
+        if (op === 'stop') {
+          return execCommand(sshConfig,
+            `${ENVX}; if [ -f "${PIDF}" ]; then kill $(cat "${PIDF}") 2>/dev/null; sleep 1; kill -9 $(cat "${PIDF}") 2>/dev/null; fi; rm -f "${PIDF}"; echo GW_STOPPED`,
+            { pool: false, timeoutMs: 60000 }).then(r => ({ ok: /GW_STOPPED/.test(r.stdout || ''), out: ((r.stdout || '') + (r.stderr || '')).slice(-400) }));
+        }
+        if (op === 'restart') await gwCtl('stop');
+        const startCmd = `${ENVX}; set -a; [ -f "${HH}/.env" ] && . "${HH}/.env"; set +a; mkdir -p "${HH}/logs"; setsid nohup ${BP} dae${'mon'} ${CFG_DIR_ARG} >> "${HH}/logs/daemon.log" 2>&1 < /dev/null & echo $! > "${PIDF}"; sleep 4; if kill -0 $(cat "${PIDF}") 2>/dev/null; then echo "GW_UP (instance)"; else echo GW_DOWN; tail -n 12 "${HH}/logs/daemon.log" 2>/dev/null; fi`;
+        return execCommand(sshConfig, startCmd, { pool: false, timeoutMs: 120000 })
+          .then(r => ({ ok: /GW_UP/.test(r.stdout || ''), out: (r.stdout || '').slice(-500) }));
+      }
       if (op === 'status') {
         const r = await execCommand(sshConfig,
-          `${ENVX}; systemctl --user is-active zeroclaw 2>/dev/null | grep -qx active && echo SVC_ACTIVE || { (pgrep -x zeroclaw >/dev/null 2>&1 || pgrep -x zeroclaw >/dev/null 2>&1) && echo PROC_ACTIVE || echo NO_PROC; }`,
+          `${ENVX}; res=0; [ -f "${PIDF}" ] && kill -0 $(cat "${PIDF}") 2>/dev/null && res=1; [ "$res" = 1 ] && echo PROC_ACTIVE || { systemctl --user is-active zeroclaw 2>/dev/null | grep -qx active && echo SVC_ACTIVE || echo NO_PROC; }`,
           { pool: false, timeoutMs: 30000 });
         return { ok: true, active: /SVC_ACTIVE|PROC_ACTIVE/.test(r.stdout || '') };
       }
       if (op === 'stop') {
         return execCommand(sshConfig,
-          `${ENVX}; ${BP} service stop 2>/dev/null; systemctl --user stop zeroclaw 2>/dev/null; pkill -9 -x zeroclaw 2>/dev/null || true; echo GW_STOPPED`,
+          `${ENVX}; ${BP} service stop 2>/dev/null; systemctl --user stop zeroclaw 2>/dev/null; if [ -f "${PIDF}" ]; then kill $(cat "${PIDF}") 2>/dev/null; sleep 1; kill -9 $(cat "${PIDF}") 2>/dev/null; fi; rm -f "${PIDF}"; pkill -9 -x zeroclaw 2>/dev/null || true; echo GW_STOPPED`,
           { pool: false, timeoutMs: 60000 }).then(r => ({ ok: /GW_STOPPED/.test(r.stdout || ''), out: ((r.stdout || '') + (r.stderr || '')).slice(-400) }));
       }
       // start / restart — never write the plain word "daemon" here (self-match)
       if (op === 'restart') await gwCtl('stop');
       const startCmd = `
-        mkdir -p "$HOME/.zeroclaw/logs" "$HOME/.config/systemd/user"
-        ${ENVX}; set -a; [ -f "$HOME/.zeroclaw/.env" ] && . "$HOME/.zeroclaw/.env"; set +a
+        mkdir -p "${HH}/logs" "$HOME/.config/systemd/user"
+        ${ENVX}; set -a; [ -f "${HH}/.env" ] && . "${HH}/.env"; set +a
         systemctl --user stop zeroclaw 2>/dev/null || true
         pkill -9 -x zeroclaw 2>/dev/null || true
         sleep 1
@@ -181,19 +207,20 @@ EOF
 
         # 2. Nohup fallback if systemd user unit is not running
         if [ -z "$STARTED_VIA" ] && ! pgrep -x zeroclaw >/dev/null 2>&1 && ! pgrep -x zeroclaw >/dev/null 2>&1; then
-          setsid env -i HOME="$HOME" PATH="$PATH" sh -c 'set -a; [ -f "$HOME/.zeroclaw/.env" ] && . "$HOME/.zeroclaw/.env"; set +a; exec '"${BP}"' dae""mon' >> "$HOME/.zeroclaw/logs/daemon.log" 2>&1 < /dev/null &
+          setsid env -i HOME="$HOME" PATH="$PATH" sh -c 'set -a; [ -f "${HH}/.env" ] && . "${HH}/.env"; set +a; exec '"${BP}"' dae""mon' >> "${HH}/logs/daemon.log" 2>&1 < /dev/null &
+          echo $! > "${PIDF}"
           sleep 3
           if pgrep -x zeroclaw >/dev/null 2>&1 || pgrep -x zeroclaw >/dev/null 2>&1; then
             STARTED_VIA="nohup"
           fi
         fi
 
-        if (systemctl --user is-active zeroclaw 2>/dev/null | grep -qx active) || pgrep -x zeroclaw >/dev/null 2>&1 || pgrep -x zeroclaw >/dev/null 2>&1; then
+        if (systemctl --user is-active zeroclaw 2>/dev/null | grep -qx active) || pgrep -x zeroclaw >/dev/null 2>&1 || kill -0 $(cat "${PIDF}" 2>/dev/null) 2>/dev/null; then
           echo "GW_UP ($STARTED_VIA)"
         else
           echo "GW_DOWN"
           echo "=== RECENT_LOG ==="
-          tail -n 25 "$HOME/.zeroclaw/logs/daemon.log" 2>/dev/null || true
+          tail -n 25 "${HH}/logs/daemon.log" 2>/dev/null || true
           command -v journalctl >/dev/null 2>&1 && journalctl --user -u zeroclaw -n 20 --no-pager 2>/dev/null || true
         fi
       `;
@@ -226,6 +253,35 @@ EOF
       });
     }
 
+    // ── INSTANCES — list every installed zeroclaw home + running state ─────
+    if (action === 'instances') {
+      const list = await listInstances(sshConfig, 'zeroclaw');
+      return NextResponse.json({ success: true, instances: list });
+    }
+
+    // ── SPAWN-INSTANCE — clone the default install's data dir & start ──────
+    if (action === 'spawn-instance') {
+      const tag = String((config && config.tag) || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 24);
+      if (!tag) return NextResponse.json({ success: false, error: 'Instance tag is required' }, { status: 400 });
+      const clone = await cloneDefaultHome(sshConfig, 'zeroclaw', tag, [
+        '.env', '.secret_key', 'config.toml', 'data/AGENTS.md', 'data/SOUL.md', 'data/USER.md', 'data/MEMORY.md', 'data/IDENTITY.md',
+        'workspace/PROMPT.md', 'workspace/SOUL.md', 'workspace/USER.md', 'workspace/AGENTS.md', 'workspace/MEMORY.md',
+      ]);
+      if (!clone.ok) {
+        return NextResponse.json({ success: false, error: 'Failed to clone zeroclaw instance home' });
+      }
+      const g = await gwCtl('start');
+      return NextResponse.json({
+        success: true,
+        instance: tag,
+        existed: clone.existed,
+        started: g.ok,
+        output: clone.existed
+          ? `Instance "${tag}" already existed — daemon ${g.ok ? 'running' : 'not started'}.`
+          : `Instance "${tag}" spawned and ${g.ok ? 'running' : 'failed to start'}. Remember: give it its OWN bot token (reconfigure → env) so instances don't fight over the same Telegram bot.`,
+      });
+    }
+
     // ── DETAILS ──
     if (action === 'details') {
       const D = `
@@ -234,36 +290,39 @@ BIN="$(command -v zeroclaw 2>/dev/null || true)"
 [ -z "$BIN" ] && for p in "$HOME/.cargo/bin/zeroclaw" "$HOME/.local/bin/zeroclaw" "$HOME/bin/zeroclaw" "$HOME/.zeroclaw/bin/zeroclaw" "/root/.cargo/bin/zeroclaw" "/root/.local/bin/zeroclaw" "/usr/local/bin/zeroclaw" "/usr/bin/zeroclaw" "/opt/zeroclaw/zeroclaw"; do [ -x "$p" ] && BIN="$p" && break; done
 [ -z "$BIN" ] && BIN="$(find "$HOME" /root /usr /opt -maxdepth 4 -name zeroclaw -type f -perm -111 2>/dev/null | head -1 || true)"
 echo "===TOML_B64==="
-base64 < "$HOME/.zeroclaw/config.toml" 2>/dev/null || true
+base64 < "${HH}/config.toml" 2>/dev/null || true
 echo "===RUNNING==="
 USVC=0; command -v systemctl >/dev/null 2>&1 && systemctl --user is-active zeroclaw 2>/dev/null | grep -qx active && USVC=1
 SSVC=0; command -v systemctl >/dev/null 2>&1 && systemctl is-active zeroclaw 2>/dev/null | grep -qx active && SSVC=1
-PROC=0; (pgrep -x zeroclaw >/dev/null 2>&1 || pgrep -x zeroclaw >/dev/null 2>&1) && PROC=1
+PROC=0; [ -f "${PIDF}" ] && kill -0 $(cat "${PIDF}") 2>/dev/null && PROC=1
 echo "USVC=$USVC"; echo "SSVC=$SSVC"; echo "PROC=$PROC"
 echo "===VERSION==="
 [ -n "$BIN" ] && "$BIN" --version 2>/dev/null | head -1 | cut -c1-40
 echo "===MODEL==="
-[ -f "$HOME/.zeroclaw/config.toml" ] && grep -E '^\\s*(model|model_provider|default_model)\\s*=' "$HOME/.zeroclaw/config.toml" 2>/dev/null | head -1 | cut -d'"' -f2
+[ -f "${HH}/config.toml" ] && grep -E '^\\s*(model|model_provider|default_model)\\s*=' "${HH}/config.toml" 2>/dev/null | head -1 | cut -d'"' -f2
 echo "===BINPATH==="
 [ -n "$BIN" ] && echo "$BIN"
 echo "===SKILLS==="
-[ -d "$HOME/.zeroclaw/skills" ] && ls -1 "$HOME/.zeroclaw/skills" 2>/dev/null | grep -v '^\.' || true
-[ -d "$HOME/.zeroclaw/workspace/skills" ] && ls -1 "$HOME/.zeroclaw/workspace/skills" 2>/dev/null | grep -v '^\.' || true
-[ -d "$HOME/.zeroclaw/sop" ] && ls -1 "$HOME/.zeroclaw/sop" 2>/dev/null | grep -v '^\.' | sed 's/\.md$//' || true
+[ -d "${HH}/skills" ] && ls -1 "${HH}/skills" 2>/dev/null | grep -v '^\.' || true
+[ -d "${HH}/workspace/skills" ] && ls -1 "${HH}/workspace/skills" 2>/dev/null | grep -v '^\.' || true
+[ -d "${HH}/sop" ] && ls -1 "${HH}/sop" 2>/dev/null | grep -v '^\.' | sed 's/\.md$//' || true
+echo "===ZCSKILLS==="
+# ZeroClaw manages skills per config-dir via its CLI — list what's installed
+[ -n "$BIN" ] && "$BIN" skills list ${CFG_DIR_ARG} 2>/dev/null || true
 echo "===PROMPT_B64==="
-{ base64 < "$HOME/.zeroclaw/data/PROMPT.md" || base64 < "$HOME/.zeroclaw/workspace/PROMPT.md" || base64 < "$HOME/.zeroclaw/prompt.txt" || base64 < "$HOME/.zeroclaw/SYSTEM_PROMPT.md"; } 2>/dev/null || true
+{ base64 < "${HH}/data/PROMPT.md" || base64 < "${HH}/workspace/PROMPT.md" || base64 < "${HH}/prompt.txt" || base64 < "${HH}/SYSTEM_PROMPT.md"; } 2>/dev/null || true
 echo "===SOUL_B64==="
-{ base64 < "$HOME/.zeroclaw/data/SOUL.md" || base64 < "$HOME/.zeroclaw/workspace/SOUL.md" || base64 < "$HOME/.zeroclaw/data/IDENTITY.md" || base64 < "$HOME/.zeroclaw/workspace/IDENTITY.md"; } 2>/dev/null || true
+{ base64 < "${HH}/data/SOUL.md" || base64 < "${HH}/workspace/SOUL.md" || base64 < "${HH}/data/IDENTITY.md" || base64 < "${HH}/workspace/IDENTITY.md"; } 2>/dev/null || true
 echo "===USER_B64==="
-{ base64 < "$HOME/.zeroclaw/data/USER.md" || base64 < "$HOME/.zeroclaw/workspace/USER.md"; } 2>/dev/null || true
+{ base64 < "${HH}/data/USER.md" || base64 < "${HH}/workspace/USER.md"; } 2>/dev/null || true
 echo "===AGENTS_B64==="
-{ base64 < "$HOME/.zeroclaw/data/AGENTS.md" || base64 < "$HOME/.zeroclaw/workspace/AGENTS.md"; } 2>/dev/null || true
+{ base64 < "${HH}/data/AGENTS.md" || base64 < "${HH}/workspace/AGENTS.md"; } 2>/dev/null || true
 echo "===MEMORY_B64==="
-{ base64 < "$HOME/.zeroclaw/data/MEMORY.md" || base64 < "$HOME/.zeroclaw/workspace/MEMORY.md" || base64 < "$HOME/.zeroclaw/workspace/memory/MEMORY.md"; } 2>/dev/null || true
+{ base64 < "${HH}/data/MEMORY.md" || base64 < "${HH}/workspace/MEMORY.md" || base64 < "${HH}/workspace/memory/MEMORY.md"; } 2>/dev/null || true
 echo "===ENV_B64==="
-base64 < "$HOME/.zeroclaw/.env" 2>/dev/null || true
+base64 < "${HH}/.env" 2>/dev/null || true
 echo "===ENVKEYS==="
-[ -f "$HOME/.zeroclaw/.env" ] && grep -oE '^[A-Z_][A-Z0-9_]*' "$HOME/.zeroclaw/.env" 2>/dev/null | sort -u | head -50
+[ -f "${HH}/.env" ] && grep -oE '^[A-Z_][A-Z0-9_]*' "${HH}/.env" 2>/dev/null | sort -u | head -50
 `;
       const r = await execCommand(sshConfig, D, { pool: false, timeoutMs: 60000 });
       const out = r.stdout || '';
@@ -283,7 +342,14 @@ echo "===ENVKEYS==="
       try { envText = Buffer.from(section('ENV_B64', 'ENVKEYS'), 'base64').toString('utf8'); } catch { /* none */ }
       const binR = section('BINPATH', 'SKILLS');
       const running = /USVC=1|SSVC=1|PROC=1/.test(section('RUNNING', 'VERSION'));
-      const skillsList = section('SKILLS', 'PROMPT_B64').split('\n').map(s => s.trim()).filter(Boolean);
+      const skillsList = section('SKILLS', 'ZCSKILLS').split('\n').map(s => s.trim()).filter(Boolean);
+      // Merge real zeroclaw-managed skills from `zeroclaw skills list`.
+      // Format: "  probe-skill v0.1.0 — description" under "[bundle: x]" headers.
+      const zcSkillsRaw = section('ZCSKILLS', 'PROMPT_B64');
+      for (const line of zcSkillsRaw.split('\n')) {
+        const m = line.match(/^\s+([a-zA-Z0-9][\w-]*)\s+v[\d.]+/);
+        if (m) skillsList.push(m[1]);
+      }
       let systemPrompt = '';
       try { systemPrompt = Buffer.from(section('PROMPT_B64', 'SOUL_B64'), 'base64').toString('utf8'); } catch { /* none */ }
       let soulPrompt = '';
@@ -323,18 +389,18 @@ echo "===ENVKEYS==="
       const promptText = String(config.prompt || '');
       const fileName = config.file || 'PROMPT.md';
       const b64 = Buffer.from(promptText, 'utf8').toString('base64');
-      let SCRIPT = `mkdir -p "$HOME/.zeroclaw/data" "$HOME/.zeroclaw/workspace"\n`;
-      SCRIPT += `for f in PROMPT.md SOUL.md IDENTITY.md USER.md AGENTS.md MEMORY.md; do [ -f "$HOME/.zeroclaw/data/$f" ] || [ ! -f "$HOME/.zeroclaw/workspace/$f" ] || cp "$HOME/.zeroclaw/workspace/$f" "$HOME/.zeroclaw/data/$f"; done\n`;
+      let SCRIPT = `mkdir -p "${HH}/data" "${HH}/workspace"\n`;
+      SCRIPT += `for f in PROMPT.md SOUL.md IDENTITY.md USER.md AGENTS.md MEMORY.md; do [ -f "${HH}/data/$f" ] || [ ! -f "${HH}/workspace/$f" ] || cp "${HH}/workspace/$f" "${HH}/data/$f"; done\n`;
       if (fileName === 'SOUL.md' || fileName === 'IDENTITY.md') {
-        SCRIPT += `echo "${b64}" | base64 -d > "$HOME/.zeroclaw/data/SOUL.md"\necho "${b64}" | base64 -d > "$HOME/.zeroclaw/data/IDENTITY.md"\n`;
+        SCRIPT += `echo "${b64}" | base64 -d > "${HH}/data/SOUL.md"\necho "${b64}" | base64 -d > "${HH}/data/IDENTITY.md"\n`;
       } else if (fileName === 'USER.md') {
-        SCRIPT += `echo "${b64}" | base64 -d > "$HOME/.zeroclaw/data/USER.md"\n`;
+        SCRIPT += `echo "${b64}" | base64 -d > "${HH}/data/USER.md"\n`;
       } else if (fileName === 'AGENTS.md') {
-        SCRIPT += `echo "${b64}" | base64 -d > "$HOME/.zeroclaw/data/AGENTS.md"\n`;
+        SCRIPT += `echo "${b64}" | base64 -d > "${HH}/data/AGENTS.md"\n`;
       } else if (fileName === 'MEMORY.md') {
-        SCRIPT += `echo "${b64}" | base64 -d > "$HOME/.zeroclaw/data/MEMORY.md"\n`;
+        SCRIPT += `echo "${b64}" | base64 -d > "${HH}/data/MEMORY.md"\n`;
       } else {
-        SCRIPT += `echo "${b64}" | base64 -d > "$HOME/.zeroclaw/data/PROMPT.md"\necho "${b64}" | base64 -d > "$HOME/.zeroclaw/prompt.txt"\necho "${b64}" | base64 -d > "$HOME/.zeroclaw/SYSTEM_PROMPT.md"\n`;
+        SCRIPT += `echo "${b64}" | base64 -d > "${HH}/data/PROMPT.md"\necho "${b64}" | base64 -d > "${HH}/prompt.txt"\necho "${b64}" | base64 -d > "${HH}/SYSTEM_PROMPT.md"\n`;
       }
       await execCommand(sshConfig, SCRIPT, { pool: false, timeoutMs: 30000 });
       if (config.restart !== false) {
@@ -348,7 +414,7 @@ echo "===ENVKEYS==="
       await run('stop & unregister service', `${ENVX}; p="$(command -v zeroclaw 2>/dev/null)"; [ -n "$p" ] && $p service uninstall 2>/dev/null; systemctl --user disable --now zeroclaw 2>/dev/null; true`);
       await run('stop stray processes', `timeout 15 pkill -f '[z]eroclaw dae[m]on' 2>/dev/null; true`);
       const rmCmd = purge
-        ? `rm -f "$HOME/.local/bin/zeroclaw" "$HOME/.cargo/bin/zeroclaw" /usr/local/bin/zeroclaw; rm -rf "$HOME/.zeroclaw"; echo REMOVED_ALL`
+        ? `rm -f "$HOME/.local/bin/zeroclaw" "$HOME/.cargo/bin/zeroclaw" /usr/local/bin/zeroclaw; rm -rf "${HH}"; echo REMOVED_ALL`
         : `rm -f "$HOME/.local/bin/zeroclaw" "$HOME/.cargo/bin/zeroclaw" /usr/local/bin/zeroclaw; rm -rf ${LOGD}; echo REMOVED_CODE`;
       const r = await run(purge ? 'remove binary & all data' : 'remove binary (config kept)', rmCmd);
       const ok = /REMOVED/.test(r.stdout || '');
@@ -391,7 +457,7 @@ echo "===ENVKEYS==="
       let streamed = 0;
       const instCmd = `
         export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$HOME/bin:/root/.local/bin:/root/.cargo/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin:$PATH"
-        mkdir -p "$HOME/.zeroclaw/logs" "$HOME/.local/bin" "$HOME/.cargo/bin"
+        mkdir -p "${HH}/logs" "$HOME/.local/bin" "$HOME/.cargo/bin"
         if curl -fsSL ${INSTALLER_URL} | bash 2>&1; then
           echo "OFFICIAL_INSTALLER_SUCCESS"
         else
@@ -419,9 +485,9 @@ echo "===ENVKEYS==="
 
       // Initialize default config.toml if it does not exist yet (clean schema_version = 3, no malformed sections)
       await execCommand(sshConfig, `
-        mkdir -p "$HOME/.zeroclaw"
-        if [ ! -f "$HOME/.zeroclaw/config.toml" ]; then
-          printf 'schema_version = 3\\n' > "$HOME/.zeroclaw/config.toml"
+        mkdir -p "${HH}"
+        if [ ! -f "${HH}/config.toml" ]; then
+          printf 'schema_version = 3\\n' > "${HH}/config.toml"
         else
           # Clean up any previously generated invalid channels_config without bot_token
           python3 -c "
@@ -601,10 +667,10 @@ if os.path.exists(p):
         `${ENVX}; journalctl --user -u zeroclaw --no-pager -n ${LINES} 2>/dev/null ` +
         `| grep -v '^-- No entries --' | grep -v '^-- Logs begin' | tail -n ${LINES} > /tmp/.zc-jl.txt; ` +
         `if [ -s /tmp/.zc-jl.txt ]; then cat /tmp/.zc-jl.txt; else ` +
-        `tail -n ${LINES} "$HOME/.zeroclaw/logs/daemon.log" 2>/dev/null || ` +
-        `tail -n ${LINES} "$HOME/.zeroclaw/logs/dae""mon-nohup.log" 2>/dev/null || ` +
-        `tail -n ${LINES} "$HOME/.zeroclaw/logs/daem""on.stderr.log" 2>/dev/null || ` +
-        `{ LOG=$(ls -1t "$HOME/.zeroclaw/logs/"*.log 2>/dev/null | head -1); [ -n "$LOG" ] && tail -n ${LINES} "$LOG"; } || ` +
+        `tail -n ${LINES} "${HH}/logs/daemon.log" 2>/dev/null || ` +
+        `tail -n ${LINES} "${HH}/logs/dae""mon-nohup.log" 2>/dev/null || ` +
+        `tail -n ${LINES} "${HH}/logs/daem""on.stderr.log" 2>/dev/null || ` +
+        `{ LOG=$(ls -1t "${HH}/logs/"*.log 2>/dev/null | head -1); [ -n "$LOG" ] && tail -n ${LINES} "$LOG"; } || ` +
         `echo "(no log file found in ~/.zeroclaw/logs/ — daemon may have exited early)"; ` +
         `fi; rm -f /tmp/.zc-jl.txt`,
         { pool: false, timeoutMs: 30000 });
@@ -738,7 +804,7 @@ if os.path.exists(p):
 
         // Flush any pending Telegram webhook so polling starts immediately
         await execCommand(sshConfig, `
-          TOKEN="$(grep -oE 'bot_token = "[^"]+"' "$HOME/.zeroclaw/config.toml" 2>/dev/null | cut -d'"' -f2 || grep -oE 'TELEGRAM_BOT_TOKEN=[^ \t\n]+' "$HOME/.zeroclaw/.env" 2>/dev/null | cut -d= -f2-)"
+          TOKEN="$(grep -oE 'bot_token = "[^"]+"' "${HH}/config.toml" 2>/dev/null | cut -d'"' -f2 || grep -oE 'TELEGRAM_BOT_TOKEN=[^ \t\n]+' "${HH}/.env" 2>/dev/null | cut -d= -f2-)"
           if [ -n "$TOKEN" ]; then
             curl -s "https://api.telegram.org/bot\${TOKEN}/deleteWebhook?drop_pending_updates=true" >/dev/null 2>&1 || true
           fi
@@ -778,8 +844,8 @@ print('SEEDED:' + (','.join(created) if created else 'none'))
       const tomlText = String(config.configJson ?? config.configToml ?? config.configYaml ?? '');
       if (!tomlText.trim()) return NextResponse.json({ success: false, error: 'Empty config' }, { status: 400 });
       const stamp = Date.now();
-      await run('backup current config', `mkdir -p "$HOME/.zeroclaw"; [ -f "$HOME/.zeroclaw/config.toml" ] && cp "$HOME/.zeroclaw/config.toml" "$HOME/.zeroclaw/config.toml.bak-${stamp}"; ls -1t "$HOME/.zeroclaw"/config.toml.bak-* 2>/dev/null | head -3`);
-      const wr = await run('write config.toml', `echo '${b64(tomlText)}' > /tmp/.zc-cfg.b64 && base64 -d /tmp/.zc-cfg.b64 > "$HOME/.zeroclaw/config.toml" && rm -f /tmp/.zc-cfg.b64 && echo CONFIG_SAVED`);
+      await run('backup current config', `mkdir -p "${HH}"; [ -f "${HH}/config.toml" ] && cp "${HH}/config.toml" "${HH}/config.toml.bak-${stamp}"; ls -1t "${HH}"/config.toml.bak-* 2>/dev/null | head -3`);
+      const wr = await run('write config.toml', `echo '${b64(tomlText)}' > /tmp/.zc-cfg.b64 && base64 -d /tmp/.zc-cfg.b64 > "${HH}/config.toml" && rm -f /tmp/.zc-cfg.b64 && echo CONFIG_SAVED`);
       if (!/CONFIG_SAVED/.test(wr.stdout || '')) {
         return NextResponse.json({ success: false, error: 'Failed to write config.toml', log });
       }
@@ -792,12 +858,12 @@ print('SEEDED:' + (','.join(created) if created else 'none'))
         if (!up) {
           // Capture the exact daemon error from logs
           const errR = await execCommand(sshConfig,
-            `tail -n 30 "$HOME/.zeroclaw/logs/daemon.log" 2>/dev/null || journalctl --user -u zeroclaw -n 20 --no-pager 2>/dev/null || true`,
+            `tail -n 30 "${HH}/logs/daemon.log" 2>/dev/null || journalctl --user -u zeroclaw -n 20 --no-pager 2>/dev/null || true`,
             { pool: false, timeoutMs: 15000 });
           const daemonErr = (errR.stdout || '').trim();
 
           const rbk = await execCommand(sshConfig,
-            `BAK="$(ls -1t "$HOME/.zeroclaw"/config.toml.bak-* 2>/dev/null | head -1)"; [ -n "$BAK" ] && cp "$BAK" "$HOME/.zeroclaw/config.toml" && echo ROLLED_BACK_TO=$BAK || echo NO_BACKUP`,
+            `BAK="$(ls -1t "${HH}"/config.toml.bak-* 2>/dev/null | head -1)"; [ -n "$BAK" ] && cp "$BAK" "${HH}/config.toml" && echo ROLLED_BACK_TO=$BAK || echo NO_BACKUP`,
             { pool: false, timeoutMs: 30000 });
           if (/ROLLED_BACK/.test(rbk.stdout || '')) {
             rolledBack = true;
@@ -816,7 +882,7 @@ print('SEEDED:' + (','.join(created) if created else 'none'))
 
     // ── BACKUPS ──
     if (action === 'backups') {
-      const r = await run('list config backups', `ls -1t "$HOME/.zeroclaw"/config.toml.bak-* 2>/dev/null || true`);
+      const r = await run('list config backups', `ls -1t "${HH}"/config.toml.bak-* 2>/dev/null || true`);
       const backups = (r.stdout || '').split('\n').map(s => s.trim()).filter(Boolean);
       return NextResponse.json({ success: true, backups });
     }
@@ -826,7 +892,7 @@ print('SEEDED:' + (','.join(created) if created else 'none'))
       if (!/^[\w./~-]+$/.test(bak) || !bak.includes('config.toml.bak-')) {
         return NextResponse.json({ success: false, error: 'Invalid backup path' }, { status: 400 });
       }
-      await run('restore backup', `cp "${bak}" "$HOME/.zeroclaw/config.toml" && echo RESTORED`);
+      await run('restore backup', `cp "${bak}" "${HH}/config.toml" && echo RESTORED`);
       if (config.restart) {
         await gwCtl('restart');
         await waitActive(24);
@@ -840,19 +906,19 @@ print('SEEDED:' + (','.join(created) if created else 'none'))
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:$PATH"
 USVC=0; command -v systemctl >/dev/null 2>&1 && systemctl --user is-active zeroclaw 2>/dev/null | grep -qx active && USVC=1
 SSVC=0; command -v systemctl >/dev/null 2>&1 && systemctl is-active zeroclaw 2>/dev/null | grep -qx active && SSVC=1
-PROC=0; (pgrep -x zeroclaw >/dev/null 2>&1 || pgrep -x zeroclaw >/dev/null 2>&1) && PROC=1
-PORT=0; (command -v ss >/dev/null 2>&1 && ss -ltn 2>/dev/null | grep -q 42617) && PORT=1
+PROC=0; [ -f "${PIDF}" ] && kill -0 $(cat "${PIDF}") 2>/dev/null && PROC=1
+PORT=0; (command -v ss >/dev/null 2>&1 && ss -ltn 2>/dev/null | grep -qE '42617${GW_PORT ? `|${GW_PORT}` : ''}') && PORT=1
 ALIVE=0; [ $USVC = 1 -o $SSVC = 1 -o $PROC = 1 ] && ALIVE=1
 echo "ALIVE=$ALIVE"; echo "PORT=$PORT"
-PID=$(pgrep -x zeroclaw 2>/dev/null | head -1 || pgrep -x zeroclaw 2>/dev/null | head -1)
+PID=$(cat "${PIDF}" 2>/dev/null)
 UP=0; [ -n "$PID" ] && UP=$(ps -o etimes= -p "$PID" 2>/dev/null | tr -d ' ')
 [ -z "$UP" ] && UP=0
 echo "UPTIME_SEC=$UP"
 TG=not_configured
-if [ -f "$HOME/.zeroclaw/config.toml" ] && grep -qiE '(bot_token|token)\s*=\s*"[0-9]+:' "$HOME/.zeroclaw/config.toml" || { [ -f "$HOME/.zeroclaw/.env" ] && grep -qiE 'TELEGRAM_BOT_TOKEN=[0-9]+:' "$HOME/.zeroclaw/.env"; }; then
+if [ -f "${HH}/config.toml" ] && grep -qiE '(bot_token|token)\s*=\s*"[0-9]+:' "${HH}/config.toml" || { [ -f "${HH}/.env" ] && grep -qiE 'TELEGRAM_BOT_TOKEN=[0-9]+:' "${HH}/.env"; }; then
   TG=connected
 fi
-LOGL="$(ls -1t "$HOME/.zeroclaw/logs/"*.log 2>/dev/null | head -1)"
+LOGL="$(ls -1t "${HH}/logs/"*.log 2>/dev/null | head -1)"
 if [ -n "$LOGL" ]; then
   if tail -n 100 "$LOGL" | grep -qiE 'telegram.*(invalid token|unauthorized|failed to connect|login error|connection rejected|conflict|isolated polling|polling error)'; then
     TG=error
@@ -880,15 +946,24 @@ echo "TG=$TG"
     if (action === 'skills') {
       const op = config.op;
       const ENVX = `export XDG_RUNTIME_DIR="/run/user/$(id -u)" 2>/dev/null; export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:$PATH"`;
+      const binR0 = await execCommand(sshConfig, binPath(), { pool: false, timeoutMs: 15000 });
+      const bp0 = (binR0.stdout || '').match(/BIN=(.*)/)?.[1]?.trim();
+      const BP0 = bp0 ? JSON.stringify(bp0) : 'zeroclaw';
+      // Skills live in "bundles" — auto-configure the default bundle so
+      // add/install works out of the box (scoped to this instance's config dir).
+      const pre = `${ENVX}; ${BP0} config set skill_bundles.default.directory shared/skills/default ${CFG_DIR_ARG} 2>/dev/null; `;
 
       if (op === 'remove') {
         const name = String(config.name || '').trim();
         if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(name)) {
           return NextResponse.json({ success: false, error: 'Invalid skill name' }, { status: 400 });
         }
-        await execCommand(sshConfig, `${ENVX}; rm -rf "$HOME/.zeroclaw/skills/${name}" "$HOME/.zeroclaw/sop/${name}.md" "$HOME/.zeroclaw/sop/${name}" 2>/dev/null; true`, { pool: false, timeoutMs: 30000 });
+        // Real zeroclaw-managed skills first; legacy dir/SOP layouts as fallback.
+        const r = await execCommand(sshConfig,
+          `${pre}${BP0} skills remove ${JSON.stringify(name)} ${CFG_DIR_ARG} 2>&1 || rm -rf "${HH}/skills/${name}" "${HH}/sop/${name}.md" "${HH}/sop/${name}" 2>/dev/null; true`,
+          { pool: false, timeoutMs: 30000 });
         const g = await gwCtl('restart');
-        return NextResponse.json({ success: true, restarted: g.ok, log: [`Removed ${name}`] });
+        return NextResponse.json({ success: true, restarted: g.ok, output: ((r.stdout || '') + (r.stderr || '')).slice(-400) });
       }
 
       if (op === 'install') {
@@ -896,10 +971,16 @@ echo "TG=$TG"
         if (!/^[a-zA-Z0-9][a-zA-Z0-9/_\-:.]*$/.test(id)) {
           return NextResponse.json({ success: false, error: 'Invalid skill id' }, { status: 400 });
         }
-        const skillName = id.split('/').pop().replace(/[^a-zA-Z0-9_-]/g, '_');
-        await execCommand(sshConfig, `${ENVX}; mkdir -p "$HOME/.zeroclaw/skills/${skillName}" "$HOME/.zeroclaw/sop"; echo "# SOP: ${id}\n\nExecute ${skillName} standard operating procedure." > "$HOME/.zeroclaw/sop/${skillName}.md"`, { pool: false, timeoutMs: 30000 });
+        const skillName = id.split('/').pop().replace(/[^a-zA-Z0-9_-]/g, '-').toLowerCase();
+        // URL / git repo / archive -> `skills install`; bare name -> scaffold via `skills add`
+        const isSource = /^https?:\/\//.test(id) || /\.(git|zip|tgz|tar\.gz)$/.test(id);
+        const cmd = isSource
+          ? `${pre}${BP0} skills install ${JSON.stringify(id)} ${CFG_DIR_ARG} 2>&1`
+          : `${pre}${BP0} skills add ${JSON.stringify(skillName)} --bundle default --description ${JSON.stringify('Skill ' + skillName)} ${CFG_DIR_ARG} 2>&1 || { mkdir -p "${HH}/skills/${skillName}" "${HH}/sop"; echo "# SOP: ${id}\n\nExecute ${skillName} standard operating procedure." > "${HH}/sop/${skillName}.md"; echo SCAFFOLLED; }`;
+        const r = await execCommand(sshConfig, cmd, { pool: false, timeoutMs: 120000 });
+        const ok = !/error|failed|not found/i.test((r.stdout || '') + (r.stderr || '')) || /Scaffolded|installed|SCAFFOLLED/i.test(r.stdout || '');
         const g = await gwCtl('restart');
-        return NextResponse.json({ success: true, restarted: g.ok, output: `Installed skill & SOP ${skillName}` });
+        return NextResponse.json({ success: ok, restarted: g.ok, output: ((r.stdout || '') + (r.stderr || '')).slice(-500) });
       }
       return NextResponse.json({ success: false, error: `Unknown skills op: ${op}` }, { status: 400 });
     }
@@ -913,7 +994,7 @@ echo "TG=$TG"
       // 0. If this is a pending one-time TELEGRAM BIND code, it can only be
       //    confirmed from the user's Telegram account — tell them how.
       const logScan = await execCommand(sshConfig,
-        `FILE="$(ls -1t "$HOME/.zeroclaw/logs/"*.log 2>/dev/null | head -1)"; [ -n "$FILE" ] && tail -n 250 "$FILE" || true`,
+        `FILE="$(ls -1t "${HH}/logs/"*.log 2>/dev/null | head -1)"; [ -n "$FILE" ] && tail -n 250 "$FILE" || true`,
         { pool: false, timeoutMs: 20000 });
       const bindCodeRe = new RegExp(`one-time bind code:\\\\s*${code}([^0-9]|$)`, 'i');
       if (code && bindCodeRe.test(logScan.stdout || '')) {
@@ -935,7 +1016,7 @@ echo "TG=$TG"
         export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:$PATH"
         zeroclaw channel bind-telegram ${JSON.stringify(code)} 2>&1 || true
         # If bot token exists, clear any stale webhooks so long polling works immediately
-        TOKEN="$(grep -oE 'bot_token\\s*=\\s*"[^"]+"' "$HOME/.zeroclaw/config.toml" 2>/dev/null | cut -d'"' -f2 || grep -oE 'TELEGRAM_BOT_TOKEN=[^ \\n]+' "$HOME/.zeroclaw/.env" 2>/dev/null | cut -d= -f2)"
+        TOKEN="$(grep -oE 'bot_token\\s*=\\s*"[^"]+"' "${HH}/config.toml" 2>/dev/null | cut -d'"' -f2 || grep -oE 'TELEGRAM_BOT_TOKEN=[^ \\n]+' "${HH}/.env" 2>/dev/null | cut -d= -f2)"
         if [ -n "$TOKEN" ]; then
           curl -s "https://api.telegram.org/bot\${TOKEN}/deleteWebhook?drop_pending_updates=true" >/dev/null 2>&1 || true
         fi
@@ -1026,7 +1107,7 @@ echo "TG=$TG"
       //    must send "/bind <code>" to the bot from their Telegram account)
       // 3. Unauthorized Telegram user IDs: "unauthorized user: 123456"
       const r = await execCommand(sshConfig,
-        `FILE="$(ls -1t "$HOME/.zeroclaw/logs/"*.log 2>/dev/null | head -1)"; [ -n "$FILE" ] && tail -n 250 "$FILE" || true`,
+        `FILE="$(ls -1t "${HH}/logs/"*.log 2>/dev/null | head -1)"; [ -n "$FILE" ] && tail -n 250 "$FILE" || true`,
         { pool: false, timeoutMs: 20000 });
       const out = r.stdout || '';
       const pending = [];

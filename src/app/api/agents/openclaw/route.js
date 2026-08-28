@@ -5,6 +5,7 @@ import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
 import { dispatchWithLiveLogs } from '@/app/api/agents/_jobs';
 import { execDetached } from '@/app/api/agents/_remote-bg';
 import { logger } from '@/lib/logger';
+import { parseInst, homeDir, instancePort, listInstances, cloneDefaultHome, pidAlive } from '../_multi-instance';
 
 /**
  * OpenClaw (openclaw.ai) one-click installer — deploys the OpenClaw gateway
@@ -124,32 +125,51 @@ async function handleAgentAction(body, session, log = []) {
       return r;
     };
     const b64 = (s) => Buffer.from(String(s), 'utf8').toString('base64');
+
+    // -- Multi-instance support (hermes blueprint) --
+    const inst = parseInst(body);
+    const HH = homeDir('openclaw', inst);   // ${HH} or ${HH}-<tag>
+    const GW_PORT = instancePort(inst);         // distinct WebSocket port for instances
+    const PIDF = `${HH}/daemon.pid`;
     const binPath = () => `p="$(export PATH="$HOME/.openclaw/local/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/usr/sbin:$PATH"; command -v openclaw 2>/dev/null)"; [ -z "$p" ] && for q in "$HOME/.openclaw/local/bin/openclaw" "$HOME/.local/bin/openclaw" "/usr/local/bin/openclaw" "/usr/bin/openclaw" "/usr/sbin/openclaw"; do [ -x "$q" ] && p="$q" && break; done; echo "BIN=$p"`;
 
-    // ── Gateway control — systemd user unit when available, else nohup ──────
+    // ── Gateway control — pidfile-scoped; instances relocate via env vars ────
     const gwCtl = async (op) => {
       const binR = await execCommand(sshConfig, `${binPath()} ; echo "SYSTEMD=$(command -v systemctl >/dev/null 2>&1 && echo 1 || echo 0)"`, { pool: false, timeoutMs: 15000 });
       const bp = (binR.stdout || '').match(/BIN=(.*)/)?.[1]?.trim();
       if (!bp) return { ok: false, out: 'openclaw binary not found' };
       const sysd = /SYSTEMD=1/.test(binR.stdout || '');
       const BP = JSON.stringify(bp);
-      const ENVX = `export XDG_RUNTIME_DIR="/run/user/$(id -u)" 2>/dev/null; export PATH="$HOME/.openclaw/local/bin:$HOME/.local/bin:/usr/local/bin:$PATH"`;
+      // Instance-aware env: OPENCLAW_STATE_DIR + OPENCLAW_CONFIG_PATH relocate the
+      // whole gateway data dir; --port gives each instance a distinct bind port.
+      const OC_RELOC = inst
+        ? `export OPENCLAW_STATE_DIR="${HH}"; export OPENCLAW_CONFIG_PATH="${HH}/openclaw.json"; export OPENCLAW_LOG_DIR="${HH}/logs"`
+        : '';
+      const OC_FLAGS = GW_PORT ? ` --port ${GW_PORT}` : '';
+      const OC_LOGL = inst ? `"${HH}/logs/gateway.log"` : LOGL;
+      // Build the env prefix from parts, joining with '; ' and dropping empties —
+      // a trailing '; ' (empty OC_RELOC) combined with `${ENVX}; cmd` produced
+      // `set +a; ; if` which bash rejects with a syntax error.
+      const ENVX = [
+        `export XDG_RUNTIME_DIR="/run/user/$(id -u)" 2>/dev/null`,
+        `export PATH="$HOME/.openclaw/local/bin:$HOME/.local/bin:/usr/local/bin:$PATH"`,
+        `set -a; [ -f "${HH}/.env" ] && . "${HH}/.env"; set +a`,
+        OC_RELOC || null,
+      ].filter(Boolean).join('; ');
       if (op === 'status') {
-        const r = await execCommand(sshConfig, `${ENVX}; ${sysd ? `systemctl --user is-active ${UNIT} 2>/dev/null | grep -qx active && echo SVC_ACTIVE || ` : ''}{ timeout 15 pgrep -f '[o]penclaw.*gatew[a]y' >/dev/null && echo PROC_ACTIVE || echo NO_PROC; }`, { pool: false, timeoutMs: 30000 });
-        return { ok: true, active: /SVC_ACTIVE|PROC_ACTIVE/.test(r.stdout || '') };
+        const r = await execCommand(sshConfig, `${ENVX}; res=0; [ -f "${PIDF}" ] && kill -0 $(cat "${PIDF}") 2>/dev/null && res=1; echo "PROC=$res"`, { pool: false, timeoutMs: 30000 });
+        return { ok: true, active: /PROC=1/.test(r.stdout || '') };
       }
       if (op === 'stop') {
         return execCommand(sshConfig,
-          `${ENVX}; ${sysd ? `timeout 25 systemctl --user stop ${UNIT} 2>/dev/null;` : ''} timeout 15 pkill -f '[o]penclaw.*gatew[a]y' 2>/dev/null; sleep 1; pkill -9 -f '[o]penclaw.*gatew[a]y' 2>/dev/null || true; echo GW_STOPPED`,
+          `${ENVX}; if [ -f "${PIDF}" ]; then kill $(cat "${PIDF}") 2>/dev/null; sleep 1; kill -9 $(cat "${PIDF}") 2>/dev/null; fi; rm -f "${PIDF}"; echo GW_STOPPED`,
           { pool: false, timeoutMs: 60000 }).then(r => ({ ok: /GW_STOPPED/.test(r.stdout || ''), out: ((r.stdout || '') + (r.stderr || '')).slice(-400) }));
       }
       // start / restart
       if (op === 'restart') await gwCtl('stop');
-      const startCmd = sysd
-        ? `${ENVX}; timeout 40 systemctl --user start ${UNIT} 2>/dev/null || { mkdir -p "$HOME/.openclaw/logs"; setsid nohup ${BP} gateway >> ${LOGL} 2>&1 < /dev/null & sleep 3; }; timeout 15 pgrep -f '[o]penclaw.*gatew[a]y' >/dev/null && echo GW_UP || echo GW_DOWN`
-        : `${ENVX}; mkdir -p "$HOME/.openclaw/logs"; setsid nohup ${BP} gateway >> ${LOGL} 2>&1 < /dev/null & sleep 3; timeout 15 pgrep -f '[o]penclaw.*gatew[a]y' >/dev/null && echo GW_UP || echo GW_DOWN`;
+      const startCmd = `${ENVX}; mkdir -p "${HH}/logs"; setsid nohup ${BP} gateway${OC_FLAGS} >> ${OC_LOGL} 2>&1 < /dev/null & echo $! > "${PIDF}"; sleep 4; if kill -0 $(cat "${PIDF}") 2>/dev/null; then echo GW_UP; else echo GW_DOWN; tail -8 "${HH}/logs/gateway.log" 2>/dev/null; fi`;
       return execCommand(sshConfig, startCmd, { pool: false, timeoutMs: 120000 })
-        .then(r => ({ ok: /GW_UP/.test(r.stdout || ''), out: (r.stdout || '').slice(-200) }));
+        .then(r => ({ ok: /GW_UP/.test(r.stdout || ''), out: (r.stdout || '').slice(-400) }));
     };
 
     // ── STATUS ──
@@ -166,6 +186,35 @@ async function handleAgentAction(body, session, log = []) {
         prereqs: { curl: parse('CURL') === '1', tar: parse('TAR') === '1', node: parse('NODE'), systemd: parse('SYSTEMD') === '1', passwordlessSudo: parse('SUDO') === '1' },
       });
     }
+
+    // ── INSTANCES — list every installed openclaw home + running state ──────
+    if (action === 'instances') {
+      const list = await listInstances(sshConfig, 'openclaw');
+      return NextResponse.json({ success: true, instances: list });
+    }
+
+    // ── SPAWN-INSTANCE — clone the default install's data dir & start ──────
+    if (action === 'spawn-instance') {
+      const tag = String((config && config.tag) || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 24);
+      if (!tag) return NextResponse.json({ success: false, error: 'Instance tag is required' }, { status: 400 });
+      const clone = await cloneDefaultHome(sshConfig, 'openclaw', tag, [
+        'openclaw.json', '.env', 'workspace/PROMPT.md', 'workspace/SOUL.md', 'workspace/IDENTITY.md',
+        'workspace/USER.md', 'workspace/AGENTS.md', 'workspace/MEMORY.md', 'prompt.txt', 'SYSTEM_PROMPT.md',
+      ]);
+      if (!clone.ok) {
+        return NextResponse.json({ success: false, error: 'Failed to clone openclaw instance home' });
+      }
+      const g = await gwCtl('start');
+      return NextResponse.json({
+        success: true,
+        instance: tag,
+        existed: clone.existed,
+        started: g.ok,
+        output: clone.existed
+          ? `Instance "${tag}" already existed — gateway ${g.ok ? 'running' : 'not started'}.`
+          : `Instance "${tag}" spawned and ${g.ok ? 'running' : 'failed to start'}. Remember: give it its OWN bot token (reconfigure → env) so instances don't fight over the same Telegram bot.`,
+      });
+    }
     // ── DETAILS ──
     if (action === 'details') {
       const D = `
@@ -173,35 +222,36 @@ export PATH="$HOME/.openclaw/local/bin:$HOME/.local/bin:/usr/local/bin:$PATH"
 BIN="$(command -v openclaw 2>/dev/null || true)"
 [ -z "$BIN" ] && for p in "$HOME/.openclaw/local/bin/openclaw" "$HOME/.local/bin/openclaw" "/usr/local/bin/openclaw" "/usr/bin/openclaw" "/usr/sbin/openclaw"; do [ -x "$p" ] && BIN="$p" && break; done
 echo "===CONFIG_B64==="
-base64 < "$HOME/.openclaw/openclaw.json" 2>/dev/null || true
+base64 < "${HH}/openclaw.json" 2>/dev/null || true
 echo "===RUNNING==="
-USVC=0; command -v systemctl >/dev/null 2>&1 && systemctl --user is-active ${UNIT} 2>/dev/null | grep -qx active && USVC=1
-SSVC=0; command -v systemctl >/dev/null 2>&1 && systemctl is-active ${UNIT} 2>/dev/null | grep -qx active && SSVC=1
-PROC=0; pgrep -f '[o]penclaw.*gatew[a]y' >/dev/null 2>&1 && PROC=1
-echo "USVC=$USVC"; echo "SSVC=$SSVC"; echo "PROC=$PROC"
+res=0; [ -f "${PIDF}" ] && kill -0 $(cat "${PIDF}") 2>/dev/null && res=1
+echo "PROC=$res"
 echo "===VERSION==="
 [ -n "$BIN" ] && "$BIN" --version 2>/dev/null | tail -1 | cut -c1-40
 echo "===MODEL==="
-[ -f "$HOME/.openclaw/openclaw.json" ] && grep -oE '"(defaultModel|model)"[[:space:]]*:[[:space:]]*"[^"]+"' "$HOME/.openclaw/openclaw.json" 2>/dev/null | head -1 | cut -d'"' -f4
+[ -f "${HH}/openclaw.json" ] && grep -oE '"(defaultModel|model)"[[:space:]]*:[[:space:]]*"[^"]+"' "${HH}/openclaw.json" 2>/dev/null | head -1 | cut -d'"' -f4
 echo "===BINPATH==="
 [ -n "$BIN" ] && echo "$BIN"
 echo "===SKILLS==="
-[ -d "$HOME/.openclaw/skills" ] && ls -1 "$HOME/.openclaw/skills" 2>/dev/null | grep -v '^\.' || true
-[ -d "$HOME/.openclaw/workspace/skills" ] && ls -1 "$HOME/.openclaw/workspace/skills" 2>/dev/null | grep -v '^\.' || true
+[ -d "${HH}/skills" ] && ls -1 "${HH}/skills" 2>/dev/null | grep -v '^\.' || true
+[ -d "${HH}/workspace/skills" ] && ls -1 "${HH}/workspace/skills" 2>/dev/null | grep -v '^\.' || true
+echo "===SKILLSCLI==="
+# OpenClaw bundles its own skill catalog (openclaw-bundled/extra) — list via CLI
+[ -n "$BIN" ] && "$BIN" skills list 2>/dev/null || true
 echo "===PROMPT_B64==="
-{ base64 < "$HOME/.openclaw/workspace/PROMPT.md" || base64 < "$HOME/.openclaw/prompt.txt" || base64 < "$HOME/.openclaw/SYSTEM_PROMPT.md"; } 2>/dev/null || true
+{ base64 < "${HH}/workspace/PROMPT.md" || base64 < "${HH}/prompt.txt" || base64 < "${HH}/SYSTEM_PROMPT.md"; } 2>/dev/null || true
 echo "===SOUL_B64==="
-{ base64 < "$HOME/.openclaw/workspace/SOUL.md" || base64 < "$HOME/.openclaw/workspace/IDENTITY.md"; } 2>/dev/null || true
+{ base64 < "${HH}/workspace/SOUL.md" || base64 < "${HH}/workspace/IDENTITY.md"; } 2>/dev/null || true
 echo "===USER_B64==="
-base64 < "$HOME/.openclaw/workspace/USER.md" 2>/dev/null || true
+base64 < "${HH}/workspace/USER.md" 2>/dev/null || true
 echo "===AGENTS_B64==="
-base64 < "$HOME/.openclaw/workspace/AGENTS.md" 2>/dev/null || true
+base64 < "${HH}/workspace/AGENTS.md" 2>/dev/null || true
 echo "===MEMORY_B64==="
-{ base64 < "$HOME/.openclaw/workspace/MEMORY.md" || base64 < "$HOME/.openclaw/workspace/memory/MEMORY.md"; } 2>/dev/null || true
+{ base64 < "${HH}/workspace/MEMORY.md" || base64 < "${HH}/workspace/memory/MEMORY.md"; } 2>/dev/null || true
 echo "===ENV_B64==="
-base64 < "$HOME/.openclaw/.env" 2>/dev/null || true
+base64 < "${HH}/.env" 2>/dev/null || true
 echo "===ENVKEYS==="
-[ -f "$HOME/.openclaw/.env" ] && grep -oE '^[A-Z_][A-Z0-9_]*' "$HOME/.openclaw/.env" 2>/dev/null | sort -u | head -50
+[ -f "${HH}/.env" ] && grep -oE '^[A-Z_][A-Z0-9_]*' "${HH}/.env" 2>/dev/null | sort -u | head -50
 `;
       const r = await execCommand(sshConfig, D, { pool: false, timeoutMs: 60000 });
       const out = r.stdout || '';
@@ -222,7 +272,19 @@ echo "===ENVKEYS==="
       const binR = section('BINPATH', 'SKILLS');
       const running = /USVC=1|SSVC=1|PROC=1/.test(section('RUNNING', 'VERSION'));
       const envKeys = section('ENVKEYS').split('\n').map(s => s.trim()).filter(Boolean);
-      const skillsList = new Set(section('SKILLS', 'PROMPT_B64').split('\n').map(s => s.trim()).filter(Boolean));
+      const skillsList = new Set(section('SKILLS', 'SKILLSCLI').split('\n').map(s => s.trim()).filter(Boolean));
+      // Merge the bundled catalog from `openclaw skills list` (openclaw-bundled /
+      // openclaw-extra sources). Table rows: │ status │ name │ desc │ source │ —
+      // wrapped continuation rows have an empty status column and are skipped.
+      const skillsCliRaw = section('SKILLSCLI', 'PROMPT_B64');
+      for (const line of skillsCliRaw.split('\n')) {
+        if (!line.includes('│')) continue;
+        const parts = line.split('│').map(p => p.trim());
+        if (parts.length < 4 || !parts[1] || !parts[2]) continue;
+        if (parts[1] === 'Status') continue; // table header
+        const nm = parts[2].replace(/^[^A-Za-z0-9]+/, '').trim();
+        if (nm && /^[a-zA-Z0-9][\w.-]*$/.test(nm) && nm.toLowerCase() !== 'skill') skillsList.add(nm);
+      }
       let systemPrompt = '';
       try { systemPrompt = Buffer.from(section('PROMPT_B64', 'SOUL_B64'), 'base64').toString('utf8'); } catch { /* none */ }
       let soulPrompt = '';
@@ -270,17 +332,17 @@ echo "===ENVKEYS==="
       const promptText = String(config.prompt || '');
       const fileName = config.file || 'PROMPT.md';
       const b64 = Buffer.from(promptText, 'utf8').toString('base64');
-      let SCRIPT = `mkdir -p "$HOME/.openclaw/workspace"\n`;
+      let SCRIPT = `mkdir -p "${HH}/workspace"\n`;
       if (fileName === 'SOUL.md' || fileName === 'IDENTITY.md') {
-        SCRIPT += `echo "${b64}" | base64 -d > "$HOME/.openclaw/workspace/SOUL.md"\necho "${b64}" | base64 -d > "$HOME/.openclaw/workspace/IDENTITY.md"\n`;
+        SCRIPT += `echo "${b64}" | base64 -d > "${HH}/workspace/SOUL.md"\necho "${b64}" | base64 -d > "${HH}/workspace/IDENTITY.md"\n`;
       } else if (fileName === 'USER.md') {
-        SCRIPT += `echo "${b64}" | base64 -d > "$HOME/.openclaw/workspace/USER.md"\n`;
+        SCRIPT += `echo "${b64}" | base64 -d > "${HH}/workspace/USER.md"\n`;
       } else if (fileName === 'AGENTS.md') {
-        SCRIPT += `echo "${b64}" | base64 -d > "$HOME/.openclaw/workspace/AGENTS.md"\n`;
+        SCRIPT += `echo "${b64}" | base64 -d > "${HH}/workspace/AGENTS.md"\n`;
       } else if (fileName === 'MEMORY.md') {
-        SCRIPT += `echo "${b64}" | base64 -d > "$HOME/.openclaw/workspace/MEMORY.md"\n`;
+        SCRIPT += `echo "${b64}" | base64 -d > "${HH}/workspace/MEMORY.md"\n`;
       } else {
-        SCRIPT += `echo "${b64}" | base64 -d > "$HOME/.openclaw/workspace/PROMPT.md"\necho "${b64}" | base64 -d > "$HOME/.openclaw/prompt.txt"\necho "${b64}" | base64 -d > "$HOME/.openclaw/SYSTEM_PROMPT.md"\n`;
+        SCRIPT += `echo "${b64}" | base64 -d > "${HH}/workspace/PROMPT.md"\necho "${b64}" | base64 -d > "${HH}/prompt.txt"\necho "${b64}" | base64 -d > "${HH}/SYSTEM_PROMPT.md"\n`;
       }
       await execCommand(sshConfig, SCRIPT, { pool: false, timeoutMs: 30000 });
       if (config.restart !== false) {
@@ -295,8 +357,8 @@ echo "===ENVKEYS==="
       await run('stop user service', `export XDG_RUNTIME_DIR="/run/user/$(id -u)"; systemctl --user disable --now ${UNIT} 2>/dev/null; true`);
       await run('stop stray processes', `pkill -f '[o]penclaw.*gatew[a]y' 2>/dev/null; pkill -f '[o]penclaw gateway' 2>/dev/null; true`);
       const rmCmd = purge
-        ? `(npm -g rm openclaw 2>/dev/null || true); rm -f "$HOME/.openclaw/local/bin/openclaw" "$HOME/.local/bin/openclaw" /usr/local/bin/openclaw /usr/bin/openclaw /usr/sbin/openclaw; rm -rf "$HOME/.openclaw"; echo REMOVED_ALL`
-        : `(npm -g rm openclaw 2>/dev/null || true); rm -f "$HOME/.openclaw/local/bin/openclaw" "$HOME/.local/bin/openclaw" /usr/local/bin/openclaw /usr/bin/openclaw /usr/sbin/openclaw; rm -rf "$HOME/.openclaw/local" "$HOME/.openclaw/logs"; echo REMOVED_CODE`;
+        ? `(npm -g rm openclaw 2>/dev/null || true); rm -f "$HOME/.openclaw/local/bin/openclaw" "$HOME/.local/bin/openclaw" /usr/local/bin/openclaw /usr/bin/openclaw /usr/sbin/openclaw; rm -rf "${HH}"; echo REMOVED_ALL`
+        : `(npm -g rm openclaw 2>/dev/null || true); rm -f "$HOME/.openclaw/local/bin/openclaw" "$HOME/.local/bin/openclaw" /usr/local/bin/openclaw /usr/bin/openclaw /usr/sbin/openclaw; rm -rf "${HH}/local" "${HH}/logs"; echo REMOVED_CODE`;
       const r = await run(purge ? 'remove binary, code & all data' : 'remove binary & code (config kept)', rmCmd);
       const ok = /REMOVED/.test(r.stdout || '');
       return NextResponse.json({ success: ok, purged: purge, log });
@@ -364,9 +426,9 @@ echo "===ENVKEYS==="
       {
         const json = JSON.stringify({ gateway: { mode: 'local', bind: 'loopback' } });
         await run('merge gateway defaults into openclaw.json', `
-          mkdir -p "$HOME/.openclaw"
-          [ -f "$HOME/.openclaw/openclaw.json" ] || echo '{}' > "$HOME/.openclaw/openclaw.json"
-          cp "$HOME/.openclaw/openclaw.json" "$HOME/.openclaw/openclaw.json.bak-install"
+          mkdir -p "${HH}"
+          [ -f "${HH}/openclaw.json" ] || echo '{}' > "${HH}/openclaw.json"
+          cp "${HH}/openclaw.json" "${HH}/openclaw.json.bak-install"
           echo '${b64(json)}' | base64 -d > /tmp/oc-seed.json
           export PATH="$HOME/.openclaw/local/bin:$HOME/.local/bin:/usr/local/bin:$PATH"
           node -e "const fs=require('fs');const p=process.env.HOME+'/.openclaw/openclaw.json';const cur=JSON.parse(fs.readFileSync(p,'utf8'));const seed=JSON.parse(fs.readFileSync('/tmp/oc-seed.json','utf8'));const merged={...seed,...cur};merged.gateway={...seed.gateway,...(cur.gateway||{})};fs.writeFileSync(p,JSON.stringify(merged,null,2));console.log('CONFIG_SEED')"
@@ -376,11 +438,11 @@ echo "===ENVKEYS==="
         if (envEntries.length > 0) {
           const envFile = envEntries.map(([k, v]) => `${k}=${v}`).join('\n');
           await run('write provider keys to ~/.openclaw/.env', `
-            touch "$HOME/.openclaw/.env"
+            touch "${HH}/.env"
             echo '${b64(envFile)}' | base64 -d > /tmp/oc-env-seed
             while IFS='=' read -rk; do
               k="\${k%%=*}"
-              grep -q "^$\{k\}=" "$HOME/.openclaw/.env" && sed -i "s|^$\{k\}=.*|$k=$(grep "^$\{k\}=" /tmp/oc-env-seed | cut -d= -f2-)|" "$HOME/.openclaw/.env" || printf '%s\\n' "$(grep "^$\{k\}=" /tmp/oc-env-seed)" >> "$HOME/.openclaw/.env"
+              grep -q "^$\{k\}=" "${HH}/.env" && sed -i "s|^$\{k\}=.*|$k=$(grep "^$\{k\}=" /tmp/oc-env-seed | cut -d= -f2-)|" "${HH}/.env" || printf '%s\\n' "$(grep "^$\{k\}=" /tmp/oc-env-seed)" >> "${HH}/.env"
             done < /tmp/oc-env-seed
             rm -f /tmp/oc-env-seed
             echo ENV_SEEDED`, { timeoutMs: 30000 });
@@ -445,7 +507,7 @@ echo "===ENVKEYS==="
       const LINES = Math.min(Number(config.lines || 300), 1000);
       const script = `
 ACTIVE=""
-for f in "$HOME/.openclaw/logs/gatew""ay.log" "$HOME/.openclaw/logs/"*.log /tmp/openclaw*.log; do
+for f in "${HH}/logs/gatew""ay.log" "${HH}/logs/"*.log /tmp/openclaw*.log; do
   if [ -f "$f" ] && [ -s "$f" ]; then ACTIVE="$f"; break; fi
 done
 if [ -z "$ACTIVE" ]; then echo "SIZE=0"; echo "===DATA==="; exit 0; fi
@@ -471,19 +533,17 @@ fi
     if (action === 'health') {
       const script = `
 export PATH="$HOME/.openclaw/local/bin:$HOME/.local/bin:/usr/local/bin:$PATH"
-SSVC=0; command -v systemctl >/dev/null 2>&1 && systemctl --user is-active ${UNIT} 2>/dev/null | grep -qx active && SSVC=1
-SSVC2=0; command -v systemctl >/dev/null 2>&1 && systemctl is-active ${UNIT} 2>/dev/null | grep -qx active && SSVC2=1
-PROC=0; pgrep -f '[o]penclaw.*gatew[a]y' >/dev/null 2>&1 && PROC=1
-PORT=0; (command -v ss >/dev/null 2>&1 && ss -ltn 2>/dev/null | grep -q 18789) && PORT=1
-ALIVE=0; [ $SSVC = 1 -o $SSVC2 = 1 -o $PROC = 1 ] && ALIVE=1
+res=0; [ -f "${PIDF}" ] && kill -0 $(cat "${PIDF}") 2>/dev/null && res=1
+ALIVE=$res
+PORT=0; (command -v ss >/dev/null 2>&1 && ss -ltn 2>/dev/null | grep -qE '18789${GW_PORT ? `|${GW_PORT}` : ''}') && PORT=1
 echo "ALIVE=$ALIVE"; echo "PORT=$PORT"
-PID=$(pgrep -f '[o]penclaw.*gatew[a]y' | head -1)
+PID=$(cat "${PIDF}" 2>/dev/null)
 UP=0; [ -n "$PID" ] && UP=$(ps -o etimes= -p "$PID" 2>/dev/null | tr -d ' ')
 [ -z "$UP" ] && UP=0
 echo "UPTIME_SEC=$UP"
 TG=unknown
 LOGL=""
-for f in "$HOME/.openclaw/logs/gatew""ay.log" "$HOME/.openclaw/logs/"*.log /tmp/openclaw*.log; do
+for f in "${HH}/logs/gatew""ay.log" "${HH}/logs/"*.log /tmp/openclaw*.log; do
   [ -f "$f" ] && [ -s "$f" ] && LOGL="$f" && break
 done
 if [ -n "$LOGL" ]; then
@@ -512,7 +572,7 @@ echo "TG=$TG"
     // ── CONFIG BACKUPS — list & restore ──
     if (action === 'backups') {
       const r = await execCommand(sshConfig,
-        `ls -1t "$HOME/.openclaw"/openclaw.json.bak-* 2>/dev/null | head -10 | while read f; do echo "$(basename "$f")|$(stat -c %y "$f" 2>/dev/null | cut -d. -f1)|$(wc -c < "$f")"; done`,
+        `ls -1t "${HH}"/openclaw.json.bak-* 2>/dev/null | head -10 | while read f; do echo "$(basename "$f")|$(stat -c %y "$f" 2>/dev/null | cut -d. -f1)|$(wc -c < "$f")"; done`,
         { pool: false, timeoutMs: 30000 });
       const backups = (r.stdout || '').split('\n').filter(Boolean).map(l => {
         const parts = l.split('|');
@@ -527,7 +587,7 @@ echo "TG=$TG"
         return NextResponse.json({ success: false, error: 'Invalid backup name' }, { status: 400 });
       }
       const r = await execCommand(sshConfig,
-        `[ -f "$HOME/.openclaw/${name}" ] && cp "$HOME/.openclaw/${name}" "$HOME/.openclaw/openclaw.json" && echo RESTORED || echo NOT_FOUND`,
+        `[ -f "${HH}/${name}" ] && cp "${HH}/${name}" "${HH}/openclaw.json" && echo RESTORED || echo NOT_FOUND`,
         { pool: false, timeoutMs: 30000 });
       const ok = /RESTORED/.test(r.stdout || '');
       let restarted = false;
@@ -550,7 +610,7 @@ echo "TG=$TG"
         const envPy = [
           'import os, base64',
           `lines_raw = base64.b64decode('${envLinesB64}').decode('utf-8').splitlines()`,
-          `ep = os.path.expanduser('~/.openclaw/.env')`,
+          `ep = (os.getenv('OC_HOME') or os.path.expanduser('~/.openclaw')) + '/.env'`,
           `os.makedirs(os.path.dirname(ep), exist_ok=True)`,
           `existing = open(ep).read().splitlines() if os.path.exists(ep) else []`,
           `upsert = {}`,
@@ -573,7 +633,7 @@ echo "TG=$TG"
           `print('ENV_UPDATED')`,
         ].join('\n');
         const envPyB64 = b64(envPy);
-        const w = await run('write ~/.openclaw/.env', `echo '${envPyB64}' | base64 -d | python3`, { timeoutMs: 30000 });
+        const w = await run('write ~/.openclaw/.env', `export OC_HOME="${HH}"` + '; echo \'${envPyB64}\' | base64 -d | python3', { timeoutMs: 30000 });
         if (!/ENV_UPDATED/.test(w.stdout || '')) {
           return NextResponse.json({ success: false, error: 'Failed to write ~/.openclaw/.env', log });
         }
@@ -601,9 +661,10 @@ echo "TG=$TG"
         }
         const setB64 = b64(JSON.stringify(ocPatch));
         await run('merge ~/.openclaw/openclaw.json settings', `
+          export OC_HOME="${HH}"
           python3 -c "
 import json, os, base64
-p = os.path.expanduser('~/.openclaw/openclaw.json')
+p = (os.getenv('OC_HOME') or os.path.expanduser('~/.openclaw')) + '/openclaw.json'
 cur = json.load(open(p)) if os.path.exists(p) else {}
 s = json.loads(base64.b64decode('${setB64}').decode('utf8'))
 # strip legacy root keys written by older monitor versions - they make the
@@ -630,9 +691,9 @@ print('OPENCLAW_CONFIG_MERGED')
         return NextResponse.json({ success: false, error: `Invalid JSON: ${e.message}` }, { status: 400 });
       }
       const sv = await execCommand(sshConfig, `
-        cp "$HOME/.openclaw/openclaw.json" "$HOME/.openclaw/openclaw.json.bak-$(date +%s)" 2>/dev/null || true
-        echo '${b64(json)}' | base64 -d > "$HOME/.openclaw/openclaw.json.new"
-        python3 -m json.tool "$HOME/.openclaw/openclaw.json.new" >/dev/null 2>&1 && { mv "$HOME/.openclaw/openclaw.json.new" "$HOME/.openclaw/openclaw.json"; echo CONFIG_SAVED; } || echo CONFIG_INVALID`,
+        cp "${HH}/openclaw.json" "${HH}/openclaw.json.bak-$(date +%s)" 2>/dev/null || true
+        echo '${b64(json)}' | base64 -d > "${HH}/openclaw.json.new"
+        python3 -m json.tool "${HH}/openclaw.json.new" >/dev/null 2>&1 && { mv "${HH}/openclaw.json.new" "${HH}/openclaw.json"; echo CONFIG_SAVED; } || echo CONFIG_INVALID`,
         { pool: false, timeoutMs: 30000 });
       if (/CONFIG_INVALID/.test(sv.stdout || '')) {
         return NextResponse.json({ success: false, error: 'Remote JSON validation failed — config not replaced.' }, { status: 400 });
@@ -646,7 +707,7 @@ print('OPENCLAW_CONFIG_MERGED')
         const up = g.ok ? await waitActive(24) : false;
         if (!up) {
           const rbk = await execCommand(sshConfig,
-            `BAK="$(ls -1t "$HOME/.openclaw"/openclaw.json.bak-* 2>/dev/null | head -1)"; [ -n "$BAK" ] && cp "$BAK" "$HOME/.openclaw/openclaw.json" && echo ROLLED_BACK_TO=$BAK || echo NO_BACKUP`,
+            `BAK="$(ls -1t "${HH}"/openclaw.json.bak-* 2>/dev/null | head -1)"; [ -n "$BAK" ] && cp "$BAK" "${HH}/openclaw.json" && echo ROLLED_BACK_TO=$BAK || echo NO_BACKUP`,
             { pool: false, timeoutMs: 30000 });
           if (/ROLLED_BACK/.test(rbk.stdout || '')) {
             rolledBack = true;
@@ -684,16 +745,17 @@ print('OPENCLAW_CONFIG_MERGED')
         }
         await run('remove MCP/skill', `
           export PATH="$HOME/.openclaw/local/bin:$HOME/.local/bin:/usr/local/bin:$PATH"
+          export OC_HOME="${HH}"
           python3 -c "
 import json, os
-p = os.path.expanduser('~/.openclaw/openclaw.json')
+p = (os.getenv('OC_HOME') or os.path.expanduser('~/.openclaw')) + '/openclaw.json'
 if os.path.exists(p):
     cur = json.load(open(p))
     cur.setdefault('mcpServers', {}).pop('${name}', None)
     cur.setdefault('tools', {}).pop('${name}', None)
     json.dump(cur, open(p, 'w'), indent=2)
 " 2>/dev/null || true
-          rm -rf "$HOME/.openclaw/skills/${name}" 2>/dev/null || true`);
+          rm -rf "${HH}/skills/${name}" 2>/dev/null || true`);
         const g = await gwCtl('restart');
         return NextResponse.json({ success: true, restarted: g.ok, log: [`Removed ${name}`] });
       }
@@ -709,10 +771,11 @@ if os.path.exists(p):
         const skillName = (presetKey || id.split('/').pop()).replace(/[^a-zA-Z0-9_-]/g, '_');
         await run('install MCP/skill', `
           export PATH="$HOME/.openclaw/local/bin:$HOME/.local/bin:/usr/local/bin:$PATH"
-          mkdir -p "$HOME/.openclaw/skills/${skillName}"
+          export OC_HOME="${HH}"
+          mkdir -p "${HH}/skills/${skillName}"
           python3 -c "
 import json, os, base64
-p = os.path.expanduser('~/.openclaw/openclaw.json')
+p = (os.getenv('OC_HOME') or os.path.expanduser('~/.openclaw')) + '/openclaw.json'
 cur = json.load(open(p)) if os.path.exists(p) else {}
 mcp = json.loads(base64.b64decode('${mcpB64}').decode('utf8'))
 cur.setdefault('mcpServers', {})['${skillName}'] = mcp
@@ -733,7 +796,7 @@ print('MCP_ADDED')
       const binR = await execCommand(sshConfig, binPath(), { pool: false, timeoutMs: 15000 });
       const bp = (binR.stdout || '').match(/BIN=(.*)/)?.[1]?.trim() || 'openclaw';
       const BP = JSON.stringify(bp);
-      const ENVX = `export PATH="$HOME/.openclaw/local/bin:$HOME/.local/bin:/usr/local/bin:$PATH"; set -a; [ -f "$HOME/.openclaw/.env" ] && . "$HOME/.openclaw/.env"; set +a`;
+      const ENVX = `export PATH="$HOME/.openclaw/local/bin:$HOME/.local/bin:/usr/local/bin:$PATH"; set -a; [ -f "${HH}/.env" ] && . "${HH}/.env"; set +a`;
       const runCmd = platform && platform !== 'auto'
         ? `${ENVX}; ${BP} pairing approve ${JSON.stringify(platform)} ${JSON.stringify(code)} 2>&1 || ${BP} pairing approve ${JSON.stringify(code)} 2>&1`
         : `${ENVX}; ${BP} pairing approve telegram ${JSON.stringify(code)} 2>&1 || ${BP} pairing approve ${JSON.stringify(code)} 2>&1`;
@@ -747,9 +810,9 @@ print('MCP_ADDED')
       const binR = await execCommand(sshConfig, binPath(), { pool: false, timeoutMs: 15000 });
       const bp = (binR.stdout || '').match(/BIN=(.*)/)?.[1]?.trim() || 'openclaw';
       const BP = JSON.stringify(bp);
-      const ENVX = `export PATH="$HOME/.openclaw/local/bin:$HOME/.local/bin:/usr/local/bin:$PATH"; set -a; [ -f "$HOME/.openclaw/.env" ] && . "$HOME/.openclaw/.env"; set +a`;
+      const ENVX = `export PATH="$HOME/.openclaw/local/bin:$HOME/.local/bin:/usr/local/bin:$PATH"; set -a; [ -f "${HH}/.env" ] && . "${HH}/.env"; set +a`;
       const r = await execCommand(sshConfig,
-        `${ENVX}; ${BP} pairing list 2>&1 || true; { FILE="$(ls -1t "$HOME/.openclaw/logs/"*.log 2>/dev/null | head -1)"; [ -n "$FILE" ] && tail -n 80 "$FILE"; } || true`,
+        `${ENVX}; ${BP} pairing list 2>&1 || true; { FILE="$(ls -1t "${HH}/logs/"*.log 2>/dev/null | head -1)"; [ -n "$FILE" ] && tail -n 80 "$FILE"; } || true`,
         { pool: false, timeoutMs: 20000 });
       const out = r.stdout || '';
       const matches = [

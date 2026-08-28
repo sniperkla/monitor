@@ -74,7 +74,7 @@ export function getJobUpdate(jobId, cursor = 0) {
  * True when the request asks for live streaming of an action.
  */
 export const isLiveAction = (body) =>
-  !!body?.live && !['status', 'details', 'health', 'backups', 'logs', 'job'].includes(body?.action);
+  !!body?.live && !['status', 'details', 'health', 'backups', 'logs', 'job', 'instances', 'spawn-instance'].includes(body?.action);
 
 /**
  * Dispatch helper used by every agent route:

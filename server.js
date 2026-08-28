@@ -2253,7 +2253,7 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
           // ── Non-Interactive Agent Live Logs Stream (Zero Terminal Banner) ──
           let activeAgentLogStream = null;
           socket.removeAllListeners('agent:logs:start');
-          socket.on('agent:logs:start', ({ agentId, lines = 250 }) => {
+          socket.on('agent:logs:start', ({ agentId, lines = 250, instance = '' }) => {
             if (!sshClient || sshClient._state === 'closed') {
               return socket.emit('agent:logs:error', 'SSH Connection Closed');
             }
@@ -2262,10 +2262,12 @@ const SSH_IDLE_CHECK_INTERVAL_MS = 30 * 1000;
               activeAgentLogStream = null;
             }
             const cleanId = String(agentId || 'hermes').replace(/[^a-zA-Z0-9_-]/g, '');
+            const cleanInst = String(instance || '').replace(/[^a-zA-Z0-9_-]/g, '');
+            const homeDir = cleanInst ? `$HOME/.${cleanId}-${cleanInst}` : `$HOME/.${cleanId}`;
             const numLines = Math.min(Number(lines || 250), 1000);
             const cmd = `sh -c '
 FILE=""
-for f in "$HOME/.${cleanId}/logs/daemon.log" "$HOME/.${cleanId}/logs/gateway.log" "$HOME/.${cleanId}/logs/agent.log" "$HOME/.${cleanId}/logs/daemon-nohup.log" "$HOME/.${cleanId}/logs/gateway-nohup.log"; do
+for f in "${homeDir}/logs/daemon.log" "${homeDir}/logs/gateway.log" "${homeDir}/logs/agent.log" "${homeDir}/logs/daemon-nohup.log" "${homeDir}/logs/gateway-nohup.log"; do
   [ -f "$f" ] && [ -s "$f" ] && FILE="$f" && break
 done
 if [ -n "$FILE" ]; then

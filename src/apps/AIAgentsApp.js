@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { Bot, Server as ServerIcon, RefreshCw, Loader2, CheckCircle2, XCircle, AlertCircle, Settings2, Puzzle, Trash2, Play, Square, RotateCw, Plus, ExternalLink, Send, Search, Sparkles, Check, FileText, Copy, Lock, Radio, Zap, Shield, Cable, ChevronRight, Flame, Heart, Terminal, ChevronDown, ChevronUp, X, Minus, Maximize2, Minimize2, GripHorizontal, Eye, EyeOff } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
+import { useOS } from '@/context/OSContext';
 import { useSupporter } from '@/hooks/useSupporter';
 import SupporterModal from '@/components/common/SupporterModal';
 import HermesAgentWizard from '@/components/HermesAgentWizard';
@@ -64,6 +65,7 @@ const AGENTS = [
 export default function AIAgentsApp({ apiFetch }) {
   const { state, connectionsReady, relayInfo } = useApp();
   const { isSupporter, isAdmin } = useSupporter({ refreshOnFocus: true });
+  const { showPrompt } = useOS();
   const [supporterModalOpen, setSupporterModalOpen] = useState(false);
   const doFetch = apiFetch || fetch;
   const connections = useMemo(
@@ -235,13 +237,26 @@ export default function AIAgentsApp({ apiFetch }) {
 
   const agent = AGENTS.find(a => a.id === agentId) || AGENTS[0];
 
+  // ── Multi-instance support (every agent): selected instance + list ──
+  const [instanceSel, setInstanceSel] = useState({});
+  const [instanceList, setInstanceList] = useState({});
+  const [instanceListTick, setInstanceListTick] = useState(0);
+  const [spawningInstance, setSpawningInstance] = useState(false);
+  const instKey = `${agent.id}:${target}`;
+  const activeInstance = instanceSel[instKey] || '';
+  const instRef = useRef('');
+  useEffect(() => { instRef.current = activeInstance; }, [activeInstance]);
+  // Instance-scoped home dir for display hints: '' → ~/.hermes, 'bot2' → ~/.hermes-bot2
+  const instHome = (inst) => `~/.${agent.id}${inst ? `-${inst}` : ''}`;
+
+
   const call = useCallback(async (action, extra = {}) => {
     if (!target) return null;
     const res = await doFetch(agent.api, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ connectionId: target, action, ...extra }),
+      body: JSON.stringify({ connectionId: target, action, instance: instRef.current || undefined, ...extra }),
     });
     return res.json();
   }, [doFetch, agent.api, target]);
@@ -333,6 +348,35 @@ export default function AIAgentsApp({ apiFetch }) {
     finally { setLoading(false); }
   }, [target, call, agent.id, promptActiveFile]);
 
+  // Instance list (multi-instance) — refetched on demand
+  const refreshInstances = useCallback(() => setInstanceListTick(t => t + 1), []);
+  useEffect(() => {
+    if (!target) return;
+    let cancelled = false;
+    call('instances').then(r => {
+      if (!cancelled && r?.instances) setInstanceList(m => ({ ...m, [instKey]: r.instances }));
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [agent.id, target, instanceListTick, call, instKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Spawn a new agent instance (clones the default install, starts it)
+  const spawnInstance = () => {
+    showPrompt(`New ${agent.name} instance name (letters/numbers/-, e.g. bot2):`, (tagRaw) => {
+      const tag = String(tagRaw || '').trim();
+      if (!tag) return;
+      setSpawningInstance(true);
+      call('spawn-instance', { instance: tag, config: { tag } })
+        .then(r => {
+          setNotice({ ok: r?.success !== false, text: r?.output || r?.error || `Instance ${tag} spawned` });
+          refreshInstances();
+          setInstanceSel(m => ({ ...m, [instKey]: tag }));
+          loadDetails();
+        })
+        .catch(e => setNotice({ ok: false, text: `Spawn failed: ${e?.message || e}` }))
+        .finally(() => setSpawningInstance(false));
+    }, '', `Spawn ${agent.name} instance`);
+  };
+
   useEffect(() => {
     if (connectionsReady && !target && connections.length > 0) {
       setTarget(connections[0]._id);
@@ -346,7 +390,7 @@ export default function AIAgentsApp({ apiFetch }) {
     setDetails(null);
     setTab('overview');
     if (target) loadDetails();
-  }, [target, agentId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [target, agentId, activeInstance]); // eslint-disable-line react-hooks/exhaustive-deps
   // When fresh details arrive (e.g. after wizard install), refresh the config draft
   // so the Config tab shows the new values, not the old ones.
   useEffect(() => {
@@ -654,8 +698,12 @@ export default function AIAgentsApp({ apiFetch }) {
       socketRef.current = null;
     }
 
+    // Instance-scoped home dir (empty tag → default ~/.<agent>)
+    const instTag = activeInstance ? `-${activeInstance}` : '';
+    const homePref = `$HOME/.${agentId}${instTag}`;
+
     // Single-line tail command that continuously follows daemon logs with -F
-    const tailCmd = `stty -echo 2>/dev/null; mkdir -p "$HOME/.${agentId}/logs"; touch "$HOME/.${agentId}/logs/daemon.log"; LOGF="$(ls -1t "$HOME/.${agentId}/logs/"*.log 2>/dev/null | head -1)"; [ -z "$LOGF" ] && LOGF="$HOME/.${agentId}/logs/daemon.log"; tail -n 100 -F "$LOGF" 2>/dev/null || journalctl --user -u ${agentId} --no-pager -n 100 -f 2>/dev/null\n`;
+    const tailCmd = `stty -echo 2>/dev/null; mkdir -p "${homePref}/logs"; touch "${homePref}/logs/daemon.log"; LOGF="$(ls -1t "${homePref}/logs/"*.log 2>/dev/null | head -1)"; [ -z "$LOGF" ] && LOGF="${homePref}/logs/daemon.log"; tail -n 100 -F "$LOGF" 2>/dev/null || journalctl --user -u ${agentId} --no-pager -n 100 -f 2>/dev/null\n`;
 
     // ── HTTP snapshot (one-shot, used as initial seed or error fallback) ──
     const fetchSnapshot = async () => {
@@ -664,7 +712,7 @@ export default function AIAgentsApp({ apiFetch }) {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
-          body: JSON.stringify({ connectionId: targetRef.current, action: 'logs', config: { lines: 300 } }),
+          body: JSON.stringify({ connectionId: targetRef.current, action: 'logs', instance: instRef.current || undefined, config: { lines: 300 } }),
         });
         const r = await res.json();
         if (active && r?.data) {
@@ -856,7 +904,7 @@ export default function AIAgentsApp({ apiFetch }) {
         rtcPeerRef.current = null;
       }
     };
-  }, [tab, target, agentId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [tab, target, agentId, activeInstance]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // keep refs in sync so interval closures always read latest values
   const callRef = useRef(call);
@@ -1115,6 +1163,37 @@ export default function AIAgentsApp({ apiFetch }) {
             </span>
           </div>
 
+          {/* Multi-instance bar (all agents) */}
+          <div className="flex flex-wrap items-center gap-2 px-4 py-2 border-b border-[var(--border-color)] bg-black/10">
+            <span className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">Instances</span>
+            <ThemeSelect
+              value={activeInstance}
+              onChange={v => setInstanceSel(m => ({ ...m, [instKey]: v }))}
+              options={(instanceList[instKey] || [{ tag: '', running: undefined }]).map(i => ({
+                value: i.tag,
+                label: `${i.tag || 'default'}${i.running === false ? ' (stopped)' : ''}`,
+              }))}
+              disabled={!!busyMsg}
+              placeholder="default"
+              size="xs"
+              className="w-40"
+              title={`Active ${agent.name} instance`}
+            />
+            <button
+              onClick={spawnInstance}
+              disabled={!!busyMsg || spawningInstance}
+              className={`${btn} !py-1 !px-2 bg-indigo-500/15 text-indigo-300 hover:bg-indigo-500/25`}
+              title={`Spawn another ${agent.name} instance on this server (own data dir, own bot token)`}
+            >
+              {spawningInstance ? <Loader2 size={11} className="animate-spin" /> : <Plus size={11} />} Spawn instance
+            </button>
+            {activeInstance && (
+              <span className="text-[9px] text-[var(--text-muted)]">
+                dir: {instHome(activeInstance)} · give it its OWN bot token via Env tab
+              </span>
+            )}
+          </div>
+
           {/* Abnormal-state banner */}
           {!details.binPath && (
             <div className="flex flex-wrap items-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-300">
@@ -1281,7 +1360,7 @@ export default function AIAgentsApp({ apiFetch }) {
                       </span>
                     )}
                     <span className="text-[10px] text-[var(--text-muted)] hidden sm:inline">
-                      {logPause ? 'Stream paused' : `Auto-refreshing ~/.${agentId}/logs/ every 5s`}
+                      {logPause ? 'Stream paused' : `Auto-refreshing ~/.${agentId}${activeInstance ? `-${activeInstance}` : ''}/logs/ every 5s`}
                     </span>
                   </div>
 
@@ -1422,7 +1501,7 @@ export default function AIAgentsApp({ apiFetch }) {
               <div className="space-y-2">
                 <div className="flex items-center justify-between gap-2 flex-wrap">
                   <label className="text-[10px] uppercase tracking-wider font-bold text-[var(--text-muted)]">
-                    {agent.id === 'hermes' ? '~/.hermes/config.yaml' : agent.id === 'nanobot' ? '~/.nanobot/config.json' : agent.id === 'openclaw' ? '~/.openclaw/config.json' : agent.id === 'zeroclaw' ? '~/.zeroclaw/config.toml' : `~/.${agent.id}/config`}
+                    {agent.id === 'hermes' ? `${instHome(activeInstance)}/config.yaml` : agent.id === 'nanobot' ? `${instHome(activeInstance)}/config.json` : agent.id === 'openclaw' ? `${instHome(activeInstance)}/config.json` : agent.id === 'zeroclaw' ? `${instHome(activeInstance)}/config.toml` : `~/.${agent.id}/config`}
                   </label>
                   <label className="flex items-center gap-1.5 text-[10px] text-[var(--text-muted)] cursor-pointer">
                     <input type="checkbox" checked={restartAfterSave} onChange={e => setRestartAfterSave(e.target.checked)} className="accent-indigo-500" />
@@ -1467,14 +1546,14 @@ export default function AIAgentsApp({ apiFetch }) {
               <div className="space-y-2">
                 <div className="flex items-center justify-between gap-2 flex-wrap">
                   <label className="text-[10px] uppercase tracking-wider font-bold text-[var(--text-muted)]">
-                    {agent.id === 'hermes' ? '~/.hermes/.env' : agent.id === 'nanobot' ? '~/.nanobot/.env' : agent.id === 'openclaw' ? '~/.openclaw/.env' : agent.id === 'zeroclaw' ? '~/.zeroclaw/.env' : '~/' + agent.id + '/.env'}
+                    {agent.id === 'hermes' ? `${instHome(activeInstance)}/.env` : agent.id === 'nanobot' ? `${instHome(activeInstance)}/.env` : agent.id === 'openclaw' ? `${instHome(activeInstance)}/.env` : agent.id === 'zeroclaw' ? `${instHome(activeInstance)}/.env` : `~/.${agent.id}/.env`}
                   </label>
                   <label className="flex items-center gap-1.5 text-[10px] text-[var(--text-muted)] cursor-pointer">
                     <input type="checkbox" checked={restartAfterSave} onChange={e => setRestartAfterSave(e.target.checked)} className="accent-indigo-500" />
                     restart gateway after save
                   </label>
                 </div>
-                <p className="text-[9px] text-[var(--text-muted)]">Environment keys & values loaded directly from <span className="font-mono">~/.{agent.id}/.env</span>. Edit any value and save to apply immediately.</p>
+                <p className="text-[9px] text-[var(--text-muted)]">Environment keys & values loaded directly from <span className="font-mono">{instHome(activeInstance)}/.env</span>. Edit any value and save to apply immediately.</p>
                 <div className="space-y-1.5">
                   {envDraft.map((r, i) => (
                     <div key={r.key} className="flex items-center gap-2">
@@ -1503,7 +1582,7 @@ export default function AIAgentsApp({ apiFetch }) {
                   ))}
                   {envDraft.length === 0 && (
                     <div className="py-2 space-y-2">
-                      <p className="text-[10px] text-[var(--text-muted)] italic">No env keys configured in <span className="font-mono">~/.{agent.id}/.env</span> yet.</p>
+                      <p className="text-[10px] text-[var(--text-muted)] italic">No env keys configured in <span className="font-mono">{instHome(activeInstance)}/.env</span> yet.</p>
                       <div className="flex flex-wrap items-center gap-1.5 pt-1">
                         <span className="text-[9px] text-[var(--text-muted)]">Quick add:</span>
                         {['MODEL', 'OPENROUTER_API_KEY', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_ALLOWED_USERS', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY'].map(k => (
@@ -1545,7 +1624,7 @@ export default function AIAgentsApp({ apiFetch }) {
                 <button onClick={saveEnv} disabled={!!busyMsg} className={`${btn} bg-indigo-500 hover:bg-indigo-400 text-white`}>
                   {busyMsg === 'Save env' ? <Loader2 size={11} className="animate-spin" /> : <CheckCircle2 size={11} />} Save env + restart
                 </button>
-                <p className="text-[9px] text-[var(--text-muted)]">Saved keys go to <span className="font-mono">~/.{agent.id}/.env</span>. The gateway is restarted (if checked) and the gateway log will reflect the new keys.</p>
+                <p className="text-[9px] text-[var(--text-muted)]">Saved keys go to <span className="font-mono">{instHome(activeInstance)}/.env</span>. The gateway is restarted (if checked) and the gateway log will reflect the new keys.</p>
               </div>
             )}
 
@@ -1610,13 +1689,13 @@ export default function AIAgentsApp({ apiFetch }) {
               //   zeroclaw → ~/.zeroclaw/data/* (0.8.4 workspace; NOT the legacy workspace/ dir)
               //   others   → ~/.<agent>/workspace/*
               const HERMES_PROMPT_PATHS = {
-                'PROMPT.md': '~/.hermes/custom_instructions.txt',
-                'SOUL.md': '~/.hermes/SOUL.md',
-                'USER.md': '~/.hermes/USER.md',
-                'AGENTS.md': '~/.hermes/AGENTS.md',
-                'MEMORY.md': '~/.hermes/memories/MEMORY.md',
+                'PROMPT.md': `${instHome(activeInstance)}/custom_instructions.txt`,
+                'SOUL.md': `${instHome(activeInstance)}/SOUL.md`,
+                'USER.md': `${instHome(activeInstance)}/USER.md`,
+                'AGENTS.md': `${instHome(activeInstance)}/AGENTS.md`,
+                'MEMORY.md': `${instHome(activeInstance)}/memories/MEMORY.md`,
               };
-              const WS_DIR = agent.id === 'zeroclaw' ? '~/.zeroclaw/data' : `~/.${agent.id}/workspace`;
+              const WS_DIR = agent.id === 'zeroclaw' ? `${instHome(activeInstance)}/data` : `${instHome(activeInstance)}/workspace`;
               const wsPath = (f) => agent.id === 'hermes' ? HERMES_PROMPT_PATHS[f] : `${WS_DIR}/${f}`;
 
               const WORKSPACE_FILES = [
@@ -2388,7 +2467,7 @@ export default function AIAgentsApp({ apiFetch }) {
 
       {/* ── Uninstall Confirmation Modal ── */}
       {showUninstallModal && (() => {
-        const home = { hermes: '~/.hermes', nanobot: '~/.nanobot', openclaw: '~/.openclaw', zeroclaw: '~/.zeroclaw' }[agent.id] || ('~/' + agent.id);
+        const home = { hermes: instHome(activeInstance), nanobot: '~/.nanobot', openclaw: '~/.openclaw', zeroclaw: '~/.zeroclaw' }[agent.id] || ('~/' + agent.id);
         return (
           <div className="fixed inset-0 z-[2000] flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(6px)' }}>
             <div className="relative w-full max-w-md rounded-2xl border border-red-500/30 bg-[var(--bg-primary)] shadow-2xl overflow-hidden">
