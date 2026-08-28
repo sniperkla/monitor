@@ -223,18 +223,34 @@ export default function HermesAgentWizard({ isOpen, onClose, connections = [], s
     }
   }, [target, call]);
 
-  useEffect(() => { if (isOpen) { setStatus(null); loadStatus(); } }, [isOpen, loadStatus, agentApi]);
-  useEffect(() => { setTarget(selectedId || connections[0]?._id || ''); }, [selectedId, connections]);
-  // When the parent switches the selected agent, reset wizard-local state so
-  // we don't show the previous agent's status/branch/inputs.
   useEffect(() => {
+    if (isOpen) {
+      setStatus(null);
+      setApiKey('');
+      setModel('');
+      setTok1('');
+      setTok2('');
+      setAllowedIds('');
+      setAdvEnv('');
+      setAdvSettings('');
+      loadStatus();
+    }
+  }, [isOpen, loadStatus, agentApi]);
+
+  useEffect(() => {
+    setTarget(selectedId || connections[0]?._id || '');
     setStatus(null);
     setLog([]);
     setDone(null);
     setShowChooser(false);
+    setApiKey('');
+    setModel('');
+    setTok1('');
+    setTok2('');
+    setAllowedIds('');
     setAdvEnv('');
     setAdvSettings('');
-  }, [agent.id]);
+  }, [selectedId, connections, agent.id]);
 
   const buildPayload = () => {
     const base = mode === 'advanced' ? buildAdvancedPayload() : buildEasyPayload();

@@ -1350,7 +1350,7 @@ export default function AIAgentsApp({ apiFetch }) {
                             type="button"
                             onClick={() => {
                               if (!envDraft.some(x => x.key === k)) {
-                                setEnvDraft(prev => [...prev, { key: k, value: k === 'TELEGRAM_ALLOWED_USERS' ? '5436398702' : '', masked: false }]);
+                                setEnvDraft(prev => [...prev, { key: k, value: '', masked: false }]);
                               }
                             }}
                             className="px-2 py-0.5 text-[9px] font-mono rounded bg-white/5 hover:bg-white/10 text-indigo-300 border border-indigo-500/20"
