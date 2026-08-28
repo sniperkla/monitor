@@ -181,7 +181,7 @@ EOF
 
         # 2. Nohup fallback if systemd user unit is not running
         if [ -z "$STARTED_VIA" ] && ! pgrep -x zeroclaw >/dev/null 2>&1 && ! pgrep -f '[z]eroclaw' >/dev/null 2>&1; then
-          setsid nohup ${BP} dae""mon >> "$HOME/.zeroclaw/logs/daemon.log" 2>&1 < /dev/null &
+          setsid env -i HOME="$HOME" PATH="$PATH" sh -c 'set -a; [ -f "$HOME/.zeroclaw/.env" ] && . "$HOME/.zeroclaw/.env"; set +a; exec '"${BP}"' dae""mon' >> "$HOME/.zeroclaw/logs/daemon.log" 2>&1 < /dev/null &
           sleep 3
           if pgrep -x zeroclaw >/dev/null 2>&1 || pgrep -f '[z]eroclaw' >/dev/null 2>&1; then
             STARTED_VIA="nohup"
@@ -416,22 +416,28 @@ echo "===ENVKEYS==="
       }
       await run('zeroclaw --version', `${ENVX}; ${JSON.stringify(zcBin)} --version 2>&1 | head -1`, { timeoutMs: 60000 });
 
-      // Initialize default config.toml if it does not exist yet
+      // Initialize default config.toml if it does not exist yet (clean schema_version = 3, no malformed sections)
       await execCommand(sshConfig, `
+        mkdir -p "$HOME/.zeroclaw"
         if [ ! -f "$HOME/.zeroclaw/config.toml" ]; then
-          cat <<'EOF' > "$HOME/.zeroclaw/config.toml"
-schema_version = 3
-
-[channels_config.telegram]
-enabled = true
-allowed_users = ["*"]
-EOF
+          printf 'schema_version = 3\\n' > "$HOME/.zeroclaw/config.toml"
+        else
+          # Clean up any previously generated invalid channels_config without bot_token
+          python3 -c "
+import os, re
+p = os.path.expanduser('~/.zeroclaw/config.toml')
+if os.path.exists(p):
+    t = open(p).read()
+    if 'bot_token' not in t and '[channels_config' in t:
+        t = re.sub(r'\\[channels_config[^\\]]*\\][\\s\\S]*?(?=\\n\\[|$)', '', t)
+        open(p, 'w').write(t.strip() + '\\n')
+" 2>/dev/null || true
         fi
       `, { pool: false, timeoutMs: 15000 });
 
       // 3. Daemon — register via `zeroclaw service install`, then start.
       const sysd = p('SYSTEMD') === '1';
-      await run('register service', `${ENVX}; ${JSON.stringify(zcBin)} service install 2>&1 | tail -3`, { timeoutMs: 60000 });
+      await run('register service', `${ENVX}; ${JSON.stringify(zcBin)} service install --service-init systemd 2>&1 || ${JSON.stringify(zcBin)} service install 2>&1 || true`, { timeoutMs: 60000 });
       const gw = await gwCtl('start');
       const startMethod = gw.ok ? (p('INITD') === '1' ? 'systemd-user' : 'service/nohup') : 'manual';
       await run('start daemon', `echo GW_${gw.ok ? 'UP' : 'DEFERRED'}${gw.ok ? '' : `\n${(gw.out || '').slice(0, 300)}`}`);
@@ -569,34 +575,22 @@ EOF
           // telegram
           `tg_token = (e.get('TELEGRAM_BOT_TOKEN') or s.get('telegram_token') or s.get('telegram.bot_token') or '')`,
           `tg_allowed_raw = (e.get('TELEGRAM_ALLOWED_USERS') or s.get('telegram.allowed_users') or s.get('telegram_allowed_users') or '')`,
-          `if tg_token or tg_allowed_raw:`,
+          `if tg_token:`,
           `    ids = [x.strip() for x in str(tg_allowed_raw).split(',') if x.strip()] if tg_allowed_raw else ['*']`,
           `    ids_toml = json.dumps(ids)`,
-          `    # Ensure section exists`,
-          `    if '[channels_config.telegram]' not in text and '[telegram]' not in text:`,
-          `        text = text.rstrip('\n') + '\n\n[channels_config.telegram]\nenabled = true\n'`,
-          `    for sec in ['[channels_config.telegram]', '[telegram]']:`,
-          `        if sec not in text:`,
-          `            continue`,
-          `        si = text.index(sec)`,
-          `        nx = re.search(r'^\\[', text[si + len(sec):], re.M)`,
-          `        se = si + len(sec) + (nx.start() if nx else len(text))`,
-          `        st = text[si:se]`,
-          `        if tg_token:`,
-          `            if re.search(r'^\\s*(?:bot_token|token)\\s*=', st, re.M):`,
-          `                st = re.sub(r'^\\s*(?:bot_token|token)\\s*=.*$', 'bot_token = "' + tg_token + '"', st, flags=re.M)`,
-          `            else:`,
-          `                st = st.rstrip('\n') + '\nbot_token = "' + tg_token + '"\n'`,
-          `        if re.search(r'^\\s*(?:allowed_users|allowed_user_ids)\\s*=', st, re.M):`,
-          `            st = re.sub(r'^\\s*(?:allowed_users|allowed_user_ids)\\s*=.*$', 'allowed_users = ' + ids_toml, st, flags=re.M)`,
-          `        else:`,
-          `            st = st.rstrip('\n') + '\nallowed_users = ' + ids_toml + '\n'`,
-          `        text = text[:si] + st + text[se:]`,
-          `        break`,
+          `    new_tg_sec = f'[channels_config.telegram]\\nbot_token = "{tg_token}"\\nallowed_users = {ids_toml}\\n'`,
+          `    if '[channels_config.telegram]' in text:`,
+          `        text = re.sub(r'\\[channels_config\\.telegram\\][\\s\\S]*?(?=\\n\\[|$)', new_tg_sec, text)`,
+          `    elif '[telegram]' in text:`,
+          `        text = re.sub(r'\\[telegram\\][\\s\\S]*?(?=\\n\\[|$)', new_tg_sec, text)`,
+          `    else:`,
+          `        text = text.rstrip('\\n') + '\\n\\n' + new_tg_sec`,
+          `elif '[channels_config.telegram]' in text and not re.search(r'bot_token\\s*=\\s*"[^"]+"', text):`,
+          `    text = re.sub(r'\\[channels_config\\.telegram\\][\\s\\S]*?(?=\\n\\[|$)', '', text)`,
           // ensure schema_version
           `if 'schema_version' not in text:`,
           `    text = 'schema_version = 3\n' + text`,
-          `open(p, 'w').write(text)`,
+          `open(p, 'w').write(text.strip() + '\n')`,
           `print('ZEROCLAW_CONFIG_MERGED')`,
         ].join('\n');
         const cfgPyB64 = b64(cfgPy);
@@ -775,55 +769,48 @@ echo "TG=$TG"
       const httpPaired = /HTTP_CODE:20[0-9]/.test(httpOut) || /token|session|paired|success/i.test(httpOut);
 
       // 2. Append this user ID to allowed_users in config.toml and ~/.zeroclaw/.env
-      const r = await execCommand(sshConfig, `
-python3 -c "
-import os, re, json
-
-p = os.path.expanduser('~/.zeroclaw/config.toml')
-if not os.path.exists(p):
-    open(p, 'w').close()
-text = open(p).read()
-uid = ${JSON.stringify(code)}
-
-def add_user(content, u):
-    for sec in ['[channels_config.telegram]', '[telegram]']:
-        if sec in content:
-            m = re.search(r'(' + re.escape(sec) + r'[\\s\\S]*?^\\s*(?:allowed_users|allowed_user_ids)\\s*=\\s*\\[)([^\\]]*)(\\])', content, re.M)
-            if m:
-                raw_items = [x.strip().strip('\\\"\\' ') for x in m.group(2).split(',') if x.strip().strip('\\\"\\' ')]
-                unique_items = []
-                for item in raw_items:
-                    if item and item not in unique_items:
-                        unique_items.append(item)
-                if u and u not in unique_items:
-                    unique_items.append(u)
-                new_val = json.dumps(unique_items)
-                content = content[:m.start(1)] + m.group(1) + new_val[1:-1] + m.group(3) + content[m.end():]
-            else:
-                content = content.replace(sec, sec + '\\nallowed_users = [' + json.dumps(u) + ']')
-            return content
-    return content + '\\n[channels_config.telegram]\\nenabled = true\\nallowed_users = [' + json.dumps(u) + ']\\n'
-
-if uid:
-    updated = add_user(text, uid)
-    open(p, 'w').write(updated)
-
-# Also update ~/.zeroclaw/.env TELEGRAM_ALLOWED_USERS
-env_p = os.path.expanduser('~/.zeroclaw/.env')
-env_text = open(env_p).read() if os.path.exists(env_p) else ''
-if uid:
-    if 'TELEGRAM_ALLOWED_USERS=' in env_text:
-        curr = re.search(r'^TELEGRAM_ALLOWED_USERS=(.*)$', env_text, re.M)
-        existing_env = [x.strip() for x in (curr.group(1) if curr else '').split(',') if x.strip()]
-        if uid not in existing_env:
-            existing_env.append(uid)
-        env_text = re.sub(r'^TELEGRAM_ALLOWED_USERS=.*$', 'TELEGRAM_ALLOWED_USERS=' + ','.join(existing_env), env_text, flags=re.M)
-    else:
-        env_text += '\\nTELEGRAM_ALLOWED_USERS=' + uid + '\\n'
-    open(env_p, 'w').write(env_text)
-
-print('ADDED_TO_ALLOWED_USERS')
-" 2>&1`, { pool: false, timeoutMs: 30000 });
+      const pairPy = [
+        'import os, re, json, base64',
+        `uid = ${JSON.stringify(code)}`,
+        `p = os.path.expanduser('~/.zeroclaw/config.toml')`,
+        `text = open(p).read() if os.path.exists(p) else ''`,
+        `def add_user(content, u):`,
+        `    for sec in ['[channels_config.telegram]', '[telegram]']:`,
+        `        if sec in content:`,
+        `            m = re.search(r'(' + re.escape(sec) + r'[\\s\\S]*?^\\s*(?:allowed_users|allowed_user_ids)\\s*=\\s*\\[)([^\\]]*)(\\])', content, re.M)`,
+        `            if m:`,
+        `                raw_items = [x.strip().strip('"\\' ') for x in m.group(2).split(',') if x.strip().strip('"\\' ')]`,
+        `                unique_items = []`,
+        `                for item in raw_items:`,
+        `                    if item and item not in unique_items:`,
+        `                        unique_items.append(item)`,
+        `                if u and u not in unique_items:`,
+        `                    unique_items.append(u)`,
+        `                new_val = json.dumps(unique_items)`,
+        `                content = content[:m.start(1)] + m.group(1) + new_val[1:-1] + m.group(3) + content[m.end():]`,
+        `            else:`,
+        `                content = content.replace(sec, sec + '\\nallowed_users = [' + json.dumps(u) + ']')`,
+        `            return content`,
+        `    return content`,
+        `if uid and os.path.exists(p):`,
+        `    open(p, 'w').write(add_user(text, uid).strip() + '\\n')`,
+        `# Update ~/.zeroclaw/.env TELEGRAM_ALLOWED_USERS`,
+        `env_p = os.path.expanduser('~/.zeroclaw/.env')`,
+        `env_text = open(env_p).read() if os.path.exists(env_p) else ''`,
+        `if uid:`,
+        `    if 'TELEGRAM_ALLOWED_USERS=' in env_text:`,
+        `        curr = re.search(r'^TELEGRAM_ALLOWED_USERS=(.*)$', env_text, re.M)`,
+        `        existing_env = [x.strip() for x in (curr.group(1) if curr else '').split(',') if x.strip()]`,
+        `        if uid not in existing_env:`,
+        `            existing_env.append(uid)`,
+        `        env_text = re.sub(r'^TELEGRAM_ALLOWED_USERS=.*$', 'TELEGRAM_ALLOWED_USERS=' + ','.join(existing_env), env_text, flags=re.M)`,
+        `    else:`,
+        `        env_text = env_text.rstrip('\\n') + '\\nTELEGRAM_ALLOWED_USERS=' + uid + '\\n'`,
+        `    open(env_p, 'w').write(env_text)`,
+        `print('ADDED_TO_ALLOWED_USERS')`,
+      ].join('\n');
+      const pairPyB64 = b64(pairPy);
+      const r = await execCommand(sshConfig, `echo '${pairPyB64}' | base64 -d | python3 2>&1`, { pool: false, timeoutMs: 30000 });
       const out = ((r.stdout || '') + (r.stderr || '')).trim();
       const ok = /ADDED_TO_ALLOWED_USERS/.test(out) || httpPaired;
       if (!ok) return NextResponse.json({ success: false, error: `Failed to approve code: ${out}`, log });
