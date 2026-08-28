@@ -16,10 +16,10 @@ import ThemeSelect from '@/components/common/ThemeSelect';
  */
 
 const PROVIDERS = [
-  { id: 'openrouter', label: 'OpenRouter', envKey: 'OPENROUTER_API_KEY', model: 'stealth/ox-alpha', hint: 'One key, 300+ models (recommended). Get a key at openrouter.ai/keys — use the model ID as-is (no provider prefix)' },
-  { id: 'openai', label: 'OpenAI', envKey: 'OPENAI_API_KEY', model: 'openai/gpt-4o', hint: 'platform.openai.com/api-keys' },
-  { id: 'anthropic', label: 'Anthropic', envKey: 'ANTHROPIC_API_KEY', model: 'anthropic/claude-sonnet-4', hint: 'console.anthropic.com → API keys' },
-  { id: 'custom', label: 'Custom…', envKey: '', model: '', hint: 'Bring your own OpenAI-compatible endpoint (Ollama, vLLM, LM Studio, Groq, Together, etc.). Pick the env-var name and paste the key.', custom: true },
+  { id: 'openrouter', label: 'OpenRouter', envKey: 'OPENROUTER_API_KEY', model: '', placeholder: 'anthropic/claude-3.5-sonnet', hint: 'One key, 300+ models (recommended). Get a key at openrouter.ai/keys — enter model ID (e.g. anthropic/claude-3.5-sonnet)' },
+  { id: 'openai', label: 'OpenAI', envKey: 'OPENAI_API_KEY', model: '', placeholder: 'gpt-4o', hint: 'platform.openai.com/api-keys' },
+  { id: 'anthropic', label: 'Anthropic', envKey: 'ANTHROPIC_API_KEY', model: '', placeholder: 'claude-3-5-sonnet-20241022', hint: 'console.anthropic.com → API keys' },
+  { id: 'custom', label: 'Custom…', envKey: '', model: '', placeholder: 'model-name', hint: 'Bring your own OpenAI-compatible endpoint (Ollama, vLLM, LM Studio, Groq, Together, etc.). Pick the env-var name and paste the key.', custom: true },
 ];
 
 const MESSENGERS = [
@@ -47,7 +47,7 @@ export default function HermesAgentWizard({ isOpen, onClose, connections = [], s
   // easy state
   const [provider, setProvider] = useState('openrouter');
   const [apiKey, setApiKey] = useState('');
-  const [model, setModel] = useState(PROVIDERS[0].model);
+  const [model, setModel] = useState('');
   const [customEnvKey, setCustomEnvKey] = useState('CUSTOM_LLM_API_KEY');
   const [customBaseUrl, setCustomBaseUrl] = useState('');
   const [messenger, setMessenger] = useState('telegram');
@@ -433,7 +433,7 @@ export default function HermesAgentWizard({ isOpen, onClose, connections = [], s
                 <label className="text-[10px] uppercase tracking-wider font-bold text-[var(--text-muted)]">1 · Brain — LLM provider</label>
                 <div className="grid grid-cols-3 gap-1.5 mt-1">
                   {PROVIDERS.map(x => (
-                    <button key={x.id} onClick={() => { setProvider(x.id); setModel(x.model); }} className={`px-2 py-1.5 rounded-lg text-[10px] font-bold border transition cursor-pointer ${provider === x.id ? 'bg-indigo-500/20 border-indigo-400/40 text-indigo-300' : 'bg-black/20 border-[var(--border-color)] text-[var(--text-muted)] hover:bg-white/5'}`}>
+                    <button key={x.id} onClick={() => { setProvider(x.id); if (x.model) setModel(x.model); }} className={`px-2 py-1.5 rounded-lg text-[10px] font-bold border transition cursor-pointer ${provider === x.id ? 'bg-indigo-500/20 border-indigo-400/40 text-indigo-300' : 'bg-black/20 border-[var(--border-color)] text-[var(--text-muted)] hover:bg-white/5'}`}>
                       {x.label}
                     </button>
                   ))}
@@ -441,7 +441,7 @@ export default function HermesAgentWizard({ isOpen, onClose, connections = [], s
                 <p className="text-[10px] text-[var(--text-muted)] mt-1.5">{prov.hint}</p>
                 <div className="grid grid-cols-2 gap-2 mt-2">
                   <input className={inputCls} placeholder="API key" value={apiKey} onChange={e => setApiKey(e.target.value)} type="password" autoComplete="off" />
-                  <input className={inputCls} placeholder="Model" value={model} onChange={e => setModel(e.target.value)} />
+                  <input className={inputCls} placeholder={`Model (e.g. ${prov.placeholder || 'anthropic/claude-3.5-sonnet'})`} value={model} onChange={e => setModel(e.target.value)} />
                 </div>
                 {isCustom && (
                   <div className="grid grid-cols-2 gap-2 mt-2">

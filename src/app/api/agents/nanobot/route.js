@@ -456,8 +456,10 @@ tail -n 30 "$LOG" 2>/dev/null | tail -5
       const newConfig = {};
       if (providerName) {
         newConfig.providers = { [providerName.p]: { apiKey: providerName.v } };
-        newConfig.modelPresets = { primary: { provider: providerName.p, model: modelFromSettings || 'stealth/ox-alpha', maxTokens: 8192, contextWindowTokens: 65536 } };
-        newConfig.agents = { defaults: { modelPreset: 'primary' } };
+        if (modelFromSettings) {
+          newConfig.modelPresets = { primary: { provider: providerName.p, model: modelFromSettings, maxTokens: 8192, contextWindowTokens: 65536 } };
+          newConfig.agents = { defaults: { modelPreset: 'primary' } };
+        }
       } else if (modelFromSettings) {
         newConfig.modelPresets = { primary: { model: modelFromSettings } };
       }

@@ -421,11 +421,10 @@ echo "===ENVKEYS==="
         if [ ! -f "$HOME/.zeroclaw/config.toml" ]; then
           cat <<'EOF' > "$HOME/.zeroclaw/config.toml"
 schema_version = 3
-model = "openrouter/anthropic/claude-3.5-sonnet"
 
 [channels_config.telegram]
 enabled = true
-allowed_users = ["5436398702", "*"]
+allowed_users = ["*"]
 EOF
         fi
       `, { pool: false, timeoutMs: 15000 });
