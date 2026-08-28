@@ -579,14 +579,14 @@ echo "TG=$TG"
         }
       }
 
-      if (hasSettings && settings.model) {
-        const setB64 = b64(JSON.stringify(settings));
+      const targetModel = (hasSettings && (settings.model || settings.default_model)) || env.MODEL || env.OPENCLAW_MODEL || env.DEFAULT_MODEL || '';
+      if (targetModel) {
+        const setB64 = b64(JSON.stringify({ model: targetModel }));
         await run('merge ~/.openclaw/openclaw.json settings', `
           python3 -c "
-import json, os
+import json, os, base64
 p = os.path.expanduser('~/.openclaw/openclaw.json')
 cur = json.load(open(p)) if os.path.exists(p) else {}
-import base64
 s = json.loads(base64.b64decode('${setB64}').decode('utf8'))
 if 'model' in s:
     cur['defaultModel'] = s['model']

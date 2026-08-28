@@ -270,7 +270,10 @@ echo "SSVC=$SSVC"; echo "USVC=$USVC"; echo "PROC=$PROC"; echo "SYSTEMD=$SYSTEMD"
 echo "===VERSION==="
 [ -n "$BIN" ] && "$BIN" --version 2>/dev/null | tail -1 | cut -c1-40
 echo "===MODEL==="
-[ -n "$BIN" ] && "$BIN" config get model 2>/dev/null | tail -1
+MDL="$( [ -n "$BIN" ] && "$BIN" config get model 2>/dev/null | tail -1 || true )"
+[ -z "$MDL" ] && MDL="$(grep -E '^model:' "$HOME/.hermes/config.yaml" 2>/dev/null | head -1 | awk '{print $2}' | tr -d '"' | tr -d "'")"
+[ -z "$MDL" ] && MDL="$(grep -E '^(MODEL|HERMES_MODEL|DEFAULT_MODEL)=' "$HOME/.hermes/.env" 2>/dev/null | head -1 | cut -d= -f2-)"
+echo "$MDL"
 `;
       const r = await execCommand(sshConfig, DETAILS_SCRIPT, { pool: false, timeoutMs: 60000 });
       const out = r.stdout || '';
@@ -360,6 +363,11 @@ echo "===MODEL==="
     if (action === 'reconfigure') {
       const env = (config && config.env) || {};
       const settings = (config && config.settings) || {};
+      const targetModel = settings.model || settings.default_model || env.MODEL || env.HERMES_MODEL || env.DEFAULT_MODEL || '';
+      if (targetModel) {
+        settings.model = targetModel;
+        env.MODEL = targetModel;
+      }
       const envKeys = Object.keys(env).filter(k => env[k] != null && env[k] !== '');
       const hasSettings = Object.keys(settings).filter(k => settings[k] != null && settings[k] !== '').length > 0;
       if (envKeys.length === 0 && !hasSettings) {
@@ -401,8 +409,8 @@ echo "===MODEL==="
       }
 
       // also merge settings (model, platform toggles) into config.yaml if provided
-      if (config.settings && Object.keys(config.settings).length) {
-        const setB64 = b64(JSON.stringify(config.settings));
+      if (hasSettings) {
+        const setB64 = b64(JSON.stringify(settings));
         await run('merge ~/.hermes/config.yaml settings', `
           export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:\$PATH"
           python3 - <<'PY' 2>/dev/null || true
@@ -422,6 +430,17 @@ open(path, 'w').write(text)
 print('SETTINGS_MERGED')
 PY`, { timeoutMs: 30000 });
       }
+
+      // Sync active model to hermes CLI directly
+      if (targetModel) {
+        await execCommand(sshConfig, `
+          export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+          HB="$([ -x "$HOME/.local/bin/hermes" ] && echo "$HOME/.local/bin/hermes" || command -v hermes || echo "/usr/local/bin/hermes")"
+          $HB config set model ${JSON.stringify(targetModel)} 2>&1 || true
+          command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx hermes-agent && docker exec hermes-agent hermes config set model ${JSON.stringify(targetModel)} 2>&1 || true
+        `, { pool: false, timeoutMs: 30000 });
+      }
+
       // restart gateway
       const g = await gwCtl('restart');
       return NextResponse.json({ success: g.ok, restarted: g.ok, startMethod: g.ok ? 'restart' : null, error: g.ok ? null : g.error, log });

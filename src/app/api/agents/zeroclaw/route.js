@@ -542,7 +542,7 @@ EOF
       // Merge settings + telegram into config.toml
       // IMPORTANT: Pass the Python via stdin (base64 decoded) to avoid ALL shell escaping issues.
       // Double-backslash in regex is correct inside a normal Python string passed via stdin.
-      if (hasSettings || env.TELEGRAM_BOT_TOKEN || env.TELEGRAM_ALLOWED_USERS || env.OPENROUTER_API_KEY || env.OPENAI_API_KEY || env.ANTHROPIC_API_KEY) {
+      if (hasSettings || env.TELEGRAM_BOT_TOKEN || env.TELEGRAM_ALLOWED_USERS || env.OPENROUTER_API_KEY || env.OPENAI_API_KEY || env.ANTHROPIC_API_KEY || env.MODEL || env.ZEROCLAW_MODEL) {
         const setB64 = b64(JSON.stringify(settings));
         const envB64 = b64(JSON.stringify(env));
         const cfgPy = [
@@ -553,7 +553,7 @@ EOF
           `os.makedirs(os.path.dirname(p), exist_ok=True)`,
           `text = open(p).read() if os.path.exists(p) else ''`,
           // model
-          `m = s.get('model') or ''`,
+          `m = (s.get('model') or s.get('default_model') or e.get('MODEL') or e.get('ZEROCLAW_MODEL') or e.get('DEFAULT_MODEL') or '')`,
           `if m:`,
           `    if re.search(r'^(model|default_model)\\s*=', text, re.M):`,
           `        text = re.sub(r'^(model|default_model)\\s*=.*$', 'model = "' + m + '"', text, flags=re.M)`,

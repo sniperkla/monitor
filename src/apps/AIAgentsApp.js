@@ -1344,7 +1344,7 @@ export default function AIAgentsApp({ apiFetch }) {
                       <p className="text-[10px] text-[var(--text-muted)] italic">No env keys configured in <span className="font-mono">~/.{agent.id}/.env</span> yet.</p>
                       <div className="flex flex-wrap items-center gap-1.5 pt-1">
                         <span className="text-[9px] text-[var(--text-muted)]">Quick add:</span>
-                        {['OPENROUTER_API_KEY', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_ALLOWED_USERS', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY'].map(k => (
+                        {['MODEL', 'OPENROUTER_API_KEY', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_ALLOWED_USERS', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY'].map(k => (
                           <button
                             key={k}
                             type="button"

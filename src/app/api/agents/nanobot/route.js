@@ -448,7 +448,7 @@ tail -n 30 "$LOG" 2>/dev/null | tail -5
         ANTHROPIC_API_KEY: 'anthropic',
         CUSTOM_LLM_API_KEY: 'custom',
       };
-      const modelFromSettings = (config.settings && config.settings.model) || null;
+      const modelFromSettings = (config.settings && (config.settings.model || config.settings.default_model)) || env.MODEL || env.NANOBOT_MODEL || env.DEFAULT_MODEL || null;
       const providerName = Object.entries(env)
         .map(([k, v]) => ({ k, v, p: PROVIDER_FROM_KEY[k] }))
         .find(x => x.p && x.v);
