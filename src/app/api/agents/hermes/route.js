@@ -366,20 +366,40 @@ echo "===MODEL==="
         return NextResponse.json({ success: false, error: 'No settings or env keys to update' }, { status: 400 });
       }
       if (envKeys.length > 0) {
-        const envB64 = b64(envKeys.map(k => `${k}=${env[k]}`).join('\n'));
-        const w = await run('write ~/.hermes/.env', `
-          touch "$HOME/.hermes/.env"; chmod 600 "$HOME/.hermes/.env"
-          echo '${envB64}' | base64 -d > /tmp/.hm-env-new
-          while IFS='=' read -r k v; do
-            [ -z "$k" ] && continue
-            grep -q "^$k=" "$HOME/.hermes/.env" && sed -i "s|^$k=.*|$k=$v|" "$HOME/.hermes/.env" || echo "$k=$v" >> "$HOME/.hermes/.env"
-          done < /tmp/.hm-env-new
-          rm -f /tmp/.hm-env-new
-          echo ENV_UPDATED`, { timeoutMs: 30000 });
+        const envLinesB64 = b64(envKeys.map(k => `${k}=${env[k]}`).join('\n'));
+        // Python script: upsert each KEY=VALUE line in .env, handles values with '=' (base64 tokens)
+        const envPy = [
+          'import os, base64',
+          `lines_raw = base64.b64decode('${envLinesB64}').decode('utf-8').splitlines()`,
+          `ep = os.path.expanduser('~/.hermes/.env')`,
+          `os.makedirs(os.path.dirname(ep), exist_ok=True)`,
+          `existing = open(ep).read().splitlines() if os.path.exists(ep) else []`,
+          `upsert = {}`,
+          `for ln in lines_raw:`,
+          `    idx = ln.find('=')`,
+          `    if idx > 0: upsert[ln[:idx]] = ln[idx+1:]`,
+          `result = []`,
+          `keys_done = set()`,
+          `for ln in existing:`,
+          `    idx = ln.find('=')`,
+          `    if idx > 0 and ln[:idx] in upsert:`,
+          `        result.append(ln[:idx] + '=' + upsert[ln[:idx]])`,
+          `        keys_done.add(ln[:idx])`,
+          `    else:`,
+          `        result.append(ln)`,
+          `for k, v in upsert.items():`,
+          `    if k not in keys_done: result.append(k + '=' + v)`,
+          `open(ep, 'w').write('\\n'.join(result) + '\\n')`,
+          `os.chmod(ep, 0o600)`,
+          `print('ENV_UPDATED')`,
+        ].join('\n');
+        const envPyB64 = b64(envPy);
+        const w = await run('write ~/.hermes/.env', `echo '${envPyB64}' | base64 -d | python3`, { timeoutMs: 30000 });
         if (!/ENV_UPDATED/.test(w.stdout || '')) {
           return NextResponse.json({ success: false, error: 'Failed to write ~/.hermes/.env', log });
         }
       }
+
       // also merge settings (model, platform toggles) into config.yaml if provided
       if (config.settings && Object.keys(config.settings).length) {
         const setB64 = b64(JSON.stringify(config.settings));

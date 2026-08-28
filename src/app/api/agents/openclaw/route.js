@@ -545,20 +545,40 @@ echo "TG=$TG"
         return NextResponse.json({ success: false, error: 'No settings or env keys to update' }, { status: 400 });
       }
       if (envKeys.length > 0) {
-        const envB64 = b64(envKeys.map(k => `${k}=${env[k]}`).join('\n'));
-        const w = await run('write ~/.openclaw/.env', `
-          touch "$HOME/.openclaw/.env"; chmod 600 "$HOME/.openclaw/.env"
-          echo '${envB64}' | base64 -d > /tmp/.oc-env-new
-          while IFS='=' read -r k v; do
-            [ -z "$k" ] && continue
-            grep -q "^$k=" "$HOME/.openclaw/.env" && sed -i "s|^$k=.*|$k=$v|" "$HOME/.openclaw/.env" || echo "$k=$v" >> "$HOME/.openclaw/.env"
-          done < /tmp/.oc-env-new
-          rm -f /tmp/.oc-env-new
-          echo ENV_UPDATED`, { timeoutMs: 30000 });
+        const envLinesB64 = b64(envKeys.map(k => `${k}=${env[k]}`).join('\n'));
+        // Python upsert: handles values containing '=' (e.g. base64 bot tokens)
+        const envPy = [
+          'import os, base64',
+          `lines_raw = base64.b64decode('${envLinesB64}').decode('utf-8').splitlines()`,
+          `ep = os.path.expanduser('~/.openclaw/.env')`,
+          `os.makedirs(os.path.dirname(ep), exist_ok=True)`,
+          `existing = open(ep).read().splitlines() if os.path.exists(ep) else []`,
+          `upsert = {}`,
+          `for ln in lines_raw:`,
+          `    idx = ln.find('=')`,
+          `    if idx > 0: upsert[ln[:idx]] = ln[idx+1:]`,
+          `result = []`,
+          `keys_done = set()`,
+          `for ln in existing:`,
+          `    idx = ln.find('=')`,
+          `    if idx > 0 and ln[:idx] in upsert:`,
+          `        result.append(ln[:idx] + '=' + upsert[ln[:idx]])`,
+          `        keys_done.add(ln[:idx])`,
+          `    else:`,
+          `        result.append(ln)`,
+          `for k, v in upsert.items():`,
+          `    if k not in keys_done: result.append(k + '=' + v)`,
+          `open(ep, 'w').write('\\n'.join(result) + '\\n')`,
+          `os.chmod(ep, 0o600)`,
+          `print('ENV_UPDATED')`,
+        ].join('\n');
+        const envPyB64 = b64(envPy);
+        const w = await run('write ~/.openclaw/.env', `echo '${envPyB64}' | base64 -d | python3`, { timeoutMs: 30000 });
         if (!/ENV_UPDATED/.test(w.stdout || '')) {
           return NextResponse.json({ success: false, error: 'Failed to write ~/.openclaw/.env', log });
         }
       }
+
       if (hasSettings && settings.model) {
         const setB64 = b64(JSON.stringify(settings));
         await run('merge ~/.openclaw/openclaw.json settings', `
