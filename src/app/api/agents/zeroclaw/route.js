@@ -450,12 +450,14 @@ EOF
         running = await readRunning();
       }
 
+      // Binary installed = success even if daemon won't start (no API key yet is expected on fresh install)
       return NextResponse.json({
-        success: running,
+        success: true,
+        installed: true,
         running,
         startMethod,
         version: p('VERSION'),
-        error: running ? null : 'Daemon did not stay running — check journalctl --user -u zeroclaw or ~/.zeroclaw/logs/, then configure via the Config tab or the dashboard at http://<host>:42617.',
+        warning: running ? null : 'Daemon is not running yet — add your API key and Telegram bot token in the Environment tab, then click Restart.',
         log,
       });
     }
@@ -491,7 +493,6 @@ EOF
       return NextResponse.json({ success: true, data, size: data.length, file: 'journal::user/zeroclaw | ~/.zeroclaw/logs/daemon.log' });
     }
 
-    // ── SAVE-CONFIG (raw TOML) with auto-rollback ──
     // ── RECONFIGURE — write env & settings to ~/.zeroclaw + restart gateway (no reinstall) ──
     if (action === 'reconfigure') {
       const env = (config && config.env) || {};
@@ -501,88 +502,119 @@ EOF
       if (envKeys.length === 0 && !hasSettings) {
         return NextResponse.json({ success: false, error: 'No settings or env keys to update' }, { status: 400 });
       }
+
+      // Write ~/.zeroclaw/.env — use Python so values containing '=' (base64 tokens) are safe
       if (envKeys.length > 0) {
-        const envB64 = b64(envKeys.map(k => `${k}=${env[k]}`).join('\n'));
-        const w = await run('write ~/.zeroclaw/.env', `
-          mkdir -p "$HOME/.zeroclaw"
-          touch "$HOME/.zeroclaw/.env"; chmod 600 "$HOME/.zeroclaw/.env"
-          echo '${envB64}' | base64 -d > /tmp/.zc-env-new
-          while IFS='=' read -r k v; do
-            [ -z "$k" ] && continue
-            grep -q "^$k=" "$HOME/.zeroclaw/.env" && sed -i "s|^$k=.*|$k=$v|" "$HOME/.zeroclaw/.env" || echo "$k=$v" >> "$HOME/.zeroclaw/.env"
-          done < /tmp/.zc-env-new
-          rm -f /tmp/.zc-env-new
-          echo ENV_UPDATED`, { timeoutMs: 30000 });
+        const envLinesB64 = b64(envKeys.map(k => `${k}=${env[k]}`).join('\n'));
+        // Python script: upsert each KEY=VALUE line in .env, handles values with '='
+        const envPy = [
+          'import os, base64',
+          `lines_raw = base64.b64decode('${envLinesB64}').decode('utf-8').splitlines()`,
+          `ep = os.path.expanduser('~/.zeroclaw/.env')`,
+          `os.makedirs(os.path.dirname(ep), exist_ok=True)`,
+          `existing = open(ep).read().splitlines() if os.path.exists(ep) else []`,
+          `upsert = {}`,
+          `for ln in lines_raw:`,
+          `    idx = ln.find('=')`,
+          `    if idx > 0: upsert[ln[:idx]] = ln[idx+1:]`,
+          `result = []`,
+          `keys_done = set()`,
+          `for ln in existing:`,
+          `    idx = ln.find('=')`,
+          `    if idx > 0 and ln[:idx] in upsert:`,
+          `        result.append(ln[:idx] + '=' + upsert[ln[:idx]])`,
+          `        keys_done.add(ln[:idx])`,
+          `    else:`,
+          `        result.append(ln)`,
+          `for k, v in upsert.items():`,
+          `    if k not in keys_done: result.append(k + '=' + v)`,
+          `open(ep, 'w').write('\\n'.join(result) + '\\n')`,
+          `os.chmod(ep, 0o600)`,
+          `print('ENV_UPDATED')`,
+        ].join('\n');
+        const envPyB64 = b64(envPy);
+        const w = await run('write ~/.zeroclaw/.env', `echo '${envPyB64}' | base64 -d | python3`, { timeoutMs: 30000 });
         if (!/ENV_UPDATED/.test(w.stdout || '')) {
           return NextResponse.json({ success: false, error: 'Failed to write ~/.zeroclaw/.env', log });
         }
       }
-      if (hasSettings || env.TELEGRAM_BOT_TOKEN || env.TELEGRAM_ALLOWED_USERS) {
+
+      // Merge settings + telegram into config.toml
+      // IMPORTANT: Pass the Python via stdin (base64 decoded) to avoid ALL shell escaping issues.
+      // Double-backslash in regex is correct inside a normal Python string passed via stdin.
+      if (hasSettings || env.TELEGRAM_BOT_TOKEN || env.TELEGRAM_ALLOWED_USERS || env.OPENROUTER_API_KEY || env.OPENAI_API_KEY || env.ANTHROPIC_API_KEY) {
         const setB64 = b64(JSON.stringify(settings));
         const envB64 = b64(JSON.stringify(env));
-        await run('merge ~/.zeroclaw/config.toml settings', `
-          python3 -c "
-import json, os, re, base64
-p = os.path.expanduser('~/.zeroclaw/config.toml')
-if not os.path.exists(p):
-    open(p, 'w').close()
-s = json.loads(base64.b64decode('${setB64}').decode('utf8'))
-e = json.loads(base64.b64decode('${envB64}').decode('utf8'))
-text = open(p).read()
+        const cfgPy = [
+          'import json, os, re, base64',
+          `s = json.loads(base64.b64decode('${setB64}').decode('utf-8'))`,
+          `e = json.loads(base64.b64decode('${envB64}').decode('utf-8'))`,
+          `p = os.path.expanduser('~/.zeroclaw/config.toml')`,
+          `os.makedirs(os.path.dirname(p), exist_ok=True)`,
+          `text = open(p).read() if os.path.exists(p) else ''`,
+          // model
+          `m = s.get('model') or ''`,
+          `if m:`,
+          `    if re.search(r'^(model|default_model)\\s*=', text, re.M):`,
+          `        text = re.sub(r'^(model|default_model)\\s*=.*$', 'model = "' + m + '"', text, flags=re.M)`,
+          `    else:`,
+          `        text = 'model = "' + m + '"\n' + text`,
+          // api_key
+          `api_key = (e.get('OPENROUTER_API_KEY') or e.get('OPENAI_API_KEY') or e.get('ANTHROPIC_API_KEY') or e.get('API_KEY') or s.get('api_key') or '')`,
+          `if api_key:`,
+          `    if re.search(r'^\\s*api_key\\s*=', text, re.M):`,
+          `        text = re.sub(r'^\\s*api_key\\s*=.*$', 'api_key = "' + api_key + '"', text, flags=re.M)`,
+          `    else:`,
+          `        text = 'api_key = "' + api_key + '"\n' + text`,
+          // telegram
+          `tg_token = (e.get('TELEGRAM_BOT_TOKEN') or s.get('telegram_token') or s.get('telegram.bot_token') or '')`,
+          `tg_allowed_raw = (e.get('TELEGRAM_ALLOWED_USERS') or s.get('telegram.allowed_users') or s.get('telegram_allowed_users') or '')`,
+          `if tg_token or tg_allowed_raw:`,
+          `    ids = [x.strip() for x in str(tg_allowed_raw).split(',') if x.strip()] if tg_allowed_raw else ['*']`,
+          `    ids_toml = json.dumps(ids)`,
+          `    # Ensure section exists`,
+          `    if '[channels_config.telegram]' not in text and '[telegram]' not in text:`,
+          `        text = text.rstrip('\n') + '\n\n[channels_config.telegram]\nenabled = true\n'`,
+          `    for sec in ['[channels_config.telegram]', '[telegram]']:`,
+          `        if sec not in text:`,
+          `            continue`,
+          `        si = text.index(sec)`,
+          `        nx = re.search(r'^\\[', text[si + len(sec):], re.M)`,
+          `        se = si + len(sec) + (nx.start() if nx else len(text))`,
+          `        st = text[si:se]`,
+          `        if tg_token:`,
+          `            if re.search(r'^\\s*(?:bot_token|token)\\s*=', st, re.M):`,
+          `                st = re.sub(r'^\\s*(?:bot_token|token)\\s*=.*$', 'bot_token = "' + tg_token + '"', st, flags=re.M)`,
+          `            else:`,
+          `                st = st.rstrip('\n') + '\nbot_token = "' + tg_token + '"\n'`,
+          `        if re.search(r'^\\s*(?:allowed_users|allowed_user_ids)\\s*=', st, re.M):`,
+          `            st = re.sub(r'^\\s*(?:allowed_users|allowed_user_ids)\\s*=.*$', 'allowed_users = ' + ids_toml, st, flags=re.M)`,
+          `        else:`,
+          `            st = st.rstrip('\n') + '\nallowed_users = ' + ids_toml + '\n'`,
+          `        text = text[:si] + st + text[se:]`,
+          `        break`,
+          // ensure schema_version
+          `if 'schema_version' not in text:`,
+          `    text = 'schema_version = 3\n' + text`,
+          `open(p, 'w').write(text)`,
+          `print('ZEROCLAW_CONFIG_MERGED')`,
+        ].join('\n');
+        const cfgPyB64 = b64(cfgPy);
+        const cfgR = await run('merge ~/.zeroclaw/config.toml', `echo '${cfgPyB64}' | base64 -d | python3 2>&1`, { timeoutMs: 30000 });
+        log.push(`config-merge result: ${(cfgR.stdout || '').trim().slice(0, 300)}`);
 
-# Update model and api_key
-m = s.get('model')
-if m:
-    if re.search(r'^(model|default_model)\s*=', text, re.M):
-        text = re.sub(r'^(model|default_model)\s*=.*$', f'model = \"{m}\"', text, flags=re.M)
-    else:
-        text = f'model = \"{m}\"\n' + text
-
-api_key = e.get('OPENROUTER_API_KEY') or e.get('OPENAI_API_KEY') or e.get('ANTHROPIC_API_KEY') or e.get('API_KEY') or s.get('api_key')
-if api_key:
-    if re.search(r'^\s*api_key\s*=', text, re.M):
-        text = re.sub(r'^\s*api_key\s*=.*$', f'api_key = \"{api_key}\"', text, flags=re.M)
-    else:
-        text = f'api_key = \"{api_key}\"\n' + text
-
-# Update telegram configuration if passed in settings or env
-tg_token = e.get('TELEGRAM_BOT_TOKEN') or s.get('telegram.bot_token') or s.get('telegram_token')
-tg_allowed = e.get('TELEGRAM_ALLOWED_USERS') or s.get('telegram.allowed_users') or s.get('telegram_allowed_users')
-
-if tg_token or tg_allowed:
-    ids = [x.strip() for x in str(tg_allowed or '').split(',') if x.strip()] if tg_allowed else ["*"]
-    ids_toml = json.dumps(ids)
-
-    if '[channels_config.telegram]' not in text and '[telegram]' not in text:
-        text += '\\n[channels_config.telegram]\\nenabled = true\\n'
-
-    for sec in ['[channels_config.telegram]', '[telegram]']:
-        if sec in text:
-            if tg_token:
-                m_tok = re.search(r'(' + re.escape(sec) + r'[\\s\\S]*?^\\s*(?:bot_token|token)\\s*=\\s*).*$', text, re.M)
-                if m_tok:
-                    text = text[:m_tok.start(1)] + m_tok.group(1) + json.dumps(tg_token) + text[m_tok.end():]
-                else:
-                    text = text.replace(sec, sec + '\\nbot_token = ' + json.dumps(tg_token))
-            m_ids = re.search(r'(' + re.escape(sec) + r'[\\s\\S]*?^\\s*(?:allowed_users|allowed_user_ids)\\s*=\\s*).*$', text, re.M)
-            if m_ids:
-                text = text[:m_ids.start(1)] + m_ids.group(1) + ids_toml + text[m_ids.end():]
-            else:
-                text = text.replace(sec, sec + '\\nallowed_users = ' + ids_toml)
-
-open(p, 'w').write(text)
-print('ZEROCLAW_CONFIG_MERGED')
-" 2>/dev/null || true
-          # Flush any pending Telegram webhook
-          TOKEN="$(grep -oE 'bot_token\\s*=\\s*"[^"]+"' "$HOME/.zeroclaw/config.toml" 2>/dev/null | cut -d'"' -f2 || grep -oE 'TELEGRAM_BOT_TOKEN=[^ \\n]+' "$HOME/.zeroclaw/.env" 2>/dev/null | cut -d= -f2)"
+        // Flush any pending Telegram webhook so polling starts immediately
+        await execCommand(sshConfig, `
+          TOKEN="$(grep -oE 'bot_token = "[^"]+"' "$HOME/.zeroclaw/config.toml" 2>/dev/null | cut -d'"' -f2 || grep -oE 'TELEGRAM_BOT_TOKEN=[^ \t\n]+' "$HOME/.zeroclaw/.env" 2>/dev/null | cut -d= -f2-)"
           if [ -n "$TOKEN" ]; then
-            curl -s "https://api.telegram.org/bot\${TOKEN}/deleteWebhook?drop_pending_updates=true" >/dev/null 2>&1 || true
+            curl -s "https://api.telegram.org/bot${TOKEN}/deleteWebhook?drop_pending_updates=true" >/dev/null 2>&1 || true
           fi
-        `);
+        `, { pool: false, timeoutMs: 15000 });
       }
+
       // restart gateway
       const g = await gwCtl('restart');
-      return NextResponse.json({ success: g.ok, restarted: g.ok, startMethod: g.ok ? 'process' : null, error: g.ok ? null : (g.out || 'gateway did not start after reconfigure'), log });
+      return NextResponse.json({ success: g.ok, restarted: g.ok, startMethod: g.ok ? 'process' : null, error: g.ok ? null : (g.out || 'gateway did not start after reconfigure — check logs tab'), log });
     }
 
     if (action === 'save-config') {
