@@ -435,26 +435,28 @@ if os.path.exists(p):
         fi
       `, { pool: false, timeoutMs: 15000 });
 
-      // 3. Daemon — register via `zeroclaw service install`, then start.
-      const sysd = p('SYSTEMD') === '1';
-      await run('register service', `${ENVX}; ${JSON.stringify(zcBin)} service install --service-init systemd 2>&1 || ${JSON.stringify(zcBin)} service install 2>&1 || true`, { timeoutMs: 60000 });
+      // 3. Daemon — register via `zeroclaw service install` only if systemd is PID 1
+      const hasInit = p('INITD') === '1';
+      if (hasInit) {
+        await run('register service', `${ENVX}; ${JSON.stringify(zcBin)} service install 2>&1 | tail -3 || true`, { timeoutMs: 60000 });
+      } else {
+        log.push('$ register service — skipped (using background nohup daemon mode)');
+      }
       const gw = await gwCtl('start');
-      const startMethod = gw.ok ? (p('INITD') === '1' ? 'systemd-user' : 'service/nohup') : 'manual';
-      await run('start daemon', `echo GW_${gw.ok ? 'UP' : 'DEFERRED'}${gw.ok ? '' : `\n${(gw.out || '').slice(0, 300)}`}`);
+      const startMethod = gw.ok ? (hasInit ? 'systemd-user' : 'service/nohup') : 'manual';
+      if (gw.ok) {
+        await run('start daemon', `echo GW_UP`);
+      } else {
+        log.push('$ start daemon — deferred: no LLM API key configured yet. Add your API key and bot token in the Environment tab, then click Restart.');
+      }
 
       const readRunning = async () => {
         const v = await execCommand(sshConfig, STATUS_SCRIPT, { pool: false, timeoutMs: 60000 });
         const vp = (k) => (v.stdout || '').match(new RegExp(`${k}=(.*)`))?.[1]?.trim();
         return vp('USVC') === '1' || vp('SSVC') === '1' || vp('PROC') === '1';
       };
-      await new Promise(r => setTimeout(r, 5000));
-      let running = await readRunning();
-      if (!running) {
-        const retry = await gwCtl('start');
-        await run('retry start daemon', `echo GW_${retry.ok ? 'UP' : 'DOWN'}${retry.ok ? '' : `\n${(retry.out || '').slice(0, 300)}`}`, { timeoutMs: 120000 });
-        await new Promise(r => setTimeout(r, 5000));
-        running = await readRunning();
-      }
+      await new Promise(r => setTimeout(r, 2000));
+      const running = await readRunning();
 
       // Binary installed = success even if daemon won't start (no API key yet is expected on fresh install)
       return NextResponse.json({
