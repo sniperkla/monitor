@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { X, Send, Loader2, Bot, Box, Server as ServerIcon, MonitorCog, CheckCircle2, XCircle, Trash2, Settings2, Zap, ExternalLink } from 'lucide-react';
 import ThemeSelect from '@/components/common/ThemeSelect';
 
@@ -237,8 +237,16 @@ export default function HermesAgentWizard({ isOpen, onClose, connections = [], s
     }
   }, [isOpen, loadStatus, agentApi]);
 
+  // Reset when the selected server or agent changes. NOTE: depend on a stable
+  // connection-id signature, NOT the `connections` array identity — parents
+  // may re-create the array on every render (health/heartbeat polling causes
+  // frequent re-renders), which previously wiped typed-in tokens/keys every
+  // few seconds while the one-click install modal was open.
+  const connectionsRef = useRef(connections);
+  useEffect(() => { connectionsRef.current = connections; }, [connections]);
+  const connectionKey = connections.map(c => c._id).join('|');
   useEffect(() => {
-    setTarget(selectedId || connections[0]?._id || '');
+    setTarget(selectedId || connectionsRef.current[0]?._id || '');
     setStatus(null);
     setLog([]);
     setDone(null);
@@ -250,7 +258,7 @@ export default function HermesAgentWizard({ isOpen, onClose, connections = [], s
     setAllowedIds('');
     setAdvEnv('');
     setAdvSettings('');
-  }, [selectedId, connections, agent.id]);
+  }, [selectedId, connectionKey, agent.id]);
 
   const buildPayload = () => {
     const base = mode === 'advanced' ? buildAdvancedPayload() : buildEasyPayload();

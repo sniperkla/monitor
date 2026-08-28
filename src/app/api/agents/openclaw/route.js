@@ -490,7 +490,7 @@ if [ -n "$LOGL" ]; then
   if tail -n 300 "$LOGL" | grep -qiE 'telegram.*(bot.*connected|polling mode|channel enabled|connected)'; then
     TG=connected
   fi
-  if tail -n 50 "$LOGL" | grep -qiE 'telegram.*(invalid token|unauthorized|failed to connect|login error|connection rejected)'; then
+  if tail -n 50 "$LOGL" | grep -qiE 'telegram.*(invalid token|unauthorized|failed to connect|login error|connection rejected|conflict|isolated polling|polling error)'; then
     TG=error
   fi
 fi
@@ -580,17 +580,41 @@ echo "TG=$TG"
       }
 
       const targetModel = (hasSettings && (settings.model || settings.default_model)) || env.MODEL || env.OPENCLAW_MODEL || env.DEFAULT_MODEL || '';
-      if (targetModel) {
-        const setB64 = b64(JSON.stringify({ model: targetModel }));
+      if (targetModel || env.TELEGRAM_BOT_TOKEN) {
+        // OpenClaw 2026.x native schema (from `openclaw config schema`):
+        //   - default model -> [agents.defaults].model   (root defaultModel/model keys are INVALID)
+        //   - telegram -> [channels.telegram]: enabled, botToken, allowFrom, dmPolicy
+        const ocPatch = {};
+        if (env.TELEGRAM_BOT_TOKEN) {
+          const allowFrom = String(env.TELEGRAM_ALLOWED_USERS || '').split(',').map(s => s.trim()).filter(Boolean);
+          ocPatch.channels = {
+            telegram: {
+              enabled: true,
+              botToken: env.TELEGRAM_BOT_TOKEN,
+              dmPolicy: 'allowlist',
+              ...(allowFrom.length ? { allowFrom } : {}),
+            },
+          };
+        }
+        if (targetModel) {
+          ocPatch.agents = { defaults: { model: targetModel } };
+        }
+        const setB64 = b64(JSON.stringify(ocPatch));
         await run('merge ~/.openclaw/openclaw.json settings', `
           python3 -c "
 import json, os, base64
 p = os.path.expanduser('~/.openclaw/openclaw.json')
 cur = json.load(open(p)) if os.path.exists(p) else {}
 s = json.loads(base64.b64decode('${setB64}').decode('utf8'))
-if 'model' in s:
-    cur['defaultModel'] = s['model']
-    cur['model'] = s['model']
+# strip legacy root keys written by older monitor versions - they make the
+# whole config fail schema validation ('<root>: Invalid input')
+cur.pop('defaultModel', None)
+cur.pop('model', None)
+def dm(a, b):
+    for k, v in b.items():
+        if isinstance(v, dict) and isinstance(a.get(k), dict): dm(a[k], v)
+        else: a[k] = v
+dm(cur, s)
 json.dump(cur, open(p, 'w'), indent=2)
 print('OPENCLAW_CONFIG_MERGED')
 " 2>/dev/null || true`);

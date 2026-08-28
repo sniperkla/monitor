@@ -256,7 +256,7 @@ echo "===PROMPT_B64==="
 echo "===SOUL_B64==="
 { base64 < "$HOME/.hermes/SOUL.md" || base64 < "$HOME/.hermes/IDENTITY.md"; } 2>/dev/null || true
 echo "===USER_B64==="
-base64 < "$HOME/.hermes/USER.md" 2>/dev/null || true
+{ base64 < "$HOME/.hermes/USER.md" || base64 < "$HOME/.hermes/memories/USER.md"; } 2>/dev/null || true
 echo "===AGENTS_B64==="
 base64 < "$HOME/.hermes/AGENTS.md" 2>/dev/null || true
 echo "===MEMORY_B64==="
@@ -344,7 +344,7 @@ echo "$MDL"
       if (fileName === 'SOUL.md' || fileName === 'IDENTITY.md') {
         SCRIPT += `echo "${b64}" | base64 -d > "$HOME/.hermes/SOUL.md"\necho "${b64}" | base64 -d > "$HOME/.hermes/IDENTITY.md"\n`;
       } else if (fileName === 'USER.md') {
-        SCRIPT += `echo "${b64}" | base64 -d > "$HOME/.hermes/USER.md"\n`;
+        SCRIPT += `echo "${b64}" | base64 -d > "$HOME/.hermes/USER.md"\necho "${b64}" | base64 -d > "$HOME/.hermes/memories/USER.md"\n`;
       } else if (fileName === 'AGENTS.md') {
         SCRIPT += `echo "${b64}" | base64 -d > "$HOME/.hermes/AGENTS.md"\n`;
       } else if (fileName === 'MEMORY.md') {
@@ -488,7 +488,7 @@ PY`, { timeoutMs: 30000 });
       const LINES = Math.min(Number(config.lines || 300), 1000);
       const script = `
 ACTIVE=""
-for f in "$HOME/.hermes/logs/gatew""ay-nohup.log" "$HOME/.hermes/logs/gatew""ay.log" "$HOME/.hermes-docker/logs/gatew""ay-nohup.log" "$HOME/.hermes-docker/logs/gatew""ay.log"; do
+for f in "$HOME/.hermes/logs/gatew""ay.log" "$HOME/.hermes/logs/gatew""ay-nohup.log" "$HOME/.hermes-docker/logs/gatew""ay.log" "$HOME/.hermes-docker/logs/gatew""ay-nohup.log"; do
   if [ -f "$f" ] && [ -s "$f" ]; then ACTIVE="$f"; break; fi
 done
 if [ -z "$ACTIVE" ]; then echo "SIZE=0"; echo "===DATA==="; exit 0; fi
@@ -527,14 +527,14 @@ UP=0; [ -n "$PID" ] && UP=$(ps -o etimes= -p "$PID" 2>/dev/null | tr -d ' ')
 echo "UPTIME_SEC=$UP"
 TG=unknown
 LOGL=""
-for f in "$HOME/.hermes/logs/gatew""ay-nohup.log" "$HOME/.hermes/logs/gatew""ay.log" "$HOME/.hermes-docker/logs/gatew""ay-nohup.log" "$HOME/.hermes-docker/logs/gatew""ay.log"; do
+for f in "$HOME/.hermes/logs/gatew""ay.log" "$HOME/.hermes/logs/gatew""ay-nohup.log" "$HOME/.hermes-docker/logs/gatew""ay.log" "$HOME/.hermes-docker/logs/gatew""ay-nohup.log"; do
   [ -f "$f" ] && [ -s "$f" ] && LOGL="$f" && break
 done
 if [ -n "$LOGL" ]; then
-  if tail -n 400 "$LOGL" | grep -qiE 'telegram.*(bot.*connected|polling mode|channel enabled|connected)'; then
+  if tail -n 400 "$LOGL" | grep -qiE 'telegram.*(bot.*connected|polling mode|channel enabled|connected|sending)'; then
     TG=connected
   fi
-  if tail -n 50 "$LOGL" | grep -qiE 'telegram.*(invalid token|unauthorized|failed to connect|login error|connection rejected)'; then
+  if tail -n 50 "$LOGL" | grep -qiE 'telegram.*(invalid token|unauthorized|failed to connect|login error|connection rejected|conflict|isolated polling|polling error)'; then
     TG=error
   fi
   echo "TG=$TG"

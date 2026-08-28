@@ -26,10 +26,11 @@ import assert from 'node:assert/strict';
 // Unlike the real implementation, the test version has a bounded
 // `maxTicks` cap so it always terminates — the real version has a
 // 20-minute deadline for the same reason.
-function makeCallLive({ fetchJob, noProgressWarnMs = 90_000, tickMs = 5, maxTicks = 200 }) {
+function makeCallLive({ fetchJob, noProgressWarnMs = 90_000, tickMs = 5, maxTicks = 200, maxUnknownRetries = 5 }) {
   const lines = [];
   let lastProgressAt = Date.now();
   let tickCount = 0;
+  let unknownJobRetries = 0;
 
   const callLive = async (jobId) => {
     let cursor = 0;
@@ -43,6 +44,17 @@ function makeCallLive({ fetchJob, noProgressWarnMs = 90_000, tickMs = 5, maxTick
       }
       cursor = upd?.cursor ?? cursor;
       if (upd?.done) return { done: true, result: upd.result, lines };
+      // Lost-job handling: the server lost the in-memory job (dev HMR /
+      // restart). Retry a few times, then fail loudly instead of silently
+      // polling until the deadline with the busy banner stuck on screen.
+      if (upd?.error && /Unknown or expired job/i.test(upd.error)) {
+        unknownJobRetries += 1;
+        if (unknownJobRetries > maxUnknownRetries) {
+          throw new Error('Lost track of the action on the server (it may have reloaded). The gateway op likely completed — check the status on the Overview tab.');
+        }
+        continue;
+      }
+      if (upd?.error) throw new Error(upd.error);
       // Stuck detection
       if (Date.now() - lastProgressAt > noProgressWarnMs) {
         lines.push(`\n⚠ No new output for ${Math.round((Date.now() - lastProgressAt) / 1000)}s — the server may be stuck.\n`);
@@ -131,4 +143,90 @@ test('normal progress resets the stuck timer', async () => {
   assert.equal(warns.length, 0, 'no stuck-warning when progress is continuous');
   assert.equal(getLines().filter(l => l.startsWith('step')).length, 10);
 });
+
+// ── Regression: "Gateway restart…" busy banner stuck after job is lost ──────
+//
+// The server keeps live-action jobs in an in-memory Map. When the Next.js
+// server reloads (dev HMR) or restarts mid-action, every poll returns
+// { success:false, error:'Unknown or expired job' } with NO done flag. The
+// old client ignored upd.error entirely and polled until the 20-minute
+// deadline — leaving the "Gateway restart…" banner stuck even though the
+// gateway had already restarted.
+
+test('a lost job fails fast with a clear error instead of polling for 20 minutes', async () => {
+  let polls = 0;
+  const { callLive } = makeCallLive({
+    fetchJob: async () => {
+      polls += 1;
+      return { success: false, error: 'Unknown or expired job' };
+    },
+    tickMs: 2,
+    maxTicks: 500, // would run the full "20 minutes" if the bug regressed
+    maxUnknownRetries: 5,
+  });
+  await assert.rejects(
+    () => callLive('job_lost'),
+    /Lost track of the action on the server/,
+  );
+  // 1 warm-up + 6 tolerated polls → must give up right after the retry cap,
+  // not burn through maxTicks.
+  assert.ok(polls <= 10, `callLive must stop polling after the retry cap, polled ${polls} times`);
+});
+
+test('transient unknown-job responses are retried and the action still completes', async () => {
+  // e.g. the route hot-reloaded between the start call and the first poll;
+  // a couple of retries then the job store is warm again.
+  let polls = 0;
+  const { callLive, getLines } = makeCallLive({
+    fetchJob: async () => {
+      polls += 1;
+      if (polls <= 2) return { success: false, error: 'Unknown or expired job' };
+      if (polls <= 4) return { done: false, lines: [`$ restarting gateway (${polls})`], cursor: polls - 2 };
+      return { done: true, lines: ['GW_UP'], cursor: 3, result: { success: true, active: true } };
+    },
+    tickMs: 2,
+    maxUnknownRetries: 5,
+  });
+  const r = await callLive('job_flappy');
+  assert.equal(r.done, true);
+  assert.equal(r.result.success, true);
+  assert.deepEqual(getLines(), ['$ restarting gateway (3)', '$ restarting gateway (4)', 'GW_UP']);
+});
+
+test('other server errors surface immediately instead of polling silently', async () => {
+  const { callLive } = makeCallLive({
+    fetchJob: async () => ({ success: false, error: 'ssh: connection refused' }),
+    tickMs: 2,
+    maxTicks: 100,
+  });
+  await assert.rejects(() => callLive('job_err'), /ssh: connection refused/);
+});
+
+// ── Regression: busyMsg must not be resurrected after callAction settles ────
+//
+// callAction's onLine callback re-set busyMsg on every streamed line. The
+// 90s "no progress" warning emitted by callLive therefore brought the
+// banner back even after the 60s safety timeout had cleared it. The fix
+// guards setBusyMsg with a `settled` flag.
+
+test('onLine cannot resurrect busyMsg once callAction has settled', () => {
+  function makeCallActionGuard() {
+    let settled = false;
+    let busyMsg = '';
+    const setBusyMsg = (v) => { if (!settled) busyMsg = v; };
+    const onLine = (last) => { if (!settled) setBusyMsg(`Gateway restart — ${last.slice(0, 80)}`); };
+    return {
+      onLine,
+      settle: () => { settled = true; busyMsg = ''; },
+      getBusyMsg: () => busyMsg,
+    };
+  }
+  const g = makeCallActionGuard();
+  g.onLine('restarting…');
+  assert.equal(g.getBusyMsg(), 'Gateway restart — restarting…', 'banner updates while the action is running');
+  g.settle(); // 60s safety timeout or completion
+  g.onLine('⚠ No new output for 90s'); // late stuck-warning from callLive
+  assert.equal(g.getBusyMsg(), '', 'late log line must NOT bring the banner back');
+});
+
 

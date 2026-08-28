@@ -71,7 +71,7 @@ VER=NONE
 echo "VERSION=$VER"
 CFG=0; [ -f "$HOME/.zeroclaw/config.toml" ] && CFG=1
 echo "CONFIG=$CFG"
-PROC=0; (pgrep -x zeroclaw >/dev/null 2>&1 || pgrep -f '[z]eroclaw' >/dev/null 2>&1) && PROC=1
+PROC=0; (pgrep -x zeroclaw >/dev/null 2>&1 || pgrep -x zeroclaw >/dev/null 2>&1) && PROC=1
 USVC=0; command -v systemctl >/dev/null 2>&1 && systemctl --user is-active zeroclaw 2>/dev/null | grep -qx active && USVC=1
 SSVC=0; command -v systemctl >/dev/null 2>&1 && systemctl is-active zeroclaw 2>/dev/null | grep -qx active && SSVC=1
 PORT=0; (command -v ss >/dev/null 2>&1 && ss -ltn 2>/dev/null | grep -q 42617 || command -v netstat >/dev/null 2>&1 && netstat -ltn 2>/dev/null | grep -q 42617) && PORT=1
@@ -129,13 +129,13 @@ async function handleAgentAction(body, session, log = []) {
       const BP = JSON.stringify(bp);
       if (op === 'status') {
         const r = await execCommand(sshConfig,
-          `${ENVX}; systemctl --user is-active zeroclaw 2>/dev/null | grep -qx active && echo SVC_ACTIVE || { (pgrep -x zeroclaw >/dev/null 2>&1 || pgrep -f '[z]eroclaw' >/dev/null 2>&1) && echo PROC_ACTIVE || echo NO_PROC; }`,
+          `${ENVX}; systemctl --user is-active zeroclaw 2>/dev/null | grep -qx active && echo SVC_ACTIVE || { (pgrep -x zeroclaw >/dev/null 2>&1 || pgrep -x zeroclaw >/dev/null 2>&1) && echo PROC_ACTIVE || echo NO_PROC; }`,
           { pool: false, timeoutMs: 30000 });
         return { ok: true, active: /SVC_ACTIVE|PROC_ACTIVE/.test(r.stdout || '') };
       }
       if (op === 'stop') {
         return execCommand(sshConfig,
-          `${ENVX}; ${BP} service stop 2>/dev/null; systemctl --user stop zeroclaw 2>/dev/null; pkill -9 -f '[z]eroclaw' 2>/dev/null || true; echo GW_STOPPED`,
+          `${ENVX}; ${BP} service stop 2>/dev/null; systemctl --user stop zeroclaw 2>/dev/null; pkill -9 -x zeroclaw 2>/dev/null || true; echo GW_STOPPED`,
           { pool: false, timeoutMs: 60000 }).then(r => ({ ok: /GW_STOPPED/.test(r.stdout || ''), out: ((r.stdout || '') + (r.stderr || '')).slice(-400) }));
       }
       // start / restart — never write the plain word "daemon" here (self-match)
@@ -144,7 +144,7 @@ async function handleAgentAction(body, session, log = []) {
         mkdir -p "$HOME/.zeroclaw/logs" "$HOME/.config/systemd/user"
         ${ENVX}; set -a; [ -f "$HOME/.zeroclaw/.env" ] && . "$HOME/.zeroclaw/.env"; set +a
         systemctl --user stop zeroclaw 2>/dev/null || true
-        pkill -9 -f '[z]eroclaw' 2>/dev/null || true
+        pkill -9 -x zeroclaw 2>/dev/null || true
         sleep 1
         # Enable lingering on Fedora / RHEL so user systemd stays active after SSH disconnects
         loginctl enable-linger $(whoami) 2>/dev/null || sudo -n loginctl enable-linger $(whoami) 2>/dev/null || true
@@ -180,15 +180,15 @@ EOF
         fi
 
         # 2. Nohup fallback if systemd user unit is not running
-        if [ -z "$STARTED_VIA" ] && ! pgrep -x zeroclaw >/dev/null 2>&1 && ! pgrep -f '[z]eroclaw' >/dev/null 2>&1; then
+        if [ -z "$STARTED_VIA" ] && ! pgrep -x zeroclaw >/dev/null 2>&1 && ! pgrep -x zeroclaw >/dev/null 2>&1; then
           setsid env -i HOME="$HOME" PATH="$PATH" sh -c 'set -a; [ -f "$HOME/.zeroclaw/.env" ] && . "$HOME/.zeroclaw/.env"; set +a; exec '"${BP}"' dae""mon' >> "$HOME/.zeroclaw/logs/daemon.log" 2>&1 < /dev/null &
           sleep 3
-          if pgrep -x zeroclaw >/dev/null 2>&1 || pgrep -f '[z]eroclaw' >/dev/null 2>&1; then
+          if pgrep -x zeroclaw >/dev/null 2>&1 || pgrep -x zeroclaw >/dev/null 2>&1; then
             STARTED_VIA="nohup"
           fi
         fi
 
-        if (systemctl --user is-active zeroclaw 2>/dev/null | grep -qx active) || pgrep -x zeroclaw >/dev/null 2>&1 || pgrep -f '[z]eroclaw' >/dev/null 2>&1; then
+        if (systemctl --user is-active zeroclaw 2>/dev/null | grep -qx active) || pgrep -x zeroclaw >/dev/null 2>&1 || pgrep -x zeroclaw >/dev/null 2>&1; then
           echo "GW_UP ($STARTED_VIA)"
         else
           echo "GW_DOWN"
@@ -238,7 +238,7 @@ base64 < "$HOME/.zeroclaw/config.toml" 2>/dev/null || true
 echo "===RUNNING==="
 USVC=0; command -v systemctl >/dev/null 2>&1 && systemctl --user is-active zeroclaw 2>/dev/null | grep -qx active && USVC=1
 SSVC=0; command -v systemctl >/dev/null 2>&1 && systemctl is-active zeroclaw 2>/dev/null | grep -qx active && SSVC=1
-PROC=0; (pgrep -x zeroclaw >/dev/null 2>&1 || pgrep -f '[z]eroclaw' >/dev/null 2>&1) && PROC=1
+PROC=0; (pgrep -x zeroclaw >/dev/null 2>&1 || pgrep -x zeroclaw >/dev/null 2>&1) && PROC=1
 echo "USVC=$USVC"; echo "SSVC=$SSVC"; echo "PROC=$PROC"
 echo "===VERSION==="
 [ -n "$BIN" ] && "$BIN" --version 2>/dev/null | head -1 | cut -c1-40
@@ -251,15 +251,15 @@ echo "===SKILLS==="
 [ -d "$HOME/.zeroclaw/workspace/skills" ] && ls -1 "$HOME/.zeroclaw/workspace/skills" 2>/dev/null | grep -v '^\.' || true
 [ -d "$HOME/.zeroclaw/sop" ] && ls -1 "$HOME/.zeroclaw/sop" 2>/dev/null | grep -v '^\.' | sed 's/\.md$//' || true
 echo "===PROMPT_B64==="
-{ base64 < "$HOME/.zeroclaw/workspace/PROMPT.md" || base64 < "$HOME/.zeroclaw/prompt.txt" || base64 < "$HOME/.zeroclaw/SYSTEM_PROMPT.md"; } 2>/dev/null || true
+{ base64 < "$HOME/.zeroclaw/data/PROMPT.md" || base64 < "$HOME/.zeroclaw/workspace/PROMPT.md" || base64 < "$HOME/.zeroclaw/prompt.txt" || base64 < "$HOME/.zeroclaw/SYSTEM_PROMPT.md"; } 2>/dev/null || true
 echo "===SOUL_B64==="
-{ base64 < "$HOME/.zeroclaw/workspace/SOUL.md" || base64 < "$HOME/.zeroclaw/workspace/IDENTITY.md"; } 2>/dev/null || true
+{ base64 < "$HOME/.zeroclaw/data/SOUL.md" || base64 < "$HOME/.zeroclaw/workspace/SOUL.md" || base64 < "$HOME/.zeroclaw/data/IDENTITY.md" || base64 < "$HOME/.zeroclaw/workspace/IDENTITY.md"; } 2>/dev/null || true
 echo "===USER_B64==="
-base64 < "$HOME/.zeroclaw/workspace/USER.md" 2>/dev/null || true
+{ base64 < "$HOME/.zeroclaw/data/USER.md" || base64 < "$HOME/.zeroclaw/workspace/USER.md"; } 2>/dev/null || true
 echo "===AGENTS_B64==="
-base64 < "$HOME/.zeroclaw/workspace/AGENTS.md" 2>/dev/null || true
+{ base64 < "$HOME/.zeroclaw/data/AGENTS.md" || base64 < "$HOME/.zeroclaw/workspace/AGENTS.md"; } 2>/dev/null || true
 echo "===MEMORY_B64==="
-{ base64 < "$HOME/.zeroclaw/workspace/MEMORY.md" || base64 < "$HOME/.zeroclaw/workspace/memory/MEMORY.md"; } 2>/dev/null || true
+{ base64 < "$HOME/.zeroclaw/data/MEMORY.md" || base64 < "$HOME/.zeroclaw/workspace/MEMORY.md" || base64 < "$HOME/.zeroclaw/workspace/memory/MEMORY.md"; } 2>/dev/null || true
 echo "===ENV_B64==="
 base64 < "$HOME/.zeroclaw/.env" 2>/dev/null || true
 echo "===ENVKEYS==="
@@ -323,17 +323,18 @@ echo "===ENVKEYS==="
       const promptText = String(config.prompt || '');
       const fileName = config.file || 'PROMPT.md';
       const b64 = Buffer.from(promptText, 'utf8').toString('base64');
-      let SCRIPT = `mkdir -p "$HOME/.zeroclaw/workspace"\n`;
+      let SCRIPT = `mkdir -p "$HOME/.zeroclaw/data" "$HOME/.zeroclaw/workspace"\n`;
+      SCRIPT += `for f in PROMPT.md SOUL.md IDENTITY.md USER.md AGENTS.md MEMORY.md; do [ -f "$HOME/.zeroclaw/data/$f" ] || [ ! -f "$HOME/.zeroclaw/workspace/$f" ] || cp "$HOME/.zeroclaw/workspace/$f" "$HOME/.zeroclaw/data/$f"; done\n`;
       if (fileName === 'SOUL.md' || fileName === 'IDENTITY.md') {
-        SCRIPT += `echo "${b64}" | base64 -d > "$HOME/.zeroclaw/workspace/SOUL.md"\necho "${b64}" | base64 -d > "$HOME/.zeroclaw/workspace/IDENTITY.md"\n`;
+        SCRIPT += `echo "${b64}" | base64 -d > "$HOME/.zeroclaw/data/SOUL.md"\necho "${b64}" | base64 -d > "$HOME/.zeroclaw/data/IDENTITY.md"\n`;
       } else if (fileName === 'USER.md') {
-        SCRIPT += `echo "${b64}" | base64 -d > "$HOME/.zeroclaw/workspace/USER.md"\n`;
+        SCRIPT += `echo "${b64}" | base64 -d > "$HOME/.zeroclaw/data/USER.md"\n`;
       } else if (fileName === 'AGENTS.md') {
-        SCRIPT += `echo "${b64}" | base64 -d > "$HOME/.zeroclaw/workspace/AGENTS.md"\n`;
+        SCRIPT += `echo "${b64}" | base64 -d > "$HOME/.zeroclaw/data/AGENTS.md"\n`;
       } else if (fileName === 'MEMORY.md') {
-        SCRIPT += `echo "${b64}" | base64 -d > "$HOME/.zeroclaw/workspace/MEMORY.md"\n`;
+        SCRIPT += `echo "${b64}" | base64 -d > "$HOME/.zeroclaw/data/MEMORY.md"\n`;
       } else {
-        SCRIPT += `echo "${b64}" | base64 -d > "$HOME/.zeroclaw/workspace/PROMPT.md"\necho "${b64}" | base64 -d > "$HOME/.zeroclaw/prompt.txt"\necho "${b64}" | base64 -d > "$HOME/.zeroclaw/SYSTEM_PROMPT.md"\n`;
+        SCRIPT += `echo "${b64}" | base64 -d > "$HOME/.zeroclaw/data/PROMPT.md"\necho "${b64}" | base64 -d > "$HOME/.zeroclaw/prompt.txt"\necho "${b64}" | base64 -d > "$HOME/.zeroclaw/SYSTEM_PROMPT.md"\n`;
       }
       await execCommand(sshConfig, SCRIPT, { pool: false, timeoutMs: 30000 });
       if (config.restart !== false) {
@@ -475,45 +476,71 @@ if os.path.exists(p):
         const setB64 = b64(JSON.stringify(settings));
         const envB64 = b64(JSON.stringify(env));
         const cfgPy = [
-          'import json, os, re, base64',
+          'import os, re, base64, json',
           `s = json.loads(base64.b64decode('${setB64}').decode('utf-8'))`,
           `e = json.loads(base64.b64decode('${envB64}').decode('utf-8'))`,
           `p = os.path.expanduser('~/.zeroclaw/config.toml')`,
           `os.makedirs(os.path.dirname(p), exist_ok=True)`,
           `text = open(p).read() if os.path.exists(p) else ''`,
-          // model
-          `m = (s.get('model') or s.get('default_model') or e.get('MODEL') or e.get('ZEROCLAW_MODEL') or e.get('DEFAULT_MODEL') or '')`,
-          `if m:`,
-          `    if re.search(r'^(model|default_model)\\s*=', text, re.M):`,
-          `        text = re.sub(r'^(model|default_model)\\s*=.*$', 'model = "' + m + '"', text, flags=re.M)`,
-          `    else:`,
-          `        text = 'model = "' + m + '"\n' + text`,
-          // api_key
-          `api_key = (e.get('OPENROUTER_API_KEY') or e.get('OPENAI_API_KEY') or e.get('ANTHROPIC_API_KEY') or e.get('API_KEY') or s.get('api_key') or '')`,
-          `if api_key:`,
-          `    if re.search(r'^\\s*api_key\\s*=', text, re.M):`,
-          `        text = re.sub(r'^\\s*api_key\\s*=.*$', 'api_key = "' + api_key + '"', text, flags=re.M)`,
-          `    else:`,
-          `        text = 'api_key = "' + api_key + '"\n' + text`,
-          // telegram
-          `tg_token = (e.get('TELEGRAM_BOT_TOKEN') or s.get('telegram_token') or s.get('telegram.bot_token') or '')`,
-          `tg_allowed_raw = (e.get('TELEGRAM_ALLOWED_USERS') or s.get('telegram.allowed_users') or s.get('telegram_allowed_users') or '')`,
-          `if tg_token:`,
-          `    ids = [x.strip() for x in str(tg_allowed_raw).split(',') if x.strip()] if tg_allowed_raw else ['*']`,
-          `    ids_toml = json.dumps(ids)`,
-          `    new_tg_sec = f'[channels_config.telegram]\\nbot_token = "{tg_token}"\\nallowed_users = {ids_toml}\\n'`,
-          `    if '[channels_config.telegram]' in text:`,
-          `        text = re.sub(r'\\[channels_config\\.telegram\\][\\s\\S]*?(?=\\n\\[|$)', new_tg_sec, text)`,
-          `    elif '[telegram]' in text:`,
-          `        text = re.sub(r'\\[telegram\\][\\s\\S]*?(?=\\n\\[|$)', new_tg_sec, text)`,
-          `    else:`,
-          `        text = text.rstrip('\\n') + '\\n\\n' + new_tg_sec`,
-          `elif '[channels_config.telegram]' in text and not re.search(r'bot_token\\s*=\\s*"[^"]+"', text):`,
-          `    text = re.sub(r'\\[channels_config\\.telegram\\][\\s\\S]*?(?=\\n\\[|$)', '', text)`,
-          // ensure schema_version
+          `NL = chr(10)`,
+          `def drop(content, header_pat):`,
+          `    while True:`,
+          `        out, skipping, removed = [], False, False`,
+          `        for ln in content.split(NL):`,
+          `            if re.fullmatch(header_pat, ln.strip()):`,
+          `                skipping = True`,
+          `                removed = True`,
+          `                continue`,
+          `            if skipping and ln.startswith('['):`,
+          `                skipping = False`,
+          `            if not skipping:`,
+          `                out.append(ln)`,
+          `        content = NL.join(out)`,
+          `        if not removed:`,
+          `            return content`,
+          `# strip legacy top-level keys — 0.8.x ignores them (provider lives under [providers.models.*])`,
+          `pre = text.find(NL + '[')`,
+          `head, tail = (text, '') if pre < 0 else (text[:pre + 1], text[pre + 1:])`,
+          `head = re.sub(r'(?m)^(api_key|model|default_model)[ \\t]*=.*$', '', head)`,
+          `text = head + tail`,
+          `# strip legacy/malformed channel sections (pre-0.8 schema)`,
+          `text = drop(text, r'\\[channels_config\\.telegram\]')`,
+          `text = drop(text, r'\\[channels_config\]')`,
+          `text = drop(text, r'\\[channels\\.telegram\]')`,
+          `# model provider profile — ZeroClaw 0.8+ native schema`,
+          `prov = None`,
+          `key = ''`,
+          `if e.get('OPENROUTER_API_KEY'):`,
+          `    prov = 'openrouter'`,
+          `elif e.get('OPENAI_API_KEY'):`,
+          `    prov = 'openai'`,
+          `elif e.get('ANTHROPIC_API_KEY'):`,
+          `    prov = 'anthropic'`,
+          `if prov:`,
+          `    key = e.get(prov.upper() + '_API_KEY') or e.get('API_KEY') or s.get('api_key') or ''`,
+          `    model = (s.get('model') or s.get('default_model') or e.get('MODEL') or e.get('ZEROCLAW_MODEL') or e.get('DEFAULT_MODEL') or '')`,
+          `    if key:`,
+          `        header = '[providers.models.' + prov + '.default]'`,
+          `        text = drop(text, re.escape(header))`,
+          `        block = header + NL + 'api_key = "' + key + '"'`,
+          `        if model:`,
+          `            block += NL + 'model = "' + model + '"'`,
+          `        text = text.rstrip(NL) + NL + NL + block + NL`,
+          `# telegram channel alias — user access is granted via 'zeroclaw channel bind-telegram <id>'`,
+          `tok = e.get('TELEGRAM_BOT_TOKEN') or s.get('telegram_token') or ''`,
+          `if tok:`,
+          `    text = drop(text, r'\\[channels\\.telegram\\.[^\\]]+\]')`,
+          `    block = '[channels.telegram.default]' + NL + 'enabled = true' + NL + 'bot_token = "' + tok + '"' + NL`,
+          `    text = text.rstrip(NL) + NL + NL + block`,
+          `# agent binding — 0.8+ channels only poll for an ENABLED agent bound to a channel`,
+          `if tok and prov and key:`,
+          `    text = drop(text, re.escape('[agents.default]'))`,
+          `    text = drop(text, re.escape('[risk_profiles.personal.default]'))`,
+          `    agent = '[agents.default]' + NL + 'enabled = true' + NL + 'model_provider = "' + prov + '.default"' + NL + 'channels = ["telegram.default"]' + NL + 'risk_profile = "personal"' + NL`,
+          `    text = text.rstrip(NL) + NL + NL + '[risk_profiles.personal.default]' + NL + 'level = "supervised"' + NL + NL + agent`,
           `if 'schema_version' not in text:`,
-          `    text = 'schema_version = 3\n' + text`,
-          `open(p, 'w').write(text.strip() + '\n')`,
+          `    text = 'schema_version = 3' + NL + text`,
+          `open(p, 'w').write(text.strip(NL) + NL)`,
           `print('ZEROCLAW_CONFIG_MERGED')`,
         ].join('\n');
         await run('merge ~/.zeroclaw/config.toml', `echo '${b64(cfgPy)}' | base64 -d | python3 2>&1`, { timeoutMs: 30000 });
@@ -638,45 +665,71 @@ if os.path.exists(p):
         const setB64 = b64(JSON.stringify(settings));
         const envB64 = b64(JSON.stringify(env));
         const cfgPy = [
-          'import json, os, re, base64',
+          'import os, re, base64, json',
           `s = json.loads(base64.b64decode('${setB64}').decode('utf-8'))`,
           `e = json.loads(base64.b64decode('${envB64}').decode('utf-8'))`,
           `p = os.path.expanduser('~/.zeroclaw/config.toml')`,
           `os.makedirs(os.path.dirname(p), exist_ok=True)`,
           `text = open(p).read() if os.path.exists(p) else ''`,
-          // model
-          `m = (s.get('model') or s.get('default_model') or e.get('MODEL') or e.get('ZEROCLAW_MODEL') or e.get('DEFAULT_MODEL') or '')`,
-          `if m:`,
-          `    if re.search(r'^(model|default_model)\\s*=', text, re.M):`,
-          `        text = re.sub(r'^(model|default_model)\\s*=.*$', 'model = "' + m + '"', text, flags=re.M)`,
-          `    else:`,
-          `        text = 'model = "' + m + '"\n' + text`,
-          // api_key
-          `api_key = (e.get('OPENROUTER_API_KEY') or e.get('OPENAI_API_KEY') or e.get('ANTHROPIC_API_KEY') or e.get('API_KEY') or s.get('api_key') or '')`,
-          `if api_key:`,
-          `    if re.search(r'^\\s*api_key\\s*=', text, re.M):`,
-          `        text = re.sub(r'^\\s*api_key\\s*=.*$', 'api_key = "' + api_key + '"', text, flags=re.M)`,
-          `    else:`,
-          `        text = 'api_key = "' + api_key + '"\n' + text`,
-          // telegram
-          `tg_token = (e.get('TELEGRAM_BOT_TOKEN') or s.get('telegram_token') or s.get('telegram.bot_token') or '')`,
-          `tg_allowed_raw = (e.get('TELEGRAM_ALLOWED_USERS') or s.get('telegram.allowed_users') or s.get('telegram_allowed_users') or '')`,
-          `if tg_token:`,
-          `    ids = [x.strip() for x in str(tg_allowed_raw).split(',') if x.strip()] if tg_allowed_raw else ['*']`,
-          `    ids_toml = json.dumps(ids)`,
-          `    new_tg_sec = f'[channels_config.telegram]\\nbot_token = "{tg_token}"\\nallowed_users = {ids_toml}\\n'`,
-          `    if '[channels_config.telegram]' in text:`,
-          `        text = re.sub(r'\\[channels_config\\.telegram\\][\\s\\S]*?(?=\\n\\[|$)', new_tg_sec, text)`,
-          `    elif '[telegram]' in text:`,
-          `        text = re.sub(r'\\[telegram\\][\\s\\S]*?(?=\\n\\[|$)', new_tg_sec, text)`,
-          `    else:`,
-          `        text = text.rstrip('\\n') + '\\n\\n' + new_tg_sec`,
-          `elif '[channels_config.telegram]' in text and not re.search(r'bot_token\\s*=\\s*"[^"]+"', text):`,
-          `    text = re.sub(r'\\[channels_config\\.telegram\\][\\s\\S]*?(?=\\n\\[|$)', '', text)`,
-          // ensure schema_version
+          `NL = chr(10)`,
+          `def drop(content, header_pat):`,
+          `    while True:`,
+          `        out, skipping, removed = [], False, False`,
+          `        for ln in content.split(NL):`,
+          `            if re.fullmatch(header_pat, ln.strip()):`,
+          `                skipping = True`,
+          `                removed = True`,
+          `                continue`,
+          `            if skipping and ln.startswith('['):`,
+          `                skipping = False`,
+          `            if not skipping:`,
+          `                out.append(ln)`,
+          `        content = NL.join(out)`,
+          `        if not removed:`,
+          `            return content`,
+          `# strip legacy top-level keys — 0.8.x ignores them (provider lives under [providers.models.*])`,
+          `pre = text.find(NL + '[')`,
+          `head, tail = (text, '') if pre < 0 else (text[:pre + 1], text[pre + 1:])`,
+          `head = re.sub(r'(?m)^(api_key|model|default_model)[ \\t]*=.*$', '', head)`,
+          `text = head + tail`,
+          `# strip legacy/malformed channel sections (pre-0.8 schema)`,
+          `text = drop(text, r'\\[channels_config\\.telegram\]')`,
+          `text = drop(text, r'\\[channels_config\]')`,
+          `text = drop(text, r'\\[channels\\.telegram\]')`,
+          `# model provider profile — ZeroClaw 0.8+ native schema`,
+          `prov = None`,
+          `key = ''`,
+          `if e.get('OPENROUTER_API_KEY'):`,
+          `    prov = 'openrouter'`,
+          `elif e.get('OPENAI_API_KEY'):`,
+          `    prov = 'openai'`,
+          `elif e.get('ANTHROPIC_API_KEY'):`,
+          `    prov = 'anthropic'`,
+          `if prov:`,
+          `    key = e.get(prov.upper() + '_API_KEY') or e.get('API_KEY') or s.get('api_key') or ''`,
+          `    model = (s.get('model') or s.get('default_model') or e.get('MODEL') or e.get('ZEROCLAW_MODEL') or e.get('DEFAULT_MODEL') or '')`,
+          `    if key:`,
+          `        header = '[providers.models.' + prov + '.default]'`,
+          `        text = drop(text, re.escape(header))`,
+          `        block = header + NL + 'api_key = "' + key + '"'`,
+          `        if model:`,
+          `            block += NL + 'model = "' + model + '"'`,
+          `        text = text.rstrip(NL) + NL + NL + block + NL`,
+          `# telegram channel alias — user access is granted via 'zeroclaw channel bind-telegram <id>'`,
+          `tok = e.get('TELEGRAM_BOT_TOKEN') or s.get('telegram_token') or ''`,
+          `if tok:`,
+          `    text = drop(text, r'\\[channels\\.telegram\\.[^\\]]+\]')`,
+          `    block = '[channels.telegram.default]' + NL + 'enabled = true' + NL + 'bot_token = "' + tok + '"' + NL`,
+          `    text = text.rstrip(NL) + NL + NL + block`,
+          `# agent binding — 0.8+ channels only poll for an ENABLED agent bound to a channel`,
+          `if tok and prov and key:`,
+          `    text = drop(text, re.escape('[agents.default]'))`,
+          `    text = drop(text, re.escape('[risk_profiles.personal.default]'))`,
+          `    agent = '[agents.default]' + NL + 'enabled = true' + NL + 'model_provider = "' + prov + '.default"' + NL + 'channels = ["telegram.default"]' + NL + 'risk_profile = "personal"' + NL`,
+          `    text = text.rstrip(NL) + NL + NL + '[risk_profiles.personal.default]' + NL + 'level = "supervised"' + NL + NL + agent`,
           `if 'schema_version' not in text:`,
-          `    text = 'schema_version = 3\n' + text`,
-          `open(p, 'w').write(text.strip() + '\n')`,
+          `    text = 'schema_version = 3' + NL + text`,
+          `open(p, 'w').write(text.strip(NL) + NL)`,
           `print('ZEROCLAW_CONFIG_MERGED')`,
         ].join('\n');
         const cfgPyB64 = b64(cfgPy);
@@ -687,10 +740,34 @@ if os.path.exists(p):
         await execCommand(sshConfig, `
           TOKEN="$(grep -oE 'bot_token = "[^"]+"' "$HOME/.zeroclaw/config.toml" 2>/dev/null | cut -d'"' -f2 || grep -oE 'TELEGRAM_BOT_TOKEN=[^ \t\n]+' "$HOME/.zeroclaw/.env" 2>/dev/null | cut -d= -f2-)"
           if [ -n "$TOKEN" ]; then
-            curl -s "https://api.telegram.org/bot${TOKEN}/deleteWebhook?drop_pending_updates=true" >/dev/null 2>&1 || true
+            curl -s "https://api.telegram.org/bot\${TOKEN}/deleteWebhook?drop_pending_updates=true" >/dev/null 2>&1 || true
           fi
         `, { pool: false, timeoutMs: 15000 });
       }
+
+      // Seed missing workspace persona files (SOUL.md / USER.md / MEMORY.md).
+      // ZeroClaw's bootstrap instructs the agent to read these from its
+      // workspace, but nothing creates them — so the Prompt tabs show empty
+      // and the agent has no persona to load. Only files that are MISSING
+      // are created; user content is never overwritten.
+      const seedB64 = b64(JSON.stringify({
+        'SOUL.md': '# SOUL.md\n\nPersona identity, tone of voice, and character traits for this agent.\n\n- Tone: friendly, concise, and practical\n- Style: direct answer first, short explanation after\n- When unsure, ask one clarifying question instead of guessing\n',
+        'USER.md': '# USER.md\n\n## Profile\n- Name: Admin\n- Language: English & Thai\n- Style: provide command lines first, brief explanations after\n\n## Preferences\n- Prefer safe, reversible commands\n- Confirm before any destructive operation\n',
+        'MEMORY.md': '# MEMORY.md\n\nLong-term knowledge, decisions, and lessons the agent should remember across sessions.\n\n- Append new lessons as bullet points\n- Keep entries short; one topic per bullet\n',
+      }));
+      await run('seed workspace files', `echo '${seedB64}' | base64 -d | python3 -c "
+import json, os, base64, sys
+defaults = json.loads(base64.b64decode('${seedB64}').decode('utf8'))
+ws = os.path.expanduser('~/.zeroclaw/data')
+os.makedirs(ws, exist_ok=True)
+created = []
+for name, content in defaults.items():
+    fp = os.path.join(ws, name)
+    if not os.path.exists(fp):
+        open(fp, 'w').write(content)
+        created.append(name)
+print('SEEDED:' + (','.join(created) if created else 'none'))
+" 2>&1`, { timeoutMs: 30000 });
 
       // restart gateway
       const g = await gwCtl('restart');
@@ -763,11 +840,11 @@ if os.path.exists(p):
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:$PATH"
 USVC=0; command -v systemctl >/dev/null 2>&1 && systemctl --user is-active zeroclaw 2>/dev/null | grep -qx active && USVC=1
 SSVC=0; command -v systemctl >/dev/null 2>&1 && systemctl is-active zeroclaw 2>/dev/null | grep -qx active && SSVC=1
-PROC=0; (pgrep -x zeroclaw >/dev/null 2>&1 || pgrep -f '[z]eroclaw' >/dev/null 2>&1) && PROC=1
+PROC=0; (pgrep -x zeroclaw >/dev/null 2>&1 || pgrep -x zeroclaw >/dev/null 2>&1) && PROC=1
 PORT=0; (command -v ss >/dev/null 2>&1 && ss -ltn 2>/dev/null | grep -q 42617) && PORT=1
 ALIVE=0; [ $USVC = 1 -o $SSVC = 1 -o $PROC = 1 ] && ALIVE=1
 echo "ALIVE=$ALIVE"; echo "PORT=$PORT"
-PID=$(pgrep -x zeroclaw 2>/dev/null | head -1 || pgrep -f '[z]eroclaw' 2>/dev/null | head -1)
+PID=$(pgrep -x zeroclaw 2>/dev/null | head -1 || pgrep -x zeroclaw 2>/dev/null | head -1)
 UP=0; [ -n "$PID" ] && UP=$(ps -o etimes= -p "$PID" 2>/dev/null | tr -d ' ')
 [ -z "$UP" ] && UP=0
 echo "UPTIME_SEC=$UP"
@@ -777,7 +854,7 @@ if [ -f "$HOME/.zeroclaw/config.toml" ] && grep -qiE '(bot_token|token)\s*=\s*"[
 fi
 LOGL="$(ls -1t "$HOME/.zeroclaw/logs/"*.log 2>/dev/null | head -1)"
 if [ -n "$LOGL" ]; then
-  if tail -n 100 "$LOGL" | grep -qiE 'telegram.*(invalid token|unauthorized|failed to connect|login error|connection rejected|Unauthorized)'; then
+  if tail -n 100 "$LOGL" | grep -qiE 'telegram.*(invalid token|unauthorized|failed to connect|login error|connection rejected|conflict|isolated polling|polling error)'; then
     TG=error
   elif tail -n 300 "$LOGL" | grep -qiE 'telegram.*(bot.*connected|polling|channel enabled|started|ready|connected|ok|listening)'; then
     TG=connected
@@ -833,7 +910,27 @@ echo "TG=$TG"
     // 2. Telegram user ID allowlist in config.toml: [channels_config.telegram] allowed_users = ["..."]
     if (action === 'pairing-approve') {
       const code = String(config.code || '').trim();
-      // 1. Try ZeroClaw CLI channel bind-telegram if available
+      // 0. If this is a pending one-time TELEGRAM BIND code, it can only be
+      //    confirmed from the user's Telegram account — tell them how.
+      const logScan = await execCommand(sshConfig,
+        `FILE="$(ls -1t "$HOME/.zeroclaw/logs/"*.log 2>/dev/null | head -1)"; [ -n "$FILE" ] && tail -n 250 "$FILE" || true`,
+        { pool: false, timeoutMs: 20000 });
+      const bindCodeRe = new RegExp(`one-time bind code:\\\\s*${code}([^0-9]|$)`, 'i');
+      if (code && bindCodeRe.test(logScan.stdout || '')) {
+        return NextResponse.json({
+          success: true,
+          output: `Bind code ${code} is pending. Open Telegram, send "/bind ${code}" to your bot, then press "Scan Pending Requests" again. (The bind must be confirmed from your own Telegram account, so it cannot be approved from here.)`,
+          log,
+        });
+      }
+      // 0b. If this is a pending GATEWAY pairing code (dashboard/API access),
+      //     it must NOT be bound as a Telegram identity — earlier versions
+      //     blindly ran `bind-telegram <6-digit-code>` here, which added a
+      //     bogus user to the telegram allowlist.
+      const isGatewayCode = code && new RegExp(`X-Pairing-Code:\\\\s*${code}([^0-9]|$)`, 'i').test(logScan.stdout || '');
+      // 1. Try ZeroClaw CLI channel bind-telegram if available (only for real
+      //    Telegram identities — numeric user IDs or usernames)
+      if (!isGatewayCode) {
       await execCommand(sshConfig, `
         export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:$PATH"
         zeroclaw channel bind-telegram ${JSON.stringify(code)} 2>&1 || true
@@ -843,6 +940,7 @@ echo "TG=$TG"
           curl -s "https://api.telegram.org/bot\${TOKEN}/deleteWebhook?drop_pending_updates=true" >/dev/null 2>&1 || true
         fi
       `, { pool: false, timeoutMs: 15000 });
+      }
 
       // 2. Try HTTP Gateway pairing (for dashboard / API / webhook access)
       const httpPairR = await execCommand(sshConfig, `
@@ -924,7 +1022,9 @@ echo "TG=$TG"
     if (action === 'pairing-list') {
       // Scan daemon logs for:
       // 1. HTTP Gateway pairing code: "X-Pairing-Code: 018875" or "│  018875  │"
-      // 2. Unauthorized Telegram user IDs: "unauthorized user: 123456"
+      // 2. Telegram one-time bind code: "One-time bind code: 388439" (user
+      //    must send "/bind <code>" to the bot from their Telegram account)
+      // 3. Unauthorized Telegram user IDs: "unauthorized user: 123456"
       const r = await execCommand(sshConfig,
         `FILE="$(ls -1t "$HOME/.zeroclaw/logs/"*.log 2>/dev/null | head -1)"; [ -n "$FILE" ] && tail -n 250 "$FILE" || true`,
         { pool: false, timeoutMs: 20000 });
@@ -941,6 +1041,15 @@ echo "TG=$TG"
         const code = m[1];
         if (code && !pending.some(p => p.code === code)) {
           pending.push({ code, platform: 'gateway' });
+        }
+      }
+
+      // 1b. Telegram one-time bind codes — confirm by sending "/bind <code>"
+      //     to the bot from the Telegram account that should be allowed.
+      for (const m of out.matchAll(/one-time bind code:\s*([0-9]{4,8})/gi)) {
+        const code = m[1];
+        if (code && !pending.some(p => p.code === code)) {
+          pending.push({ code, platform: 'telegram-bind' });
         }
       }
 

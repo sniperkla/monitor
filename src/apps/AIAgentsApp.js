@@ -66,7 +66,10 @@ export default function AIAgentsApp({ apiFetch }) {
   const { isSupporter, isAdmin } = useSupporter({ refreshOnFocus: true });
   const [supporterModalOpen, setSupporterModalOpen] = useState(false);
   const doFetch = apiFetch || fetch;
-  const connections = (state?.connections || []).filter(c => c.type !== 'database');
+  const connections = useMemo(
+    () => (state?.connections || []).filter(c => c.type !== 'database'),
+    [state?.connections]
+  );
 
   const [agentId, setAgentId] = useState('hermes');
   const [target, setTarget] = useState('');
@@ -191,6 +194,11 @@ export default function AIAgentsApp({ apiFetch }) {
   const skillSearchBoxRef = useRef(null);
   // logs tab & WebRTC streamline
   const [logText, setLogText] = useState('');
+  
+  // Debug: log state changes
+  useEffect(() => {
+    console.log(`[Agent Logs] logText state changed: ${logText.length} chars`, logText.substring(0, 100));
+  }, [logText]);
   const [logCursor, setLogCursor] = useState(0);
   const [logPause, setLogPause] = useState(false);
   const [logStreamMode, setLogStreamMode] = useState('connecting'); // 'p2p' | 'relay_ws' | 'http' | 'connecting'
@@ -264,6 +272,11 @@ export default function AIAgentsApp({ apiFetch }) {
     let lastLineCount = 0;
     let lastProgressAt = Date.now();
     const noProgressWarnMs = 90_000;
+    // "Unknown or expired job" happens when the server lost the in-memory job
+    // (dev HMR reload / restart). Retry a few times, then give up with a clear
+    // error instead of silently polling until the 20-minute deadline while the
+    // "Gateway restart…" busy banner stays stuck on screen.
+    let unknownJobRetries = 0;
     while (Date.now() < deadline) {
       await new Promise(r => setTimeout(r, 1200));
       let upd = null;
@@ -276,6 +289,14 @@ export default function AIAgentsApp({ apiFetch }) {
       }
       cursor = upd?.cursor ?? cursor;
       if (upd?.done) return upd.result || { success: false, error: 'Job ended without a result' };
+      if (upd?.error && /Unknown or expired job/i.test(upd.error)) {
+        unknownJobRetries += 1;
+        if (unknownJobRetries > 5) {
+          throw new Error('Lost track of the action on the server (it may have reloaded). The gateway op likely completed — check the status on the Overview tab.');
+        }
+        continue;
+      }
+      if (upd?.error) throw new Error(upd.error);
       // Detect "stuck" — server is alive but no log progress for >90s.
       // (The server-side job may genuinely be slow, so we only emit a
       //  warning, not abort.)
@@ -348,6 +369,20 @@ export default function AIAgentsApp({ apiFetch }) {
     setLiveLogLines([`> Starting ${label}...`, '> Connecting to remote server...']);
     setLiveLogAction(label); setLiveLogOpen(true); setLiveLogMinimized(false);
     const startTs = Date.now();
+    
+    // Once the action completes, fails, or the safety timeout below fires,
+    // late log lines (e.g. the 90s "no progress" warning from callLive) must
+    // NOT resurrect the busy banner — that is what made "Gateway restart…"
+    // appear stuck even after the gateway had already restarted.
+    let settled = false;
+    
+    // Safety timeout: clear busyMsg after 60 seconds no matter what
+    const timeoutId = setTimeout(() => {
+      console.warn(`[AIAgents] Action "${label}" timed out, clearing busyMsg`);
+      settled = true;
+      setBusyMsg('');
+    }, 60000);
+    
     try {
       let r;
       if (liveLogs) {
@@ -355,7 +390,7 @@ export default function AIAgentsApp({ apiFetch }) {
           const parts = String(line).split('\n');
           setLiveLogLines(prev => [...prev, ...parts]);
           const last = parts.filter(Boolean).pop() || parts[0] || '';
-          setBusyMsg(`${label} — ${last.slice(0, 80)}`);
+          if (!settled) setBusyMsg(`${label} — ${last.slice(0, 80)}`);
         });
       } else {
         r = await call(action, extra);
@@ -375,12 +410,17 @@ export default function AIAgentsApp({ apiFetch }) {
       if (r?.output) setNotice({ ok: r.success !== false, text: `${label}: ${String(r.output).slice(-400)}` });
       else setNotice({ ok: r?.success !== false, text: `${label}: ${r?.error || 'done'}` });
       await loadDetails();
+      console.log(`[AIAgents] Action "${label}" completed in ${elapsed}s`);
       return r;
     } catch (e) {
+      console.error(`[AIAgents] Action "${label}" error:`, e.message);
       setLiveLogLines(prev => [...prev, `✗ ERROR: ${e.message}`]);
       setNotice({ ok: false, text: `${label}: ${e.message}` });
     } finally {
+      settled = true;
+      clearTimeout(timeoutId);
       setBusyMsg('');
+      console.log(`[AIAgents] busyMsg cleared for "${label}"`);
     }
   };
 
@@ -594,8 +634,14 @@ export default function AIAgentsApp({ apiFetch }) {
     }
 
     let active = true;
+    let hasReceivedData = false; // Track if any data has come through
+    console.log(`[Agent Logs] useEffect triggered: tab=${tab}, target=${target}, agentId=${agentId}`);
     const selectedConn = connectionsRef.current?.find(c => c._id === target);
-    if (!selectedConn) return;
+    if (!selectedConn) {
+      console.log('[Agent Logs] No selected connection found, aborting');
+      return;
+    }
+    console.log(`[Agent Logs] Selected connection: ${selectedConn.name || selectedConn.host}`);
 
     setLogText('');
     setLogStreamMode('connecting');
@@ -622,14 +668,25 @@ export default function AIAgentsApp({ apiFetch }) {
         });
         const r = await res.json();
         if (active && r?.data) {
+          hasReceivedData = true; // Mark that we've received data
           const cleaned = cleanLogStream(r.data);
-          if (cleaned) setLogText(cleaned.slice(-100000));
+          if (cleaned) {
+            console.log(`[Agent Logs] Fetched ${cleaned.length} chars of logs via HTTP`);
+            setLogText(cleaned.slice(-100000));
+          } else {
+            // No historical logs exist — show helpful message
+            setLogText(`[No historical logs found]\n\nThe agent log file appears to be empty. New log entries will appear here as they are generated.\n\nTo generate logs, try:\n- Starting or restarting the ${agent.name} gateway\n- Sending a message to your bot via Telegram/Discord/etc\n- Running: systemctl --user status ${agentId}\n`);
+          }
+        } else {
+          setLogText(`[Connection established]\n\nWaiting for log output from ${agent.name}...\n\nIf no logs appear:\n1. Check if the agent is running (Overview tab)\n2. Verify ~/.${agentId}/logs/ directory exists\n3. Send a test message to your bot to generate activity\n`);
         }
-      } catch {}
+      } catch (err) {
+        if (active) {
+          console.error('[Agent Logs] HTTP fetch error:', err.message);
+          setLogText(`[Log fetch error]\n\nCouldn't retrieve logs: ${err.message}\n\nTry clicking Refresh or check if the agent is running.\n`);
+        }
+      }
     };
-
-    // Immediately seed with historical logs
-    fetchSnapshot();
 
     const preferredRelay = typeof window !== 'undefined'
       ? (localStorage.getItem('ssh_monitor_preferred_relay') || undefined)
@@ -637,9 +694,11 @@ export default function AIAgentsApp({ apiFetch }) {
 
     const socket = io({ path: '/api/socket', transports: ['websocket', 'polling'] });
     socketRef.current = socket;
+    console.log('[Agent Logs] Socket.IO client created, waiting for connect event...');
 
     socket.on('connect', () => {
       if (!active) return;
+      console.log(`[Agent Logs] Socket connected! Emitting ssh:connect for ${selectedConn.name || selectedConn.host}`);
       socket.emit('ssh:connect', {
         connectionId: selectedConn._id,
         connection: selectedConn,
@@ -647,25 +706,56 @@ export default function AIAgentsApp({ apiFetch }) {
       });
     });
 
+    socket.on('disconnect', (reason) => {
+      console.log(`[Agent Logs] Socket disconnected: ${reason}`);
+    });
+
+    socket.on('connect_error', (err) => {
+      console.error('[Agent Logs] Socket connection error:', err.message);
+    });
+    
+    socket.on('ssh:error', (err) => {
+      console.error('[Agent Logs] SSH error:', err);
+    });
+    
+    socket.on('ssh:close', () => {
+      console.log('[Agent Logs] SSH session closed');
+    });
+
     // ── Path 1: WebRTC P2P via Local Relay (zero central server load) ──
     socket.on('relay:rtc:ready', async ({ connId: relayConnId }) => {
       if (!active) return;
+      console.log(`[Agent Logs] relay:rtc:ready received, initializing WebRTC peer for ${relayConnId}`);
       try {
         const peer = await createRelayPeer({ socket, relayConnId });
         if (!active) { peer.close(); return; }
         rtcPeerRef.current = peer;
         setLogStreamMode('p2p');
+        console.log('[Agent Logs] WebRTC peer established, setting up SSH channel...');
 
         peer.channel(DC.SSH).onmessage = (evt) => {
           if (!active || logPauseRef.current) return;
+          hasReceivedData = true; // Mark that we've received data
           const raw = typeof evt.data === 'string' ? evt.data : new TextDecoder().decode(evt.data);
+          console.log(`[Agent Logs] WebRTC data received: ${raw.length} bytes`);
           const chunk = cleanLogStream(raw);
-          if (chunk) setLogText(prev => (prev + chunk).slice(-100000));
+          console.log(`[Agent Logs] After cleanLogStream (WebRTC): ${chunk?.length || 0} chars`);
+          if (chunk) {
+            setLogText(prev => {
+              // If we had the placeholder message, replace it completely
+              if (prev.includes('Listening for live output')) return chunk.slice(-100000);
+              return (prev + chunk).slice(-100000);
+            });
+          }
         };
 
         peer.sendControl({ type: 'ssh:start', connId: relayConnId });
+        console.log('[Agent Logs] Sent ssh:start control message via WebRTC');
         setTimeout(() => {
-          if (active) try { peer.sendSsh(tailCmd); } catch {}
+          if (active) {
+            console.log('[Agent Logs] Sending tail command via WebRTC:', tailCmd.substring(0, 80) + '...');
+            try { peer.sendSsh(tailCmd); } catch {}
+          }
         }, 300);
       } catch (err) {
         if (!active) return;
@@ -677,14 +767,67 @@ export default function AIAgentsApp({ apiFetch }) {
     // ── Path 2: Dedicated Non-Interactive Stream / Fallback Stream ──
     socket.on('ssh:connected', () => {
       if (!active || rtcPeerRef.current) return; // already on WebRTC
+      console.log(`[Agent Logs] SSH connected for ${agentId}, setting up polling mode`);
       setLogStreamMode('relay_ws');
-      socket.emit('ssh:input', tailCmd);
+      
+      // WORKAROUND: Poll for new logs every 5 seconds instead of tail -F
+      // tail -F doesn't stream continuously over SSH exec
+      let lastFetchTime = Date.now();
+      const pollInterval = setInterval(() => {
+        if (!active) {
+          clearInterval(pollInterval);
+          return;
+        }
+        console.log('[Agent Logs] Polling for new logs...');
+        fetchSnapshot();
+      }, 5000); // Poll every 5 seconds
+      
+      // Initial fetch
+      console.log('[Agent Logs] Fetching initial logs...');
+      fetchSnapshot();
+      
+      // Show a helpful message after 3 seconds if no logs appear
+      setTimeout(() => {
+        if (!active || hasReceivedData) {
+          console.log(`[Agent Logs] Placeholder check at 3s: active=${active}, hasReceivedData=${hasReceivedData} - skipping`);
+          return;
+        }
+        console.log(`[Agent Logs] No logs after 3s, showing placeholder for ${agentId}`);
+        setLogText(`[SSH connection established]\n\nConnected to ${selectedConn.name || selectedConn.host} successfully.\nAuto-refreshing every 5 seconds...\n\nIf no logs appear:\n• The agent gateway might not be running\n• Try starting/restarting the gateway from the Overview tab\n• Click the "Refresh" button above to fetch logs manually\n`);
+      }, 3000);
+      
+      // Cleanup on unmount
+      return () => {
+        clearInterval(pollInterval);
+      };
     });
 
     socket.on('ssh:data', (data) => {
-      if (!active || logPauseRef.current || rtcPeerRef.current) return;
+      console.log(`[Agent Logs] ssh:data received (${data?.length || 0} bytes), active=${active}, paused=${logPauseRef.current}, rtc=${!!rtcPeerRef.current}`);
+      console.log(`[Agent Logs] Raw data preview:`, data?.substring?.(0, 100) || data);
+      if (!active || logPauseRef.current || rtcPeerRef.current) {
+        console.log('[Agent Logs] Early return triggered');
+        return;
+      }
+      hasReceivedData = true; // Mark that we've received data
+      console.log('[Agent Logs] Calling cleanLogStream...');
       const chunk = cleanLogStream(data);
-      if (chunk) setLogText(prev => (prev + chunk).slice(-100000));
+      console.log(`[Agent Logs] After cleanLogStream: ${chunk?.length || 0} chars`);
+      if (chunk) {
+        console.log('[Agent Logs] Chunk exists, calling setLogText');
+        setLogText(prev => {
+          console.log(`[Agent Logs] setLogText callback, prev length: ${prev.length}`);
+          // If we had the placeholder message, replace it completely
+          if (prev.includes('Listening for live output') || prev.includes('[SSH connection established]')) {
+            console.log('[Agent Logs] Replacing placeholder with real data');
+            return chunk.slice(-100000);
+          }
+          console.log('[Agent Logs] Appending to existing log');
+          return (prev + chunk).slice(-100000);
+        });
+      } else {
+        console.log('[Agent Logs] Chunk is empty, not updating UI');
+      }
     });
 
     // ── Path 3: HTTP snapshot fallback on error ──
@@ -720,6 +863,10 @@ export default function AIAgentsApp({ apiFetch }) {
   useEffect(() => { callRef.current = call; }, [call]);
   const detailsRef = useRef(details);
   useEffect(() => { detailsRef.current = details; }, [details]);
+  const agentRef = useRef(agent);
+  useEffect(() => { agentRef.current = agent; }, [agent]);
+  const targetRef = useRef(target);
+  useEffect(() => { targetRef.current = target; }, [target]);
   useEffect(() => { autoHealRef.current = autoHeal; }, [autoHeal]);
   useEffect(() => { userStoppedRef.current = userStopped; }, [userStopped]);
 
@@ -1134,7 +1281,7 @@ export default function AIAgentsApp({ apiFetch }) {
                       </span>
                     )}
                     <span className="text-[10px] text-[var(--text-muted)] hidden sm:inline">
-                      {logPause ? 'Stream paused' : `Streaming ~/.${agent.id} / daemon logs`}
+                      {logPause ? 'Stream paused' : `Auto-refreshing ~/.${agentId}/logs/ every 5s`}
                     </span>
                   </div>
 
@@ -1458,6 +1605,20 @@ export default function AIAgentsApp({ apiFetch }) {
                 },
               ];
 
+              // Per-agent workspace file locations:
+              //   hermes   → ~/.hermes/* (custom_instructions.txt for the system prompt)
+              //   zeroclaw → ~/.zeroclaw/data/* (0.8.4 workspace; NOT the legacy workspace/ dir)
+              //   others   → ~/.<agent>/workspace/*
+              const HERMES_PROMPT_PATHS = {
+                'PROMPT.md': '~/.hermes/custom_instructions.txt',
+                'SOUL.md': '~/.hermes/SOUL.md',
+                'USER.md': '~/.hermes/USER.md',
+                'AGENTS.md': '~/.hermes/AGENTS.md',
+                'MEMORY.md': '~/.hermes/memories/MEMORY.md',
+              };
+              const WS_DIR = agent.id === 'zeroclaw' ? '~/.zeroclaw/data' : `~/.${agent.id}/workspace`;
+              const wsPath = (f) => agent.id === 'hermes' ? HERMES_PROMPT_PATHS[f] : `${WS_DIR}/${f}`;
+
               const WORKSPACE_FILES = [
                 {
                   key: 'PROMPT.md',
@@ -1465,7 +1626,7 @@ export default function AIAgentsApp({ apiFetch }) {
                   icon: '📜',
                   label: 'System Prompt',
                   desc: 'Core instructions and behavioral rules',
-                  path: agent.id === 'hermes' ? '~/.hermes/custom_instructions.txt' : `~/.${agent.id}/workspace/PROMPT.md`,
+                  path: wsPath('PROMPT.md'),
                 },
                 {
                   key: 'SOUL.md',
@@ -1473,7 +1634,7 @@ export default function AIAgentsApp({ apiFetch }) {
                   icon: '🎭',
                   label: 'Personality & Voice',
                   desc: 'Persona identity, tone of voice, empathy, and character traits',
-                  path: agent.id === 'hermes' ? '~/.hermes/SOUL.md' : `~/.${agent.id}/workspace/SOUL.md`,
+                  path: wsPath('SOUL.md'),
                 },
                 {
                   key: 'USER.md',
@@ -1481,7 +1642,7 @@ export default function AIAgentsApp({ apiFetch }) {
                   icon: '👤',
                   label: 'User Profile',
                   desc: 'User bio, preferences, language style, and background',
-                  path: agent.id === 'hermes' ? '~/.hermes/USER.md' : `~/.${agent.id}/workspace/USER.md`,
+                  path: wsPath('USER.md'),
                 },
                 {
                   key: 'AGENTS.md',
@@ -1489,7 +1650,7 @@ export default function AIAgentsApp({ apiFetch }) {
                   icon: '🛡️',
                   label: 'Rules & Safety',
                   desc: 'Operational safety boundaries and constraints',
-                  path: agent.id === 'hermes' ? '~/.hermes/AGENTS.md' : `~/.${agent.id}/workspace/AGENTS.md`,
+                  path: wsPath('AGENTS.md'),
                 },
                 {
                   key: 'MEMORY.md',
@@ -1497,7 +1658,7 @@ export default function AIAgentsApp({ apiFetch }) {
                   icon: '🧠',
                   label: 'Long-Term Memory',
                   desc: 'Persistent knowledge notes, facts, and saved context',
-                  path: agent.id === 'hermes' ? '~/.hermes/memories/MEMORY.md' : `~/.${agent.id}/workspace/MEMORY.md`,
+                  path: wsPath('MEMORY.md'),
                 },
               ];
 
