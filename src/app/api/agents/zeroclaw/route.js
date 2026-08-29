@@ -5,7 +5,7 @@ import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
 import { dispatchWithLiveLogs } from '@/app/api/agents/_jobs';
 import { execDetached } from '@/app/api/agents/_remote-bg';
 import { logger } from '@/lib/logger';
-import { parseInst, homeDir, instancePort, listInstances, cloneDefaultHome, pidAlive } from '../_multi-instance';
+import { parseInst, homeDir, instancePort, listInstances, cloneDefaultHome, pidAlive, gatewayUnit, ensureInstanceUnit, writeInstanceEnv, sdAvailable, sdInstanceCtl } from '../_multi-instance';
 
 /**
  * ZeroClaw (zeroclaw-labs) one-click installer — deploys
@@ -117,7 +117,7 @@ async function handleAgentAction(body, session, log = []) {
     // -- Multi-instance support (hermes blueprint) --
     const inst = parseInst(body);
     const HH = homeDir('zeroclaw', inst);  // ${HH} or ${HH}-<tag>
-    const GW_PORT = instancePort(inst);        // distinct dashboard port for instances
+    const GW_PORT = instancePort('zeroclaw', inst);        // distinct dashboard port for instances
     const PIDF = `${HH}/daemon.pid`;
     const CFG_DIR_ARG = inst ? `--config-dir "${HH}"` : '';
     const binPath = () => `
@@ -138,7 +138,23 @@ async function handleAgentAction(body, session, log = []) {
       if (!bp) return { ok: false, out: 'zeroclaw binary not found. Please click "Install ZeroClaw" in the Overview tab.' };
       const BP = JSON.stringify(bp);
       if (inst) {
-        // Tagged instance: fully isolated, pidfile-scoped, no shared systemd unit.
+        // Tagged instance: preferred path = per-instance systemd template unit
+        // (own cgroup + Restart=on-failure + NoNewPrivileges/PrivateTmp).
+        // Falls back to pidfile-scoped nohup when no systemd user session.
+        if (await sdAvailable(sshConfig)) {
+          await ensureInstanceUnit(sshConfig, 'zeroclaw', gatewayUnit('zeroclaw', {
+            description: 'ZeroClaw daemon',
+            envLines: [
+              'EnvironmentFile=-%h/.zeroclaw-%i/.env',
+              'Environment=PATH=%h/.local/bin:%h/.cargo/bin:%h/bin:/usr/local/bin:/usr/bin:/bin',
+            ],
+            execStart: `/bin/sh -c 'exec "$(command -v zeroclaw || echo %h/.cargo/bin/zeroclaw)" dae""mon --config-dir %h/.zeroclaw-%i'`,
+            logFile: '%h/.zeroclaw-%i/logs/daemon.log',
+          }));
+          const sd = await sdInstanceCtl(sshConfig, 'zeroclaw', inst, op);
+          if (sd) return sd;
+        }
+        // Legacy fallback: fully isolated, pidfile-scoped, no shared systemd unit.
         if (op === 'status') {
           const r = await execCommand(sshConfig, `${ENVX}; res=0; [ -f "${PIDF}" ] && kill -0 $(cat "${PIDF}") 2>/dev/null && res=1; echo "PROC=$res"`, { pool: false, timeoutMs: 30000 });
           return { ok: true, active: /PROC=1/.test(r.stdout || '') };
@@ -160,8 +176,12 @@ async function handleAgentAction(body, session, log = []) {
         return { ok: true, active: /SVC_ACTIVE|PROC_ACTIVE/.test(r.stdout || '') };
       }
       if (op === 'stop') {
+        // Broad `pkill -x zeroclaw` matches EVERY instance on the box — only
+        // allowed for the default install (full reset). Instances are killed
+        // strictly via their own pidfile.
+        const broadKill = inst ? '' : 'pkill -9 -x zeroclaw 2>/dev/null || true;';
         return execCommand(sshConfig,
-          `${ENVX}; ${BP} service stop 2>/dev/null; systemctl --user stop zeroclaw 2>/dev/null; if [ -f "${PIDF}" ]; then kill $(cat "${PIDF}") 2>/dev/null; sleep 1; kill -9 $(cat "${PIDF}") 2>/dev/null; fi; rm -f "${PIDF}"; pkill -9 -x zeroclaw 2>/dev/null || true; echo GW_STOPPED`,
+          `${ENVX}; ${BP} service stop 2>/dev/null; ${inst ? '' : 'systemctl --user stop zeroclaw 2>/dev/null;'} if [ -f "${PIDF}" ]; then kill $(cat "${PIDF}") 2>/dev/null; sleep 1; kill -9 $(cat "${PIDF}") 2>/dev/null; fi; rm -f "${PIDF}"; ${broadKill} echo GW_STOPPED`,
           { pool: false, timeoutMs: 60000 }).then(r => ({ ok: /GW_STOPPED/.test(r.stdout || ''), out: ((r.stdout || '') + (r.stderr || '')).slice(-400) }));
       }
       // start / restart — never write the plain word "daemon" here (self-match)
@@ -170,7 +190,7 @@ async function handleAgentAction(body, session, log = []) {
         mkdir -p "${HH}/logs" "$HOME/.config/systemd/user"
         ${ENVX}; set -a; [ -f "${HH}/.env" ] && . "${HH}/.env"; set +a
         systemctl --user stop zeroclaw 2>/dev/null || true
-        pkill -9 -x zeroclaw 2>/dev/null || true
+        ${inst ? '' : 'pkill -9 -x zeroclaw 2>/dev/null || true'}
         sleep 1
         # Enable lingering on Fedora / RHEL so user systemd stays active after SSH disconnects
         loginctl enable-linger $(whoami) 2>/dev/null || sudo -n loginctl enable-linger $(whoami) 2>/dev/null || true
@@ -411,11 +431,20 @@ echo "===ENVKEYS==="
 
     // ── UNINSTALL ──
     if (action === 'uninstall') {
-      await run('stop & unregister service', `${ENVX}; p="$(command -v zeroclaw 2>/dev/null)"; [ -n "$p" ] && $p service uninstall 2>/dev/null; systemctl --user disable --now zeroclaw 2>/dev/null; true`);
-      await run('stop stray processes', `timeout 15 pkill -f '[z]eroclaw dae[m]on' 2>/dev/null; true`);
+      // Instance uninstall must never kill other instances or remove the
+      // shared binary — only its own pidfile & home.
+      if (inst) {
+        await run('stop instance (pidfile-scoped)', `if [ -f "${PIDF}" ]; then p=$(cat "${PIDF}"); kill "$p" 2>/dev/null; sleep 1; kill -9 "$p" 2>/dev/null; rm -f "${PIDF}"; fi; true`);
+      } else {
+        await run('stop & unregister service', `${ENVX}; p="$(command -v zeroclaw 2>/dev/null)"; [ -n "$p" ] && $p service uninstall 2>/dev/null; systemctl --user disable --now zeroclaw 2>/dev/null; true`);
+        await run('stop stray processes', `timeout 15 pkill -f '[z]eroclaw dae[m]on' 2>/dev/null; true`);
+      }
+      const binRm = inst
+        ? '' // instances share the globally-installed binary — leave it alone
+        : `rm -f "$HOME/.local/bin/zeroclaw" "$HOME/.cargo/bin/zeroclaw" /usr/local/bin/zeroclaw; `;
       const rmCmd = purge
-        ? `rm -f "$HOME/.local/bin/zeroclaw" "$HOME/.cargo/bin/zeroclaw" /usr/local/bin/zeroclaw; rm -rf "${HH}"; echo REMOVED_ALL`
-        : `rm -f "$HOME/.local/bin/zeroclaw" "$HOME/.cargo/bin/zeroclaw" /usr/local/bin/zeroclaw; rm -rf ${LOGD}; echo REMOVED_CODE`;
+        ? `${binRm}rm -rf "${HH}"; echo REMOVED_ALL`
+        : `${binRm}rm -rf "${HH}/logs"; echo REMOVED_CODE`;
       const r = await run(purge ? 'remove binary & all data' : 'remove binary (config kept)', rmCmd);
       const ok = /REMOVED/.test(r.stdout || '');
       return NextResponse.json({ success: ok, purged: purge, log });
@@ -909,6 +938,10 @@ SSVC=0; command -v systemctl >/dev/null 2>&1 && systemctl is-active zeroclaw 2>/
 PROC=0; [ -f "${PIDF}" ] && kill -0 $(cat "${PIDF}") 2>/dev/null && PROC=1
 PORT=0; (command -v ss >/dev/null 2>&1 && ss -ltn 2>/dev/null | grep -qE '42617${GW_PORT ? `|${GW_PORT}` : ''}') && PORT=1
 ALIVE=0; [ $USVC = 1 -o $SSVC = 1 -o $PROC = 1 ] && ALIVE=1
+if [ "$ALIVE" = 0 ] && [ -n "${inst}" ]; then
+  export XDG_RUNTIME_DIR="/run/user/$(id -u)" 2>/dev/null
+  systemctl --user is-active zeroclaw-gatew""ay@${inst} 2>/dev/null | grep -qx active && ALIVE=1
+fi
 echo "ALIVE=$ALIVE"; echo "PORT=$PORT"
 PID=$(cat "${PIDF}" 2>/dev/null)
 UP=0; [ -n "$PID" ] && UP=$(ps -o etimes= -p "$PID" 2>/dev/null | tr -d ' ')

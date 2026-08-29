@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
 import { dispatchWithLiveLogs } from '@/app/api/agents/_jobs';
+import { gatewayUnit, ensureInstanceUnit, writeInstanceEnv, sdAvailable, sdInstanceCtl } from '../_multi-instance';
 import { execDetached } from '@/app/api/agents/_remote-bg';
 import { logger } from '@/lib/logger';
 
@@ -129,11 +130,17 @@ async function handleAgentAction(body, session, log = []) {
     const HERMES_ENV = inst ? `export HERMES_HOME=$HOME/.hermes-${inst};` : '';
 
     // instance liveness: pidfile-first (fast) + systemd fallback (default).
+    // kill -0 alone can false-positive after PID reuse, so the process cmdline
+    // is verified to point inside this instance home (".hermes-<tag>").
     const pidScan = `res=0;` +
-      ` if [ -f "${HH}/daemon.pid" ] && kill -0 $(cat "${HH}/daemon.pid") 2>/dev/null; then res=1; fi;` +
+      ` pid=$(cat "${HH}/daemon.pid" 2>/dev/null);` +
+      ` if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && ps -p "$pid" -o args= 2>/dev/null | grep -qF ".hermes${inst ? `-${inst}` : ''}"; then res=1; fi;` +
       ` if [ "$res" = 0 ] && [ -z "${inst}" ]; then` +
       ` systemctl --user is-active hermes-gate\\way 2>/dev/null | grep -qx active && res=1;` +
       ` systemctl is-active hermes-gate\\way 2>/dev/null | grep -qx active && res=1;` +
+      ` fi;` +
+      ` if [ "$res" = 0 ] && [ -n "${inst}" ]; then` +
+      ` export XDG_RUNTIME_DIR="/run/user/$(id -u)" 2>/dev/null; systemctl --user is-active hermes-gate""way@${inst} 2>/dev/null | grep -qx active && res=1;` +
       ` fi;` +
       ` echo "PID_ALIVE=$res"`;
     const pidAlive = async () => {
@@ -152,11 +159,51 @@ async function handleAgentAction(body, session, log = []) {
     };
     const b64 = (s) => Buffer.from(String(s), 'utf8').toString('base64');
 
+    // ── Per-instance systemd template unit (Hermes) ─────────────────────────
+    // Instances run as their own user-level cgroup (Restart=on-failure,
+    // NoNewPrivileges, PrivateTmp) via hermes-gateway@<tag>. Returns null when
+    // unavailable/failed so the legacy pidfile+nohup flow takes over.
+    const sdHermesBranch = async (operation) => {
+      if (!inst || !(await sdAvailable(sshConfig))) return null;
+      await ensureInstanceUnit(sshConfig, 'hermes', gatewayUnit('hermes', {
+        description: 'Hermes gateway',
+        envLines: [
+          'Environment=HERMES_HOME=%h/.hermes-%i',
+          'EnvironmentFile=-%h/.hermes-%i/instance.env',
+          'Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin',
+        ],
+        execStart: `/bin/sh -c 'exec "$(command -v hermes || echo %h/.local/bin/hermes)" gateway run'`,
+        logFile: '%h/.hermes-%i/logs/gateway.log',
+      }));
+      return sdInstanceCtl(sshConfig, 'hermes', inst, operation);
+    };
+
     // ── Gateway control helper — never blocks ────────────────────────────────
     // Uses systemctl only when systemd is genuinely PID 1; otherwise falls back
     // to pkill + detached nohup start. Every remote call is wrapped in `timeout`
     // so a stuck hermes CLI can never hang the request.
     const gwCtl = async (op) => {
+      // Instances: systemd-first for start/restart (own cgroup + supervision).
+      // stop is belt-and-braces: systemd stop + legacy pidfile kill, so an
+      // instance started via the legacy nohup path is still stopped cleanly.
+      if (inst) {
+        if (op === 'stop') {
+          const sd = await sdHermesBranch('stop');
+          const legacy = await legacyGwCtl(op);
+          return {
+            ok: (sd ? sd.ok : false) || legacy.ok,
+            out: `${sd ? `systemd:${sd.out || 'ok'} ` : ''}${legacy.out}`,
+          };
+        }
+        if (op !== 'status') {
+          const sd = await sdHermesBranch(op);
+          if (sd) return sd;
+        }
+      }
+      return legacyGwCtl(op);
+    };
+
+    const legacyGwCtl = async (op) => {
       const binR = await execCommand(sshConfig,
         `p="$(export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"; command -v hermes 2>/dev/null)"; [ -n "$p" ] && echo "HBIN=$p"
 DC=0; command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx hermes-agent && DC=1
@@ -246,6 +293,10 @@ for d in "$HOME"/.hermes-*; do
   tag="$(basename "$d")"
   PIDF="$d/daemon.pid"
   RUN=0; [ -f "$PIDF" ] && kill -0 "$(cat "$PIDF")" 2>/dev/null && RUN=1
+  if [ "$RUN" = 0 ]; then
+    export XDG_RUNTIME_DIR="/run/user/$(id -u)" 2>/dev/null
+    systemctl --user is-active "hermes-gate""way@\${tag#.hermes-}" 2>/dev/null | grep -qx active && RUN=1
+  fi
   echo "TAGRUN=\${tag#.hermes-}:$RUN"
 done
 `, { pool: false, timeoutMs: 20000 });
@@ -270,12 +321,25 @@ mkdir -p "$HOME/.hermes-${tag}"
 for f in .env config.yaml SOUL.md USER.md AGENTS.md MEMORY.md custom_instructions.txt prompt.txt; do
   [ -f "$HOME/.hermes/$f" ] && cp "$HOME/.hermes/$f" "$HOME/.hermes-${tag}/$f"
 done
+# Credential-isolation check: a cloned .env identical to the default means the
+# new instance would fight the default over the same bot token.
+TS=0; [ -f "$HOME/.hermes/.env" ] && cmp -s "$HOME/.hermes/.env" "$HOME/.hermes-${tag}/.env" && TS=1
+echo "TOKEN_SAME=$TS"
 echo CLONED
 `, { pool: false, timeoutMs: 30000 });
       if (!/CLONED|EXISTS/.test(r.stdout || '')) {
         return NextResponse.json({ success: false, error: 'Failed to clone instance home: ' + ((r.stdout || '') + (r.stderr || '')).slice(-200), log });
       }
       const existed = /EXISTS/.test(r.stdout || '');
+      const tokenSame = /TOKEN_SAME=1/.test(r.stdout || '');
+      if (!existed && tokenSame) {
+        return NextResponse.json({
+          success: false,
+          instance: tag,
+          error: 'Cloned .env is identical to the default instance — set this instance its OWN bot token first (reconfigure → env). Starting it now would make the two instances fight over the same Telegram bot.',
+          log,
+        });
+      }
       const g = await gwCtl('start');
       return NextResponse.json({
         success: true,
@@ -309,14 +373,25 @@ echo CLONED
 
     // ── UNINSTALL ───────────────────────────────────────────────────────────
     if (action === 'uninstall') {
-      await run('stop system service', `(sudo -n systemctl disable --now hermes-gate""way 2>/dev/null || systemctl disable --now hermes-gate""way 2>/dev/null); true`);
-      await run('stop user service', `export XDG_RUNTIME_DIR="/run/user/$(id -u)"; systemctl --user disable --now hermes-gate""way 2>/dev/null; true`);
-      await run('stop stray processes', `pkill -f '[h]ermes.*gatew[a]y' 2>/dev/null; pkill -f '[h]ermes-agent/hermes' 2>/dev/null; true`);
-      // Remove isolated Docker container (if any); data volume kept unless purge.
-      await run('remove docker container', `command -v docker >/dev/null 2>&1 && docker rm -f hermes-agent 2>/dev/null; ${purge ? 'rm -rf "${HH}-docker" 2>/dev/null;' : ''} true`);
+      // Instance uninstall must never kill other instances (broad pkill
+      // matches every hermes gateway on the box), touch the shared systemd
+      // unit, or remove the shared binary — only its own pidfile & home.
+      if (inst) {
+        await run('stop instance (pidfile-scoped)', `if [ -f "${HH}/daemon.pid" ]; then p=$(cat "${HH}/daemon.pid"); kill "$p" 2>/dev/null; sleep 1; kill -9 "$p" 2>/dev/null; rm -f "${HH}/daemon.pid"; fi; true`);
+      } else {
+        await run('stop system service', `(sudo -n systemctl disable --now hermes-gate""way 2>/dev/null || systemctl disable --now hermes-gate""way 2>/dev/null); true`);
+        await run('stop user service', `export XDG_RUNTIME_DIR="/run/user/$(id -u)"; systemctl --user disable --now hermes-gate""way 2>/dev/null; true`);
+        await run('stop stray processes', `pkill -f '[h]ermes.*gatew[a]y' 2>/dev/null; pkill -f '[h]ermes-agent/hermes' 2>/dev/null; true`);
+        // Remove isolated Docker container (if any); data volume kept unless purge.
+        await run('remove docker container', `command -v docker >/dev/null 2>&1 && docker rm -f hermes-agent 2>/dev/null; ${purge ? `rm -rf "$HOME/.hermes-docker" 2>/dev/null;` : ''} true`);
+      }
+      const binRm = inst
+        ? '' // instances share the globally-installed binary — leave it alone
+        : `rm -f "$HOME/.local/bin/hermes" /usr/local/bin/hermes; `;
+      const libRm = purge && !inst ? ' /usr/local/lib/hermes-agent' : '';
       const rmCmd = purge
-        ? `rm -f "$HOME/.local/bin/hermes" /usr/local/bin/hermes; rm -rf "${HH}" /usr/local/lib/hermes-agent; echo REMOVED_ALL`
-        : `rm -f "$HOME/.local/bin/hermes" /usr/local/bin/hermes; rm -rf "${HH}/hermes-agent" /usr/local/lib/hermes-agent; echo REMOVED_CODE`;
+        ? `${binRm}rm -rf "${HH}"${libRm}; echo REMOVED_ALL`
+        : `${binRm}rm -rf "${HH}/hermes-agent"${libRm}; echo REMOVED_CODE`;
       const r = await run(purge ? 'remove binary, code & all config' : 'remove binary & code (config kept)', rmCmd);
       const ok = /REMOVED/.test(r.stdout || '');
       return NextResponse.json({ success: ok, purged: purge, log });

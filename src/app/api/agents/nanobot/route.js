@@ -5,7 +5,7 @@ import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
 import { dispatchWithLiveLogs } from '@/app/api/agents/_jobs';
 import { execDetached } from '@/app/api/agents/_remote-bg';
 import { logger } from '@/lib/logger';
-import { parseInst, homeDir, instancePort, listInstances, cloneDefaultHome, pidAlive } from '../_multi-instance';
+import { parseInst, homeDir, instancePort, listInstances, cloneDefaultHome, pidAlive, gatewayUnit, ensureInstanceUnit, writeInstanceEnv, sdAvailable, sdInstanceCtl } from '../_multi-instance';
 
 /**
  * Nanobot (HKUDS) one-click installer — deploys https://github.com/HKUDS/nanobot
@@ -115,12 +115,30 @@ async function handleAgentAction(body, session, log = []) {
     // -- Multi-instance support (hermes blueprint) --
     const inst = parseInst(body);
     const HH = homeDir('nanobot', inst);        // ${HH} or ${HH}-<tag>
-    const GW_PORT = instancePort(inst);          // distinct port for instances (null for default)
+    const GW_PORT = instancePort('nanobot', inst);          // distinct port for instances (null for default)
     const PIDF = `${HH}/daemon.pid`;
 
     const binPath = () => `p="$(export PATH="$HOME/.local/bin:$HOME/.nanobot/venv/bin:/usr/local/bin:/usr/bin:$PATH"; command -v nanobot 2>/dev/null)"; [ -z "$p" ] && for q in "$HOME/.local/bin/nanobot" "$HOME/.nanobot/venv/bin/nanobot" "/usr/local/bin/nanobot" "/usr/bin/nanobot"; do [ -x "$q" ] && p="$q" && break; done; echo "BIN=$p"`;
 
     const gwCtl = async (op) => {
+      // Instances first: per-instance systemd template unit (own cgroup +
+      // supervision + hardening). Falls through to legacy nohup path on any
+      // failure / missing systemd user session. Default keeps exact behavior.
+      if (inst && (await sdAvailable(sshConfig))) {
+        await writeInstanceEnv(sshConfig, HH, { NB_PORT: GW_PORT });
+        await ensureInstanceUnit(sshConfig, 'nanobot', gatewayUnit('nanobot', {
+          description: 'Nanobot gateway',
+          envLines: [
+            'EnvironmentFile=-%h/.nanobot-%i/.env',
+            `EnvironmentFile=%h/.nanobot-%i/instance.env`,
+            'Environment=PATH=%h/.local/bin:%h/.nanobot/venv/bin:/usr/local/bin:/usr/bin:/bin',
+          ],
+          execStart: `/bin/sh -c 'exec "$(command -v nanobot || echo %h/.local/bin/nanobot)" gateway --config %h/.nanobot-%i/config.json --workspace %h/.nanobot-%i/workspace --port "$NB_PORT"'`,
+          logFile: '%h/.nanobot-%i/logs/gateway.log',
+        }));
+        const sd = await sdInstanceCtl(sshConfig, 'nanobot', inst, op);
+        if (sd) return sd;
+      }
       const binR = await execCommand(sshConfig, binPath(), { pool: false, timeoutMs: 15000 });
       const bp = (binR.stdout || '').match(/BIN=(.*)/)?.[1]?.trim();
       if (!bp) return { ok: false, out: 'nanobot binary not found' };
@@ -180,6 +198,13 @@ async function handleAgentAction(body, session, log = []) {
       if (!clone.ok) {
         return NextResponse.json({ success: false, error: 'Failed to clone nanobot instance home' });
       }
+      if (clone.tokenSame && !clone.existed) {
+        return NextResponse.json({
+          success: false,
+          instance: tag,
+          error: 'Cloned .env is identical to the default instance — set this instance its OWN bot token first (reconfigure → env). Starting it now would make the two instances fight over the same Telegram bot.',
+        });
+      }
       const g = await gwCtl('start');
       return NextResponse.json({
         success: true,
@@ -216,6 +241,10 @@ echo "===MEMORY_B64==="
 { base64 < "${HH}/workspace/MEMORY.md" || base64 < "${HH}/workspace/memory/MEMORY.md"; } 2>/dev/null || true
 echo "===RUNNING==="
 res=0; [ -f "${PIDF}" ] && kill -0 $(cat "${PIDF}") 2>/dev/null && res=1
+if [ "$res" = 0 ] && [ -n "${inst}" ]; then
+  export XDG_RUNTIME_DIR="/run/user/$(id -u)" 2>/dev/null
+  systemctl --user is-active nanobot-gatew""ay@${inst} 2>/dev/null | grep -qx active && res=1
+fi
 [ "$res" = 1 ] && echo PROC_ACTIVE || echo NO_PROC
 echo "===VERSION==="
 [ -n "$BIN" ] && "$BIN" --version 2>/dev/null | tail -1 | cut -c1-40
@@ -356,10 +385,18 @@ tail -n 30 "$LOG" 2>/dev/null | tail -5
 
     // ── UNINSTALL ──
     if (action === 'uninstall') {
-      await run('stop gateway', `pkill -f '[n]anobot.*gatew[a]y' 2>/dev/null; pkill -f '[n]anobot webui' 2>/dev/null; sleep 1; pkill -9 -f '[n]anobot' 2>/dev/null; true`);
+      // Instance uninstall must never kill other instances or remove the
+      // shared binary — only its own pidfile & home.
+      const stopCmd = inst
+        ? `if [ -f "${PIDF}" ]; then p=$(cat "${PIDF}"); kill "$p" 2>/dev/null; sleep 1; kill -9 "$p" 2>/dev/null; rm -f "${PIDF}"; fi; true`
+        : `pkill -f '[n]anobot.*gatew[a]y' 2>/dev/null; pkill -f '[n]anobot webui' 2>/dev/null; sleep 1; pkill -9 -f '[n]anobot' 2>/dev/null; true`;
+      await run('stop gateway', stopCmd);
+      const binRm = inst
+        ? '' // instances share the globally-installed binary — leave it alone
+        : `rm -f "$HOME/.local/bin/nanobot" "$HOME/.nanobot/venv/bin/nanobot" /usr/local/bin/nanobot /usr/bin/nanobot 2>/dev/null; pipx uninstall nanobot-ai 2>/dev/null; pipx uninstall nanobot 2>/dev/null; `;
       const rmCmd = purge
-        ? `rm -f "$HOME/.local/bin/nanobot" "$HOME/.nanobot/venv/bin/nanobot" /usr/local/bin/nanobot /usr/bin/nanobot 2>/dev/null; rm -rf "${HH}" /home/*/.nanobot "$HOME/.cache/nanobot" /tmp/.nb* 2>/dev/null; pipx uninstall nanobot-ai 2>/dev/null; pipx uninstall nanobot 2>/dev/null; echo REMOVED_ALL`
-        : `rm -f "$HOME/.local/bin/nanobot" "$HOME/.nanobot/venv/bin/nanobot" /usr/local/bin/nanobot /usr/bin/nanobot 2>/dev/null; rm -rf "$HOME/.nanobot/venv" "$HOME/.cache/nanobot" "${HH}/logs" 2>/dev/null; pipx uninstall nanobot-ai 2>/dev/null; pipx uninstall nanobot 2>/dev/null; echo REMOVED_CODE`;
+        ? `${binRm}rm -rf "${HH}" /home/*/.nanobot "$HOME/.cache/nanobot" /tmp/.nb* 2>/dev/null; echo REMOVED_ALL`
+        : `${binRm}rm -rf "$HOME/.nanobot/venv" "$HOME/.cache/nanobot" "${HH}/logs" 2>/dev/null; echo REMOVED_CODE`;
       const r = await run(purge ? 'remove nanobot binary & all data' : 'remove nanobot binary & venv (config kept)', `export PATH="$HOME/.local/bin:$HOME/.nanobot/venv/bin:/usr/local/bin:$PATH"; ${rmCmd}`);
       const ok = /REMOVED/.test(r.stdout || '');
       return NextResponse.json({ success: ok, purged: purge, output: (r.stdout || '').slice(-500), log });
@@ -688,6 +725,10 @@ if [ ${cursor} -gt 0 ] && [ ${cursor} -le $SZ ]; then tail -c +$((cursor + 1)) "
     if (action === 'health') {
       const script = `
 ALIVE=0; [ -f "${PIDF}" ] && kill -0 $(cat "${PIDF}") 2>/dev/null && ALIVE=1
+if [ "$ALIVE" = 0 ] && [ -n "${inst}" ]; then
+  export XDG_RUNTIME_DIR="/run/user/$(id -u)" 2>/dev/null
+  systemctl --user is-active nanobot-gatew""ay@${inst} 2>/dev/null | grep -qx active && ALIVE=1
+fi
 echo "ALIVE=$ALIVE"
 PID=$(cat "${PIDF}" 2>/dev/null)
 UP=0; [ -n "$PID" ] && UP=$(ps -o etimes= -p "$PID" 2>/dev/null | tr -d ' ')

@@ -5,7 +5,7 @@ import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
 import { dispatchWithLiveLogs } from '@/app/api/agents/_jobs';
 import { execDetached } from '@/app/api/agents/_remote-bg';
 import { logger } from '@/lib/logger';
-import { parseInst, homeDir, instancePort, listInstances, cloneDefaultHome, pidAlive } from '../_multi-instance';
+import { parseInst, homeDir, instancePort, listInstances, cloneDefaultHome, pidAlive, gatewayUnit, ensureInstanceUnit, writeInstanceEnv, sdAvailable, sdInstanceCtl } from '../_multi-instance';
 
 /**
  * OpenClaw (openclaw.ai) one-click installer — deploys the OpenClaw gateway
@@ -129,12 +129,33 @@ async function handleAgentAction(body, session, log = []) {
     // -- Multi-instance support (hermes blueprint) --
     const inst = parseInst(body);
     const HH = homeDir('openclaw', inst);   // ${HH} or ${HH}-<tag>
-    const GW_PORT = instancePort(inst);         // distinct WebSocket port for instances
+    const GW_PORT = instancePort('openclaw', inst);         // distinct WebSocket port for instances
     const PIDF = `${HH}/daemon.pid`;
     const binPath = () => `p="$(export PATH="$HOME/.openclaw/local/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/usr/sbin:$PATH"; command -v openclaw 2>/dev/null)"; [ -z "$p" ] && for q in "$HOME/.openclaw/local/bin/openclaw" "$HOME/.local/bin/openclaw" "/usr/local/bin/openclaw" "/usr/bin/openclaw" "/usr/sbin/openclaw"; do [ -x "$q" ] && p="$q" && break; done; echo "BIN=$p"`;
 
     // ── Gateway control — pidfile-scoped; instances relocate via env vars ────
     const gwCtl = async (op) => {
+      // Instances first: per-instance systemd template unit (own cgroup +
+      // supervision + hardening). Falls through to legacy nohup path on any
+      // failure / missing systemd user session. Default keeps exact behavior.
+      if (inst && (await sdAvailable(sshConfig))) {
+        await writeInstanceEnv(sshConfig, HH, { OC_PORT: GW_PORT });
+        await ensureInstanceUnit(sshConfig, 'openclaw', gatewayUnit('openclaw', {
+          description: 'OpenClaw gateway',
+          envLines: [
+            `EnvironmentFile=%h/.openclaw-%i/instance.env`,
+            'EnvironmentFile=-%h/.openclaw-%i/.env',
+            'Environment=OPENCLAW_STATE_DIR=%h/.openclaw-%i',
+            'Environment=OPENCLAW_CONFIG_PATH=%h/.openclaw-%i/openclaw.json',
+            'Environment=OPENCLAW_LOG_DIR=%h/.openclaw-%i/logs',
+            'Environment=PATH=%h/.openclaw/local/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin',
+          ],
+          execStart: `/bin/sh -c 'exec "$(command -v openclaw || echo %h/.openclaw/local/bin/openclaw)" gateway --port "$OC_PORT"'`,
+          logFile: '%h/.openclaw-%i/logs/gateway.log',
+        }));
+        const sd = await sdInstanceCtl(sshConfig, 'openclaw', inst, op);
+        if (sd) return sd;
+      }
       const binR = await execCommand(sshConfig, `${binPath()} ; echo "SYSTEMD=$(command -v systemctl >/dev/null 2>&1 && echo 1 || echo 0)"`, { pool: false, timeoutMs: 15000 });
       const bp = (binR.stdout || '').match(/BIN=(.*)/)?.[1]?.trim();
       if (!bp) return { ok: false, out: 'openclaw binary not found' };
@@ -204,6 +225,13 @@ async function handleAgentAction(body, session, log = []) {
       if (!clone.ok) {
         return NextResponse.json({ success: false, error: 'Failed to clone openclaw instance home' });
       }
+      if (clone.tokenSame && !clone.existed) {
+        return NextResponse.json({
+          success: false,
+          instance: tag,
+          error: 'Cloned .env is identical to the default instance — set this instance its OWN bot token first (reconfigure → env). Starting it now would make the two instances fight over the same Telegram bot.',
+        });
+      }
       const g = await gwCtl('start');
       return NextResponse.json({
         success: true,
@@ -225,6 +253,10 @@ echo "===CONFIG_B64==="
 base64 < "${HH}/openclaw.json" 2>/dev/null || true
 echo "===RUNNING==="
 res=0; [ -f "${PIDF}" ] && kill -0 $(cat "${PIDF}") 2>/dev/null && res=1
+if [ "$res" = 0 ] && [ -n "${inst}" ]; then
+  export XDG_RUNTIME_DIR="/run/user/$(id -u)" 2>/dev/null
+  systemctl --user is-active openclaw-gatew""ay@${inst} 2>/dev/null | grep -qx active && res=1
+fi
 echo "PROC=$res"
 echo "===VERSION==="
 [ -n "$BIN" ] && "$BIN" --version 2>/dev/null | tail -1 | cut -c1-40
@@ -353,12 +385,21 @@ echo "===ENVKEYS==="
 
     // ── UNINSTALL ──
     if (action === 'uninstall') {
-      await run('stop system service', `(sudo -n systemctl disable --now ${UNIT} 2>/dev/null || systemctl disable --now ${UNIT} 2>/dev/null); true`);
-      await run('stop user service', `export XDG_RUNTIME_DIR="/run/user/$(id -u)"; systemctl --user disable --now ${UNIT} 2>/dev/null; true`);
-      await run('stop stray processes', `pkill -f '[o]penclaw.*gatew[a]y' 2>/dev/null; pkill -f '[o]penclaw gateway' 2>/dev/null; true`);
+      // Instance uninstall must NEVER touch shared resources (systemd unit,
+      // broad pkill patterns, the shared binary) — only its own pidfile & home.
+      if (inst) {
+        await run('stop instance (pidfile-scoped)', `if [ -f "${PIDF}" ]; then p=$(cat "${PIDF}"); kill "$p" 2>/dev/null; sleep 1; kill -9 "$p" 2>/dev/null; rm -f "${PIDF}"; fi; true`);
+      } else {
+        await run('stop system service', `(sudo -n systemctl disable --now ${UNIT} 2>/dev/null || systemctl disable --now ${UNIT} 2>/dev/null); true`);
+        await run('stop user service', `export XDG_RUNTIME_DIR="/run/user/$(id -u)"; systemctl --user disable --now ${UNIT} 2>/dev/null; true`);
+        await run('stop stray processes', `pkill -f '[o]penclaw.*gatew[a]y' 2>/dev/null; pkill -f '[o]penclaw gateway' 2>/dev/null; true`);
+      }
+      const binRm = inst
+        ? '' // instances share the globally-installed binary — leave it alone
+        : `(npm -g rm openclaw 2>/dev/null || true); rm -f "$HOME/.openclaw/local/bin/openclaw" "$HOME/.local/bin/openclaw" /usr/local/bin/openclaw /usr/bin/openclaw /usr/sbin/openclaw; `;
       const rmCmd = purge
-        ? `(npm -g rm openclaw 2>/dev/null || true); rm -f "$HOME/.openclaw/local/bin/openclaw" "$HOME/.local/bin/openclaw" /usr/local/bin/openclaw /usr/bin/openclaw /usr/sbin/openclaw; rm -rf "${HH}"; echo REMOVED_ALL`
-        : `(npm -g rm openclaw 2>/dev/null || true); rm -f "$HOME/.openclaw/local/bin/openclaw" "$HOME/.local/bin/openclaw" /usr/local/bin/openclaw /usr/bin/openclaw /usr/sbin/openclaw; rm -rf "${HH}/local" "${HH}/logs"; echo REMOVED_CODE`;
+        ? `${binRm}rm -rf "${HH}"; echo REMOVED_ALL`
+        : `${binRm}rm -rf "${HH}/local" "${HH}/logs"; echo REMOVED_CODE`;
       const r = await run(purge ? 'remove binary, code & all data' : 'remove binary & code (config kept)', rmCmd);
       const ok = /REMOVED/.test(r.stdout || '');
       return NextResponse.json({ success: ok, purged: purge, log });
@@ -534,6 +575,10 @@ fi
       const script = `
 export PATH="$HOME/.openclaw/local/bin:$HOME/.local/bin:/usr/local/bin:$PATH"
 res=0; [ -f "${PIDF}" ] && kill -0 $(cat "${PIDF}") 2>/dev/null && res=1
+if [ "$res" = 0 ] && [ -n "${inst}" ]; then
+  export XDG_RUNTIME_DIR="/run/user/$(id -u)" 2>/dev/null
+  systemctl --user is-active openclaw-gatew""ay@${inst} 2>/dev/null | grep -qx active && res=1
+fi
 ALIVE=$res
 PORT=0; (command -v ss >/dev/null 2>&1 && ss -ltn 2>/dev/null | grep -qE '18789${GW_PORT ? `|${GW_PORT}` : ''}') && PORT=1
 echo "ALIVE=$ALIVE"; echo "PORT=$PORT"
