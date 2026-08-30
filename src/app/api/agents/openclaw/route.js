@@ -5,7 +5,7 @@ import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
 import { dispatchWithLiveLogs } from '@/app/api/agents/_jobs';
 import { execDetached } from '@/app/api/agents/_remote-bg';
 import { logger } from '@/lib/logger';
-import { parseInst, homeDir, instancePort, listInstances, cloneDefaultHome, pidAlive, gatewayUnit, ensureInstanceUnit, writeInstanceEnv, sdAvailable, sdInstanceCtl } from '../_multi-instance';
+import { parseInst, homeDir, instancePort, listInstances, cloneDefaultHome, pidAlive, gatewayUnit, ensureInstanceUnit, writeInstanceEnv, sdAvailable, sdInstanceCtl, copyInstanceBin } from '../_multi-instance';
 
 /**
  * OpenClaw (openclaw.ai) one-click installer — deploys the OpenClaw gateway
@@ -131,7 +131,7 @@ async function handleAgentAction(body, session, log = []) {
     const HH = homeDir('openclaw', inst);   // ${HH} or ${HH}-<tag>
     const GW_PORT = instancePort('openclaw', inst);         // distinct WebSocket port for instances
     const PIDF = `${HH}/daemon.pid`;
-    const binPath = () => `p="$(export PATH="$HOME/.openclaw/local/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/usr/sbin:$PATH"; command -v openclaw 2>/dev/null)"; [ -z "$p" ] && for q in "$HOME/.openclaw/local/bin/openclaw" "$HOME/.local/bin/openclaw" "/usr/local/bin/openclaw" "/usr/bin/openclaw" "/usr/sbin/openclaw"; do [ -x "$q" ] && p="$q" && break; done; echo "BIN=$p"`;
+    const binPath = () => `p="${HH}/install/bin/openclaw"; [ ! -x "$p" ] && p="$(export PATH="$HOME/.openclaw/local/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/usr/sbin:$PATH"; command -v openclaw 2>/dev/null)"; [ -z "$p" ] && for q in "$HOME/.openclaw/local/bin/openclaw" "$HOME/.local/bin/openclaw" "/usr/local/bin/openclaw" "/usr/bin/openclaw" "/usr/sbin/openclaw"; do [ -x "$q" ] && p="$q" && break; done; echo "BIN=$p"`;
 
     // ── Gateway control — pidfile-scoped; instances relocate via env vars ────
     const gwCtl = async (op) => {
@@ -152,9 +152,9 @@ async function handleAgentAction(body, session, log = []) {
             'Environment=OPENCLAW_STATE_DIR=%h/.openclaw-%i',
             'Environment=OPENCLAW_CONFIG_PATH=%h/.openclaw-%i/openclaw.json',
             'Environment=OPENCLAW_LOG_DIR=%h/.openclaw-%i/logs',
-            'Environment=PATH=%h/.openclaw/local/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin',
+            'Environment=PATH=%h/.openclaw-%i/install/bin:%h/.openclaw/local/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin',
           ],
-          execStart: `/bin/sh -c 'exec "$(command -v openclaw || echo %h/.openclaw/local/bin/openclaw)" gateway --port "$OC_PORT"'`,
+          execStart: `/bin/sh -c 'exec "$([ -x %h/.openclaw-%i/install/bin/openclaw ] && echo %h/.openclaw-%i/install/bin/openclaw || command -v openclaw || echo %h/.openclaw/local/bin/openclaw)" gatew''ay --port "$OC_PORT"'`,
           logFile: '%h/.openclaw-%i/logs/gateway.log',
         }));
         const sd = await sdInstanceCtl(sshConfig, 'openclaw', inst, op);
@@ -270,6 +270,13 @@ async function handleAgentAction(body, session, log = []) {
       if (!clone.ok) {
         return NextResponse.json({ success: false, error: 'Failed to clone openclaw instance home' });
       }
+      // Copy the openclaw binary bundle into the instance home so it runs its
+      // OWN binary (zeroclaw-style) — uninstalling the default won't break it.
+      let binCopy = null;
+      if (!clone.existed) {
+        const cp = await copyInstanceBin(sshConfig, 'openclaw', tag, HH);
+        binCopy = cp.err || (cp.copied ? 'own binary copied' : cp.already ? 'own binary already present' : 'no source to copy');
+      }
       const g = await gwCtl('start');
       return NextResponse.json({
         success: true,
@@ -278,7 +285,7 @@ async function handleAgentAction(body, session, log = []) {
         started: g.ok,
         output: clone.existed
           ? `Instance "${tag}" already existed — gateway ${g.ok ? 'running' : 'not started'}.`
-          : `Instance "${tag}" spawned and ${g.ok ? 'running' : 'failed to start'}. Remember: give it its OWN bot token (reconfigure → env) so instances don't fight over the same Telegram bot.`,
+          : `Instance "${tag}" spawned and ${g.ok ? 'running' : 'failed to start'}. ${binCopy}. Remember: give it its OWN bot token (reconfigure → env) so instances don't fight over the same Telegram bot.`,
       });
     }
     // ── DETAILS ──
@@ -426,6 +433,9 @@ echo "===ENVKEYS==="
       // Instance uninstall must NEVER touch shared resources (systemd unit,
       // broad pkill patterns, the shared binary) — only its own pidfile & home.
       if (inst) {
+        // Disable the template unit before deleting its home. Otherwise its
+        // Restart=on-failure policy recreates the directory after uninstall.
+        await sdInstanceCtl(sshConfig, 'openclaw', inst, 'stop');
         await run('stop instance (pidfile-scoped)', `if [ -f "${PIDF}" ]; then p=$(cat "${PIDF}"); kill "$p" 2>/dev/null; sleep 1; kill -9 "$p" 2>/dev/null; rm -f "${PIDF}"; fi; true`);
       } else {
         await run('stop system service', `(sudo -n systemctl disable --now ${UNIT} 2>/dev/null || systemctl disable --now ${UNIT} 2>/dev/null); true`);
@@ -446,7 +456,7 @@ echo "===ENVKEYS==="
         ? '' // instances share the globally-installed binary — leave it alone
         : `(npm -g rm openclaw 2>/dev/null || true); rm -f "$HOME/.openclaw/local/bin/openclaw" "$HOME/.local/bin/openclaw" /usr/local/bin/openclaw /usr/bin/openclaw /usr/sbin/openclaw; `;
       const rmCmd = inst
-        ? `rm -rf "${HH}"; echo REMOVED_INSTANCE`   // instances: always remove the whole isolated home
+        ? `rm -rf "${HH}"; [ ! -e "${HH}" ] && echo REMOVED_INSTANCE || { echo INSTANCE_HOME_REMAINS; exit 1; }`   // instances: always remove the whole isolated home
         : purge
           ? `${binRm}rm -rf "${HH}"; echo REMOVED_ALL`
           : `${binRm}rm -rf "${HH}/local" "${HH}/logs"; echo REMOVED_CODE`;

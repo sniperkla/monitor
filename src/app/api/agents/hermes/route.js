@@ -3,7 +3,7 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
 import { dispatchWithLiveLogs } from '@/app/api/agents/_jobs';
-import { parseInst, gatewayUnit, ensureInstanceUnit, writeInstanceEnv, sdAvailable, sdInstanceCtl } from '../_multi-instance';
+import { parseInst, gatewayUnit, ensureInstanceUnit, writeInstanceEnv, sdAvailable, sdInstanceCtl, copyInstanceBin } from '../_multi-instance';
 import { execDetached } from '@/app/api/agents/_remote-bg';
 import { logger } from '@/lib/logger';
 
@@ -205,7 +205,7 @@ async function handleAgentAction(body, session, log = []) {
           'EnvironmentFile=-%h/.hermes-%i/instance.env',
           'Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin',
         ],
-        execStart: `/bin/sh -c 'exec "$(command -v hermes || echo %h/.local/bin/hermes)" gateway run'`,
+        execStart: `/bin/sh -c 'exec "$([ -x %h/.hermes-%i/hermes-agent/venv/bin/hermes ] && echo %h/.hermes-%i/hermes-agent/venv/bin/hermes || command -v hermes || echo %h/.local/bin/hermes)" gatew''ay run'`,
         logFile: '%h/.hermes-%i/logs/gateway.log',
       }));
       return sdInstanceCtl(sshConfig, 'hermes', inst, operation);
@@ -250,6 +250,16 @@ true`,
       let cbin = (o0.match(/CBIN=(.*)/)?.[1] || '').trim();
       if (!hbin && !cbin) return { ok: false, out: 'hermes binary not found (host or container)' };
       const sysdLive = /SYSTEMD=1/.test(binR.stdout || '');
+      // Per-instance binary isolation (zeroclaw blueprint): an instance runs
+      // its OWN copied hermes-agent tree from its home when present, so it
+      // keeps working even after the default install is uninstalled.
+      if (inst) {
+        const localBin = `${HH}/hermes-agent/venv/bin/hermes`;
+        const lb = await execCommand(sshConfig, `[ -x \"${localBin}\" ] && echo LOCAL_BIN=1 || true`, { pool: false, timeoutMs: 15000 });
+        if (/LOCAL_BIN=1/.test(lb.stdout || '')) {
+          return gwCtlHost(op, localBin, sysdLive);
+        }
+      }
       // Build an execution wrapper + bin path valid for whichever side has hermes
       let PFX = '';
       let BINP;
@@ -383,13 +393,20 @@ echo CLONED
         return NextResponse.json({ success: false, error: 'Failed to clone instance home: ' + ((r.stdout || '') + (r.stderr || '')).slice(-200), log });
       }
       const existed = /EXISTS/.test(r.stdout || '');
+      // Copy the hermes runtime tree into the instance home so it runs its OWN
+      // binary (zeroclaw-style) — uninstalling the default won't break it.
+      let binCopy = null;
+      if (!existed) {
+        const cp = await copyInstanceBin(sshConfig, 'hermes', tag, `$HOME/.hermes-${tag}`);
+        binCopy = cp.err || (cp.copied ? 'own binary copied' : cp.already ? 'own binary already present' : 'no source to copy');
+      }
       const g = await gwCtl('start');
       return NextResponse.json({
         success: true,
         instance: tag,
         existed,
         started: g.ok,
-        output: existed ? `Instance "${tag}" already existed — gateway ${g.ok ? 'running' : 'not started'}.` : `Instance "${tag}" spawned and ${g.ok ? 'running' : 'failed to start'}. Remember: give it its OWN bot token (reconfigure → env) or the two instances will fight over the same Telegram bot.`,
+        output: existed ? `Instance "${tag}" already existed — gateway ${g.ok ? 'running' : 'not started'}.` : `Instance "${tag}" spawned and ${g.ok ? 'running' : 'failed to start'}. ${binCopy}. Remember: give it its OWN bot token (reconfigure → env) or the two instances will fight over the same Telegram bot.`,
         log,
       });
     }
@@ -420,6 +437,9 @@ echo CLONED
       // matches every hermes gateway on the box), touch the shared systemd
       // unit, or remove the shared binary — only its own pidfile & home.
       if (inst) {
+        // A systemd-managed template unit can recreate its home on restart.
+        // Disable it first, then retain the pidfile cleanup for legacy nohup instances.
+        await sdInstanceCtl(sshConfig, 'hermes', inst, 'stop');
         await run('stop instance (pidfile-scoped)', `if [ -f "${HH}/daemon.pid" ]; then p=$(cat "${HH}/daemon.pid"); kill "$p" 2>/dev/null; sleep 1; kill -9 "$p" 2>/dev/null; rm -f "${HH}/daemon.pid"; fi; true`);
       } else {
         await run('stop system service', `(sudo -n systemctl disable --now hermes-gate""way 2>/dev/null || systemctl disable --now hermes-gate""way 2>/dev/null); true`);
@@ -444,7 +464,7 @@ echo CLONED
         : `rm -f "$HOME/.local/bin/hermes" /usr/local/bin/hermes; `;
       const libRm = purge && !inst && !instancesRemain ? ' /usr/local/lib/hermes-agent' : '';
       const rmCmd = inst
-        ? `rm -rf "${HH}"; echo REMOVED_INSTANCE`   // instances: always remove the whole isolated home
+        ? `rm -rf "${HH}"; [ ! -e "${HH}" ] && echo REMOVED_INSTANCE || { echo INSTANCE_HOME_REMAINS; exit 1; }`   // instances: always remove the whole isolated home
         : purge
           ? `${binRm}rm -rf "${HH}"${libRm}; echo REMOVED_ALL`
           : `${binRm}rm -rf "${HH}/hermes-agent"${libRm}; echo REMOVED_CODE`;

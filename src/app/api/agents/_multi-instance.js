@@ -140,6 +140,79 @@ echo CLONED
     tokenSame: false, // .env is never cloned — always isolated
   };
 }
+
+// Per-instance binary isolation (zeroclaw blueprint). Each agent's runtime is a
+// self-contained tree that an instance can execute from its OWN home dir:
+//   hermes   -> ~/.hermes-<tag>/hermes-agent/   (code + venv, hard-linked)
+//   nanobot  -> ~/.nanobot-<tag>/venv/          (python venv, hard-linked)
+//   openclaw -> ~/.openclaw-<tag>/install/      (node dist bundle, hard-linked)
+// Hard links (cp -al) make the copy INSTANT and ~0 extra disk while still being
+// an independent tree: `rm -rf` on the default leaves the inodes alive because
+// the instance's links hold them, and instance upgrades never touch the default
+// (and vice-versa). Falls back to a full copy when src/dst are on different
+// filesystems (hard links cannot cross mounts). Shebangs are rewritten to the
+// instance-local interpreter so the copied venv is self-contained.
+export async function copyInstanceBin(sshConfig, agentId, tag, HH) {
+  if (!tag) return { copied: false, bin: '', err: 'no tag' };
+  const plan = {
+    hermes: { dstRoot: 'hermes-agent', src: '/usr/local/lib/hermes-agent', bin: 'hermes-agent/venv/bin/hermes', py: 'venv/bin/python' },
+    nanobot: { dstRoot: 'venv', src: '$HOME/.nanobot/venv', bin: 'venv/bin/nanobot', py: 'venv/bin/python' },
+    openclaw: { dstRoot: 'install', src: '$HOME/.openclaw/local', bin: 'install/bin/openclaw', py: null },
+  }[agentId];
+  if (!plan) return { copied: false, bin: '', err: `unsupported ${agentId}` };
+  const dst = `${HH}/${plan.dstRoot}`;
+  const fixShebang = plan.py ? `
+# Rewrite bin/* shebangs to the instance-local interpreter so the copied venv
+# is self-contained (default rm -rf cannot break it).
+NEWPY="${dst}/${plan.py}"
+for f in "${dst}/bin/"*; do
+  [ -f "$f" ] || continue
+  head1=$(head -1 "$f" 2>/dev/null)
+  case "$head1" in
+    '#!'*) case "$head1" in *"python"*) printf '#!%s\\n' "$NEWPY" > "$f.tmp"; tail -n +2 "$f" >> "$f.tmp"; mv -f "$f.tmp" "$f"; chmod 755 "$f";; esac ;;
+  esac
+done
+# pyvenv.cfg home points at the system python — still valid after the copy.
+# Editable installs (pip install -e) embed the ORIGINAL tree path in .pth /
+# finder files — repoint them at this copy so the venv is fully self-contained.
+SP=$(ls -d ${dst}/venv/lib/python*/site-packages 2>/dev/null | head -1)
+if [ -n "$SP" ] && [ "$SRC" != "$dst" ]; then
+  grep -rlF "$SRC" "$SP" 2>/dev/null | while read -r pf; do
+    sed -i "s|$SRC|${dst}|g" "$pf" 2>/dev/null
+  done
+fi
+` : '';
+  const cmd = `
+[ -d "${dst}" ] && echo ALREADY && exit 0
+mkdir -p "${HH}"
+SRC="${plan.src}"
+[ -e "$SRC" ] || { echo NO_SRC; exit 0; }
+if cp -al "$SRC" "${dst}" 2>/dev/null; then
+  echo COPY_LINKED
+elif cp -a "$SRC" "${dst}" 2>/dev/null; then
+  echo COPY_FULL
+else
+  echo COPY_FAIL
+  exit 0
+fi
+rm -f "${dst}/daemon.pid" 2>/dev/null
+# Strip copied bytecode: hard-linked .pyc files can go stale the moment the
+# default gateway recompiles a module (marshal version/mtime mismatch ->
+# "bad marshal data" at import). Python regenerates them on first run.
+find "${dst}" -depth -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null
+find "${dst}" -name '*.pyc' -delete 2>/dev/null
+${fixShebang}
+`;
+  const r = await execCommand(sshConfig, cmd, { pool: false, timeoutMs: 180000 });
+  const out = r.stdout || '';
+  const bin = /COPY_LINKED|COPY_FULL|ALREADY/.test(out) ? `${HH}/${plan.bin}` : '';
+  return {
+    copied: /COPY_LINKED|COPY_FULL/.test(out),
+    linked: /COPY_LINKED/.test(out),
+    already: /ALREADY/.test(out),
+    bin, err: /NO_SRC/.test(out) ? 'bin source not found' : /COPY_FAIL/.test(out) ? 'copy failed' : '',
+  };
+}
 // ── Strict mode: one Linux user per "friend" (per-owner isolation) ────────
 // A dedicated user gets its own home (own .env, own token, own systemd user
 // units, own cgroups) — nobody can read anyone else's credentials. The friend
@@ -298,7 +371,7 @@ export async function sdInstanceCtl(sshConfig, agentId, inst, op) {
   }
   if (op === 'stop') {
     const r = await execCommand(sshConfig,
-      `${XF} systemctl --user disable --now ${U} 2>/dev/null; systemctl --user stop ${U} 2>/dev/null; echo SD_STOPPED`,
+      `${XF} systemctl --user disable --now ${U} 2>/dev/null; systemctl --user stop ${U} 2>/dev/null; systemctl --user reset-failed ${U} 2>/dev/null || true; echo SD_STOPPED`,
       { pool: false, timeoutMs: 45000 });
     return { ok: /SD_STOPPED/.test(r.stdout || ''), out: ((r.stdout || '') + (r.stderr || '')).slice(-300), via: 'systemd' };
   }
