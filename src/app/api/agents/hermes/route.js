@@ -3,7 +3,7 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
 import { dispatchWithLiveLogs } from '@/app/api/agents/_jobs';
-import { gatewayUnit, ensureInstanceUnit, writeInstanceEnv, sdAvailable, sdInstanceCtl } from '../_multi-instance';
+import { parseInst, gatewayUnit, ensureInstanceUnit, writeInstanceEnv, sdAvailable, sdInstanceCtl } from '../_multi-instance';
 import { execDetached } from '@/app/api/agents/_remote-bg';
 import { logger } from '@/lib/logger';
 
@@ -56,8 +56,28 @@ function maskEnvText(text) {
   }).join('\n');
 }
 
+// ── Instance-scoped gateway detection (shared by every probe script) ────────
+// A bare `pgrep -f '[h]ermes.*gatew[a]y'` matches EVERY instance on the box, so
+// one instance's status would report a sibling instance as running — ZeroClaw
+// solves exactly this with a `--config-dir` check. Here we walk the matched pids
+// and keep only those whose HERMES_HOME (or command line) points at THIS
+// instance's home; a gateway carrying no marker at all cannot be attributed to a
+// sibling, so it still counts (preserves the previous behaviour).
+// NOTE: the literal word "gateway" must never appear in this snippet — only the
+// bracketed regex `gatew[a]y` — or pgrep would match this very command line.
+const procScan = (tag = '') => `PROC=0
+for hp in $(pgrep -f '[h]ermes.*gatew[a]y' 2>/dev/null; pgrep -f '[h]ermes_cli.*gatew[a]y' 2>/dev/null); do
+  [ -n "$hp" ] || continue
+  HME="$(tr '\\0' '\\n' < /proc/$hp/environ 2>/dev/null | sed -n 's/^HERMES_HOME=//p' | head -1)"
+  [ -n "$HME" ] || HME="$(tr '\\0' '\\n' < /proc/$hp/cmdline 2>/dev/null | grep -o '\\.hermes[-a-zA-Z0-9_]*' | head -1)"
+  if [ -z "$HME" ]; then PROC=1; break; fi
+  case "$HME" in *".hermes${tag ? '-' + tag : ''}") PROC=1; break ;; esac
+done`;
+
 // POSIX sh probe — works on every supported distro.
-const STATUS_SCRIPT = `
+// `tag` scopes every process check to one instance home ('' = default install).
+const statusScript = (tag = '') => `
+${tag ? `export HERMES_HOME="$HOME/.hermes-${tag}"` : ''}
 export PATH="$HOME/.local/bin:/usr/local/lib/hermes-agent/venv/bin:$HOME/.hermes/hermes-agent/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 BIN="$(command -v hermes 2>/dev/null || true)"
 [ -z "$BIN" ] && for p in "$HOME/.local/bin/hermes" "/usr/local/bin/hermes" "/usr/bin/hermes" "$HOME/.hermes/hermes-agent/venv/bin/hermes" "/usr/local/lib/hermes-agent/venv/bin/hermes" "/usr/local/lib/hermes-agent/hermes"; do [ -x "$p" ] && BIN="$p" && break; done
@@ -73,7 +93,7 @@ ENVF=0; [ -f "$HOME/.hermes/.env" ] && ENVF=1
 echo "ENVFILE=$ENVF"
 USVC=0; command -v systemctl >/dev/null 2>&1 && systemctl --user is-active hermes-gate""way 2>/dev/null | grep -qx active && USVC=1
 SSVC=0; command -v systemctl >/dev/null 2>&1 && systemctl is-active hermes-gate""way 2>/dev/null | grep -qx active && SSVC=1
-PROC=0; { pgrep -f '[h]ermes.*gatew[a]y' || pgrep -f '[h]ermes_cli.*gatew[a]y'; } >/dev/null 2>&1 && PROC=1
+${procScan(tag)}
 GSTAT=0; if [ "$PROC" = 0 ] && [ -n "$BIN" ]; then timeout 15 "$BIN" gatew""ay status 2>/dev/null | grep -q 'is running' && GSTAT=1; fi
 [ "$GSTAT" = 1 ] && PROC=1
 echo "PROC=$PROC"
@@ -87,8 +107,9 @@ ATOMIC=0
 { ldconfig -p 2>/dev/null | grep -q libatomic || [ -e /usr/lib64/libatomic.so.1 ] || [ -e /usr/lib/x86_64-linux-gnu/libatomic.so.1 ]; } && ATOMIC=1
 CXX=0; { command -v g++ >/dev/null 2>&1 || command -v c++ >/dev/null 2>&1 || command -v gcc >/dev/null 2>&1; } && CXX=1
 TARP=0; command -v tar >/dev/null 2>&1 && TARP=1
+PROCP=0; command -v pgrep >/dev/null 2>&1 && PROCP=1
 echo "SYSTEMD=$SYSTEMD"; echo "SUDO=$SUDO"
-echo "GIT=$GIT"; echo "CURL=$CURLP"; echo "XZ=$XZ"; echo "ATOMIC=$ATOMIC"; echo "CXX=$CXX"; echo "TAR=$TARP"
+echo "GIT=$GIT"; echo "CURL=$CURLP"; echo "XZ=$XZ"; echo "ATOMIC=$ATOMIC"; echo "CXX=$CXX"; echo "TAR=$TARP"; echo "PROCP=$PROCP"
 DOCKER=0; command -v docker >/dev/null 2>&1 && DOCKER=1
 DCONT=0; command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx hermes-agent && DCONT=1
 echo "DOCKER=$DOCKER"; echo "DCONT=$DCONT"
@@ -128,7 +149,10 @@ async function handleAgentAction(body, session, log = []) {
     // ── Multi-instance support: optional instance tag ──
     // instance '' → default install (~/.hermes); tag → ~/.hermes-<tag> with
     // its own HERMES_HOME, service identity, pidfile, env, and bot token.
-    const inst = String((body && (body.instance || (body.config && body.config.instance))) || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 24);
+    // parseInst reads body.instance → body.config.instance → body.config.tag
+    // (the `spawn-instance` action sends config.tag), so a spawned instance is
+    // actually targeted instead of silently hitting the default install.
+    const inst = parseInst(body);
     const HH = inst ? `$HOME/.hermes-${inst}` : `$HOME/.hermes`;
     const HERMES_ENV = inst ? `export HERMES_HOME=$HOME/.hermes-${inst};` : '';
 
@@ -300,7 +324,9 @@ true`,
           await execCommand(sshConfig, `docker exec hermes-agent pkill -f '[h]ermes.*gatew[a]y' 2>/dev/null; sleep 2; echo KILLED`, { pool: false, timeoutMs: 45000 });
         }
         const r = await execCommand(sshConfig,
-          `docker exec -d hermes-agent bash -c 'mkdir -p /root/.hermes/logs && PATH=/usr/local/bin:/usr/bin:/bin:$PATH nohup sh -c "exec ${JSON.stringify(cbin)} gateway run || exec ${JSON.stringify(cbin)} gateway" >> /root/.hermes/logs/gateway-nohup.log 2>&1 < /dev/null &' && sleep 3 && docker exec hermes-agent pgrep -f '[h]ermes.*gatew[a]y' >/dev/null && echo GW_STARTED`,
+          // Same self-match guard as the host path: the literal `gateway run`
+          // sits on this very command line, so it is split (`gatew""ay`).
+          `docker exec -d hermes-agent bash -c 'mkdir -p /root/.hermes/logs && PATH=/usr/local/bin:/usr/bin:/bin:$PATH nohup sh -c "exec ${JSON.stringify(cbin)} gatew""ay run || exec ${JSON.stringify(cbin)} gatew""ay" >> /root/.hermes/logs/gateway-nohup.log 2>&1 < /dev/null &' && sleep 3 && docker exec hermes-agent pgrep -f '[h]ermes.*gatew[a]y' >/dev/null && echo GW_STARTED`,
           { pool: false, timeoutMs: 60000 });
         return { ok: /GW_STARTED/.test(r.stdout || ''), out: (r.stdout || '').slice(-200) };
       }
@@ -369,7 +395,7 @@ echo CLONED
     }
 
     if (action === 'status') {
-      const r = await execCommand(sshConfig, STATUS_SCRIPT, { pool: false, timeoutMs: 30000 });
+      const r = await execCommand(sshConfig, statusScript(inst), { pool: false, timeoutMs: 30000 });
       const parse = (k) => (r.stdout || '').match(new RegExp(`${k}=(.*)`))?.[1]?.trim();
       const hostInstalled = parse('BIN') === 'SET';
       const inContainer = parse('DCONT') === '1';
@@ -398,14 +424,25 @@ echo CLONED
       } else {
         await run('stop system service', `(sudo -n systemctl disable --now hermes-gate""way 2>/dev/null || systemctl disable --now hermes-gate""way 2>/dev/null); true`);
         await run('stop user service', `export XDG_RUNTIME_DIR="/run/user/$(id -u)"; systemctl --user disable --now hermes-gate""way 2>/dev/null; true`);
-        await run('stop stray processes', `pkill -f '[h]ermes.*gatew[a]y' 2>/dev/null; pkill -f '[h]ermes-agent/hermes' 2>/dev/null; true`);
+        // Selective stray-kill: only default gateways (no per-instance home), so
+        // spawned instances survive a default stop/uninstall (zeroclaw blueprint).
+        await run('stop stray processes', `for p in $(pgrep -f '[h]ermes.*gatew[a]y' 2>/dev/null; pgrep -f '[h]ermes-agent/hermes' 2>/dev/null); do grep -qaE 'HERMES_HOME=.+\.hermes-[^ /]' /proc/$p/environ 2>/dev/null || kill -9 $p 2>/dev/null; done; true`);
         // Remove isolated Docker container (if any); data volume kept unless purge.
         await run('remove docker container', `command -v docker >/dev/null 2>&1 && docker rm -f hermes-agent 2>/dev/null; ${purge ? `rm -rf "$HOME/.hermes-docker" 2>/dev/null;` : ''} true`);
       }
-      const binRm = inst
+      // Share the globally-installed binary/venv. Removing it while any instance
+      // still exists breaks restart for those instances — skip when siblings remain.
+      let instancesRemain = false;
+      if (!inst) {
+        try {
+          const instList = await listInstances(sshConfig, 'hermes');
+          instancesRemain = Array.isArray(instList) && instList.length > 0;
+        } catch { /* non-fatal */ }
+      }
+      const binRm = (inst || instancesRemain)
         ? '' // instances share the globally-installed binary — leave it alone
         : `rm -f "$HOME/.local/bin/hermes" /usr/local/bin/hermes; `;
-      const libRm = purge && !inst ? ' /usr/local/lib/hermes-agent' : '';
+      const libRm = purge && !inst && !instancesRemain ? ' /usr/local/lib/hermes-agent' : '';
       const rmCmd = inst
         ? `rm -rf "${HH}"; echo REMOVED_INSTANCE`   // instances: always remove the whole isolated home
         : purge
@@ -456,7 +493,7 @@ echo "===MEMORY_B64==="
 echo "===RUNNING==="
 SSVC=0; command -v systemctl >/dev/null 2>&1 && systemctl is-active hermes-gate""way 2>/dev/null | grep -qx active && SSVC=1
 USVC=0; command -v systemctl >/dev/null 2>&1 && systemctl --user is-active hermes-gate""way 2>/dev/null | grep -qx active && USVC=1
-PROC=0; pgrep -f '[h]ermes.*gatew[a]y' >/dev/null 2>&1 && PROC=1
+${procScan(inst)}
 SYSTEMD=0; command -v systemctl >/dev/null 2>&1 && SYSTEMD=1
 echo "SSVC=$SSVC"; echo "USVC=$USVC"; echo "PROC=$PROC"; echo "SYSTEMD=$SYSTEMD"
 echo "===VERSION==="
@@ -514,8 +551,18 @@ echo "$MDL"
         binPath: remoteBinPath || null,
         service: /SSVC=1/.test(out) ? 'system' : /USVC=1/.test(out) ? 'user' : /PROC=1/.test(out) ? 'process' : null,
         hasSystemd: /SYSTEMD=1/.test(section('RUNNING', 'VERSION')),
-        configYaml: configYaml || '',
-        envText: envText || '',
+        // Intentionally NOT masked: these fields round-trip through the config
+        // editor. Returning masked placeholders ("••••") would make the UI
+        // persist them straight back into config.yaml on save and corrupt it.
+        // Masking needs a UI contract change first — either a separate
+        // read-only masked field, or a sentinel value that save-config rejects.
+        // Matches zeroclaw's current behaviour. See AGENT_PARITY_AUDIT.md.
+        configYaml,
+        // Field-name drift: the shared config editor reads `configJson`
+        // (zeroclaw returns configJson) — return the same content under BOTH
+        // names so either consumer works.
+        configJson: configYaml,
+        envText,
         envKeys,
         skills,
         systemPrompt,
@@ -675,7 +722,10 @@ PY`, { timeoutMs: 30000 });
     }
 
     if (action === 'save-config') {
-      const yaml = String(config.configYaml ?? '');
+      // Accept every name the config editors post (zeroclaw: configJson →
+      // configToml → configYaml) so a shared component posting `configJson`
+      // no longer gets a 400 "content is empty".
+      const yaml = String(config.configJson ?? config.configToml ?? config.configYaml ?? '');
       if (!yaml.trim()) return NextResponse.json({ success: false, error: 'config.yaml content is empty' }, { status: 400 });
       await execCommand(sshConfig, `
         cp "${HH}/config.yaml" "${HH}/config.yaml.bak-$(date +%s)" 2>/dev/null || true
@@ -856,7 +906,7 @@ fi
 
     if (action === 'restore-backup') {
       const name = String(config.name || '');
-      if (!/^config\\.yaml\\.bak-[0-9]+$/.test(name)) {
+      if (!/^config\.yaml\.bak-[0-9]+$/.test(name)) {
         return NextResponse.json({ success: false, error: 'Invalid backup name' }, { status: 400 });
       }
       const r = await execCommand(sshConfig,
@@ -952,7 +1002,7 @@ fi
 
     // 1. Probe HOST (docker availability lives here, not inside the container)
     log.push(`> [probe] Checking host system capabilities...`);
-    const hostProbe = await run('host probe', STATUS_SCRIPT);
+    const hostProbe = await run('host probe', statusScript(inst));
     const hp = (k) => (hostProbe.stdout || '').match(new RegExp(`${k}=(.*)`))?.[1]?.trim();
 
     if (config.docker?.enabled) {
@@ -978,7 +1028,7 @@ fi
 
     // 1b. Probe TARGET (inside container when docker-isolated, else the host)
     log.push(`> [probe] Checking target environment prerequisites...`);
-    const probeR = await execCommand(sshConfig, wrap(STATUS_SCRIPT), { pool: false, timeoutMs: 60000 });
+    const probeR = await execCommand(sshConfig, wrap(statusScript(inst)), { pool: false, timeoutMs: 60000 });
     const p = (k) => (probeR.stdout || '').match(new RegExp(`${k}=(.*)`))?.[1]?.trim();
     const hasSystemd = p('SYSTEMD') === '1';
     const hasSudo = p('SUDO') === '1';
@@ -987,7 +1037,11 @@ fi
     const atomicMissing = p('ATOMIC') !== '1';
     const cxxMissing = p('CXX') !== '1';
     const tarMissing = p('TAR') !== '1';
-    if (p('GIT') === 'NONE' || p('CURL') !== '1' || p('XZ') !== '1' || atomicMissing || cxxMissing || tarMissing) {
+    // pgrep/procps: every status/health check shells out to pgrep, and minimal
+    // images (CentOS Stream 9, Alpine) ship without it — without this probe the
+    // whole prereq block is skipped and installs report failure (PROC always 0).
+    const procpsMissing = p('PROCP') !== '1';
+    if (p('GIT') === 'NONE' || p('CURL') !== '1' || p('XZ') !== '1' || atomicMissing || cxxMissing || tarMissing || procpsMissing) {
       const base = [['git', p('GIT') === 'NONE'], ['curl', p('CURL') !== '1'], ['xz', p('XZ') !== '1'], ['tar', tarMissing]]
         .filter(x => x[1]).map(x => x[0]);
       const mk = (extra) => base.concat(extra.filter(Boolean)).join(' ');
@@ -1009,6 +1063,19 @@ fi
         `(command -v zypper >/dev/null 2>&1 && { sed -i 's|^gpgcheck.*|gpgcheck = 0|' /etc/zypp/zypp.conf 2>/dev/null || echo 'gpgcheck = 0' >> /etc/zypp/zypp.conf; } && $S zypper --non-interactive --no-gpg-checks install ${zyppPkgs} && { command -v pip3 >/dev/null 2>&1 && $S pip3 install -q uv 2>/dev/null || true; }) < /dev/null ||`,
         `(command -v pacman >/dev/null 2>&1 && $S pacman -Sy --noconfirm --needed git curl xz libatomic make) < /dev/null ||`,
         'echo PREREQ_SKIPPED',
+        // procps/pgrep fallback (mirrors zeroclaw): the branch above only ever
+        // runs when git/curl/xz/libatomic/g++/tar is missing too, so pgrep stays
+        // absent on minimal CentOS Stream 9 / Alpine images. Ends in `true` so
+        // the marker file below is always written (otherwise the poll loop waits
+        // the full 160s for a file that never appears).
+        'command -v pgrep >/dev/null 2>&1 ||',
+        '(command -v apt-get >/dev/null 2>&1 && $S apt-get install -y procps) < /dev/null ||',
+        '(command -v apk    >/dev/null 2>&1 && $S apk add --no-cache procps) < /dev/null ||',
+        '(command -v dnf    >/dev/null 2>&1 && $S dnf install -y --allowerasing procps-ng) < /dev/null ||',
+        '(command -v yum    >/dev/null 2>&1 && $S yum install -y procps-ng) < /dev/null ||',
+        '(command -v zypper >/dev/null 2>&1 && $S zypper --non-interactive --no-gpg-checks install procps) < /dev/null ||',
+        '(command -v pacman >/dev/null 2>&1 && $S pacman -Sy --noconfirm --needed procps-ng) < /dev/null ||',
+        'true',
         'touch /tmp/.prereq-done',
       ].join('\n');
       await run(`install prerequisites (${aptPkgs || rpmPkgs})`, `
@@ -1132,13 +1199,18 @@ fi
     }
     if (!svcOk) {
       await run('start gateway (background daemon)',
-        `${ENVPREFIX}; mkdir -p "${HH}/logs"; setsid nohup sh -c 'set -a; [ -f "${HH}/.env" ] && . "${HH}/.env"; set +a; export PATH="${BIN_DIR}:$HOME/.local/bin:/usr/local/bin:$PATH"; exec ${HB} gateway run || exec ${HB} gateway' >> "${HH}/logs/gateway-nohup.log" 2>&1 < /dev/null & sleep 3; { pgrep -f '[h]ermes.*gatew[a]y' || pgrep -f '[h]ermes gateway'; } >/dev/null 2>&1 && echo GW_RUNNING || echo GW_PENDING`,
+        // NOTE: the literal is split (`gatew""ay`) so the pgrep pattern in the
+        // SAME command line cannot match the enclosing shell — otherwise pgrep
+        // always reports the gateway up, even right after it died.
+        // HERMES_HOME is exported so the instance-scoped scan can attribute
+        // this process to its own home instead of the default install.
+        `${ENVPREFIX}; export HERMES_HOME="${HH}"; mkdir -p "${HH}/logs"; setsid nohup sh -c 'set -a; [ -f "${HH}/.env" ] && . "${HH}/.env"; set +a; export PATH="${BIN_DIR}:$HOME/.local/bin:/usr/local/bin:$PATH"; exec ${HB} gatew""ay run || exec ${HB} gatew""ay' >> "${HH}/logs/gateway-nohup.log" 2>&1 < /dev/null & sleep 3; { pgrep -f '[h]ermes.*gatew[a]y' || pgrep -f '[h]ermes gatew[a]y'; } >/dev/null 2>&1 && echo GW_RUNNING || echo GW_PENDING`,
         { timeoutMs: 30000 });
     }
 
     // 7. Verify (inside the container for docker installs)
     await new Promise(res => setTimeout(res, 3000));
-    const verify = await execCommand(sshConfig, wrap(STATUS_SCRIPT), { pool: false, timeoutMs: 60000 });
+    const verify = await execCommand(sshConfig, wrap(statusScript(inst)), { pool: false, timeoutMs: 60000 });
     const vp = (k) => (verify.stdout || '').match(new RegExp(`${k}=(.*)`))?.[1]?.trim();
     const running = dockerMode
       ? vp('PROC') === '1'

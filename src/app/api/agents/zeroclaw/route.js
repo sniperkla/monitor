@@ -524,6 +524,17 @@ echo "===ENVKEYS==="
       const instCmd = `
         export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$HOME/bin:/root/.local/bin:/root/.cargo/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin:$PATH"
         mkdir -p "${HH}/logs" "$HOME/.local/bin" "$HOME/.cargo/bin"
+        # Alpine/musl: the official installer assumes glibc — install the musl
+        # release tarball directly (zeroclaw ships a static musl target).
+        MUSL=0; ldd /bin/busybox 2>/dev/null | grep -qi musl && MUSL=1 || { [ -f /etc/alpine-release ] && MUSL=1; }
+        if [ "$MUSL" = 1 ]; then
+          mkdir -p /tmp/zcmusl && cd /tmp/zcmusl
+          if curl -fsSL -o zcm.tar.gz https://github.com/zeroclaw-labs/zeroclaw/releases/download/v0.8.4/zeroclaw-x86_64-unknown-linux-musl.tar.gz 2>/dev/null; then
+            tar -xzf zcm.tar.gz zeroclaw 2>/dev/null && mv -f zeroclaw "$HOME/.cargo/bin/zeroclaw" && chmod 755 "$HOME/.cargo/bin/zeroclaw" && echo "MUSL_INSTALL_SUCCESS"
+          else
+            echo "MUSL_TARBALL_UNAVAILABLE - building from source is required on Alpine"
+          fi
+        fi
         if curl -fsSL ${INSTALLER_URL} | bash 2>&1; then
           echo "OFFICIAL_INSTALLER_SUCCESS"
         else

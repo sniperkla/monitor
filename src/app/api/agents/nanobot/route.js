@@ -442,15 +442,29 @@ PYEOF
       // shared binary — only its own pidfile & home.
       const stopCmd = inst
         ? `if [ -f "${PIDF}" ]; then p=$(cat "${PIDF}"); kill "$p" 2>/dev/null; sleep 1; kill -9 "$p" 2>/dev/null; rm -f "${PIDF}"; fi; true`
-        : `pkill -f '[n]anobot.*gatew[a]y' 2>/dev/null; pkill -f '[n]anobot webui' 2>/dev/null; sleep 1; pkill -9 -f '[n]anobot' 2>/dev/null; true`;
+        // Selective kill: only default (no per-instance --config home). Never kill
+        // instance gateways so they survive a default stop/uninstall.
+        : `for p in $(pgrep -f '[n]anobot' 2>/dev/null); do grep -qaE -- '--config ${HOME}/.nanobot?-' /proc/$p/cmdline 2>/dev/null || grep -qa -- '-.nanobot-' /proc/$p/cmdline 2>/dev/null || kill -9 $p 2>/dev/null; done; true`;
       await run('stop gateway', stopCmd);
-      const binRm = inst
+      // Share the globally-installed binary/venv. Removing while any instance
+      // exists breaks restart for those instances — skip when siblings remain.
+      let instancesRemain = false;
+      if (!inst) {
+        try {
+          const instList = await listInstances(sshConfig, 'nanobot');
+          instancesRemain = Array.isArray(instList) && instList.length > 0;
+        } catch { /* non-fatal */ }
+      }
+      const binRm = (inst || instancesRemain)
         ? '' // instances share the globally-installed binary — leave it alone
         : `rm -f "$HOME/.local/bin/nanobot" "$HOME/.nanobot/venv/bin/nanobot" /usr/local/bin/nanobot /usr/bin/nanobot 2>/dev/null; pipx uninstall nanobot-ai 2>/dev/null; pipx uninstall nanobot 2>/dev/null; `;
       const rmCmd = inst
         ? `rm -rf "${HH}" 2>/dev/null; echo REMOVED_INSTANCE`   // instances: always remove the whole isolated home
         : purge
-          ? `${binRm}rm -rf "${HH}" /home/*/.nanobot "$HOME/.cache/nanobot" /tmp/.nb* 2>/dev/null; echo REMOVED_ALL`
+          // Only this install's home. Previously `/home/*/.nanobot` was also
+          // removed, which as root wiped EVERY user's agent home (including
+          // provisioned "friend" users). zeroclaw scopes purge to ${HH} too.
+          ? `${binRm}rm -rf "${HH}" "$HOME/.cache/nanobot" /tmp/.nb* 2>/dev/null; echo REMOVED_ALL`
           : `${binRm}rm -rf "$HOME/.nanobot/venv" "$HOME/.cache/nanobot" "${HH}/logs" 2>/dev/null; echo REMOVED_CODE`;
       const r = await run(inst ? 'remove instance (isolated home)' : purge ? 'remove nanobot binary & all data' : 'remove nanobot binary & venv (config kept)', `export PATH="$HOME/.local/bin:$HOME/.nanobot/venv/bin:/usr/local/bin:$PATH"; ${rmCmd}`);
       const ok = /REMOVED/.test(r.stdout || '');
@@ -474,6 +488,7 @@ PYEOF
           (command -v yum    >/dev/null 2>&1 && $S yum install -y python3.11 python3.11-pip) < /dev/null ||
           (command -v zypper >/dev/null 2>&1 && echo 'gpgcheck = 0' >> /etc/zypp/zypp.conf; $S zypper --non-interactive --no-gpg-checks install python311 python311-pip; [ -x /usr/bin/python3.11 ] && ln -sf /usr/bin/python3.11 /usr/local/bin/python3) < /dev/null ||
           (command -v pacman >/dev/null 2>&1 && $S pacman -Sy --noconfirm --needed python) < /dev/null ||
+          (command -v apk    >/dev/null 2>&1 && $S apk add --no-cache python3 py3-pip py3-virtualenv) < /dev/null ||
           echo PYTHON_PREREQ_SKIPPED`, { timeoutMs: 300000 });
       }
       // always make sure the venv module is present (Debian/Ubuntu split it into python3-venv)
@@ -483,8 +498,12 @@ PYEOF
         export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
         S="${hasSudo ? 'sudo -n' : ''}"
         (command -v apt-get >/dev/null 2>&1 && $S apt-get install -y python3-venv python3-pip python3-full 2>/dev/null) < /dev/null || true
-        (command -v dnf    >/dev/null 2>&1 && $S dnf install -y python3-pip python3-virtualenv 2>/dev/null) < /dev/null || true
-        (command -v zypper >/dev/null 2>&1 && $S zypper --non-interactive install python3-pip python3-virtualenv 2>/dev/null) < /dev/null || true
+        # -devel/headers + a compiler: the HKUDS installer builds wheels from
+        # source on several platforms, which fails without them.
+        (command -v dnf    >/dev/null 2>&1 && $S dnf install -y python3-pip python3-virtualenv python3-devel gcc 2>/dev/null) < /dev/null || true
+        (command -v yum    >/dev/null 2>&1 && $S yum install -y python3-pip python3-devel gcc 2>/dev/null) < /dev/null || true
+        (command -v zypper >/dev/null 2>&1 && $S zypper --non-interactive install python3-pip python3-virtualenv python3-devel gcc 2>/dev/null) < /dev/null || true
+        (command -v apk    >/dev/null 2>&1 && $S apk add --no-cache py3-pip py3-virtualenv python3-dev gcc musl-dev 2>/dev/null) < /dev/null || true
         (command -v pacman >/dev/null 2>&1 && $S pacman -Sy --noconfirm --needed python-pip 2>/dev/null) < /dev/null || true
         true`, { timeoutMs: 300000 });
       // refresh probe so later checks see the new interpreter
@@ -520,8 +539,13 @@ PYEOF
           });
         log.push(`$ official installer${instR.code !== 0 ? ` — exited ${instR.code}` : ' — finished'}${streamed > 400 ? ` (${streamed} lines total)` : ''}${instR.stderr ? `\n${instR.stderr.slice(0, 300)}` : ''}`);
       }
-      const bc = await resolveBin();
-      const NB = binFrom(bc);
+      // resolveBin()/binFrom() were never defined anywhere in this module (and
+      // are not imported), so every install died here with
+      // `ReferenceError: resolveBin is not defined` -> HTTP 500. Reuse the
+      // binPath() helper defined above and the same BIN= parse gwCtl already
+      // uses at the top of this handler.
+      const binR = await execCommand(sshConfig, binPath(), { pool: false, timeoutMs: 15000 });
+      const NB = (binR.stdout || '').match(/BIN=(.*)/)?.[1]?.trim() || null;
       if (!NB) return NextResponse.json({ success: false, error: 'Installer finished but nanobot binary was not found. See log.', log });
       const NBE = JSON.stringify(NB);
 
@@ -559,12 +583,19 @@ PYEOF
 
       // 6. Start gateway detached
       await run('start gateway', [
-        `mkdir -p "${HH}/logs"`,
-        `setsid nohup $(export PATH="$(dirname ${NBE}):$HOME/.local/bin:$HOME/.nanobot/venv/bin:/usr/local/bin:$PATH"; command -v nanobot) gateway >> "${HH}/logs/gatew""ay.log" 2>&1 < /dev/null &`,
+        `mkdir -p "${HH}/logs" "${HH}/workspace"`,
+        // Pass GW_FLAGS so a tagged instance starts on its own config/workspace/
+        // port. Previously a bare `nanobot gateway` started the DEFAULT install
+        // even when installing an instance. Also record the PID so gwCtl can
+        // stop/restart this instance later.
+        `setsid nohup ${NBE} gateway${GW_FLAGS} >> "${HH}/logs/gateway.log" 2>&1 < /dev/null & echo $! > "${PIDF}"`,
         'sleep 4',
-        "timeout 15 pgrep -f '[n]anobot.*gatew[a]y' >/dev/null && echo GW_UP || echo GW_DOWN",
+        `if [ -f "${PIDF}" ] && kill -0 $(cat "${PIDF}") 2>/dev/null; then echo GW_UP; else echo GW_DOWN; fi`,
       ].join('\n'), { timeoutMs: 90000 });
-      const up = await execCommand(sshConfig, `timeout 15 pgrep -f '[n]anobot.*gatew[a]y' >/dev/null && echo GW_UP || echo GW_DOWN`, { pool: false, timeoutMs: 30000 });
+      // Instance-scoped liveness: check our own pidfile rather than a global
+      // pgrep, which would report the default install (or a sibling instance)
+      // as up.
+      const up = await execCommand(sshConfig, `if [ -f "${PIDF}" ] && kill -0 $(cat "${PIDF}") 2>/dev/null; then echo GW_UP; else echo GW_DOWN; fi`, { pool: false, timeoutMs: 30000 });
       const running = /GW_UP/.test(up.stdout || '');
 
       return NextResponse.json({
@@ -726,8 +757,14 @@ PYEOF`,
     }
 
     if (action === 'restore-backup') {
-      const name = String(config.name || '');
-      if (!/^config\\.json\\.bak-[0-9]+$/.test(name)) {
+      // Accept either shape: nanobot/openclaw use `name`, zeroclaw reads
+      // `config.backup`. A shared UI may send either — taking both keeps them
+      // interchangeable. The regex below still guards against path traversal.
+      const name = String(config.name || config.backup || '');
+      // `\\.` in a REGEX LITERAL means "a literal backslash + any char", not a
+      // dot — real backups are named config.json.bak-<epoch>, so this never
+      // matched and restore-backup always returned 400.
+      if (!/^config\.json\.bak-[0-9]+$/.test(name)) {
         return NextResponse.json({ success: false, error: 'Invalid backup name' }, { status: 400 });
       }
       const r = await execCommand(sshConfig,

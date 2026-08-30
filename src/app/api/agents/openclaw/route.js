@@ -136,14 +136,18 @@ async function handleAgentAction(body, session, log = []) {
     // ── Gateway control — pidfile-scoped; instances relocate via env vars ────
     const gwCtl = async (op) => {
       // Instances first: per-instance systemd template unit (own cgroup +
-      // supervision + hardening). Falls through to legacy nohup path on any
-      // failure / missing systemd user session. Default keeps exact behavior.
+      // supervision + hardening). The DEFAULT install is handled by the block
+      // immediately below, which drives the installer-created unit when one
+      // exists. Both fall through to the legacy nohup path when systemd is
+      // unavailable or does not know about the unit.
       if (inst && (await sdAvailable(sshConfig))) {
         await writeInstanceEnv(sshConfig, HH, { OC_PORT: GW_PORT });
         await ensureInstanceUnit(sshConfig, 'openclaw', gatewayUnit('openclaw', {
           description: 'OpenClaw gateway',
           envLines: [
-            `EnvironmentFile=%h/.openclaw-%i/instance.env`,
+            // Leading '-' marks the file optional. Without it systemd refuses
+            // to start the unit when instance.env does not exist yet.
+            `EnvironmentFile=-%h/.openclaw-%i/instance.env`,
             'EnvironmentFile=-%h/.openclaw-%i/.env',
             'Environment=OPENCLAW_STATE_DIR=%h/.openclaw-%i',
             'Environment=OPENCLAW_CONFIG_PATH=%h/.openclaw-%i/openclaw.json',
@@ -156,6 +160,47 @@ async function handleAgentAction(body, session, log = []) {
         const sd = await sdInstanceCtl(sshConfig, 'openclaw', inst, op);
         if (sd) return sd;
       }
+
+      // The DEFAULT install is supervised by the unit the official installer
+      // creates. That branch above was instance-only, so the default install
+      // always fell through to the nohup/pidfile path: `stop` killed a pidfile
+      // PID that was never written (a silent no-op) and `restart` then started a
+      // SECOND gateway onto a port systemd still held (EADDRINUSE). If the unit
+      // actually exists, drive it through systemd instead.
+      // NOTE: ${UNIT} carries the `gatew""ay` split, which the shell collapses
+      // to `gateway`. It must stay inside DOUBLE quotes (or unquoted) — single
+      // quotes would preserve the `""` literally and match nothing.
+      if (!inst && (await sdAvailable(sshConfig))) {
+        const probe = await execCommand(
+          sshConfig,
+          `export XDG_RUNTIME_DIR="/run/user/$(id -u)" 2>/dev/null; ` +
+          `systemctl --user list-unit-files "${UNIT}*" 2>/dev/null | grep -qi "${UNIT}" && echo UNIT_SCOPE=user; ` +
+          `systemctl list-unit-files "${UNIT}*" 2>/dev/null | grep -qi "${UNIT}" && echo UNIT_SCOPE=system; ` +
+          `echo PROBE_DONE`,
+          { pool: false, timeoutMs: 15000 });
+        const pout = probe.stdout || '';
+        const scope = /UNIT_SCOPE=user/.test(pout) ? 'user' : /UNIT_SCOPE=system/.test(pout) ? 'system' : null;
+        if (scope) {
+          const ctl = scope === 'user' ? 'systemctl --user' : 'systemctl';
+          const sudo = scope === 'system' ? 'sudo -n ' : '';
+          const pre = `export XDG_RUNTIME_DIR="/run/user/$(id -u)" 2>/dev/null; `;
+          const res = await execCommand(
+            sshConfig,
+            `${pre}${sudo}${ctl} ${op} ${UNIT} 2>&1 | tail -5; echo "SD_DONE";`,
+            { pool: false, timeoutMs: 90000 });
+          const o = (res.stdout || '') + (res.stderr || '');
+          // Only trust systemd when it really acted on the unit; otherwise fall
+          // through to the legacy nohup path below.
+          if (/SD_DONE/.test(o) && !/Unknown|not-found|No such file/i.test(o)) {
+            const act = await execCommand(
+              sshConfig,
+              `${pre}${sudo}${ctl} is-active ${UNIT} 2>/dev/null | grep -qx active && echo ACTIVE || echo INACTIVE`,
+              { pool: false, timeoutMs: 15000 });
+            return { ok: true, active: /ACTIVE/.test(act.stdout || ''), out: o.slice(-400) };
+          }
+        }
+      }
+
       const binR = await execCommand(sshConfig, `${binPath()} ; echo "SYSTEMD=$(command -v systemctl >/dev/null 2>&1 && echo 1 || echo 0)"`, { pool: false, timeoutMs: 15000 });
       const bp = (binR.stdout || '').match(/BIN=(.*)/)?.[1]?.trim();
       if (!bp) return { ok: false, out: 'openclaw binary not found' };
@@ -387,7 +432,17 @@ echo "===ENVKEYS==="
         await run('stop user service', `export XDG_RUNTIME_DIR="/run/user/$(id -u)"; systemctl --user disable --now ${UNIT} 2>/dev/null; true`);
         await run('stop stray processes', `pkill -f '[o]penclaw.*gatew[a]y' 2>/dev/null; pkill -f '[o]penclaw gateway' 2>/dev/null; true`);
       }
-      const binRm = inst
+      // Instances share the globally-installed binary. Removing it while any
+      // instance still exists leaves those instances unable to ever restart, so
+      // skip binary removal when siblings remain (zeroclaw guards this too).
+      let instancesRemain = false;
+      if (!inst) {
+        try {
+          const instList = await listInstances(sshConfig, 'openclaw');
+          instancesRemain = Array.isArray(instList) && instList.length > 0;
+        } catch { /* non-fatal: fall through to the normal removal */ }
+      }
+      const binRm = (inst || instancesRemain)
         ? '' // instances share the globally-installed binary — leave it alone
         : `(npm -g rm openclaw 2>/dev/null || true); rm -f "$HOME/.openclaw/local/bin/openclaw" "$HOME/.local/bin/openclaw" /usr/local/bin/openclaw /usr/bin/openclaw /usr/sbin/openclaw; `;
       const rmCmd = inst
@@ -467,7 +522,11 @@ echo "===ENVKEYS==="
           cp "${HH}/openclaw.json" "${HH}/openclaw.json.bak-install"
           echo '${b64(json)}' | base64 -d > /tmp/oc-seed.json
           export PATH="$HOME/.openclaw/local/bin:$HOME/.local/bin:/usr/local/bin:$PATH"
-          node -e "const fs=require('fs');const p=process.env.HOME+'/.openclaw/openclaw.json';const cur=JSON.parse(fs.readFileSync(p,'utf8'));const seed=JSON.parse(fs.readFileSync('/tmp/oc-seed.json','utf8'));const merged={...seed,...cur};merged.gateway={...seed.gateway,...(cur.gateway||{})};fs.writeFileSync(p,JSON.stringify(merged,null,2));console.log('CONFIG_SEED')"
+          # Drive the merge off ${HH} instead of the hardcoded default home —
+          # otherwise installing a tagged instance rewrites the DEFAULT
+          # install's openclaw.json rather than the new instance's.
+          export OC_HOME="${HH}"
+          node -e "const fs=require('fs');const p=process.env.OC_HOME+'/openclaw.json';const cur=JSON.parse(fs.readFileSync(p,'utf8'));const seed=JSON.parse(fs.readFileSync('/tmp/oc-seed.json','utf8'));const merged={...seed,...cur};merged.gateway={...seed.gateway,...(cur.gateway||{})};fs.writeFileSync(p,JSON.stringify(merged,null,2));console.log('CONFIG_SEED')"
           rm -f /tmp/oc-seed.json`,
           { timeoutMs: 30000 });
         const envEntries = Object.entries(config.env || {});
@@ -476,7 +535,11 @@ echo "===ENVKEYS==="
           await run('write provider keys to ~/.openclaw/.env', `
             touch "${HH}/.env"
             echo '${b64(envFile)}' | base64 -d > /tmp/oc-env-seed
-            while IFS='=' read -rk; do
+            # 'read -rk' parses as options -r AND -k; -k is not a valid read
+            # option, so bash/dash error out and the loop body never runs —
+            # provider keys were silently never written even though ENV_SEEDED
+            # is echoed below. The space after -r is load-bearing.
+            while IFS='=' read -r k; do
               k="\${k%%=*}"
               grep -q "^$\{k\}=" "${HH}/.env" && sed -i "s|^$\{k\}=.*|$k=$(grep "^$\{k\}=" /tmp/oc-env-seed | cut -d= -f2-)|" "${HH}/.env" || printf '%s\\n' "$(grep "^$\{k\}=" /tmp/oc-env-seed)" >> "${HH}/.env"
             done < /tmp/oc-env-seed
@@ -622,7 +685,10 @@ echo "TG=$TG"
     }
 
     if (action === 'restore-backup') {
-      const name = String(config.name || '');
+      // Accept either shape: openclaw/nanobot use `name`, zeroclaw reads
+      // `config.backup`. A shared UI may send either — taking both keeps them
+      // interchangeable. The regex below still guards against path traversal.
+      const name = String(config.name || config.backup || '');
       if (!/^openclaw\.json\.bak-[A-Za-z0-9._-]+$/.test(name)) {
         return NextResponse.json({ success: false, error: 'Invalid backup name' }, { status: 400 });
       }
