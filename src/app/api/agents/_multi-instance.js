@@ -53,6 +53,21 @@ export async function listInstances(sshConfig, agentId) {
 DE=0; [ -d "$HOME/.${agentId}" ] && DE=1
 echo "DEFAULT_EXISTS=$DE"
 PR=0; [ -f "$HOME/.${agentId}/daemon.pid" ] && kill -0 $(cat "$HOME/.${agentId}/daemon.pid") 2>/dev/null && PR=1
+if [ "$PR" = 0 ]; then
+  case "${agentId}" in
+    nanobot)  pgrep -f "nanobot gateway --config $HOME/.${agentId}/config.json" >/dev/null 2>&1 && PR=1 ;;
+    zeroclaw) pgrep -f "zeroclaw.*--config-dir $HOME/.${agentId}" >/dev/null 2>&1 && PR=1 ;;
+  esac
+fi
+# Hermes self-reports its own lifecycle via control socket — catches gateways
+# the (possibly stale) pidfile/systemd cannot see. Run through the venv so
+# hermes_cli imports resolve (bare /usr/local/lib/hermes-agent/hermes fails
+# on system python without venv site-packages).
+if [ "$PR" = 0 ] && [ "${agentId}" = "hermes" ]; then
+  export PATH="$HOME/.local/bin:/usr/local/lib/hermes-agent/venv/bin:$HOME/.hermes/hermes-agent/venv/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+  HB=$(command -v hermes 2>/dev/null)
+  [ -n "$HB" ] && { HERMES_HOME="$HOME/.hermes" timeout 12 "$HB" gatew""ay status 2>/dev/null | grep -q 'is running' && PR=1; }
+fi
 echo "PROC=$PR"
 for d in "$HOME"/.${agentId}-*; do
   [ -d "$d" ] || continue
@@ -66,10 +81,23 @@ for d in "$HOME"/.${agentId}-*; do
   if [ "$RUN" = 0 ]; then
     export XDG_RUNTIME_DIR="/run/user/$(id -u)" 2>/dev/null
     systemctl --user is-active "${agentId}-gatew""ay@\${tag#.${agentId}-}" 2>/dev/null | grep -qx active && RUN=1
+    # process-cmdline fallback: catches gateways started without a pidfile
+    if [ "$RUN" = 0 ]; then
+      case "${agentId}" in
+        nanobot)  pgrep -f "nanobot gateway --config $d/config.json" >/dev/null 2>&1 && RUN=1 ;;
+        zeroclaw) pgrep -f "zeroclaw.*--config-dir $d" >/dev/null 2>&1 && RUN=1 ;;
+      esac
+    fi
+    # Hermes fallback: control-socket self-report (stale-pidfile proof)
+    if [ "$RUN" = 0 ] && [ "${agentId}" = "hermes" ]; then
+      export PATH="$HOME/.local/bin:/usr/local/lib/hermes-agent/venv/bin:$HOME/.hermes/hermes-agent/venv/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+      HB=$(command -v hermes 2>/dev/null)
+      [ -n "$HB" ] && { HERMES_HOME="$d" timeout 12 "$HB" gatew""ay status 2>/dev/null | grep -q 'is running' && RUN=1; }
+    fi
   fi
   echo "TAGRUN=\${tag#.${agentId}-}:$RUN"
 done
-`, { pool: false, timeoutMs: 20000 });
+`, { pool: false, timeoutMs: 60000 });
   const out = r.stdout || '';
   const instances = [];
   if (/DEFAULT_EXISTS=1/.test(out)) instances.push({ tag: '', running: /PROC=1/.test(out) });
@@ -80,9 +108,14 @@ done
 }
 
 // Clone default-home identity files into a new tagged home (does NOT start).
+// .env is NEVER copied — a tagged instance must use its OWN bot token / API
+// keys, so it starts with a clean, empty .env and the user fills credentials
+// via the Env tab before first start. This avoids two instances fighting over
+// the same Telegram bot (getUpdates 409) and shared paid API keys.
 export async function cloneDefaultHome(sshConfig, agentId, tag, files = []) {
   if (files.length === 0) return { existed: false, ok: false };
-  const cpLines = files
+  const identityFiles = files.filter((f) => f.split('/').pop() !== '.env');
+  const cpLines = identityFiles
     .map((f) => {
       // nested targets (workspace/PROMPT.md) need their parent dir first
       const dir = f.includes('/')
@@ -96,19 +129,81 @@ if [ -d "$HOME/.${agentId}-${tag}" ]; then echo "EXISTS"; exit 0; fi
 mkdir -p "$HOME/.${agentId}-${tag}"
 ${cpLines}
 mkdir -p "$HOME/.${agentId}-${tag}/logs"
-# Credential-isolation check: a cloned .env identical to the default means the
-# new instance would fight the default over the same bot token / API keys.
-TS=0; [ -f "$HOME/.${agentId}/.env" ] && cmp -s "$HOME/.${agentId}/.env" "$HOME/.${agentId}-${tag}/.env" && TS=1
-echo "TOKEN_SAME=$TS"
+# Fresh empty .env — the instance is fully credential-isolated from the start.
+: > "$HOME/.${agentId}-${tag}/.env"
 echo CLONED
 `;
   const r = await execCommand(sshConfig, cmd, { pool: false, timeoutMs: 30000 });
   return {
     existed: /EXISTS/.test(r.stdout || ''),
     ok: /CLONED|EXISTS/.test(r.stdout || ''),
-    tokenSame: /TOKEN_SAME=1/.test(r.stdout || ''),
+    tokenSame: false, // .env is never cloned — always isolated
   };
 }
+// ── Strict mode: one Linux user per "friend" (per-owner isolation) ────────
+// A dedicated user gets its own home (own .env, own token, own systemd user
+// units, own cgroups) — nobody can read anyone else's credentials. The friend
+// then uses the agent through their OWN SSH connection in the monitor, so every
+// existing route (install/spawn/systemd/logs) works unchanged against their
+// account. Linger keeps their gateway units running without an active login.
+
+// Linux username must be lowercase, short, and safe.
+export function sanitizeUsername(raw) {
+  return String(raw || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, '')
+    .slice(0, 31)
+    .replace(/^[^a-z_]+/, '');
+}
+
+// Script body: idempotently create the user, harden its home, enable linger
+// (so user-level gateway units run without a login session), and optionally
+// install the friend's SSH public key.
+export function provisionUserScript(username, { publicKey = '' } = {}) {
+  const u = sanitizeUsername(username);
+  const PUB = Buffer.from(String(publicKey || ''), 'utf8').toString('base64');
+  return `
+U="${u}"
+case "$U" in ''|root|daemon|bin|sys|sync|games|man|lp|mail|news|uucp|proxy|www-data|backup|list|irc|gnats|nobody|systemd-*|sshd|messagebus) echo "BAD_USER=$U"; exit 0;; esac
+S=""
+command -v useradd >/dev/null 2>&1 && S="" || S="sudo -n"
+if ! id "$U" >/dev/null 2>&1; then
+  \$S useradd -m -s /bin/bash "$U" 2>/dev/null || useradd -m -s /bin/bash "$U" 2>/dev/null || { echo "CREATE_FAILED"; exit 0; }
+fi
+export XDG_RUNTIME_DIR="/run/user/\$(id -u)" 2>/dev/null
+loginctl enable-linger "\$U" 2>/dev/null || \$S loginctl enable-linger "\$U" 2>/dev/null || true
+HOME_U="\$(getent passwd "\$U" | cut -d: -f6)"
+chmod 700 "\$HOME_U" 2>/dev/null || true
+if [ -n "${PUB}" ]; then
+  mkdir -p "\$HOME_U/.ssh" && chmod 700 "\$HOME_U/.ssh"
+  echo "${PUB}" | base64 -d > "\$HOME_U/.ssh/authorized_keys"
+  chmod 600 "\$HOME_U/.ssh/authorized_keys"
+  chown -R "\$U:\$U" "\$HOME_U/.ssh" 2>/dev/null || true
+  echo "PUBKEY=1"
+fi
+echo "USER=\$U"
+echo "HOME_U=\$HOME_U"
+echo "UID_U=\$(id -u "\$U")"
+echo "PROVISIONED"
+`;
+}
+
+// Server-side: run the provision script on the remote host.
+export async function provisionUser(sshConfig, username, opts = {}) {
+  const r = await execCommand(sshConfig, provisionUserScript(username, opts), { pool: false, timeoutMs: 30000 });
+  const out = r.stdout || '';
+  const val = (k) => out.match(new RegExp(`${k}=(.*)`))?.[1]?.trim() || null;
+  const ok = /PROVISIONED/.test(out);
+  return {
+    ok,
+    existed: ok && !/PUBKEY|CREATE_FAILED/.test(out) ? true : undefined,
+    username: val('USER'),
+    home: val('HOME_U'),
+    uid: val('UID_U'),
+    error: /BAD_USER/.test(out) ? 'Reserved or invalid username' : /CREATE_FAILED/.test(out) ? 'useradd failed (need root/sudo)' : ok ? null : ((r.stderr || '').slice(-200) || 'provision failed'),
+  };
+}
+
 // ── Per-instance systemd template unit (true process isolation) ──────────
 // One template per agent: ~/.config/systemd/user/<agentId>-gateway@.service
 // Every tagged instance then runs as its OWN user-level cgroup with
@@ -119,8 +214,18 @@ echo CLONED
 // written right before start. %i expands to the tag, %h to the user home.
 
 // Build the unit body for an agent's template unit.
-export function gatewayUnit(agentId, { description, envLines = [], execStart, logFile }) {
-  return [
+// Resource caps keep one instance from starving the host — important when
+// instances are shared with other people. Override via opts, or pass 'none'
+// to disable a cap entirely.
+export function gatewayUnit(agentId, {
+  description,
+  envLines = [],
+  execStart,
+  logFile,
+  memoryMax = '2G',
+  cpuQuota = '200%',
+}) {
+  const lines = [
     '[Unit]',
     `Description=${description} (instance %i)`,
     'After=network-online.target',
@@ -137,10 +242,11 @@ export function gatewayUnit(agentId, { description, envLines = [], execStart, lo
     'PrivateTmp=true',
     `StandardOutput=append:${logFile}`,
     `StandardError=append:${logFile}`,
-    '',
-    '[Install]',
-    'WantedBy=default.target',
-  ].join('\n');
+  ];
+  if (memoryMax && memoryMax !== 'none') lines.push(`MemoryMax=${memoryMax}`);
+  if (cpuQuota && cpuQuota !== 'none') lines.push(`CPUQuota=${cpuQuota}`);
+  lines.push('', '[Install]', 'WantedBy=default.target');
+  return lines.join('\n');
 }
 
 // Idempotently install the template unit + daemon-reload.

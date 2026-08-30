@@ -302,17 +302,27 @@ export function BootSequence({ onComplete, onSkip }) {
     if (relayInfo.checkDone) setRelayStatus('ok');
   }, [relayInfo.checkDone]);
 
-  // Health check: first thing we do after static animation finishes
+  // Health check: first thing we do after static animation finishes.
+  // Retries with backoff — a single check used to HALT the boot permanently
+  // whenever it raced a server restart or a cold-start Mongo connection
+  // (readyState 0/2 → 503), which looked like a fatal DB failure.
   useEffect(() => {
     if (!staticComplete) return;
     let cancelled = false;
-    const doCheck = async () => {
+    const MAX_ATTEMPTS = 8;
+    const RETRY_DELAY_MS = 3000;
+    const doCheck = async (attempt = 1) => {
       try {
         const res = await fetch('/api/health', { cache: 'no-store' });
         if (cancelled) return;
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
           const dbDown = body.status === 'degraded' || res.status === 503;
+          if (attempt < MAX_ATTEMPTS) {
+            await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
+            if (cancelled) return;
+            return doCheck(attempt + 1);
+          }
           setServerError(dbDown
             ? '[ FATAL ] Central database is unreachable. The server has shut down to prevent data corruption. Please restore the database connection and restart the server.'
             : `[ FATAL ] Server returned HTTP ${res.status}. Please check server logs.`);
@@ -322,6 +332,11 @@ export function BootSequence({ onComplete, onSkip }) {
         }
       } catch {
         if (cancelled) return;
+        if (attempt < MAX_ATTEMPTS) {
+          await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
+          if (cancelled) return;
+          return doCheck(attempt + 1);
+        }
         setServerError('[ FATAL ] Cannot reach the server. It may have crashed or the central database is down. Please restore the database and restart the server.');
         setServerStatus('error');
       }

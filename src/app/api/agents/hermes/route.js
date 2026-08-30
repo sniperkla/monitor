@@ -58,7 +58,7 @@ function maskEnvText(text) {
 
 // POSIX sh probe — works on every supported distro.
 const STATUS_SCRIPT = `
-export PATH="$HOME/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+export PATH="$HOME/.local/bin:/usr/local/lib/hermes-agent/venv/bin:$HOME/.hermes/hermes-agent/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 BIN="$(command -v hermes 2>/dev/null || true)"
 [ -z "$BIN" ] && for p in "$HOME/.local/bin/hermes" "/usr/local/bin/hermes" "/usr/bin/hermes" "$HOME/.hermes/hermes-agent/venv/bin/hermes" "/usr/local/lib/hermes-agent/venv/bin/hermes" "/usr/local/lib/hermes-agent/hermes"; do [ -x "$p" ] && BIN="$p" && break; done
 if [ -n "$BIN" ]; then echo "BIN=SET"; else echo "BIN=UNSET"; fi
@@ -73,7 +73,10 @@ ENVF=0; [ -f "$HOME/.hermes/.env" ] && ENVF=1
 echo "ENVFILE=$ENVF"
 USVC=0; command -v systemctl >/dev/null 2>&1 && systemctl --user is-active hermes-gate""way 2>/dev/null | grep -qx active && USVC=1
 SSVC=0; command -v systemctl >/dev/null 2>&1 && systemctl is-active hermes-gate""way 2>/dev/null | grep -qx active && SSVC=1
-PROC=0; { pgrep -f '[h]ermes.*gatew[a]y' || pgrep -f '[h]ermes gateway' || pgrep -f 'hermes_cli.*gateway'; } >/dev/null 2>&1 && PROC=1
+PROC=0; { pgrep -f '[h]ermes.*gatew[a]y' || pgrep -f '[h]ermes_cli.*gatew[a]y'; } >/dev/null 2>&1 && PROC=1
+GSTAT=0; if [ "$PROC" = 0 ] && [ -n "$BIN" ]; then timeout 15 "$BIN" gatew""ay status 2>/dev/null | grep -q 'is running' && GSTAT=1; fi
+[ "$GSTAT" = 1 ] && PROC=1
+echo "PROC=$PROC"
 SYSTEMD=0; command -v systemctl >/dev/null 2>&1 && SYSTEMD=1
 SUDO=0; sudo -n true 2>/dev/null && SUDO=1
 GIT=$(git --version 2>/dev/null | awk '{print $3}')
@@ -141,6 +144,12 @@ async function handleAgentAction(body, session, log = []) {
       ` fi;` +
       ` if [ "$res" = 0 ] && [ -n "${inst}" ]; then` +
       ` export XDG_RUNTIME_DIR="/run/user/$(id -u)" 2>/dev/null; systemctl --user is-active hermes-gate""way@${inst} 2>/dev/null | grep -qx active && res=1;` +
+      ` fi;` +
+      // Last resort: ask hermes itself — it reports "is running" only when the
+      // control socket is actually live (its exit code is 0 either way, so we
+      // must match the output, NOT the exit status).
+      ` if [ "$res" = 0 ]; then` +
+      ` export PATH="$HOME/.local/bin:/usr/local/lib/hermes-agent/venv/bin:$HOME/.hermes/hermes-agent/venv/bin:/usr/local/bin:/usr/bin:/bin:$PATH"; ${inst ? `export HERMES_HOME=$HOME/.hermes-${inst};` : ''} timeout 15 hermes gatew""ay status 2>/dev/null | grep -q 'is running' && res=1;` +
       ` fi;` +
       ` echo "PID_ALIVE=$res"`;
     const pidAlive = async () => {
@@ -249,14 +258,33 @@ true`,
         }
         const preStop = (op === 'restart' || operation === 'restart') ? `if [ -f "${PIDF}" ]; then kill -9 $(cat "${PIDF}") 2>/dev/null; rm -f "${PIDF}"; sleep 1; fi; ` : '';
         const startBackground = `mkdir -p "${HH}/logs"; ${HHX}setsid nohup sh -c 'exec ${JSON.stringify(binPath)} gateway run || exec ${JSON.stringify(binPath)} gateway' >> "${HH}/logs/gateway-nohup.log" 2>&1 < /dev/null & echo $! > "${PIDF}"; sleep 4; if kill -0 $(cat "${PIDF}") 2>/dev/null; then echo 'GW_UP'; else echo GW_DOWN; tail -5 "${HH}/logs/gateway-nohup.log" 2>/dev/null; fi`;
+        // Start, with self-healing: hermes tracks its own lifecycle via the
+        // control socket, so a gateway the monitor cannot see (stale pidfile,
+        // process started outside the monitor) makes `start` refuse with
+        // "Another gateway instance is already running". In that case fall
+        // back to `gateway restart` which replaces it cleanly.
+        const startAliveCheck = `${ENVX}; ${HHX}sleep 3; if [ -f "${PIDF}" ] && kill -0 $(cat "${PIDF}") 2>/dev/null; then echo ALIVE; elif ${SYS_ACTIVE}; then echo ALIVE; elif pgrep -f '[h]ermes.*gatew[a]y' >/dev/null 2>&1; then echo ALIVE; else echo DEAD; fi`;
+        const finishStart = async (r) => {
+          const out = r.stdout || '';
+          if (/GW_UP/.test(out)) return { ok: true, out: out.slice(-200) };
+          if (/already running/i.test(out)) {
+            const r2 = await execCommand(sshConfig,
+              `${ENVX}; ${HHX}timeout 90 ${JSON.stringify(binPath)} gateway restart 2>&1 || ${startBackground}`,
+              { pool: false, timeoutMs: 120000 });
+            const chk = await execCommand(sshConfig, startAliveCheck, { pool: false, timeoutMs: 30000 });
+            const ok = /ALIVE/.test(chk.stdout || '');
+            return { ok, out: (`auto-replaced running instance: ` + (r2.stdout || out)).slice(-300) };
+          }
+          return { ok: false, out: out.slice(-300) };
+        };
         if (sysd) {
           const v2 = op === 'restart' ? 'try-restart' : 'start';
           return execCommand(sshConfig,
             `${ENVX}; ${preStop}timeout 40 systemctl ${v2} hermes-gate""way 2>/dev/null || timeout 40 systemctl --user ${verb || 'start'} hermes-gate""way 2>/dev/null || ${startBackground}`,
-            { pool: false, timeoutMs: 120000 }).then(r => ({ ok: /GW_UP/.test(r.stdout || ''), out: (r.stdout || '').slice(-200) }));
+            { pool: false, timeoutMs: 120000 }).then(finishStart);
         }
         return execCommand(sshConfig, `${ENVX}; ${preStop}${startBackground}`, { pool: false, timeoutMs: 90000 })
-          .then(r => ({ ok: /GW_UP/.test(r.stdout || ''), out: (r.stdout || '').slice(-200) }));
+          .then(finishStart);
       }
       async function gwCtlExec(operation, cbin) {
         const CB = JSON.stringify(cbin);
@@ -318,28 +346,17 @@ done
       const r = await execCommand(sshConfig, `
 if [ -d "$HOME/.hermes-${tag}" ]; then echo "EXISTS"; exit 0; fi
 mkdir -p "$HOME/.hermes-${tag}"
-for f in .env config.yaml SOUL.md USER.md AGENTS.md MEMORY.md custom_instructions.txt prompt.txt; do
+for f in config.yaml SOUL.md USER.md AGENTS.md MEMORY.md custom_instructions.txt prompt.txt; do
   [ -f "$HOME/.hermes/$f" ] && cp "$HOME/.hermes/$f" "$HOME/.hermes-${tag}/$f"
 done
-# Credential-isolation check: a cloned .env identical to the default means the
-# new instance would fight the default over the same bot token.
-TS=0; [ -f "$HOME/.hermes/.env" ] && cmp -s "$HOME/.hermes/.env" "$HOME/.hermes-${tag}/.env" && TS=1
-echo "TOKEN_SAME=$TS"
+# Fresh empty .env — instances are credential-isolated (own bot token/keys).
+: > "$HOME/.hermes-${tag}/.env"
 echo CLONED
 `, { pool: false, timeoutMs: 30000 });
       if (!/CLONED|EXISTS/.test(r.stdout || '')) {
         return NextResponse.json({ success: false, error: 'Failed to clone instance home: ' + ((r.stdout || '') + (r.stderr || '')).slice(-200), log });
       }
       const existed = /EXISTS/.test(r.stdout || '');
-      const tokenSame = /TOKEN_SAME=1/.test(r.stdout || '');
-      if (!existed && tokenSame) {
-        return NextResponse.json({
-          success: false,
-          instance: tag,
-          error: 'Cloned .env is identical to the default instance — set this instance its OWN bot token first (reconfigure → env). Starting it now would make the two instances fight over the same Telegram bot.',
-          log,
-        });
-      }
       const g = await gwCtl('start');
       return NextResponse.json({
         success: true,
@@ -389,10 +406,12 @@ echo CLONED
         ? '' // instances share the globally-installed binary — leave it alone
         : `rm -f "$HOME/.local/bin/hermes" /usr/local/bin/hermes; `;
       const libRm = purge && !inst ? ' /usr/local/lib/hermes-agent' : '';
-      const rmCmd = purge
-        ? `${binRm}rm -rf "${HH}"${libRm}; echo REMOVED_ALL`
-        : `${binRm}rm -rf "${HH}/hermes-agent"${libRm}; echo REMOVED_CODE`;
-      const r = await run(purge ? 'remove binary, code & all config' : 'remove binary & code (config kept)', rmCmd);
+      const rmCmd = inst
+        ? `rm -rf "${HH}"; echo REMOVED_INSTANCE`   // instances: always remove the whole isolated home
+        : purge
+          ? `${binRm}rm -rf "${HH}"${libRm}; echo REMOVED_ALL`
+          : `${binRm}rm -rf "${HH}/hermes-agent"${libRm}; echo REMOVED_CODE`;
+      const r = await run(inst ? 'remove instance (isolated home)' : purge ? 'remove binary, code & all config' : 'remove binary & code (config kept)', rmCmd);
       const ok = /REMOVED/.test(r.stdout || '');
       return NextResponse.json({ success: ok, purged: purge, log });
     }
@@ -542,6 +561,26 @@ echo "$MDL"
         settings.model = targetModel;
         env.MODEL = targetModel;
       }
+
+      // ── Custom OpenAI-compatible endpoint (wizard "Custom…" provider) ──
+      // Writes CUSTOM_LLM_API_KEY + OPENAI_BASE_URL. hermes routes custom
+      // endpoints through its model.provider / model.base_url block and reads the
+      // provider's API key env var. Map the wizard's custom fields into the
+      // proper hermes provider + env key so the endpoint is actually used.
+      const customKey = String(env.CUSTOM_LLM_API_KEY || '').trim()
+        || String(env.CUSTOM_API_KEY || env.OPENAI_API_KEY || '').trim();
+      const customBaseUrl = String(env.OPENAI_BASE_URL || env.OPENAI_API_BASE || '').trim();
+      let customProvider = null;
+      if (customBaseUrl && targetModel) {
+        // Z.ai / GLM endpoint → native zai provider (env GLM_API_KEY|ZAI_API_KEY).
+        // Anything else → generic openai-compatible provider (env OPENAI_API_KEY).
+        customProvider = /z\.ai|api\.bigmodel|zhipu/i.test(customBaseUrl) ? 'zai' : 'openai';
+        if (customKey) {
+          const provKey = customProvider === 'zai' ? 'ZAI_API_KEY' : 'OPENAI_API_KEY';
+          env[provKey] = customKey;          // hermes reads this for the provider
+          env.CUSTOM_LLM_API_KEY = customKey;  // keep the wizard's original key too
+        }
+      }
       const envKeys = Object.keys(env).filter(k => env[k] != null && env[k] !== '');
       const hasSettings = Object.keys(settings).filter(k => settings[k] != null && settings[k] !== '').length > 0;
       if (envKeys.length === 0 && !hasSettings) {
@@ -576,16 +615,18 @@ echo "$MDL"
           `print('ENV_UPDATED')`,
         ].join('\n');
         const envPyB64 = b64(envPy);
-        const w = await run('write ~/.hermes/.env', `${HERMES_ENV} echo '${envPyB64}' | base64 -d | python3`, { timeoutMs: 30000 });
+        const envTargetLabel = inst ? `~/.hermes-${inst}/.env` : '~/.hermes/.env';
+        const w = await run(`write ${envTargetLabel}`, `${HERMES_ENV} echo '${envPyB64}' | base64 -d | python3`, { timeoutMs: 30000 });
         if (!/ENV_UPDATED/.test(w.stdout || '')) {
-          return NextResponse.json({ success: false, error: 'Failed to write ~/.hermes/.env', log });
+          return NextResponse.json({ success: false, error: `Failed to write ${envTargetLabel}`, log });
         }
       }
 
       // also merge settings (model, platform toggles) into config.yaml if provided
       if (hasSettings) {
         const setB64 = b64(JSON.stringify(settings));
-        await run('merge ~/.hermes/config.yaml settings', `${HERMES_ENV}
+        const cfgTargetLabel = inst ? `~/.hermes-${inst}/config.yaml` : '~/.hermes/config.yaml';
+        await run(`merge ${cfgTargetLabel} settings`, `${HERMES_ENV}
           export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:\$PATH"
           python3 - <<'PY' 2>/dev/null || true
 import json, os, base64, re
@@ -612,6 +653,19 @@ PY`, { timeoutMs: 30000 });
           HB="$([ -x "$HOME/.local/bin/hermes" ] && echo "$HOME/.local/bin/hermes" || command -v hermes || echo "/usr/local/bin/hermes")"
           $HB config set model ${JSON.stringify(targetModel)} 2>&1 || true
           command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx hermes-agent && docker exec hermes-agent hermes config set model ${JSON.stringify(targetModel)} 2>&1 || true
+        `, { pool: false, timeoutMs: 30000 });
+      }
+
+      // Custom endpoint → point hermes' model block at the custom provider/URL.
+      // `hermes config set model.<nested>` supports dotted paths (verified).
+      if (customProvider && customBaseUrl) {
+        const esc = (v) => JSON.stringify(v);
+        await execCommand(sshConfig, `
+          export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+          HB="$([ -x "$HOME/.local/bin/hermes" ] && echo "$HOME/.local/bin/hermes" || command -v hermes || echo "/usr/local/bin/hermes")"
+          ${HERMES_ENV} $HB config set model.provider ${esc(customProvider)} 2>&1 || true
+          ${HERMES_ENV} $HB config set model.base_url ${esc(customBaseUrl)} 2>&1 || true
+          ${HERMES_ENV} $HB config set model.default ${esc(targetModel)} 2>&1 || true
         `, { pool: false, timeoutMs: 30000 });
       }
 
@@ -1024,7 +1078,7 @@ fi
       // NOTE: trailing newline is REQUIRED — `while read` drops an unterminated
     // final line, which silently lost the last .env key.
     const envPayload = envBlock.endsWith('\n') ? envBlock : envBlock + '\n';
-    await run(`write ${envEntries.length} key(s) to ~/.hermes/.env`, `
+    await run(`write ${envEntries.length} key(s) to ${inst ? `~/.hermes-${inst}` : '~/.hermes'}/.env`, `
         mkdir -p "${HH}" && touch "${HH}/.env"
         echo '${b64(envPayload)}' | base64 -d > /tmp/.hermes-env-merge
         while IFS= read -r line; do
@@ -1049,8 +1103,8 @@ fi
       settingsEntries.push(['auxiliary.free_only', 'true']);
     }
     for (const [key, value] of settingsEntries) {
-      await run(`hermes config set ${key}`,
-        `${ENVPREFIX}; ${HB} config set ${key} ${JSON.stringify(String(value))} 2>&1 | tail -2`,
+      await run(`hermes config set ${key}${inst ? ` (→ ~/.hermes-${inst})` : ''}`,
+        `${ENVPREFIX}; ${HERMES_ENV} ${HB} config set ${key} ${JSON.stringify(String(value))} 2>&1 | tail -2`,
         { timeoutMs: 60000 });
     }
 

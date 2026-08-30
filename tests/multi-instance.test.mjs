@@ -58,17 +58,14 @@ test('pidAliveCmd verifies process cmdline against the home marker', () => {
   assert.equal(pidAliveCmd('$HOME/.openclaw').includes('.openclaw'), true);
 });
 
-test('cloneDefaultHome: creates parent dirs for nested files + token check', async () => {
-  // Stub execCommand capturing the remote script, simulating a fresh clone.
-  let captured = '';
-  const fakeSsh = {};
+test('cloneDefaultHome: creates parent dirs for nested files + isolates .env', async () => {
   const orig = (await import(`file://${modPath}`)).cloneDefaultHome;
-  // cloneDefaultHome uses the module-level execCommand import which we stripped;
-  // verify the generated script shape instead by checking source of the module.
   const modSrc = src;
   assert.match(modSrc, /mkdir -p "\$HOME\/\.\$\{agentId\}-\$\{tag\}\/\$\{f\.slice/, 'nested parent dirs must be created before cp');
-  assert.match(modSrc, /TOKEN_SAME=\$TS/, 'token-identity check must be emitted');
-  assert.match(modSrc, /cmp -s/, 'must compare .env with cmp');
+  // .env must NEVER be cloned — instances get a fresh empty .env instead
+  assert.match(modSrc, /identityFiles = files\.filter/, 'must filter out .env from cloned files');
+  assert.match(modSrc, /: > "\$HOME\/\.\$\{agentId\}-\$\{tag\}\/\.env"/, 'must create a fresh empty .env');
+  assert.doesNotMatch(modSrc, /TOKEN_SAME|cmp -s/, 'token-same guard is gone — no .env clone means no conflict check needed');
   // sanity: exported symbol exists
   assert.equal(typeof orig, 'function');
   assert.equal(typeof cloneDefaultHome, 'function');
@@ -81,10 +78,13 @@ test('route callers pass their agentId into instancePort', () => {
   }
 });
 
-test('hermes route: instance uninstall is pidfile-scoped and token guard exists', () => {
+test('hermes route: instance uninstall is pidfile-scoped + .env not cloned on spawn', () => {
   const route = readFileSync('src/app/api/agents/hermes/route.js', 'utf8');
   assert.match(route, /stop instance \(pidfile-scoped\)/);
-  assert.match(route, /TOKEN_SAME=1/);
+  // .env must not be in the spawn clone list, and must get a fresh empty .env
+  assert.match(route, /for f in config\.yaml SOUL\.md/, 'spawn must not clone .env');
+  assert.match(route, /: > "\$HOME\/\.hermes-\$\{tag\}\/\.env"/, 'spawn creates a fresh empty .env');
+  assert.doesNotMatch(route, /TOKEN_SAME=1/, 'token-same spawn guard removed');
   // pidScan verifies cmdline via ps
   assert.match(route, /ps -p "\$pid" -o args=/);
 });
@@ -106,7 +106,50 @@ test('gatewayUnit: hardening + supervision + instance relocation', () => {
   assert.match(unit, /HERMES_HOME=%h\/\.hermes-%i/, 'per-instance home via %i');
   assert.match(unit, /%h\/\.hermes-%i\/logs\/gateway\.log/, 'per-instance log');
   assert.match(unit, /WantedBy=default\.target/);
+  // resource caps protect the host when instances are shared with others
+  assert.match(unit, /MemoryMax=2G/, 'default memory cap');
+  assert.match(unit, /CPUQuota=200%/, 'default cpu cap');
+  const capped = gatewayUnit('hermes', {
+    description: 'x', envLines: [], execStart: 'x', logFile: 'x', memoryMax: '512M', cpuQuota: '50%',
+  });
+  assert.match(capped, /MemoryMax=512M/);
+  assert.match(capped, /CPUQuota=50%/);
+  const uncapped = gatewayUnit('hermes', {
+    description: 'x', envLines: [], execStart: 'x', logFile: 'x', memoryMax: 'none', cpuQuota: 'none',
+  });
+  assert.doesNotMatch(uncapped, /MemoryMax|CPUQuota/, "'none' disables caps");
 });
+
+// ── Strict mode: one Linux user per friend ────────────────────────────────
+test('sanitizeUsername: lowercase, safe chars, no leading digit, reserved names', async () => {
+  const m = await import(`file://${modPath}`);
+  assert.equal(m.sanitizeUsername('  Friend-2 X! '), 'friend-2x');
+  assert.equal(m.sanitizeUsername('9bad'), 'bad', 'leading digit stripped');
+  assert.equal(m.sanitizeUsername('!!!'), '');
+  assert.equal(m.sanitizeUsername('MyBot_01').startsWith('mybot'), true);
+});
+
+test('provisionUserScript: idempotent user creation, linger, 700 home, pubkey', async () => {
+  const m = await import(`file://${modPath}`);
+  const s = m.provisionUserScript('friend1', { publicKey: 'ssh-ed25519 AAAA test' });
+  assert.match(s, /useradd -m -s \/bin\/bash/, 'creates user with home');
+  assert.match(s, /loginctl enable-linger/, 'linger so units run without login');
+  assert.match(s, /chmod 700/, 'private home dir');
+  assert.match(s, /authorized_keys/, 'installs the friend pubkey');
+  assert.match(s, /root\|daemon\|bin\|sys/, 'blocks reserved usernames');
+  assert.match(s, /PROVISIONED/, 'success marker');
+  // reserved-name block must actually trigger
+  const bad = m.provisionUserScript('root');
+  assert.match(bad, /BAD_USER/, 'root must be rejected');
+});
+
+test('provision-user route exists with auth + strict mode docs', () => {
+  const route = readFileSync('src/app/api/agents/provision-user/route.js', 'utf8');
+  assert.match(route, /getServerSession/, 'must require auth');
+  assert.match(route, /sanitizeUsername/, 'must sanitize username');
+  assert.match(route, /provisionUser/, 'must call the provision helper');
+});
+
 
 test('template unit name avoids bare "gateway" via gatew""ay split', async () => {
   const src2 = readFileSync('src/app/api/agents/_multi-instance.js', 'utf8');

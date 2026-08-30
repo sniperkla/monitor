@@ -1,6 +1,6 @@
 'use client';
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { X, Send, Loader2, Bot, Box, Server as ServerIcon, MonitorCog, CheckCircle2, XCircle, Trash2, Settings2, Zap, ExternalLink } from 'lucide-react';
+import { X, Send, Loader2, Bot, Box, Server as ServerIcon, MonitorCog, CheckCircle2, XCircle, Trash2, Settings2, Zap, Sparkles, ExternalLink } from 'lucide-react';
 import ThemeSelect from '@/components/common/ThemeSelect';
 
 /**
@@ -41,7 +41,7 @@ const DISTROS = [
 
 const THEMED_SELECT_CLS = 'w-full bg-black/40 border border-[var(--border-color)] rounded-lg px-3 py-2 text-[11px] text-[var(--text-primary)] cursor-pointer focus:outline-none focus:border-indigo-400/50 [&>option]:bg-[#1a1a2e] [&>option]:text-white';
 
-export default function HermesAgentWizard({ isOpen, onClose, connections = [], selectedId, apiFetch, agentApi = '/api/agents/hermes', agent = { id: 'hermes', name: 'Hermes Agent', by: 'Nous Research', docsUrl: 'https://hermes-agent.nousresearch.com/docs/' }, onLog, onActionStart, onActionEnd }) {
+export default function HermesAgentWizard({ isOpen, onClose, connections = [], selectedId, apiFetch, agentApi = '/api/agents/hermes', agent = { id: 'hermes', name: 'Hermes Agent', by: 'Nous Research', docsUrl: 'https://hermes-agent.nousresearch.com/docs/' }, onLog, onActionStart, onActionEnd, instance = '' }) {
   const [mode, setMode] = useState('easy');
   const [target, setTarget] = useState(selectedId || connections[0]?._id || '');
   // easy state
@@ -66,7 +66,7 @@ export default function HermesAgentWizard({ isOpen, onClose, connections = [], s
   const [done, setDone] = useState(null);
   const [showSuccess, setShowSuccess] = useState(false);
   const [successDetail, setSuccessDetail] = useState('');
-  const [purge, setPurge] = useState(false);
+  const [purge, setPurge] = useState(true); // default: uninstall removes EVERYTHING — untick to keep config for a later reconfigure
   // install-target chooser
   const [showChooser, setShowChooser] = useState(false);
   const [runWhere, setRunWhere] = useState('direct'); // 'direct' | 'docker'
@@ -79,7 +79,7 @@ export default function HermesAgentWizard({ isOpen, onClose, connections = [], s
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ connectionId: target, action, ...extra }),
+      body: JSON.stringify({ connectionId: target, action, instance: instance || undefined, ...extra }),
     });
     return res.json();
   }, [doFetch, target, agentApi]);
@@ -139,85 +139,12 @@ export default function HermesAgentWizard({ isOpen, onClose, connections = [], s
   const loadStatus = useCallback(async () => {
     if (!target) return;
     setStatus(null);
+    // NOTE: intentionally do NOT pre-fill API key / model / tokens from the
+    // server — the form always starts FRESH so a reconfigure never silently
+    // re-saves old values. The user enters only what they want to change.
     try {
-      const [st, dt] = await Promise.all([
-        call('status').catch(() => null),
-        call('details').catch(() => null),
-      ]);
+      const st = await call('status').catch(() => null);
       setStatus(st);
-      if (dt) {
-        // 1. Restore Model & Provider
-        if (dt.model) {
-          setModel(dt.model);
-          if (dt.model.startsWith('openrouter/') || (dt.envKeys || []).includes('OPENROUTER_API_KEY')) {
-            setProvider('openrouter');
-          } else if (dt.model.startsWith('openai/') || dt.model.startsWith('gpt-') || (dt.envKeys || []).includes('OPENAI_API_KEY')) {
-            setProvider('openai');
-          } else if (dt.model.startsWith('anthropic/') || dt.model.startsWith('claude-') || (dt.envKeys || []).includes('ANTHROPIC_API_KEY')) {
-            setProvider('anthropic');
-          }
-        }
-
-        // 2. Restore Env & Tokens
-        if (dt.envText) {
-          setAdvEnv(dt.envText);
-          const envMap = {};
-          dt.envText.split('\n').forEach(line => {
-            const idx = line.indexOf('=');
-            if (idx > 0 && !line.trim().startsWith('#')) {
-              envMap[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
-            }
-          });
-
-          // Restore API key
-          if (envMap.OPENROUTER_API_KEY) {
-            setProvider('openrouter');
-            setApiKey(envMap.OPENROUTER_API_KEY);
-          } else if (envMap.OPENAI_API_KEY) {
-            setProvider('openai');
-            setApiKey(envMap.OPENAI_API_KEY);
-          } else if (envMap.ANTHROPIC_API_KEY) {
-            setProvider('anthropic');
-            setApiKey(envMap.ANTHROPIC_API_KEY);
-          } else {
-            const customK = Object.keys(envMap).find(k => k.endsWith('_API_KEY') || k.endsWith('_KEY'));
-            if (customK) {
-              setProvider('custom');
-              setCustomEnvKey(customK);
-              setApiKey(envMap[customK]);
-            }
-          }
-          if (envMap.OPENAI_BASE_URL || envMap.OPENAI_API_BASE) {
-            setCustomBaseUrl(envMap.OPENAI_BASE_URL || envMap.OPENAI_API_BASE);
-          }
-
-          // Restore messenger
-          if (envMap.TELEGRAM_BOT_TOKEN) {
-            setMessenger('telegram');
-            setTok1(envMap.TELEGRAM_BOT_TOKEN);
-            setAllowedIds(envMap.TELEGRAM_ALLOWED_USERS || '');
-          } else if (envMap.LINE_CHANNEL_ACCESS_TOKEN) {
-            setMessenger('line');
-            setTok1(envMap.LINE_CHANNEL_ACCESS_TOKEN);
-            setTok2(envMap.LINE_CHANNEL_SECRET || '');
-            setAllowedIds(envMap.LINE_ALLOWED_USERS || '');
-          } else if (envMap.DISCORD_BOT_TOKEN) {
-            setMessenger('discord');
-            setTok1(envMap.DISCORD_BOT_TOKEN);
-            setAllowedIds(envMap.DISCORD_ALLOWED_USERS || '');
-          }
-        }
-
-        // 3. Restore Advanced Settings
-        if (dt.configYaml) {
-          const lines = [];
-          dt.configYaml.split('\n').forEach(l => {
-            const m = l.match(/^([a-zA-Z0-9_.-]+):\s*(.*)$/);
-            if (m && m[2] && !m[2].startsWith('#')) lines.push(`${m[1]}=${m[2].trim()}`);
-          });
-          if (lines.length) setAdvSettings(lines.join('\n'));
-        }
-      }
     } catch {
       setStatus(null);
     }
@@ -319,9 +246,40 @@ export default function HermesAgentWizard({ isOpen, onClose, connections = [], s
   const install = async () => {
     setBusy(true); setLog([]); setDone(null); setShowChooser(false);
     try {
-      const installed = !!(status && (status.installed || status.running || status.binPath));
-      const action = installed ? 'reconfigure' : 'install';
-      const label = installed ? `Reconfigure ${agent.name}` : `Install ${agent.name}`;
+      // 1-Click Install is ALWAYS a real fresh install. When the agent is
+      // already installed we purge its instance config/memories first so the
+      // resulting setup is identical to a first-time install (no stale tokens,
+      // models or gateway). It is NOT a reconfigure.
+      const st = (await call('status').catch(() => null)) || status;
+      const installed = !!(st && st.installed);
+
+      // Fresh install still requires at least one real field.
+      const advHasInput = mode === 'advanced' && !!(advEnv.trim() || advSettings.trim());
+      const hasInput = !!(apiKey.trim() || model.trim() || tok1.trim() || customBaseUrl.trim() || advHasInput);
+      if (!hasInput) {
+        setDone({ ok: false, detail: 'Nothing entered — enter at least an API key/model to install.' });
+        setBusy(false);
+        return;
+      }
+
+      // Purge whatever is already there so the install below is genuinely fresh.
+      if (installed) {
+        onActionStart?.(`Fresh reinstall ${agent.name} (purging old instance…)`);
+        const append = (line) => { setLog(prev => [...prev, line]); onLog?.(line); };
+        const u = liveLogs
+          ? await callLive('uninstall', { purge: true }, append)
+          : await call('uninstall', { purge: true });
+        if (!u?.success) {
+          setDone({ ok: false, detail: (u && u.error) || 'Failed to clear previous install. Close and retry.' });
+          setBusy(false);
+          return;
+        }
+        setLog(prev => [...prev, `— old instance cleared. Starting fresh install…`]);
+        onLog?.('— old instance cleared. Starting fresh install…');
+      }
+
+      const action = 'install';
+      const label = `Install ${agent.name}`;
       onActionStart?.(label);
       const append = (line) => { setLog(prev => [...prev, line]); onLog?.(line); };
       const r = liveLogs
@@ -329,11 +287,46 @@ export default function HermesAgentWizard({ isOpen, onClose, connections = [], s
         : await call(action, buildPayload());
       if (r?.log && !liveLogs) { setLog(r.log); r.log.forEach(l => onLog?.(l)); }
       const detail = r.success
-        ? (installed
-            ? `${agent.name} reconfigured successfully — gateway restarted.`
-            : `${agent.name} ${r.version || ''} gateway is running (${r.startMethod}). Say hi to your agent in ${MESSENGERS.find(m => m.id === messenger)?.label || 'your messenger'}!`)
+        ? `${agent.name} ${r.version || ''} gateway is running (${r.startMethod}). Say hi to your agent in ${MESSENGERS.find(m => m.id === messenger)?.label || 'your messenger'}!`
         : r.error;
-      if (r.success && installed) {
+      if (r.success) {
+        setSuccessDetail(detail);
+        setShowSuccess(true);
+      } else {
+        setDone({ ok: !!r.success, detail });
+      }
+      loadStatus();
+    } catch (e) {
+      setLog(prev => [...prev, `ERROR: ${e.message}`]);
+      onLog?.(`ERROR: ${e.message}`);
+      setDone({ ok: false, detail: e.message });
+    } finally { setBusy(false); onActionEnd?.(); }
+  };
+
+  // ── RECONFIGURE — update config + restart gateway. Keeps everything
+  // (token, memories, sessions, skills) — just re-applies what the user
+  // entered and bounces the gateway. No purge, no reinstall.
+  const reconfigure = async () => {
+    setBusy(true); setLog([]); setDone(null); setShowChooser(false);
+    try {
+      const advHasInput = mode === 'advanced' && !!(advEnv.trim() || advSettings.trim());
+      const hasInput = !!(apiKey.trim() || model.trim() || tok1.trim() || customBaseUrl.trim() || advHasInput);
+      if (!hasInput) {
+        setDone({ ok: false, detail: 'Nothing entered — enter what you want to update, or close the wizard.' });
+        setBusy(false);
+        return;
+      }
+      const label = `Reconfigure ${agent.name}`;
+      onActionStart?.(label);
+      const append = (line) => { setLog(prev => [...prev, line]); onLog?.(line); };
+      const r = liveLogs
+        ? await callLive('reconfigure', buildPayload(), append)
+        : await call('reconfigure', buildPayload());
+      if (r?.log && !liveLogs) { setLog(r.log); r.log.forEach(l => onLog?.(l)); }
+      const detail = r.success
+        ? `${agent.name} reconfigured successfully — gateway restarted.`
+        : r.error;
+      if (r.success) {
         setSuccessDetail(detail);
         setShowSuccess(true);
       } else {
@@ -534,25 +527,84 @@ export default function HermesAgentWizard({ isOpen, onClose, connections = [], s
             </div>
           )}
 
-          {/* Action buttons */}
+          {/* Instance Setup mode (newly spawned instance): only Save & Start.
+              No Reinstall/Uninstall — those belong on the default/manager view. */}
+          {instance ? (
+            <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-4 space-y-3">
+              <div className="text-[10px] font-bold text-emerald-300 flex items-center gap-1.5">
+                <Sparkles size={11} /> Configure this new instance ({instance})
+              </div>
+              <p className="text-[9px] text-[var(--text-muted)]">
+                This instance was just created. Give it its <b>OWN API key / token</b> so it doesn&apos;t fight the default over the same credentials.
+              </p>
+              <button
+                onClick={reconfigure}
+                disabled={busy || !target}
+                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-white text-xs font-bold disabled:opacity-50 transition cursor-pointer"
+              >
+                {busy ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                Save &amp; Start
+              </button>
+              <p className="text-[9px] text-[var(--text-muted)]">Applies the config above and starts this instance&apos;s gateway. Uninstall is done later from the instance dropdown.</p>
+            </div>
+          ) : (
           <div className="flex items-center gap-2">
-            <button
-              onClick={() => (status?.installed ? install() : setShowChooser(true))}
-              disabled={busy || !target}
-              className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white text-xs font-bold disabled:opacity-50 transition cursor-pointer"
-            >
-              {busy ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
-              {busy ? (status?.installed ? 'Reconfiguring…' : 'Installing… (can take 5–15 min)') : status?.installed ? 'Reconfigure & Start' : 'One-Click Install'}
-            </button>
-            {status?.installed && (
-              <button onClick={uninstall} disabled={busy} className="px-3 py-2.5 rounded-xl bg-red-500/10 text-red-400 text-xs font-bold hover:bg-red-500/20 disabled:opacity-50 cursor-pointer"><Trash2 size={13} /></button>
+            {status?.installed ? (
+              <>
+                <button
+                  onClick={reconfigure}
+                  disabled={busy || !target}
+                  className="flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 text-xs font-bold disabled:opacity-50 transition cursor-pointer"
+                  title="Update config + restart gateway — keeps token, memories & sessions"
+                >
+                  {busy ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                  Update &amp; Restart
+                </button>
+                <button
+                  onClick={install}
+                  disabled={busy || !target}
+                  className="flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white text-xs font-bold disabled:opacity-50 transition cursor-pointer"
+                  title="Wipe this instance's config/memories and install from scratch"
+                >
+                  {busy ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+                  One-Click Reinstall
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={() => setShowChooser(true)}
+                disabled={busy || !target}
+                className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white text-xs font-bold disabled:opacity-50 transition cursor-pointer"
+              >
+                {busy ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+                {busy ? 'Installing… (can take 5–15 min)' : 'One-Click Install'}
+              </button>
             )}
           </div>
+          )}
+          {!instance && status?.installed && (
+            <p className="text-[10px] text-[var(--text-muted)] mt-1">
+              <span className="text-emerald-400/80 font-bold">Update &amp; Restart</span> keeps token/memories · <span className="text-indigo-400/80 font-bold">One-Click Reinstall</span> wipes this instance&apos;s config &amp; memories and installs from scratch
+            </p>
+          )}
+
+          {/* ── Danger zone — kept at the bottom, separated from safe actions ── */}
           {status?.installed && (
-            <label className="flex items-center gap-1.5 text-[10px] text-[var(--text-muted)] cursor-pointer">
-              <input type="checkbox" checked={purge} onChange={e => setPurge(e.target.checked)} className="accent-red-500" />
-              also delete ~/.hermes config, memories &amp; sessions on uninstall
-            </label>
+            <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-3 space-y-2">
+              <div className="text-[10px] font-bold text-red-300 flex items-center gap-1.5">
+                <Trash2 size={11} /> Danger zone
+              </div>
+              <p className="text-[9px] text-[var(--text-muted)]">
+                Uninstall removes the agent runtime from this server. {instance ? `This also deletes the instance "${instance}" including its config, memories & sessions.` : 'Optionally delete all data (config, memories, sessions) with the checkbox above.'}
+              </p>
+              <button
+                onClick={uninstall}
+                disabled={busy}
+                className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-red-500/10 text-red-400 text-xs font-bold hover:bg-red-500/20 disabled:opacity-50 transition cursor-pointer"
+              >
+                <Trash2 size={12} /> Uninstall {agent.name}{instance ? ` (${instance})` : ''}
+              </button>
+            </div>
           )}
 
           {/* Install-target chooser (fire alert) */}

@@ -120,7 +120,9 @@ async function handleAgentAction(body, session, log = []) {
     const GW_PORT = instancePort('zeroclaw', inst);        // distinct dashboard port for instances
     const PIDF = `${HH}/daemon.pid`;
     const CFG_DIR_ARG = inst ? `--config-dir "${HH}"` : '';
-    const binPath = () => `
+    const binPath = () => inst
+      ? `${ENVX}; p=""; [ -x "${HH}/bin/zeroclaw" ] && p="${HH}/bin/zeroclaw"; echo "BIN=$p"` // instance-local isolated binary
+      : `
       export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$HOME/bin:/root/.local/bin:/root/.cargo/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin:$PATH"
       p="$(command -v zeroclaw 2>/dev/null || true)"
       [ -z "$p" ] && for q in "$HOME/.cargo/bin/zeroclaw" "$HOME/.local/bin/zeroclaw" "$HOME/bin/zeroclaw" "$HOME/.zeroclaw/bin/zeroclaw" "/root/.cargo/bin/zeroclaw" "/root/.local/bin/zeroclaw" "/usr/local/bin/zeroclaw" "/usr/bin/zeroclaw" "/opt/zeroclaw/zeroclaw"; do [ -x "$q" ] && p="$q" && break; done
@@ -142,13 +144,19 @@ async function handleAgentAction(body, session, log = []) {
         // (own cgroup + Restart=on-failure + NoNewPrivileges/PrivateTmp).
         // Falls back to pidfile-scoped nohup when no systemd user session.
         if (await sdAvailable(sshConfig)) {
+          // Per-instance dashboard port: the fixed default (42617) would collide
+          // across instances. zeroclaw stores it in config.toml gateway.port —
+          // set it via the binary's own props command (best-effort).
+          if (GW_PORT) {
+            await execCommand(sshConfig, `${ENVX}; ${BP} config set gateway.port ${GW_PORT} --no-interactive 2>/dev/null || true`, { pool: false, timeoutMs: 30000 });
+          }
           await ensureInstanceUnit(sshConfig, 'zeroclaw', gatewayUnit('zeroclaw', {
             description: 'ZeroClaw daemon',
             envLines: [
               'EnvironmentFile=-%h/.zeroclaw-%i/.env',
               'Environment=PATH=%h/.local/bin:%h/.cargo/bin:%h/bin:/usr/local/bin:/usr/bin:/bin',
             ],
-            execStart: `/bin/sh -c 'exec "$(command -v zeroclaw || echo %h/.cargo/bin/zeroclaw)" dae""mon --config-dir %h/.zeroclaw-%i'`,
+            execStart: `/bin/sh -c 'exec "$( [ -x %h/.zeroclaw-%i/bin/zeroclaw ] && echo %h/.zeroclaw-%i/bin/zeroclaw || echo %h/.cargo/bin/zeroclaw)" dae""mon --config-dir %h/.zeroclaw-%i'`,
             logFile: '%h/.zeroclaw-%i/logs/daemon.log',
           }));
           const sd = await sdInstanceCtl(sshConfig, 'zeroclaw', inst, op);
@@ -165,21 +173,30 @@ async function handleAgentAction(body, session, log = []) {
             { pool: false, timeoutMs: 60000 }).then(r => ({ ok: /GW_STOPPED/.test(r.stdout || ''), out: ((r.stdout || '') + (r.stderr || '')).slice(-400) }));
         }
         if (op === 'restart') await gwCtl('stop');
+        if (GW_PORT) {
+          await execCommand(sshConfig, `${ENVX}; ${BP} config set gateway.port ${GW_PORT} --no-interactive 2>/dev/null || true`, { pool: false, timeoutMs: 30000 });
+        }
         const startCmd = `${ENVX}; set -a; [ -f "${HH}/.env" ] && . "${HH}/.env"; set +a; mkdir -p "${HH}/logs"; setsid nohup ${BP} dae${'mon'} ${CFG_DIR_ARG} >> "${HH}/logs/daemon.log" 2>&1 < /dev/null & echo $! > "${PIDF}"; sleep 4; if kill -0 $(cat "${PIDF}") 2>/dev/null; then echo "GW_UP (instance)"; else echo GW_DOWN; tail -n 12 "${HH}/logs/daemon.log" 2>/dev/null; fi`;
         return execCommand(sshConfig, startCmd, { pool: false, timeoutMs: 120000 })
           .then(r => ({ ok: /GW_UP/.test(r.stdout || ''), out: (r.stdout || '').slice(-500) }));
       }
       if (op === 'status') {
-        const r = await execCommand(sshConfig,
-          `${ENVX}; res=0; [ -f "${PIDF}" ] && kill -0 $(cat "${PIDF}") 2>/dev/null && res=1; [ "$res" = 1 ] && echo PROC_ACTIVE || { systemctl --user is-active zeroclaw 2>/dev/null | grep -qx active && echo SVC_ACTIVE || echo NO_PROC; }`,
-          { pool: false, timeoutMs: 30000 });
+        // Instances: pidfile-scoped only (never match the default's daemon).
+        // Default: pidfile, systemd, then any daemon WITHOUT --config-dir.
+        let statusSh;
+        if (inst) {
+          statusSh = `${ENVX}; res=0; [ -f "${PIDF}" ] && kill -0 $(cat "${PIDF}") 2>/dev/null && res=1; [ "$res" = 1 ] && echo PROC_ACTIVE || echo NO_PROC`;
+        } else {
+          statusSh = `${ENVX}; res=0; [ -f "${PIDF}" ] && kill -0 $(cat "${PIDF}") 2>/dev/null && res=1; [ "$res" = 1 ] && echo PROC_ACTIVE || { systemctl --user is-active zeroclaw 2>/dev/null | grep -qx active && echo SVC_ACTIVE || true; }; if [ "$res" = 0 ]; then for p in $(pgrep -f '[z]eroclaw daem[o]n' 2>/dev/null); do grep -qa -- '--config-dir' /proc/$p/cmdline 2>/dev/null || res=1; done; fi; [ "$res" = 1 ] && echo PROC_ACTIVE || echo NO_PROC`;
+        }
+        const r = await execCommand(sshConfig, statusSh, { pool: false, timeoutMs: 30000 });
         return { ok: true, active: /SVC_ACTIVE|PROC_ACTIVE/.test(r.stdout || '') };
       }
       if (op === 'stop') {
         // Broad `pkill -x zeroclaw` matches EVERY instance on the box — only
         // allowed for the default install (full reset). Instances are killed
         // strictly via their own pidfile.
-        const broadKill = inst ? '' : 'pkill -9 -x zeroclaw 2>/dev/null || true;';
+        const broadKill = inst ? '' : `for p in $(pgrep -f '[z]eroclaw dae[m]on' 2>/dev/null); do grep -qa -- '--config-dir' /proc/$p/cmdline 2>/dev/null || kill -9 $p 2>/dev/null; done; true`;
         return execCommand(sshConfig,
           `${ENVX}; ${BP} service stop 2>/dev/null; ${inst ? '' : 'systemctl --user stop zeroclaw 2>/dev/null;'} if [ -f "${PIDF}" ]; then kill $(cat "${PIDF}") 2>/dev/null; sleep 1; kill -9 $(cat "${PIDF}") 2>/dev/null; fi; rm -f "${PIDF}"; ${broadKill} echo GW_STOPPED`,
           { pool: false, timeoutMs: 60000 }).then(r => ({ ok: /GW_STOPPED/.test(r.stdout || ''), out: ((r.stdout || '') + (r.stderr || '')).slice(-400) }));
@@ -190,7 +207,7 @@ async function handleAgentAction(body, session, log = []) {
         mkdir -p "${HH}/logs" "$HOME/.config/systemd/user"
         ${ENVX}; set -a; [ -f "${HH}/.env" ] && . "${HH}/.env"; set +a
         systemctl --user stop zeroclaw 2>/dev/null || true
-        ${inst ? '' : 'pkill -9 -x zeroclaw 2>/dev/null || true'}
+        ${inst ? '' : `for p in $(pgrep -f '[z]eroclaw dae[m]on' 2>/dev/null); do grep -qa -- '--config-dir' /proc/$p/cmdline 2>/dev/null || kill -9 $p 2>/dev/null; done; true`}
         sleep 1
         # Enable lingering on Fedora / RHEL so user systemd stays active after SSH disconnects
         loginctl enable-linger $(whoami) 2>/dev/null || sudo -n loginctl enable-linger $(whoami) 2>/dev/null || true
@@ -283,12 +300,22 @@ EOF
     if (action === 'spawn-instance') {
       const tag = String((config && config.tag) || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 24);
       if (!tag) return NextResponse.json({ success: false, error: 'Instance tag is required' }, { status: 400 });
-      const clone = await cloneDefaultHome(sshConfig, 'zeroclaw', tag, [
-        '.env', '.secret_key', 'config.toml', 'data/AGENTS.md', 'data/SOUL.md', 'data/USER.md', 'data/MEMORY.md', 'data/IDENTITY.md',
-        'workspace/PROMPT.md', 'workspace/SOUL.md', 'workspace/USER.md', 'workspace/AGENTS.md', 'workspace/MEMORY.md',
-      ]);
-      if (!clone.ok) {
-        return NextResponse.json({ success: false, error: 'Failed to clone zeroclaw instance home' });
+      // FULL ISOLATION: do NOT seed anything from the default (no config.toml,
+      // no .env, no .secret_key, no personality files). The instance starts as a
+      // blank slate — the auto-opened setup wizard writes the user's OWN config
+      // (API key, bot token, model) via Save & Start.
+      const seedRes = await execCommand(sshConfig,
+        `mkdir -p "${HH}/logs" "${HH}/bin" "${HH}/data" "${HH}/workspace"; if [ ! -f "${HH}/config.toml" ]; then printf 'schema_version = 3\\n' > "${HH}/config.toml"; fi; mkdir -p "${HH}/bin"; SRC=$(command -v zeroclaw 2>/dev/null || echo "$HOME/.cargo/bin/zeroclaw"); if [ -x "$SRC" ]; then cp -f "$SRC" "${HH}/bin/zeroclaw"; chmod 755 "${HH}/bin/zeroclaw"; fi; echo FRESH_HOME_READY`,
+        { pool: false, timeoutMs: 30000 });
+      const clone = { ok: /FRESH_HOME_READY/.test(seedRes.stdout || ''), existed: false };
+      // True per-instance binary isolation: give each instance its own copy of
+      // the shared binary at ~/.zeroclaw-<tag>/bin/zeroclaw. Then uninstalling
+      // the default (which removes the shared ~/.cargo/bin/zeroclaw) never
+      // breaks running/restartable instances.
+      if (!clone.existed) {
+        await execCommand(sshConfig,
+          `export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$HOME/bin:/root/.local/bin:/root/.cargo/bin:/usr/local/bin:/usr/bin:/usr/sbin:$PATH"; SRC=$(command -v zeroclaw 2>/dev/null || echo "$HOME/.cargo/bin/zeroclaw"); mkdir -p "${HH}/bin"; if [ -x "$SRC" ]; then cp -f "$SRC" "${HH}/bin/zeroclaw"; chmod 755 "${HH}/bin/zeroclaw"; echo BIN_COPIED; else echo BIN_SRC_MISSING; fi`,
+          { pool: false, timeoutMs: 30000 });
       }
       const g = await gwCtl('start');
       return NextResponse.json({
@@ -298,7 +325,7 @@ EOF
         started: g.ok,
         output: clone.existed
           ? `Instance "${tag}" already existed — daemon ${g.ok ? 'running' : 'not started'}.`
-          : `Instance "${tag}" spawned and ${g.ok ? 'running' : 'failed to start'}. Remember: give it its OWN bot token (reconfigure → env) so instances don't fight over the same Telegram bot.`,
+          : `Instance "${tag}" created fully isolated (nothing seeded from default). Configure it in the setup wizard — give it its OWN bot token so instances don't fight over the same Telegram bot.`,
       });
     }
 
@@ -306,7 +333,9 @@ EOF
     if (action === 'details') {
       const D = `
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$HOME/bin:/root/.local/bin:/root/.cargo/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin:$PATH"
-BIN="$(command -v zeroclaw 2>/dev/null || true)"
+BIN="";
+if [ -n "${inst}" ] && [ -x "${HH}/bin/zeroclaw" ]; then BIN="${HH}/bin/zeroclaw"; fi
+[ -z "$BIN" ] && BIN="$(command -v zeroclaw 2>/dev/null || true)"
 [ -z "$BIN" ] && for p in "$HOME/.cargo/bin/zeroclaw" "$HOME/.local/bin/zeroclaw" "$HOME/bin/zeroclaw" "$HOME/.zeroclaw/bin/zeroclaw" "/root/.cargo/bin/zeroclaw" "/root/.local/bin/zeroclaw" "/usr/local/bin/zeroclaw" "/usr/bin/zeroclaw" "/opt/zeroclaw/zeroclaw"; do [ -x "$p" ] && BIN="$p" && break; done
 [ -z "$BIN" ] && BIN="$(find "$HOME" /root /usr /opt -maxdepth 4 -name zeroclaw -type f -perm -111 2>/dev/null | head -1 || true)"
 echo "===TOML_B64==="
@@ -315,6 +344,9 @@ echo "===RUNNING==="
 USVC=0; command -v systemctl >/dev/null 2>&1 && systemctl --user is-active zeroclaw 2>/dev/null | grep -qx active && USVC=1
 SSVC=0; command -v systemctl >/dev/null 2>&1 && systemctl is-active zeroclaw 2>/dev/null | grep -qx active && SSVC=1
 PROC=0; [ -f "${PIDF}" ] && kill -0 $(cat "${PIDF}") 2>/dev/null && PROC=1
+if [ "$PROC" = 0 ] && [ -z "${inst}" ]; then
+  DEFAULT_DAEMON=0; for p in $(pgrep -f '[z]eroclaw daem[o]n' 2>/dev/null); do grep -qa -- '--config-dir' /proc/$p/cmdline 2>/dev/null || DEFAULT_DAEMON=1; done; [ "$DEFAULT_DAEMON" = 1 ] && PROC=1
+fi
 echo "USVC=$USVC"; echo "SSVC=$SSVC"; echo "PROC=$PROC"
 echo "===VERSION==="
 [ -n "$BIN" ] && "$BIN" --version 2>/dev/null | head -1 | cut -c1-40
@@ -439,13 +471,18 @@ echo "===ENVKEYS==="
         await run('stop & unregister service', `${ENVX}; p="$(command -v zeroclaw 2>/dev/null)"; [ -n "$p" ] && $p service uninstall 2>/dev/null; systemctl --user disable --now zeroclaw 2>/dev/null; true`);
         await run('stop stray processes', `timeout 15 pkill -f '[z]eroclaw dae[m]on' 2>/dev/null; true`);
       }
+      // Only remove the (shared) binary when NO instances remain — instances need
+      // it to keep running (zeroclaw has one binary, all instances reuse it via
+      // --config-dir). If instances exist, keep the binary so they stay usable.
       const binRm = inst
         ? '' // instances share the globally-installed binary — leave it alone
-        : `rm -f "$HOME/.local/bin/zeroclaw" "$HOME/.cargo/bin/zeroclaw" /usr/local/bin/zeroclaw; `;
-      const rmCmd = purge
-        ? `${binRm}rm -rf "${HH}"; echo REMOVED_ALL`
-        : `${binRm}rm -rf "${HH}/logs"; echo REMOVED_CODE`;
-      const r = await run(purge ? 'remove binary & all data' : 'remove binary (config kept)', rmCmd);
+        : `HAS_INST=$(ls -d "$HOME/.zeroclaw-"* 2>/dev/null | head -1); if [ -z "$HAS_INST" ]; then rm -f "$HOME/.local/bin/zeroclaw" "$HOME/.cargo/bin/zeroclaw" /usr/local/bin/zeroclaw; echo BIN_REMOVED; else echo BIN_KEPT_FOR_INSTANCES; fi; `;
+      const rmCmd = inst
+        ? `rm -rf "${HH}"; echo REMOVED_INSTANCE`   // instances: always remove the whole isolated home
+        : purge
+          ? `${binRm}rm -rf "${HH}"; echo REMOVED_ALL`
+          : `${binRm}rm -rf "${HH}/logs"; echo REMOVED_CODE`;
+      const r = await run(inst ? 'remove instance (isolated home)' : purge ? 'remove binary & all data' : 'remove binary (config kept)', rmCmd);
       const ok = /REMOVED/.test(r.stdout || '');
       return NextResponse.json({ success: ok, purged: purge, log });
     }
@@ -604,6 +641,7 @@ if os.path.exists(p):
           `text = drop(text, r'\\[channels\\.telegram\]')`,
           `# model provider profile — ZeroClaw 0.8+ native schema`,
           `prov = None`,
+          `base_url_override = ''`,
           `key = ''`,
           `if e.get('OPENROUTER_API_KEY'):`,
           `    prov = 'openrouter'`,
@@ -611,13 +649,18 @@ if os.path.exists(p):
           `    prov = 'openai'`,
           `elif e.get('ANTHROPIC_API_KEY'):`,
           `    prov = 'anthropic'`,
+          `elif e.get('CUSTOM_LLM_API_KEY') and e.get('OPENAI_BASE_URL'):`,
+          `    prov = 'openai'`,
+          `    base_url_override = e.get('OPENAI_BASE_URL') or ''`,
           `if prov:`,
-          `    key = e.get(prov.upper() + '_API_KEY') or e.get('API_KEY') or s.get('api_key') or ''`,
+          `    key = e.get(prov.upper() + '_API_KEY') or e.get('CUSTOM_LLM_API_KEY') or e.get('API_KEY') or s.get('api_key') or ''`,
           `    model = (s.get('model') or s.get('default_model') or e.get('MODEL') or e.get('ZEROCLAW_MODEL') or e.get('DEFAULT_MODEL') or '')`,
           `    if key:`,
           `        header = '[providers.models.' + prov + '.default]'`,
           `        text = drop(text, re.escape(header))`,
           `        block = header + NL + 'api_key = "' + key + '"'`,
+          `        if base_url_override:`,
+          `            block += NL + 'base_url = "' + base_url_override + '"'`,
           `        if model:`,
           `            block += NL + 'model = "' + model + '"'`,
           `        text = text.rstrip(NL) + NL + NL + block + NL`,
@@ -630,9 +673,10 @@ if os.path.exists(p):
           `# agent binding — 0.8+ channels only poll for an ENABLED agent bound to a channel`,
           `if tok and prov and key:`,
           `    text = drop(text, re.escape('[agents.default]'))`,
+          `    text = drop(text, re.escape('[risk_profiles.personal]'))`,
           `    text = drop(text, re.escape('[risk_profiles.personal.default]'))`,
           `    agent = '[agents.default]' + NL + 'enabled = true' + NL + 'model_provider = "' + prov + '.default"' + NL + 'channels = ["telegram.default"]' + NL + 'risk_profile = "personal"' + NL`,
-          `    text = text.rstrip(NL) + NL + NL + '[risk_profiles.personal.default]' + NL + 'level = "supervised"' + NL + NL + agent`,
+          `    text = text.rstrip(NL) + NL + NL + '[risk_profiles.personal]' + NL + 'level = "supervised"' + NL + NL + agent`,
           `if 'schema_version' not in text:`,
           `    text = 'schema_version = 3' + NL + text`,
           `open(p, 'w').write(text.strip(NL) + NL)`,
@@ -793,6 +837,7 @@ if os.path.exists(p):
           `text = drop(text, r'\\[channels\\.telegram\]')`,
           `# model provider profile — ZeroClaw 0.8+ native schema`,
           `prov = None`,
+          `base_url_override = ''`,
           `key = ''`,
           `if e.get('OPENROUTER_API_KEY'):`,
           `    prov = 'openrouter'`,
@@ -1022,15 +1067,23 @@ echo "TG=$TG"
     // ZeroClaw supports two types of pairing:
     // 1. HTTP Gateway pairing code (e.g. 018875) via POST http://127.0.0.1:42617/pair -H "X-Pairing-Code: 018875"
     // 2. Telegram user ID allowlist in config.toml: [channels_config.telegram] allowed_users = ["..."]
+    // Gateway dashboard port — default 42617, instances use their own.
+    const dashPort = GW_PORT || 42617;
+
     if (action === 'pairing-approve') {
       const code = String(config.code || '').trim();
       // 0. If this is a pending one-time TELEGRAM BIND code, it can only be
       //    confirmed from the user's Telegram account — tell them how.
+      // Scan wide (1000 lines, newest 2 logs) — a narrow 250-line window once
+      // missed the bind line and the code got added as a bogus user ID.
       const logScan = await execCommand(sshConfig,
-        `FILE="$(ls -1t "${HH}/logs/"*.log 2>/dev/null | head -1)"; [ -n "$FILE" ] && tail -n 250 "$FILE" || true`,
+        `cat $(ls -1t "${HH}/logs/"*.log 2>/dev/null | head -2) 2>/dev/null | tail -n 1000 || true`,
         { pool: false, timeoutMs: 20000 });
+      // The UI tags bind codes with platform 'telegram-bind' — never add those
+      // as user IDs; they must be confirmed from the user's Telegram account.
+      const isBindPlatform = String(config.platform || '') === 'telegram-bind';
       const bindCodeRe = new RegExp(`one-time bind code:\\\\s*${code}([^0-9]|$)`, 'i');
-      if (code && bindCodeRe.test(logScan.stdout || '')) {
+      if (code && (isBindPlatform || bindCodeRe.test(logScan.stdout || ''))) {
         return NextResponse.json({
           success: true,
           output: `Bind code ${code} is pending. Open Telegram, send "/bind ${code}" to your bot, then press "Scan Pending Requests" again. (The bind must be confirmed from your own Telegram account, so it cannot be approved from here.)`,
@@ -1058,7 +1111,7 @@ echo "TG=$TG"
 
       // 2. Try HTTP Gateway pairing (for dashboard / API / webhook access)
       const httpPairR = await execCommand(sshConfig, `
-        curl -s -w "\\nHTTP_CODE:%{http_code}" -X POST http://127.0.0.1:42617/pair \
+        curl -s -w "\\nHTTP_CODE:%{http_code}" -X POST http://127.0.0.1:${dashPort || 42617}/pair \
           -H "X-Pairing-Code: ${code}" \
           -H "Content-Type: application/json" \
           -d '{}' 2>/dev/null || true
@@ -1090,12 +1143,12 @@ echo "TG=$TG"
         `                content = content.replace(sec, sec + '\\nallowed_users = [' + json.dumps(u) + ']')`,
         `            return content`,
         `    return content`,
-        `if uid and os.path.exists(p):`,
+        `if uid and os.path.exists(p) and uid.isdigit():`,
         `    open(p, 'w').write(add_user(text, uid).strip() + '\\n')`,
         `# Update ~/.zeroclaw/.env TELEGRAM_ALLOWED_USERS`,
         `env_p = os.path.expanduser('~/.zeroclaw/.env')`,
         `env_text = open(env_p).read() if os.path.exists(env_p) else ''`,
-        `if uid:`,
+        `if uid and uid.isdigit():`,
         `    if 'TELEGRAM_ALLOWED_USERS=' in env_text:`,
         `        curr = re.search(r'^TELEGRAM_ALLOWED_USERS=(.*)$', env_text, re.M)`,
         `        existing_env = [x.strip() for x in (curr.group(1) if curr else '').split(',') if x.strip()]`,
@@ -1105,7 +1158,8 @@ echo "TG=$TG"
         `    else:`,
         `        env_text = env_text.rstrip('\\n') + '\\nTELEGRAM_ALLOWED_USERS=' + uid + '\\n'`,
         `    open(env_p, 'w').write(env_text)`,
-        `print('ADDED_TO_ALLOWED_USERS')`,
+        `added = bool(uid) and (os.path.exists(p) and uid in open(p).read() or uid in open(env_p).read())`,
+        `print('ADDED_TO_ALLOWED_USERS' if added else 'NOT_ADDED')`,
       ].join('\n');
       const pairPyB64 = b64(pairPy);
       const r = await execCommand(sshConfig, `echo '${pairPyB64}' | base64 -d | python3 2>&1`, { pool: false, timeoutMs: 30000 });
@@ -1145,26 +1199,42 @@ echo "TG=$TG"
       const out = r.stdout || '';
       const pending = [];
 
-      // 1. One-time gateway pairing codes
-      const gwMatches = [
-        ...out.matchAll(/X-Pairing-Code:\s*([0-9]{6})/gi),
-        ...out.matchAll(/[│|]\s*([0-9]{6})\s*[│|]/g),
-        ...out.matchAll(/pairing\s+code\s+is\s+([0-9]{6})/gi),
-      ];
-      for (const m of gwMatches) {
-        const code = m[1];
-        if (code && !pending.some(p => p.code === code)) {
-          pending.push({ code, platform: 'gateway' });
+      // 0b. Fetch a FRESH one-time gateway pairing code from the daemon's
+      //     admin endpoint (localhost-only). Banner codes seen in the startup
+      //     log ("Send: POST /pair with header X-Pairing-Code: ...") are help
+      //     text, not live pending codes — the real code must come from here.
+      const freshR = await execCommand(sshConfig,
+        `curl -s -m 5 -X POST http://127.0.0.1:${dashPort}/admin/paircode/new 2>/dev/null || true`,
+        { pool: false, timeoutMs: 15000 });
+      const freshCode = (freshR.stdout || '').match(/pairing_code\":\"([0-9]{4,8})\"/) || (freshR.stdout || '').match(/pairing_code\":\"?([0-9]{4,8})/);
+      if (freshCode && freshCode[1]) {
+        pending.push({ code: freshCode[1], platform: 'gateway', fresh: true });
+      }
+
+      // 1. Gateway codes from the log: every daemon start prints a NEW banner
+      //    code, so older entries in the log are STALE. When a fresh code was
+      //    fetched from the admin endpoint above, skip log-derived gateway
+      //    codes entirely. Otherwise keep ONLY the last one (most recent).
+      if (!freshCode) {
+        const logLines = out.split('\n').filter(l => !/Send:\s*POST \/pair with header/i.test(l));
+        const logText = logLines.join('\n');
+        const gwMatches = [
+          ...logText.matchAll(/X-Pairing-Code:\s*([0-9]{6})/gi),
+          ...logText.matchAll(/[│|]\s*([0-9]{6})\s*[│|]/g),
+          ...logText.matchAll(/pairing\s+code\s+is\s+([0-9]{6})/gi),
+        ];
+        const last = gwMatches[gwMatches.length - 1];
+        if (last && last[1] && !pending.some(p => p.code === last[1])) {
+          pending.push({ code: last[1], platform: 'gateway' });
         }
       }
 
-      // 1b. Telegram one-time bind codes — confirm by sending "/bind <code>"
-      //     to the bot from the Telegram account that should be allowed.
-      for (const m of out.matchAll(/one-time bind code:\s*([0-9]{4,8})/gi)) {
-        const code = m[1];
-        if (code && !pending.some(p => p.code === code)) {
-          pending.push({ code, platform: 'telegram-bind' });
-        }
+      // 1b. Telegram one-time bind codes — only the LAST one is valid; older
+      //     banners are stale and would clutter the approve list.
+      const bindMatches = [...out.matchAll(/one-time bind code:\s*([0-9]{4,8})/gi)];
+      const lastBind = bindMatches[bindMatches.length - 1];
+      if (lastBind && lastBind[1] && !pending.some(p => p.code === lastBind[1])) {
+        pending.push({ code: lastBind[1], platform: 'telegram-bind' });
       }
 
       // 2. Telegram unauthorized user attempts
@@ -1180,7 +1250,66 @@ echo "TG=$TG"
         }
       }
 
-      return NextResponse.json({ success: true, pending, raw: out.slice(-1000) });
+            // 3. Already-paired devices + total token count (for the revoke UI).
+      //    The config keeps paired_tokens under [gateway]; each device is a
+      //    separate bearer token entry.
+      const devR = await execCommand(sshConfig,
+        `CONF="${HH}/config.toml"; PT=$(grep -oE 'paired_tokens\\s*=\\s*\\[[^]]*\\]' "$CONF" 2>/dev/null | tr ',' '\n' | grep -cE 'enc2|zc_' || echo 0); echo "PAIRED_TOKENS=$PT"`,
+        { pool: false, timeoutMs: 15000 });
+      const pairedTokens = Number((devR.stdout || '').match(/PAIRED_TOKENS=(\d+)/)?.[1] || 0);
+
+      return NextResponse.json({ success: true, pending, pairedTokens, raw: out.slice(-1000) });
+    }
+
+    // ── PAIRING-REVOKE — deactivate / unapprove a pairing ──
+    // zeroclaw has no 1:1 "unpair the pending code" — instead it revokes the
+    // issued bearer token(s):
+    //   --rotate         revoke ALL paired tokens + clear device registry
+    //   --rotate-device  revoke one device's token (reissue a code for it)
+    // And Telegram allow-list removal is handled separately here.
+    if (action === 'pairing-revoke') {
+      const which = String(config.which || '');
+      const device = String(config.device || '').trim();
+      if (which === 'remove-tg') {
+        const uid = device;
+        if (!uid) return NextResponse.json({ success: false, error: 'Telegram user id is required' }, { status: 400 });
+        const py = [
+          'import os, re',
+          `uid = ${JSON.stringify(uid)}`,
+          "env_p = os.path.expanduser('~/.zeroclaw/.env')",
+          "e = open(env_p).read() if os.path.exists(env_p) else ''",
+          "m = re.search(r'^TELEGRAM_ALLOWED_USERS=(.*)$', e, re.M)",
+          'if m:',
+          "    users = [x.strip() for x in m.group(1).split(',') if x.strip() and x.strip() != uid]",
+          "    e = re.sub(r'^TELEGRAM_ALLOWED_USERS=.*$', 'TELEGRAM_ALLOWED_USERS=' + ','.join(users), e, flags=re.M)",
+          "    open(env_p, 'w').write(e)",
+          "    print('TG_REMOVED' if uid not in (','.join(users)) else 'TG_STILL_PRESENT')",
+          "# /bind stores peers in config.toml [peer_groups.*].external_peers - remove there too",
+          "cfg_p = os.path.expanduser('~/.zeroclaw/config.toml')",
+          "cfg = open(cfg_p).read() if os.path.exists(cfg_p) else ''",
+          "if uid in cfg:",
+          "    q = chr(34)",
+          "    cfg = cfg.replace(q + uid + q + ',', '').replace(', ' + q + uid + q, '').replace(q + uid + q, '')",
+          "    open(cfg_p, 'w').write(cfg)",
+          "    print('CFG_PEER_REMOVED')",
+          'else:',
+          "    print('TG_NONE')",
+        ].join('\n');
+        const r = await execCommand(sshConfig, `echo '${b64(py)}' | base64 -d | python3`, { pool: false, timeoutMs: 30000 });
+        const ok = /TG_REMOVED|CFG_PEER_REMOVED/.test(r.stdout || '');
+        await gwCtl('restart');
+        return NextResponse.json({ success: ok, output: ok ? `Removed Telegram user ${uid}.` : 'User not found in allow-list.', restarted: true, log });
+      }
+
+      const flag = which === 'device' && device
+        ? `--rotate-device ${JSON.stringify(device)}`
+        : '--rotate'; // all
+      const r = await execCommand(sshConfig,
+        `export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:$PATH"; zeroclaw gateway get-paircode ${flag} --port ${dashPort || 42617} 2>&1 | head -20`,
+        { pool: false, timeoutMs: 30000 });
+      const out = (r.stdout || '').trim();
+      const ok = !/error|failed/i.test(out);
+      return NextResponse.json({ success: ok, output: ok ? (out || `Pairing revoked (${which === 'device' && device ? device : 'all devices'}).`) : out, log });
     }
 
     return NextResponse.json({ success: false, error: `Unknown action: ${action}` }, { status: 400 });

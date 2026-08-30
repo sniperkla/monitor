@@ -149,7 +149,7 @@ async function handleAgentAction(body, session, log = []) {
       const GW_FLAGS = inst
         ? ` --config "${HH}/config.json" --workspace "${HH}/workspace"${GW_PORT ? ` --port ${GW_PORT}` : ''}`
         : '';
-      const pidScan = `${ENVX}; res=0; if [ -f "${PIDF}" ] && kill -0 $(cat "${PIDF}") 2>/dev/null; then res=1; fi; echo "PROC=$res"`;
+      const pidScan = `${ENVX}; res=0; if [ -f "${PIDF}" ] && kill -0 $(cat "${PIDF}") 2>/dev/null; then res=1; fi; if [ "$res" = 0 ]; then pgrep -f "nanobot gateway --config ${HH}/config.json" >/dev/null 2>&1 && res=1; fi; echo "PROC=$res"`;
       if (op === 'status') {
         const r = await execCommand(sshConfig, pidScan, { pool: false, timeoutMs: 30000 });
         return { ok: true, active: /PROC=1/.test(r.stdout || '') };
@@ -198,12 +198,21 @@ async function handleAgentAction(body, session, log = []) {
       if (!clone.ok) {
         return NextResponse.json({ success: false, error: 'Failed to clone nanobot instance home' });
       }
-      if (clone.tokenSame && !clone.existed) {
-        return NextResponse.json({
-          success: false,
-          instance: tag,
-          error: 'Cloned .env is identical to the default instance — set this instance its OWN bot token first (reconfigure → env). Starting it now would make the two instances fight over the same Telegram bot.',
-        });
+      // Per-instance WebSocket/WebUI port: nanobot binds channels.websocket on a
+      // FIXED default (8765) — instances would collide. Inject a distinct port
+      // right after the clone so the very first start is collision-free.
+      if (GW_PORT) {
+        await execCommand(sshConfig, `python3 - << 'PY'
+import json, os
+p = os.path.expanduser('${HH}/config.json')
+try:
+    d = json.load(open(p))
+except Exception:
+    d = {}
+d.setdefault('channels', {})['websocket'] = { 'enabled': True, 'port': ${GW_PORT + 1} }
+json.dump(d, open(p, 'w'), indent=2)
+print('WS_PORT_INJECTED')
+PY`, { pool: false, timeoutMs: 30000 });
       }
       const g = await gwCtl('start');
       return NextResponse.json({
@@ -244,6 +253,9 @@ res=0; [ -f "${PIDF}" ] && kill -0 $(cat "${PIDF}") 2>/dev/null && res=1
 if [ "$res" = 0 ] && [ -n "${inst}" ]; then
   export XDG_RUNTIME_DIR="/run/user/$(id -u)" 2>/dev/null
   systemctl --user is-active nanobot-gatew""ay@${inst} 2>/dev/null | grep -qx active && res=1
+fi
+if [ "$res" = 0 ]; then
+  pgrep -f "nanobot gateway --config ${HH}/config.json" >/dev/null 2>&1 && res=1
 fi
 [ "$res" = 1 ] && echo PROC_ACTIVE || echo NO_PROC
 echo "===VERSION==="
@@ -305,6 +317,8 @@ tail -n 30 "$LOG" 2>/dev/null | tail -5
         if (m && m[1]) skillsList.add(m[1].trim());
       }
       let model = null;
+      let models = [];
+      let activeModelPreset = null;
       try {
         const c = JSON.parse(configJson || '{}');
         for (const k of Object.keys(c.providers || {})) {
@@ -335,6 +349,14 @@ tail -n 30 "$LOG" 2>/dev/null | tail -5
           systemPrompt = c.agent.system_prompt;
         }
         model = c.modelPresets?.primary?.model || c.agents?.defaults?.modelPreset || c.agents?.defaults?.model || null;
+        // All configured model presets (provider+model pairs) — the UI offers a
+        // switcher when more than one is configured.
+        try {
+          for (const [name, p] of Object.entries(c.modelPresets || {})) {
+            models.push({ preset: name, provider: p.provider || null, model: p.model || null });
+          }
+          activeModelPreset = c.agents?.defaults?.modelPreset || Object.keys(c.modelPresets || {})[0] || null;
+        } catch {}
       } catch {}
       envText = envText.trim();
       return NextResponse.json({
@@ -342,6 +364,9 @@ tail -n 30 "$LOG" 2>/dev/null | tail -5
         installed: !!binR,
         version: sec('VERSION', 'BINPATH') || null,
         model,
+        models,
+        activeModelPreset,
+        isNanobot: true,
         binPath: binR || null,
         running: /PROC_ACTIVE/.test(sec('RUNNING', 'VERSION')),
         recentLog: sec('LOG', 'LOGFILE').split('\n').slice(-5).join('\n'),
@@ -358,6 +383,34 @@ tail -n 30 "$LOG" 2>/dev/null | tail -5
           'MEMORY.md': memoryPrompt,
         },
       });
+    }
+
+    // ── SET MODEL PRESET — switch which configured preset is active ──
+    if (action === 'set-model-preset') {
+      const preset = String(config.preset || config.modelPreset || '').trim();
+      if (!preset) return NextResponse.json({ success: false, error: 'preset is required' }, { status: 400 });
+      const r = await execCommand(sshConfig, `
+P="${HH}/config.json"
+python3 - "$P" "${preset}" <<'PYEOF'
+import json, sys
+path, preset = sys.argv[1], sys.argv[2]
+data = json.load(open(path))
+if preset not in data.get("modelPresets", {}):
+    print(f"PRESET_NOT_FOUND {preset}")
+    sys.exit(1)
+d = data.setdefault("agents", {}).setdefault("defaults", {})
+d["model_preset"] = preset
+d["modelPreset"] = preset
+json.dump(data, open(path, "w"), indent=2)
+print("PRESET_SET", preset)
+PYEOF
+`, { pool: false, timeoutMs: 30000 });
+      const out = ((r.stdout || '') + (r.stderr || '')).trim();
+      if (!/PRESET_SET/.test(out)) {
+        return NextResponse.json({ success: false, error: out || 'Failed to set preset', log });
+      }
+      const g = await gwCtl('restart');
+      return NextResponse.json({ success: true, activeModelPreset: preset, restarted: g.ok, output: out, log });
     }
 
     if (action === 'save-prompt') {
@@ -394,10 +447,12 @@ tail -n 30 "$LOG" 2>/dev/null | tail -5
       const binRm = inst
         ? '' // instances share the globally-installed binary — leave it alone
         : `rm -f "$HOME/.local/bin/nanobot" "$HOME/.nanobot/venv/bin/nanobot" /usr/local/bin/nanobot /usr/bin/nanobot 2>/dev/null; pipx uninstall nanobot-ai 2>/dev/null; pipx uninstall nanobot 2>/dev/null; `;
-      const rmCmd = purge
-        ? `${binRm}rm -rf "${HH}" /home/*/.nanobot "$HOME/.cache/nanobot" /tmp/.nb* 2>/dev/null; echo REMOVED_ALL`
-        : `${binRm}rm -rf "$HOME/.nanobot/venv" "$HOME/.cache/nanobot" "${HH}/logs" 2>/dev/null; echo REMOVED_CODE`;
-      const r = await run(purge ? 'remove nanobot binary & all data' : 'remove nanobot binary & venv (config kept)', `export PATH="$HOME/.local/bin:$HOME/.nanobot/venv/bin:/usr/local/bin:$PATH"; ${rmCmd}`);
+      const rmCmd = inst
+        ? `rm -rf "${HH}" 2>/dev/null; echo REMOVED_INSTANCE`   // instances: always remove the whole isolated home
+        : purge
+          ? `${binRm}rm -rf "${HH}" /home/*/.nanobot "$HOME/.cache/nanobot" /tmp/.nb* 2>/dev/null; echo REMOVED_ALL`
+          : `${binRm}rm -rf "$HOME/.nanobot/venv" "$HOME/.cache/nanobot" "${HH}/logs" 2>/dev/null; echo REMOVED_CODE`;
+      const r = await run(inst ? 'remove instance (isolated home)' : purge ? 'remove nanobot binary & all data' : 'remove nanobot binary & venv (config kept)', `export PATH="$HOME/.local/bin:$HOME/.nanobot/venv/bin:/usr/local/bin:$PATH"; ${rmCmd}`);
       const ok = /REMOVED/.test(r.stdout || '');
       return NextResponse.json({ success: ok, purged: purge, output: (r.stdout || '').slice(-500), log });
     }
@@ -473,8 +528,8 @@ tail -n 30 "$LOG" 2>/dev/null | tail -5
       // 4. Merge ~/.nanobot/config.json (deep-merge via python3, shipped as b64)
       const cfg = typeof config.configJson === 'object' && config.configJson ? config.configJson : {};
       const cfgB64 = b64(JSON.stringify(cfg));
-      await run('merge ~/.nanobot/config.json', [
-        'export NB_HOME="${HH}"; mkdir -p "${HH}"',
+      await run(`merge ${inst ? `~/.nanobot-${inst}` : '~/.nanobot'}/config.json`, [
+        `export NB_HOME="${HH}"; mkdir -p "${HH}"`,
         `echo '${b64(JSON.stringify(cfg))}' | base64 -d > /tmp/.nb-new.json`,
         `cat > /tmp/.nb-merge.py <<'PYEOF'`,
         'import json, os, sys',
@@ -492,7 +547,7 @@ tail -n 30 "$LOG" 2>/dev/null | tail -5
         'json.dump(deep_merge(cur, new), open(path, \"w\"), indent=2)',
         "print('CONFIG_MERGED')",
         'PYEOF',
-        '(command -v python3 >/dev/null 2>&1 && python3 /tmp/.nb-merge.py /tmp/.nb-new.json || cp /tmp/.nb-new.json "${HH}/config.json")',
+        `(command -v python3 >/dev/null 2>&1 && python3 /tmp/.nb-merge.py /tmp/.nb-new.json || cp /tmp/.nb-new.json "${HH}/config.json")`,
         'rm -f /tmp/.nb-new.json /tmp/.nb-merge.py',
         'echo NB_CFG_MERGED',
       ].join('\n'), { timeoutMs: 60000 });
@@ -504,7 +559,7 @@ tail -n 30 "$LOG" 2>/dev/null | tail -5
 
       // 6. Start gateway detached
       await run('start gateway', [
-        'mkdir -p "${HH}/logs"',
+        `mkdir -p "${HH}/logs"`,
         `setsid nohup $(export PATH="$(dirname ${NBE}):$HOME/.local/bin:$HOME/.nanobot/venv/bin:/usr/local/bin:$PATH"; command -v nanobot) gateway >> "${HH}/logs/gatew""ay.log" 2>&1 < /dev/null &`,
         'sleep 4',
         "timeout 15 pgrep -f '[n]anobot.*gatew[a]y' >/dev/null && echo GW_UP || echo GW_DOWN",
@@ -537,14 +592,32 @@ tail -n 30 "$LOG" 2>/dev/null | tail -5
         .find(x => x.p && x.v);
 
       const newConfig = {};
+      // Custom endpoint support: wizard sends OPENAI_BASE_URL / OPENAI_API_BASE.
+      // Sink it into the provider block (nanobot custom/OpenAI-compatible base).
+      const customBaseUrl = String(env.OPENAI_BASE_URL || env.OPENAI_API_BASE || '').trim();
       if (providerName) {
-        newConfig.providers = { [providerName.p]: { apiKey: providerName.v } };
+        const pcfg = { apiKey: providerName.v };
+        // nanobot ProviderConfig uses snake_case `api_base` (see config/schema.py)
+        if (providerName.p === 'custom' && customBaseUrl) pcfg.api_base = customBaseUrl;
+        // Provide the chosen provider (plus any base URL). Reconfigure deep-merges
+        // with the existing config, so also clear stale providers so the config
+        // reflects what was submitted this time.
+        newConfig.providers = { [providerName.p]: pcfg };
         if (modelFromSettings) {
           newConfig.modelPresets = { primary: { provider: providerName.p, model: modelFromSettings, maxTokens: 8192, contextWindowTokens: 65536 } };
-          newConfig.agents = { defaults: { modelPreset: 'primary' } };
+          newConfig.agents = { defaults: { model_preset: 'primary', modelPreset: 'primary' } };
         }
       } else if (modelFromSettings) {
         newConfig.modelPresets = { primary: { model: modelFromSettings } };
+      }
+      // also pass custom base URL into the env sidecar so it survives (harmless on default)
+      if (customBaseUrl) env.CUSTOM_LLM_BASE_URL = customBaseUrl;
+      // Per-instance WebSocket/WebUI port: nanobot binds channels.websocket on a
+      // FIXED default (8765) — two instances would collide on it. Give every
+      // instance its own ws port derived from its gateway port.
+      if (inst && GW_PORT) {
+        newConfig.channels = newConfig.channels || {};
+        newConfig.channels.websocket = { ...(newConfig.channels.websocket || {}), port: GW_PORT + 1 };
       }
 
       const tgToken = env.TELEGRAM_BOT_TOKEN || env.TELEGRAM_TOKEN;
@@ -560,30 +633,48 @@ tail -n 30 "$LOG" 2>/dev/null | tail -5
         await execCommand(sshConfig, `export PATH="$HOME/.local/bin:$HOME/.nanobot/venv/bin:/usr/local/bin:$PATH"; command -v nanobot >/dev/null 2>&1 && nanobot plugins enable telegram 2>/dev/null || true`, { pool: false, timeoutMs: 30000 });
       }
 
-      const sidecarKeys = Object.entries(env).filter(([k]) => k.startsWith('TELEGRAM_') || k.startsWith('LINE_') || k.startsWith('DISCORD_'));
+      // Write ALL env entries (LLM keys, base URLs, MODEL, messenger tokens, …)
+      // into the instance .env — the Env tab reads from there, so anything the
+      // user entered must survive here (previously only TELEGRAM_/LINE_/DISCORD_
+      // keys landed, which lost custom endpoints like OPENAI_BASE_URL).
+      const sidecarKeys = Object.entries(env).filter(([k, v]) => k && v != null && String(v).trim() !== '');
       const cfgB64 = b64(JSON.stringify(newConfig));
       const sidecarB64 = b64(sidecarKeys.map(([k, v]) => `${k}=${v}`).join('\n'));
-      const w = await run('merge ~/.nanobot/config.json', [
-        'export NB_HOME="${HH}"; mkdir -p "${HH}"',
+      const w = await run(`merge ${inst ? `~/.nanobot-${inst}` : '~/.nanobot'}/config.json`, [
+        `export NB_HOME="${HH}"; mkdir -p "${HH}"`,
         `echo '${cfgB64}' | base64 -d > /tmp/.nb-cfg-new.json`,
         sidecarKeys.length ? `echo '${sidecarB64}' | base64 -d > "${HH}/.env"; chmod 600 "${HH}/.env"` : 'true',
         `cat > /tmp/.nb-merge.py <<'PYEOF'
 import json, os, sys
-p = os.environ.get('NB_HOME') or os.path.expanduser('~/.nanobot/config.json')
+home = os.environ.get('NB_HOME') or os.path.expanduser('~/.nanobot')
+p = home.rstrip('/') + '/config.json'
 new = json.load(open(sys.argv[1]))
 cur = {}
 if os.path.exists(p):
     try: cur = json.load(open(p))
     except Exception: cur = {}
+# Remember the previously active provider so a save that only changes MODEL
+# (no new provider key) still keeps a valid provider reference.
+old_active = cur.get('agents', {}).get('defaults', {}).get('model_preset') or cur.get('agents', {}).get('defaults', {}).get('modelPreset')
+old_provider = cur.get('modelPresets', {}).get(old_active, {}).get('provider') if old_active else None
+if not old_provider:
+    old_provider = next(iter(cur.get('providers', {})), None)
+# Replace (not deep-merge) the provider/model/agent sections so stale providers
+# (e.g. openrouter) don't linger when the user switched to custom.
+for k in ('providers', 'modelPresets', 'agents'):
+    cur.pop(k, None)
 def dm(a, b):
     for k, v in b.items():
         if isinstance(v, dict) and isinstance(a.get(k), dict): dm(a[k], v)
         else: a[k] = v
 dm(cur, new)
+for pr in (cur.get('modelPresets') or {}).values():
+    if isinstance(pr, dict) and not pr.get('provider') and old_provider:
+        pr['provider'] = old_provider
 json.dump(cur, open(p, 'w'), indent=2)
 print('MERGED')
 PYEOF`,
-        '(command -v python3 >/dev/null 2>&1 && python3 /tmp/.nb-merge.py /tmp/.nb-cfg-new.json || cp /tmp/.nb-cfg-new.json "${HH}/config.json")',
+        `(command -v python3 >/dev/null 2>&1 && python3 /tmp/.nb-merge.py /tmp/.nb-cfg-new.json || cp /tmp/.nb-cfg-new.json "${HH}/config.json")`,
         'rm -f /tmp/.nb-cfg-new.json /tmp/.nb-merge.py',
         'echo RECONFIGURED',
       ].join('\n'), { timeoutMs: 30000 });
@@ -651,40 +742,66 @@ PYEOF`,
     }
 
     // ── PAIRING APPROVAL ──
+    // nanobot has NO `pairing` CLI command — pairing lives in ~/.nanobot/pairing.json
+    // ({ pending: {CODE:{channel,sender_id,expires_at}} , approved:{channel:[sender]}}).
+    // Approve = move the code from `pending` → `approved[channel]`, matching the
+    // runtime's own approve_code(). We edit the JSON directly via python.
     if (action === 'pairing-approve') {
-      const platform = String(config.platform || '').trim();
+      const platform = String(config.platform || 'auto').trim();
       const code = String(config.code || '').trim();
       if (!code) return NextResponse.json({ success: false, error: 'Pairing code is required' }, { status: 400 });
-      const binR = await execCommand(sshConfig, binPath(), { pool: false, timeoutMs: 15000 });
-      const bp = (binR.stdout || '').match(/BIN=(.*)/)?.[1]?.trim() || 'nanobot';
-      const BP = JSON.stringify(bp);
-      const ENVX = `export PATH="$HOME/.local/bin:$HOME/.nanobot/venv/bin:/usr/local/bin:$PATH"`;
-      const runCmd = platform && platform !== 'auto'
-        ? `${ENVX}; ${BP} pairing approve ${JSON.stringify(platform)} ${JSON.stringify(code)} 2>&1 || ${BP} pairing approve ${JSON.stringify(code)} 2>&1`
-        : `${ENVX}; ${BP} pairing approve ${JSON.stringify(code)} 2>&1`;
-      const r = await run(`pairing approve ${platform ? platform + ' ' : ''}${code}`, runCmd);
+      const r = await execCommand(sshConfig, `
+export PATH="$HOME/.local/bin:$HOME/.nanobot/venv/bin:/usr/local/bin:$PATH"
+P="${HH}/pairing.json"
+BP="$( (command -v nanobot || which nanobot) 2>/dev/null || echo $HOME/.local/bin/nanobot )"
+if [ ! -f "$P" ]; then echo NO_STORE; exit 0; fi
+python3 - "$P" "${code}" <<'PYEOF'
+import json, sys, os
+path, code = sys.argv[1], sys.argv[2]
+data = json.load(open(path))
+pending = data.get("pending", {})
+info = pending.pop(code, None)
+if info is None:
+    # try approved too (idempotent re-approve)
+    for ch, users in data.get("approved", {}).items():
+        if isinstance(users, list) and code in users:
+            print("ALREADY_APPROVED", ch)
+            sys.exit(0)
+    print("CODE_NOT_FOUND")
+    sys.exit(1)
+channel = str(info.get("channel", "telegram"))
+sender = str(info.get("sender_id", ""))
+data.setdefault("approved", {}).setdefault(channel, [])
+if sender and sender not in data["approved"][channel]:
+    data["approved"][channel].append(sender)
+json.dump(data, open(path, "w"), indent=2)
+print("APPROVED", channel, sender)
+PYEOF
+      `, { pool: false, timeoutMs: 30000 });
       const out = ((r.stdout || '') + (r.stderr || '')).trim();
-      const ok = !/error|failed|invalid/i.test(out) || /approved|success|paired/i.test(out);
-      return NextResponse.json({ success: ok, output: out || 'Pairing command executed', log });
+      const ok = /APPROVED|ALREADY_APPROVED/.test(out);
+      return NextResponse.json({ success: ok, output: out || 'Pairing command executed', approved: /APPROVED/.test(out), log });
     }
 
     if (action === 'pairing-list') {
-      const binR = await execCommand(sshConfig, binPath(), { pool: false, timeoutMs: 15000 });
-      const bp = (binR.stdout || '').match(/BIN=(.*)/)?.[1]?.trim() || 'nanobot';
-      const BP = JSON.stringify(bp);
-      const ENVX = `export PATH="$HOME/.local/bin:$HOME/.nanobot/venv/bin:/usr/local/bin:$PATH"`;
-      const r = await execCommand(sshConfig,
-        `${ENVX}; ${BP} pairing list 2>&1 || true; { [ -f "${HH}/logs/gateway.log" ] && tail -n 60 "${HH}/logs/gateway.log"; } || true`,
-        { pool: false, timeoutMs: 20000 });
+      const r = await execCommand(sshConfig, `
+P="${HH}/pairing.json"
+if [ ! -f "$P" ]; then echo NO_STORE; exit 0; fi
+python3 - "$P" <<'PYEOF'
+import json, sys
+data = json.load(open(sys.argv[1]))
+for code, info in data.get("pending", {}).items():
+    print(f"PENDING {code} {info.get('channel','telegram')} {info.get('sender_id','')}")
+for ch, users in data.get("approved", {}).items():
+    for u in users:
+        print(f"APPROVED {ch} {u}")
+PYEOF
+      `, { pool: false, timeoutMs: 20000 });
       const out = (r.stdout || '');
-      const matches = [...out.matchAll(/pairing\s+approve\s+(?:(\w+)\s+)?([A-Z0-9]{6,12})/gi), ...out.matchAll(/code[:\s]+([A-Z0-9]{6,12})/gi), ...out.matchAll(/pairing\s+code\s+is\s+([A-Z0-9]{6,12})/gi)];
       const pending = [];
-      for (const m of matches) {
-        const code = m[2] || m[1];
-        const platform = m[2] ? m[1] : 'telegram';
-        if (code && !pending.some(p => p.code === code)) {
-          pending.push({ code, platform: platform || 'telegram' });
-        }
+      for (const line of out.split('\n')) {
+        const m = line.match(/^PENDING\s+(\S+)\s+(\S+)(?:\s+(.*))?$/);
+        if (m) pending.push({ code: m[1], platform: m[2] || 'telegram', sender: m[3] || '' });
       }
       return NextResponse.json({ success: true, pending, raw: out.slice(-1000) });
     }

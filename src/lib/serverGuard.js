@@ -115,7 +115,9 @@ export function checkMemory(minFreeMB = 512) {
   const rssLimitMB = isDev ? 2560 : 1536; 
   
   // Relaxed threshold for Dev mode since OS handles swap well
-  const threshold = isDev ? 16 : minFreeMB;
+  // macOS: os.freemem() excludes purgeable/compressed memory and reports
+  // near-zero on healthy machines — use a tiny threshold there instead.
+  const threshold = isDev ? 16 : (process.platform === 'darwin' ? 64 : minFreeMB);
   
   const safe = sysFreeMB > threshold && rssMB < rssLimitMB;
 

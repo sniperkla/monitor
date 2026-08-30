@@ -225,13 +225,6 @@ async function handleAgentAction(body, session, log = []) {
       if (!clone.ok) {
         return NextResponse.json({ success: false, error: 'Failed to clone openclaw instance home' });
       }
-      if (clone.tokenSame && !clone.existed) {
-        return NextResponse.json({
-          success: false,
-          instance: tag,
-          error: 'Cloned .env is identical to the default instance — set this instance its OWN bot token first (reconfigure → env). Starting it now would make the two instances fight over the same Telegram bot.',
-        });
-      }
       const g = await gwCtl('start');
       return NextResponse.json({
         success: true,
@@ -397,10 +390,12 @@ echo "===ENVKEYS==="
       const binRm = inst
         ? '' // instances share the globally-installed binary — leave it alone
         : `(npm -g rm openclaw 2>/dev/null || true); rm -f "$HOME/.openclaw/local/bin/openclaw" "$HOME/.local/bin/openclaw" /usr/local/bin/openclaw /usr/bin/openclaw /usr/sbin/openclaw; `;
-      const rmCmd = purge
-        ? `${binRm}rm -rf "${HH}"; echo REMOVED_ALL`
-        : `${binRm}rm -rf "${HH}/local" "${HH}/logs"; echo REMOVED_CODE`;
-      const r = await run(purge ? 'remove binary, code & all data' : 'remove binary & code (config kept)', rmCmd);
+      const rmCmd = inst
+        ? `rm -rf "${HH}"; echo REMOVED_INSTANCE`   // instances: always remove the whole isolated home
+        : purge
+          ? `${binRm}rm -rf "${HH}"; echo REMOVED_ALL`
+          : `${binRm}rm -rf "${HH}/local" "${HH}/logs"; echo REMOVED_CODE`;
+      const r = await run(inst ? 'remove instance (isolated home)' : purge ? 'remove binary, code & all data' : 'remove binary & code (config kept)', rmCmd);
       const ok = /REMOVED/.test(r.stdout || '');
       return NextResponse.json({ success: ok, purged: purge, log });
     }
@@ -644,6 +639,19 @@ echo "TG=$TG"
     if (action === 'reconfigure') {
       const env = (config && config.env) || {};
       const settings = (config && config.settings) || {};
+      // ── Custom OpenAI-compatible endpoint (wizard "Custom…" provider) ──
+      // OpenClaw resolves OpenAI-compatible providers via env (OPENAI_API_KEY for
+      // the credential + OPENAI_BASE_URL / LLM_API_BASE for the endpoint). Map
+      // the wizard's custom fields so the endpoint is actually used.
+      const customKey = String(env.CUSTOM_LLM_API_KEY || '').trim()
+        || String(env.OPENAI_API_KEY || '').trim();
+      const customBaseUrl = String(env.OPENAI_BASE_URL || env.OPENAI_API_BASE || '').trim();
+      if (customKey && customBaseUrl) {
+        env.OPENAI_API_KEY = customKey;
+        env.OPENAI_BASE_URL = customBaseUrl;
+        env.LLM_API_BASE = customBaseUrl; // common OpenClaw alias
+        env.CUSTOM_LLM_API_KEY = customKey; // keep wizard's original
+      }
       const envKeys = Object.keys(env).filter(k => env[k] != null && env[k] !== '');
       const hasSettings = Object.keys(settings).filter(k => settings[k] != null && settings[k] !== '').length > 0;
       if (envKeys.length === 0 && !hasSettings) {

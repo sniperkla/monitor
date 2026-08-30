@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Bot, Server as ServerIcon, RefreshCw, Loader2, CheckCircle2, XCircle, AlertCircle, Settings2, Puzzle, Trash2, Play, Square, RotateCw, Plus, ExternalLink, Send, Search, Sparkles, Check, FileText, Copy, Lock, Radio, Zap, Shield, Cable, ChevronRight, Flame, Heart, Terminal, ChevronDown, ChevronUp, X, Minus, Maximize2, Minimize2, GripHorizontal, Eye, EyeOff } from 'lucide-react';
+import { Bot, Server as ServerIcon, RefreshCw, Loader2, CheckCircle2, XCircle, AlertCircle, Settings2, Puzzle, Trash2, Play, Square, RotateCw, Plus, ExternalLink, Send, Search, Sparkles, Check, FileText, Copy, Lock, Radio, Zap, Shield, ShieldOff, UserX, Cable, ChevronRight, Flame, Heart, Terminal, ChevronDown, ChevronUp, X, Minus, Maximize2, Minimize2, GripHorizontal, Eye, EyeOff, UserPlus } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 import { useOS } from '@/context/OSContext';
 import { useSupporter } from '@/hooks/useSupporter';
@@ -21,6 +21,32 @@ import { createRelayPeer, DC } from '@/lib/webrtc-relay';
  *   • Skills     — installed skills list, install from hub, remove,
  *                  bundled-skills seeding toggle (opt-out / opt-in)
  */
+
+// Per-agent pairing UI: code format, platforms and hints differ per agent.
+const PAIRING_UI = {
+  hermes: {
+    platforms: ['telegram', 'discord', 'line', 'slack', 'auto'],
+    placeholder: 'Enter pairing code (e.g. 2VXNGUEH)',
+    hint: 'Alphanumeric codes from the bot. Approve here, or run /pair in your messenger.',
+  },
+  nanobot: {
+    platforms: ['telegram'],
+    placeholder: 'Enter pairing code (e.g. AXL7-CR8Q)',
+    hint: 'XXXX-XXXX code appears when you first message the bot — approve here to allow that sender.',
+  },
+  openclaw: {
+    platforms: ['telegram', 'discord', 'line', 'slack', 'auto'],
+    placeholder: 'Enter pairing code (e.g. A1B2C3)',
+    hint: 'Alphanumeric codes (6-12 chars) from the bot or gateway log. Approve here.',
+  },
+  zeroclaw: {
+    platforms: ['telegram'],
+    placeholder: 'Enter 6-digit code (e.g. 517043)',
+    numericOnly: true,
+    hint: 'Gateway codes (6-digit) can be approved here. Telegram bind codes must be confirmed by sending /bind <code> from your own Telegram account.',
+    revoke: true,
+  },
+};
 
 const AGENTS = [
   {
@@ -234,6 +260,10 @@ export default function AIAgentsApp({ apiFetch }) {
   const [pairingPlatform, setPairingPlatform] = useState('telegram');
   const [pairingLoading, setPairingLoading] = useState(false);
   const [pendingPairings, setPendingPairings] = useState([]);
+  const [pairingRevokeDevice, setPairingRevokeDevice] = useState('');
+  const [pairedTokens, setPairedTokens] = useState(null);
+  const [zcManualCode, setZcManualCode] = useState('');
+  const [zcRevokeTab, setZcRevokeTab] = useState('device');
 
   const agent = AGENTS.find(a => a.id === agentId) || AGENTS[0];
 
@@ -371,10 +401,52 @@ export default function AIAgentsApp({ apiFetch }) {
           refreshInstances();
           setInstanceSel(m => ({ ...m, [instKey]: tag }));
           loadDetails();
+          // Auto-open the configure wizard so the new instance gets its OWN
+          // API key / token (the clone carries an empty .env, not the default's).
+          setTimeout(() => setShowWizard(true), 350);
         })
         .catch(e => setNotice({ ok: false, text: `Spawn failed: ${e?.message || e}` }))
         .finally(() => setSpawningInstance(false));
     }, '', `Spawn ${agent.name} instance`);
+  };
+
+  // ── Strict mode: provision one dedicated Linux user per friend ──
+  // The friend gets their own account (own .env, own token, own systemd units,
+  // own cgroups) and uses the agent through their OWN SSH connection.
+  const [provisioningUser, setProvisioningUser] = useState(false);
+  const provisionFriendUser = () => {
+    showPrompt('Linux username for your friend (a-z, 0-9, -, _):', (userRaw) => {
+      const username = String(userRaw || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '').replace(/^[^a-z_]+/, '');
+      if (!username) {
+        setNotice({ ok: false, text: 'Invalid username — must contain letters (e.g. somchai)' });
+        return;
+      }
+      // Deferred one tick — see note below re: DesktopModal CLOSE_MODAL race.
+      setTimeout(() => showPrompt(`SSH public key for "${username}" (optional — paste their key to allow key login, leave empty to skip):`, (pubRaw) => {
+        const publicKey = String(pubRaw || '').trim();
+        setProvisioningUser(true);
+        doFetch('/api/agents/provision-user', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ connectionId: target, username, publicKey }),
+        })
+          .then(r => r.json())
+          .then(r => {
+            if (r?.success) {
+              setNotice({ ok: true, text: `✅ User "${r.username}" is ready on the server (${r.home}, isolated home 700, linger enabled).\n\nNext steps:\n${(r.instructions || []).slice(1).join('\n')}` });
+            } else {
+              setNotice({ ok: false, text: r?.error || 'Provision failed' });
+            }
+          })
+          .catch(e => setNotice({ ok: false, text: `Provision failed: ${e?.message || e}` }))
+          .finally(() => setProvisioningUser(false));
+      }, '', `Provision user "${username}"`), 0);
+      // NOTE: DesktopModal.handleConfirm runs onConfirm() BEFORE closeModal()
+      // — dispatching a new SHOW_MODAL synchronously here gets immediately
+      // clobbered by the trailing CLOSE_MODAL. Deferring one tick lets the
+      // second prompt survive.
+    }, '', 'New user for a friend (strict isolation)');
   };
 
   useEffect(() => {
@@ -504,7 +576,12 @@ export default function AIAgentsApp({ apiFetch }) {
   const gatewayOp = (op) => {
     if (op === 'stop') setUserStopped(true);
     if (op === 'start' || op === 'restart') setUserStopped(false);
-    return callAction(`Gateway ${op}`, 'gateway', { config: { op } });
+    return callAction(`Gateway ${op}`, 'gateway', { config: { op } }).then((r) => {
+      // After a start/stop/restart the per-instance running state changes —
+      // refresh the dropdown list too, else it keeps showing the stale state.
+      refreshInstances();
+      return r;
+    });
   };
   const saveConfig = () => {
     const isJson = ['nanobot', 'openclaw'].includes(agent.id);
@@ -535,7 +612,22 @@ export default function AIAgentsApp({ apiFetch }) {
   const doUninstall = (wantsPurge) => {
     setShowUninstallModal(false);
     setPurge(wantsPurge);
-    return callAction('Uninstall', 'uninstall', { purge: wantsPurge });
+    return callAction('Uninstall', 'uninstall', { purge: wantsPurge }).then((r) => {
+      // After uninstall the instance list / selected target may be gone —
+      // refresh and fall back to the default ('').
+      refreshInstances();
+      setInstanceSel(m => ({ ...m, [instKey]: '' }));
+      loadDetails();
+      return r;
+    });
+  };
+
+  // ZeroClaw gateway (dashboard/API) manual code approve.
+  const handleZcGatewayPairing = () => {
+    const c = zcManualCode.trim();
+    if (!c) return;
+    handleApprovePairing(c, 'gateway');
+    setZcManualCode('');
   };
 
   const fetchPairings = useCallback(async () => {
@@ -544,6 +636,9 @@ export default function AIAgentsApp({ apiFetch }) {
       const res = await call('pairing-list');
       if (res?.pending && Array.isArray(res.pending)) {
         setPendingPairings(res.pending);
+      }
+      if (typeof res?.pairedTokens === 'number') {
+        setPairedTokens(res.pairedTokens);
       }
     } catch { /* ignore */ }
   }, [call, target, details?.installed]);
@@ -563,6 +658,25 @@ export default function AIAgentsApp({ apiFetch }) {
       await callAction(`Approve pairing code ${c}`, 'pairing-approve', { config: { code: c, platform: p } });
       setPairingCode('');
       fetchPairings();
+    } finally {
+      setPairingLoading(false);
+    }
+  };
+
+  // ZeroClaw: revoke / deactivate pairing (all devices or one device). The UI
+  // guards destructive rotate behind a confirm().
+  const revokePairing = async (which, extra) => {
+    setPairingLoading(true);
+    try {
+      const cfg = which === 'device'
+        ? { which: 'device', device: pairingRevokeDevice.trim() }
+        : which === 'remove-tg'
+        ? { which: 'remove-tg', device: extra }
+        : { which: 'all' };
+      const r = await callAction(`Revoke access (${which === 'device' ? pairingRevokeDevice : 'all devices'})`, 'pairing-revoke', { config: cfg });
+      if (which === 'device') setPairingRevokeDevice('');
+      fetchPairings();
+      return r;
     } finally {
       setPairingLoading(false);
     }
@@ -1037,6 +1151,22 @@ export default function AIAgentsApp({ apiFetch }) {
     );
   }
 
+  const zcBindCode = (pendingPairings.find(p => p.platform === 'telegram-bind') || {}).code || '';
+  // Instances that exist on the server but are not running (default uninstalled,
+  // instance homes survived). Shown as a banner on the install card.
+  const stoppedInstanceTags = (instanceList[instKey] || []).filter(i => i.tag && !i.running).map(i => i.tag);
+  const zcTgUsers = (() => {
+    const users = new Set();
+    // 1. .env allow-list (TELEGRAM_ALLOWED_USERS)
+    const m = String(details?.envText || '').match(/^TELEGRAM_ALLOWED_USERS=(.*)$/m);
+    (m ? m[1].split(',') : []).forEach(x => { const v = x.trim(); if (v) users.add(v); });
+    // 2. /bind results live in config.toml [peer_groups.*].external_peers
+    const cfg = String(details?.configJson || '');
+    for (const mm of cfg.matchAll(/external_peers\s*=\s*\[([^\]]*)\]/g)) {
+      mm[1].split(',').forEach(x => { const v = x.trim().replace(/^"|"$/g, ''); if (v && /^\d+$/.test(v)) users.add(v); });
+    }
+    return [...users];
+  })();
   return (
     <div className="h-full overflow-y-auto p-4 md:p-6 max-w-4xl mx-auto space-y-4">
       <style>{`select option { background-color: #16162a; color: #fff; }`}</style>
@@ -1123,8 +1253,18 @@ export default function AIAgentsApp({ apiFetch }) {
           {agent.logo
             ? <img src={agent.logo} alt="" className="w-8 h-8 mx-auto mb-2 rounded object-contain" />
             : <Bot size={26} className="mx-auto mb-2 text-indigo-400" />}
-          <p className="text-sm font-bold mb-1">No agent installed on this server</p>
+          <p className="text-sm font-bold mb-1">No default agent installed on this server</p>
           <p className="text-[11px] text-[var(--text-muted)] mb-4">Install {agent.name} with one click — chat with it from Telegram, LINE, Discord &amp; more.</p>
+          {stoppedInstanceTags.length > 0 && (
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 mb-4 text-left">
+              <div className="text-[10px] font-bold text-amber-300 mb-0.5">
+                {stoppedInstanceTags.length} instance{stoppedInstanceTags.length > 1 ? 's' : ''} still on this server (stopped): {stoppedInstanceTags.join(', ')}
+              </div>
+              <div className="text-[10px] text-amber-200/70">
+                One-Click Install will restore the binary — then select an instance in the dropdown and press Start to bring it back.
+              </div>
+            </div>
+          )}
           <button onClick={() => setShowWizard(true)} className={`${btn} bg-indigo-500 hover:bg-indigo-400 text-white text-xs px-5 py-2.5`}>
             <Send size={13} /> One-Click Install
           </button>
@@ -1151,15 +1291,34 @@ export default function AIAgentsApp({ apiFetch }) {
                 {details.binPath}
               </span>
             )}
-            {details.model && <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-300">🧠 {details.model}</span>}
+            {details.isNanobot !== true && details.model && <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-300">🧠 {details.model}</span>}
+            {details.isNanobot === true && details.models?.length > 1 && (
+              <span className="flex items-center gap-1">
+                <span className="text-[10px] text-indigo-200">🧠</span>
+                <select
+                  value={details.activeModelPreset || ''}
+                  onChange={(e) => call('set-model-preset', { config: { preset: e.target.value } }).then(r => {
+                    if (r?.success) { setNotice({ ok: true, text: `Model preset → ${r.activeModelPreset}` }); loadDetails(); }
+                    else setNotice({ ok: false, text: r?.error || 'Failed to switch model' });
+                  })}
+                  disabled={!!busyMsg}
+                  className="text-[10px] bg-black/40 border border-[var(--border-color)] rounded px-1.5 py-0.5 text-indigo-200 font-mono cursor-pointer max-w-[180px]"
+                  title="Active model preset (nanobot)"
+                >
+                  {details.models.map(m => (
+                    <option key={m.preset} value={m.preset} className="text-black">
+                      {m.preset}{m.model ? ` · ${m.model}` : ''}
+                    </option>
+                  ))}
+                </select>
+              </span>
+            )}
+            {details.isNanobot === true && details.models?.length <= 1 && details.model && <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-300">🧠 {details.model}</span>}
             {details.service && <span className="text-[10px] text-[var(--text-muted)]">{details.service} service</span>}
             <span className="ml-auto flex items-center gap-1">
               {!details.running && <button onClick={() => gatewayOp('start')} disabled={!!busyMsg} className={`${btn} bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20`}><Play size={11} /> Start</button>}
               {details.running && <button onClick={() => gatewayOp('stop')} disabled={!!busyMsg} className={`${btn} bg-red-500/10 text-red-400 hover:bg-red-500/20`}><Square size={11} /> Stop</button>}
               <button onClick={() => gatewayOp('restart')} disabled={!!busyMsg} className={`${btn} bg-white/5 border border-[var(--border-color)] text-[var(--text-muted)] hover:text-white`}><RotateCw size={11} /> Restart</button>
-              <button onClick={uninstall} disabled={!!busyMsg} title="Uninstall agent" className={`${btn} bg-red-500/10 text-red-400 hover:bg-red-500/20`}>
-                <Trash2 size={11} /> Uninstall
-              </button>
             </span>
           </div>
 
@@ -1186,6 +1345,14 @@ export default function AIAgentsApp({ apiFetch }) {
               title={`Spawn another ${agent.name} instance on this server (own data dir, own bot token)`}
             >
               {spawningInstance ? <Loader2 size={11} className="animate-spin" /> : <Plus size={11} />} Spawn instance
+            </button>
+            <button
+              onClick={provisionFriendUser}
+              disabled={!!busyMsg || provisioningUser || !target}
+              className={`${btn} !py-1 !px-2 bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25`}
+              title="Strict isolation: create a dedicated Linux user for a friend — they add their own SSH connection and install the agent inside their own account (own .env, own token, own cgroups)"
+            >
+              {provisioningUser ? <Loader2 size={11} className="animate-spin" /> : <UserPlus size={11} />} User for friend
             </button>
             {activeInstance && (
               <span className="text-[9px] text-[var(--text-muted)]">
@@ -1251,90 +1418,173 @@ export default function AIAgentsApp({ apiFetch }) {
                     {(details.envKeys || []).length === 0 && <span className="text-[10px] text-[var(--text-muted)]">none yet — use the install wizard to add API keys / messenger tokens</span>}
                   </div>
                 </div>
-                {/* ── Pairing & Access Approval Card ── */}
-                <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/5 p-4 space-y-3">
-                  <div className="flex items-center justify-between gap-2 flex-wrap">
-                    <div className="flex items-center gap-2">
-                      <div className="w-7 h-7 rounded-lg bg-indigo-500/20 text-indigo-400 flex items-center justify-center font-bold text-sm">
-                        🔑
-                      </div>
-                      <div>
-                        <div className="font-bold text-white text-xs">Pairing &amp; User Access Approval</div>
-                        <div className="text-[10px] text-[var(--text-muted)]">
-                          Approve Telegram, Discord, LINE or Slack user pairing codes without using SSH
+                {/* ── Pairing & Access Approval Card ── */}{agent.id === 'zeroclaw' ? (
+                  <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/5 p-4 space-y-3">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div className="flex items-center gap-2">
+                        <div className="w-7 h-7 rounded-lg bg-indigo-500/20 text-indigo-400 flex items-center justify-center font-bold text-sm">🔑</div>
+                        <div>
+                          <div className="font-bold text-white text-xs">Pairing &amp; User Access</div>
+                          <div className="text-[10px] text-[var(--text-muted)]">ZeroClaw has two separate pairing systems — pick the one for how you connect.</div>
                         </div>
                       </div>
+                      <button onClick={fetchPairings} className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-[10px] font-bold text-[var(--text-muted)] border border-[var(--border-color)] flex items-center gap-1 cursor-pointer transition"><RotateCw size={10} /> Refresh</button>
                     </div>
-                    <button
-                      onClick={fetchPairings}
-                      className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-[10px] font-bold text-[var(--text-muted)] hover:text-white border border-[var(--border-color)] flex items-center gap-1 cursor-pointer transition"
-                    >
-                      <RotateCw size={10} /> Scan Pending Requests
-                    </button>
-                  </div>
 
-                  {/* Pending detected pairing chips */}
-                  {pendingPairings.length > 0 && (
-                    <div className="rounded-lg bg-black/40 border border-indigo-500/30 p-2.5 space-y-2">
-                      <div className="text-[10px] font-bold text-indigo-300 flex items-center gap-1.5">
-                        <Sparkles size={11} className="text-amber-400 animate-pulse" /> Pending pairing request(s) detected:
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        {pendingPairings.map((p, idx) => (
-                          <div key={idx} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-500/20 border border-indigo-500/40 text-xs">
-                            <span className="font-mono font-bold text-white tracking-wider">{p.code}</span>
-                            <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-indigo-500/30 text-indigo-200 font-bold">{p.platform}</span>
-                            <button
-                              onClick={() => handleApprovePairing(p.code, p.platform)}
-                              disabled={pairingLoading || !!busyMsg}
-                              className="px-2 py-0.5 rounded bg-emerald-500 hover:bg-emerald-400 text-white font-bold text-[10px] transition cursor-pointer flex items-center gap-1"
-                            >
-                              <Check size={10} /> Approve
-                            </button>
-                          </div>
-                        ))}
+                    <div className="rounded-lg bg-black/30 border border-teal-500/30 p-3 space-y-1.5">
+                      <div className="flex items-center gap-1.5"><span className="w-5 h-5 rounded bg-teal-500/20 text-teal-300 flex items-center justify-center text-[10px]">✉</span><span className="text-[10px] font-bold text-teal-300">System A — Chat in Telegram</span></div>
+                      <p className="text-[10px] text-[var(--text-muted)]">Use the bot in Telegram. First time you message it, the bot replies with a <b>one-time bind code</b>.</p>
+                      <div className="flex items-center gap-2 mt-1">
+                        {zcBindCode ? (
+                        <code className="flex-1 bg-black/50 border border-teal-500/20 rounded px-2 py-1 text-[10px] font-mono text-teal-200">/bind <span className="text-white">{zcBindCode}</span></code>
+                      ) : (
+                        <code className="flex-1 bg-black/50 border border-teal-500/20 rounded px-2 py-1 text-[10px] font-mono text-[var(--text-muted)]">message the bot first — bind code will appear here</code>
+                      )}
+                        <span className="text-[9px] text-[var(--text-muted)]">type this in Telegram yourself</span>
                       </div>
                     </div>
-                  )}
 
-                  {/* Manual Pairing Form */}
-                  <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap pt-1">
-                    <div className="w-32 shrink-0">
-                      <ThemeSelect
-                        value={pairingPlatform}
-                        onChange={setPairingPlatform}
-                        options={[
-                          { value: 'telegram', label: 'Telegram' },
-                          { value: 'discord', label: 'Discord' },
-                          { value: 'line', label: 'LINE' },
-                          { value: 'slack', label: 'Slack' },
-                          { value: 'auto', label: 'Auto (any)' },
-                        ]}
-                        size="xs"
-                        className="w-full"
-                      />
+                    <div className="rounded-lg bg-black/30 border border-indigo-500/30 p-3 space-y-2">
+                      <div className="flex items-center gap-1.5"><span className="w-5 h-5 rounded bg-indigo-500/20 text-indigo-300 flex items-center justify-center text-[10px]">🖥</span><span className="text-[10px] font-bold text-indigo-300">System B — Dashboard / API access</span></div>
+                      <p className="text-[10px] text-[var(--text-muted)]">For the web dashboard (127.0.0.1:42617) or API clients. Approve a 6-digit gateway code here.</p>
+                      {pendingPairings.filter(p => p.platform === 'gateway').length > 0 ? (
+                        <div className="flex flex-wrap gap-2">
+                          {pendingPairings.filter(p => p.platform === 'gateway').map((p, idx) => (
+                            <div key={idx} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-500/20 border border-indigo-500/40 text-xs">
+                              <span className="font-mono font-bold text-white tracking-wider">{p.code}</span>
+                              <button onClick={() => handleApprovePairing(p.code, 'gateway')} disabled={pairingLoading || !!busyMsg} className="px-2 py-0.5 rounded bg-emerald-500 hover:bg-emerald-400 text-white font-bold text-[10px] transition cursor-pointer flex items-center gap-1"><Check size={10} /> Approve</button>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-[9px] text-[var(--text-muted)]">No gateway code pending right now. Refresh to scan.</div>
+                      )}
+                      <div className="flex items-center gap-2 pt-1">
+                        <input type="text" inputMode="numeric" placeholder="6-digit gateway code (dashboard/API)" value={zcManualCode} onChange={e => { const v = e.target.value.replace(/\D/g, ''); setZcManualCode(v); }} onKeyDown={e => { if (e.key === 'Enter' && zcManualCode.trim()) handleZcGatewayPairing(); }} className="flex-1 bg-black/40 border border-[var(--border-color)] rounded-lg px-3 py-1.5 text-xs text-white placeholder:text-[var(--text-muted)] font-mono focus:outline-none focus:border-indigo-400" />
+                        <button onClick={handleZcGatewayPairing} disabled={!zcManualCode.trim() || pairingLoading || !!busyMsg} className={`${btn} bg-indigo-500 hover:bg-indigo-400 text-white !py-1.5 !px-3 font-bold disabled:opacity-40 disabled:cursor-not-allowed`}>
+                          {pairingLoading ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />} Approve
+                        </button>
+                      </div>
                     </div>
-                    <div className="relative flex-1 min-w-[160px]">
-                      <input
-                        type="text"
-                        placeholder="Enter pairing code (e.g. 2VXNGUEH)"
-                        value={pairingCode}
-                        onChange={e => setPairingCode(e.target.value.toUpperCase())}
-                        onKeyDown={e => { if (e.key === 'Enter' && pairingCode.trim()) handleApprovePairing(); }}
-                        className="w-full bg-black/40 border border-[var(--border-color)] rounded-lg px-3 py-1.5 text-xs text-white placeholder:text-[var(--text-muted)] font-mono uppercase tracking-wider focus:outline-none focus:border-indigo-400"
-                      />
-                    </div>
-                    <button
-                      onClick={() => handleApprovePairing()}
-                      disabled={!pairingCode.trim() || pairingLoading || !!busyMsg}
-                      className={`${btn} bg-emerald-500 hover:bg-emerald-400 text-white !py-1.5 !px-3.5 font-bold disabled:opacity-40 disabled:cursor-not-allowed`}
-                    >
-                      {pairingLoading ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
-                      Approve Code
-                    </button>
+
+                    {PAIRING_UI[agent.id]?.revoke && (
+  <div className="rounded-lg bg-black/40 border border-red-500/25 p-3 space-y-2.5">
+    <div className="text-[10px] font-bold text-red-300 flex items-center justify-between gap-2">
+      <span className="flex items-center gap-1.5"><ShieldOff size={11} /> Revoke / Deactivate access</span>
+      <span className="text-[9px] text-[var(--text-muted)] font-normal">paired tokens: {pairedTokens ?? '—'}</span>
+    </div>
+
+    {/* Tabs: Devices | Telegram */}
+    <div className="flex gap-1 bg-black/30 rounded-lg p-0.5">
+      <button
+        onClick={() => setZcRevokeTab('device')}
+        className={`flex-1 px-2 py-1 rounded-md text-[10px] font-bold transition cursor-pointer ${zcRevokeTab === 'device' ? 'bg-red-500/25 text-red-200' : 'text-[var(--text-muted)] hover:text-white'}`}
+      >Devices (dashboard/API)</button>
+      <button
+        onClick={() => setZcRevokeTab('telegram')}
+        className={`flex-1 px-2 py-1 rounded-md text-[10px] font-bold transition cursor-pointer ${zcRevokeTab === 'telegram' ? 'bg-red-500/25 text-red-200' : 'text-[var(--text-muted)] hover:text-white'}`}
+      >Telegram users ({zcTgUsers.length})</button>
+    </div>
+
+    {zcRevokeTab === 'device' && (
+      <div className="space-y-2">
+        <p className="text-[9px] text-[var(--text-muted)]">Gateway bearer tokens (web dashboard / API). Revoking forces every client to re-pair.</p>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button onClick={() => { if (confirm('Revoke ALL paired devices? Every client must re-pair.')) revokePairing('all'); }} disabled={pairingLoading || !!busyMsg} className="px-2 py-1 rounded bg-red-500/20 hover:bg-red-500/30 text-red-300 text-[10px] font-bold border border-red-500/30 transition cursor-pointer" title="Revoke all devices">
+            <RotateCw size={10} /> All
+          </button>
+          <div className="flex items-center gap-1 flex-1 min-w-[160px]">
+            <input value={pairingRevokeDevice} onChange={e => setPairingRevokeDevice(e.target.value)} placeholder="device ID (optional)" disabled={pairingLoading || !!busyMsg} className="flex-1 bg-black/40 border border-[var(--border-color)] rounded px-2 py-1 text-[10px] text-white placeholder:text-[var(--text-muted)] font-mono focus:outline-none focus:border-red-400" />
+            <button onClick={() => { if (!pairingRevokeDevice.trim()) { setNotice({ ok: false, text: 'Enter a device ID, or use Revoke All.' }); return; } revokePairing('device'); }} disabled={pairingLoading || !!busyMsg} className="px-2 py-1 rounded bg-red-500/20 hover:bg-red-500/30 text-red-300 text-[10px] font-bold border border-red-500/30 transition cursor-pointer" title="Revoke specific device">
+              Device
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {zcRevokeTab === 'telegram' && (
+      <div className="space-y-2">
+        <p className="text-[9px] text-[var(--text-muted)]">Accounts allowed to message the bot. Remove one to have it ignored.</p>
+        {zcTgUsers.length > 0 ? (
+          <div className="flex flex-wrap gap-1.5">
+            {zcTgUsers.map((uid, i) => (
+              <div key={i} className="flex items-center gap-1.5 px-2 py-1 rounded bg-red-500/10 border border-red-500/25 text-[10px]">
+                <span className="font-mono text-red-200">{uid}</span>
+                <button
+                  onClick={() => { if (confirm('Remove Telegram user ' + uid + '? The bot will ignore their messages.')) revokePairing('remove-tg', uid); }}
+                  disabled={pairingLoading || !!busyMsg}
+                  className="text-red-400 hover:text-white font-bold transition cursor-pointer"
+                  title="Remove from allow-list"
+                ><X size={10} /></button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="text-[9px] text-[var(--text-muted)]">No Telegram users — the bot uses /bind pairing instead.</div>
+        )}
+      </div>
+    )}
+  </div>
+)}
+
+<p className="text-[9px] text-[var(--text-muted)]">Only the system you use matters. Telegram chat = /bind. Dashboard/API = approve a gateway code.</p>
                   </div>
+                ) : (
+                  <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/5 p-4 space-y-3">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div className="flex items-center gap-2">
+                        <div className="w-7 h-7 rounded-lg bg-indigo-500/20 text-indigo-400 flex items-center justify-center font-bold text-sm">🔑</div>
+                        <div>
+                          <div className="font-bold text-white text-xs">Pairing &amp; User Access Approval</div>
+                          <div className="text-[10px] text-[var(--text-muted)]">Approve Telegram, Discord, LINE or Slack user pairing codes without using SSH</div>
+                        </div>
+                      </div>
+                      <button onClick={fetchPairings} className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-[10px] font-bold text-[var(--text-muted)] hover:text-white border border-[var(--border-color)] flex items-center gap-1 cursor-pointer transition"><RotateCw size={10} /> Scan Pending Requests</button>
+                    </div>
+                    {pendingPairings.length > 0 && (
+                      <div className="rounded-lg bg-black/40 border border-indigo-500/30 p-2.5 space-y-2">
+                        <div className="text-[10px] font-bold text-indigo-300 flex items-center gap-1.5"><Sparkles size={11} className="text-amber-400 animate-pulse" /> Pending pairing request(s) detected:</div>
+                        <div className="flex flex-wrap gap-2">
+                          {pendingPairings.map((p, idx) => (
+                            <div key={idx} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-500/20 border border-indigo-500/40 text-xs">
+                              <span className="font-mono font-bold text-white tracking-wider">{p.code}</span>
+                              <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-indigo-500/30 text-indigo-200 font-bold">{p.platform}</span>
+                              <button onClick={() => handleApprovePairing(p.code, p.platform)} disabled={pairingLoading || !!busyMsg} className="px-2 py-0.5 rounded bg-emerald-500 hover:bg-emerald-400 text-white font-bold text-[10px] transition cursor-pointer flex items-center gap-1"><Check size={10} /> Approve</button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap pt-1">
+                      <div className="w-32 shrink-0">
+                        <ThemeSelect value={pairingPlatform} onChange={setPairingPlatform} options={(PAIRING_UI[agent.id]?.platforms || ['telegram', 'discord', 'line', 'slack', 'auto']).map(v => ({ value: v, label: v === 'auto' ? 'Auto (any)' : v.charAt(0).toUpperCase() + v.slice(1) }))} size="xs" className="w-full" />
+                      </div>
+                      <div className="relative flex-1 min-w-[160px]">
+                        <input type="text" inputMode={PAIRING_UI[agent.id]?.numericOnly ? 'numeric' : 'text'} placeholder={PAIRING_UI[agent.id]?.placeholder || 'Enter pairing code'} value={pairingCode} onChange={e => setPairingCode(PAIRING_UI[agent.id]?.numericOnly ? e.target.value.replace(/\D/g, '') : e.target.value.toUpperCase())} onKeyDown={e => { if (e.key === 'Enter' && pairingCode.trim()) handleApprovePairing(); }} className="w-full bg-black/40 border border-[var(--border-color)] rounded-lg px-3 py-1.5 text-xs text-white placeholder:text-[var(--text-muted)] font-mono tracking-wider focus:outline-none focus:border-indigo-400" />
+                      </div>
+                      <button onClick={() => handleApprovePairing()} disabled={!pairingCode.trim() || pairingLoading || !!busyMsg} className={`${btn} bg-emerald-500 hover:bg-emerald-400 text-white !py-1.5 !px-3.5 font-bold disabled:opacity-40 disabled:cursor-not-allowed`}>
+                        {pairingLoading ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />} Approve Code
+                      </button>
+                    </div>
+                    {PAIRING_UI[agent.id]?.hint && <p className="text-[9px] text-[var(--text-muted)]">{PAIRING_UI[agent.id].hint}</p>}
+                  </div>
+                )}
+
+                {/* ── Danger zone — uninstall, kept at the bottom ── */}
+                <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-3 flex items-center justify-between gap-2 flex-wrap">
+                  <div>
+                    <div className="text-[10px] font-bold text-red-300 flex items-center gap-1.5">
+                      <Trash2 size={11} /> Danger zone
+                    </div>
+                    <div className="text-[9px] text-[var(--text-muted)]">
+                      Uninstall removes the agent runtime from this server{activeInstance ? ` and deletes the instance "${activeInstance}"` : ''}.
+                    </div>
+                  </div>
+                  <button onClick={uninstall} disabled={!!busyMsg} className={`${btn} bg-red-500/10 text-red-400 hover:bg-red-500/20 font-bold`}>
+                    <Trash2 size={11} /> Uninstall {agent.name}{activeInstance ? ` (${activeInstance})` : ''}
+                  </button>
                 </div>
-
                 <label className="flex items-center gap-1.5 text-[10px] text-[var(--text-muted)] cursor-pointer">
                   <input type="checkbox" checked={autoHeal} onChange={e => setAutoHeal(e.target.checked)} className="accent-emerald-500" />
                   Auto-restart gateway if it dies unexpectedly (watchdog)
@@ -2449,6 +2699,7 @@ export default function AIAgentsApp({ apiFetch }) {
         apiFetch={doFetch}
         agentApi={agent.api}
         agent={{ id: agent.id, name: agent.name, by: agent.by, docsUrl: agent.docs, logo: agent.logo }}
+        instance={activeInstance || ''}
         onActionStart={(label) => {
           setLiveLogLines([`> Starting ${label}...`, '> Connecting to remote server...']);
           setLiveLogAction(label);
@@ -2467,7 +2718,9 @@ export default function AIAgentsApp({ apiFetch }) {
 
       {/* ── Uninstall Confirmation Modal ── */}
       {showUninstallModal && (() => {
-        const home = { hermes: instHome(activeInstance), nanobot: '~/.nanobot', openclaw: '~/.openclaw', zeroclaw: '~/.zeroclaw' }[agent.id] || ('~/' + agent.id);
+        const home = activeInstance
+          ? `~/.${agent.id}-${activeInstance}`
+          : ('~/' + agent.id);
         return (
           <div className="fixed inset-0 z-[2000] flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(6px)' }}>
             <div className="relative w-full max-w-md rounded-2xl border border-red-500/30 bg-[var(--bg-primary)] shadow-2xl overflow-hidden">
@@ -2477,8 +2730,10 @@ export default function AIAgentsApp({ apiFetch }) {
                 <div className="flex items-center gap-3">
                   <div className="flex-shrink-0 w-10 h-10 rounded-full bg-red-500/15 border border-red-500/30 flex items-center justify-center text-lg">🗑️</div>
                   <div>
-                    <h2 className="text-base font-bold text-white">Uninstall {agent.name}</h2>
-                    <p className="text-[11px] text-[var(--text-muted)] mt-0.5">Choose how much to remove from the server</p>
+                    <h2 className="text-base font-bold text-white">Uninstall {agent.name}{activeInstance ? ` — ${activeInstance}` : ''}</h2>
+                    <p className="text-[11px] text-[var(--text-muted)] mt-0.5">
+                      {activeInstance ? `Targeting the instance "${activeInstance}" (${home}). This removes only that instance.` : 'Choose how much to remove from the server (default install).'}
+                    </p>
                   </div>
                 </div>
 
