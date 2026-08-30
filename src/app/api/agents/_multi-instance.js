@@ -43,7 +43,7 @@ export function pidAliveCmd(home) {
 }
 
 export async function pidAlive(sshConfig, home) {
-  const r = await execCommand(sshConfig, pidAliveCmd(home), { pool: false, timeoutMs: 15000 });
+  const r = await execCommand(sshConfig, pidAliveCmd(home), { timeoutMs: 15000 });
   return /PID_ALIVE=1/.test(r.stdout || '');
 }
 
@@ -97,7 +97,7 @@ for d in "$HOME"/.${agentId}-*; do
   fi
   echo "TAGRUN=\${tag#.${agentId}-}:$RUN"
 done
-`, { pool: false, timeoutMs: 60000 });
+`, { timeoutMs: 60000 });
   const out = r.stdout || '';
   const instances = [];
   if (/DEFAULT_EXISTS=1/.test(out)) instances.push({ tag: '', running: /PROC=1/.test(out) });

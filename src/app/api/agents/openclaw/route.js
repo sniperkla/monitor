@@ -240,7 +240,7 @@ async function handleAgentAction(body, session, log = []) {
 
     // ── STATUS ──
     if (action === 'status') {
-      const r = await execCommand(sshConfig, STATUS_SCRIPT, { pool: false, timeoutMs: 30000 });
+      const r = await execCommand(sshConfig, STATUS_SCRIPT, { pool: true, timeoutMs: 30000 });
       const parse = (k) => (r.stdout || '').match(new RegExp(`${k}=(.*)`))?.[1]?.trim();
       const installed = parse('BIN') === 'SET';
       return NextResponse.json({
@@ -323,7 +323,7 @@ base64 < "${HH}/.env" 2>/dev/null || true
 echo "===ENVKEYS==="
 [ -f "${HH}/.env" ] && grep -oE '^[A-Z_][A-Z0-9_]*' "${HH}/.env" 2>/dev/null | sort -u | head -50
 `;
-      const r = await execCommand(sshConfig, D, { pool: false, timeoutMs: 60000 });
+      const r = await execCommand(sshConfig, D, { pool: true, timeoutMs: 60000 });
       const out = r.stdout || '';
       const section = (name, next) => {
         const marker = `===${name}===`;

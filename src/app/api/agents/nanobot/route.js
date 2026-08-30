@@ -168,7 +168,7 @@ async function handleAgentAction(body, session, log = []) {
 
     // ── STATUS ──
     if (action === 'status') {
-      const r = await execCommand(sshConfig, STATUS_SCRIPT, { pool: false, timeoutMs: 30000 });
+      const r = await execCommand(sshConfig, STATUS_SCRIPT, { pool: true, timeoutMs: 30000 });
       const parse = (k) => (r.stdout || '').match(new RegExp(`${k}=(.*)`))?.[1]?.trim();
       return NextResponse.json({
         success: true,
@@ -273,7 +273,7 @@ for f in "${HH}/logs/gatew""ay.log" "${HH}-gatew""ay.log"; do [ -f "$f" ] && [ -
 echo "$LOG"
 tail -n 30 "$LOG" 2>/dev/null | tail -5
 `;
-      const r = await execCommand(sshConfig, D, { pool: false, timeoutMs: 60000 });
+      const r = await execCommand(sshConfig, D, { pool: true, timeoutMs: 60000 });
       const out = r.stdout || '';
       const sec = (name, next) => {
         const marker = `===${name}===`;
@@ -303,7 +303,7 @@ tail -n 30 "$LOG" 2>/dev/null | tail -5
       const envKeys = new Set();
       let envText = '';
       try {
-        const envR = await execCommand(sshConfig, `[ -f "${HH}/.env" ] && cat "${HH}/.env" 2>/dev/null || true`, { pool: false, timeoutMs: 15000 });
+        const envR = await execCommand(sshConfig, `[ -f "${HH}/.env" ] && cat "${HH}/.env" 2>/dev/null || true`, { pool: true, timeoutMs: 15000 });
         envText = envR.stdout || '';
         for (const k of envText.split('\n')) {
           const name = k.split('=')[0]?.trim();

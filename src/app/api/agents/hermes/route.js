@@ -353,7 +353,7 @@ for d in "$HOME"/.hermes-*; do
   fi
   echo "TAGRUN=\${tag#.hermes-}:$RUN"
 done
-`, { pool: false, timeoutMs: 20000 });
+`, { pool: true, timeoutMs: 20000 });
       const out = r.stdout || '';
       const instances = [];
       if (/DEFAULT_EXISTS=1/.test(out)) instances.push({ tag: '', running: /PROC=1/.test(out) });
@@ -395,7 +395,7 @@ echo CLONED
     }
 
     if (action === 'status') {
-      const r = await execCommand(sshConfig, statusScript(inst), { pool: false, timeoutMs: 30000 });
+      const r = await execCommand(sshConfig, statusScript(inst), { pool: true, timeoutMs: 30000 });
       const parse = (k) => (r.stdout || '').match(new RegExp(`${k}=(.*)`))?.[1]?.trim();
       const hostInstalled = parse('BIN') === 'SET';
       const inContainer = parse('DCONT') === '1';
@@ -504,7 +504,7 @@ MDL="$( [ -n "$BIN" ] && "$BIN" config get model 2>/dev/null | tail -1 || true )
 [ -z "$MDL" ] && MDL="$(grep -E '^(MODEL|HERMES_MODEL|DEFAULT_MODEL)=' "${HH}/.env" 2>/dev/null | head -1 | cut -d= -f2-)"
 echo "$MDL"
 `;
-      const r = await execCommand(sshConfig, DETAILS_SCRIPT, { pool: false, timeoutMs: 60000 });
+      const r = await execCommand(sshConfig, DETAILS_SCRIPT, { pool: true, timeoutMs: 60000 });
       const out = r.stdout || '';
       const section = (name, next) => {
         const marker = `===${name}===`;
@@ -536,7 +536,7 @@ echo "$MDL"
       // Binary may live on the host OR inside the hermes-agent docker container
       const binR2 = await execCommand(sshConfig,
         `p="$(export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"; command -v hermes 2>/dev/null)"; [ -n "$p" ] && echo "BIN=$p"; command -v docker >/dev/null 2>&1 && docker exec hermes-agent sh -c 'command -v hermes' 2>/dev/null | head -1 | { read -r cp2; [ -n "$cp2" ] && echo "CBIN=$cp2"; }; true`,
-        { pool: false, timeoutMs: 30000 });
+        { pool: true, timeoutMs: 30000 });
       const dout = binR2.stdout || '';
       const remoteBinPath = (dout.match(/BIN=(.*)/)?.[1] || dout.match(/CBIN=(.*)/)?.[1] || '').trim();
       const installed = !!remoteBinPath;

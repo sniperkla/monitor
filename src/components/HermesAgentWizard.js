@@ -1,6 +1,6 @@
 'use client';
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { X, Send, Loader2, Bot, Box, Server as ServerIcon, MonitorCog, CheckCircle2, XCircle, Trash2, Settings2, Zap, Sparkles, ExternalLink } from 'lucide-react';
+import { X, Send, Loader2, Bot, Box, Server as ServerIcon, MonitorCog, CheckCircle2, XCircle, Trash2, Settings2, Zap, Sparkles, ExternalLink, UserPlus, Lock } from 'lucide-react';
 import ThemeSelect from '@/components/common/ThemeSelect';
 
 /**
@@ -385,7 +385,14 @@ export default function HermesAgentWizard({ isOpen, onClose, connections = [], s
         <div className="flex items-center justify-between px-5 pt-4 pb-3 border-b border-[var(--border-color)]">
           <div className="flex items-center gap-2">
             {agent.logo ? <img src={agent.logo} alt="" className="w-[18px] h-[18px] rounded object-contain" /> : null}
-            <h2 className="text-sm font-bold">{agent.name} <span className="text-[10px] font-normal text-[var(--text-muted)]">by {agent.by}</span></h2>
+            <h2 className="text-sm font-bold flex items-center gap-2 flex-wrap">
+              {agent.name} <span className="text-[10px] font-normal text-[var(--text-muted)]">by {agent.by}</span>
+              {instance && (
+                <span className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-500/15 border border-amber-500/40 text-amber-300 text-[10px] font-bold" title={`All changes apply to instance "${instance}" (~/.${agent.id}-${instance}), not the default`}>
+                  <UserPlus size={10} /> instance: {instance}
+                </span>
+              )}
+            </h2>
           </div>
           <div className="flex items-center gap-1 bg-black/30 rounded-lg p-0.5">
             <button onClick={toggleLiveLogs} title={liveLogs ? 'Live action logs: ON (click to disable)' : 'Live action logs: OFF (click to enable)'}
@@ -527,16 +534,37 @@ export default function HermesAgentWizard({ isOpen, onClose, connections = [], s
             </div>
           )}
 
-          {/* Instance Setup mode (newly spawned instance): only Save & Start.
-              No Reinstall/Uninstall — those belong on the default/manager view. */}
-          {instance ? (
-            <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-4 space-y-3">
-              <div className="text-[10px] font-bold text-emerald-300 flex items-center gap-1.5">
-                <Sparkles size={11} /> Configure this new instance ({instance})
+          {/* ── Danger zone — kept at the bottom, separated from safe actions ── */}
+          {status?.installed && (
+            <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-3 space-y-2">
+              <div className="text-[10px] font-bold text-red-300 flex items-center gap-1.5">
+                <Trash2 size={11} /> Danger zone
               </div>
               <p className="text-[9px] text-[var(--text-muted)]">
-                This instance was just created. Give it its <b>OWN API key / token</b> so it doesn&apos;t fight the default over the same credentials.
+                Uninstall removes the agent runtime from this server. {instance ? `This also deletes the instance "${instance}" including its config, memories & sessions.` : 'Optionally delete all data (config, memories, sessions) with the checkbox above.'}
               </p>
+              <button
+                onClick={uninstall}
+                disabled={busy}
+                className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-red-500/10 text-red-400 text-xs font-bold hover:bg-red-500/20 disabled:opacity-50 transition cursor-pointer"
+              >
+                <Trash2 size={12} /> Uninstall {agent.name}{instance ? ` (${instance})` : ''}
+              </button>
+            </div>
+          )}
+
+          {/* ── Sticky action footer — always visible at the modal bottom ── */}
+          <div className="sticky bottom-0 -mx-5 px-5 pt-2.5 pb-1 mt-3 bg-[var(--bg-secondary)] border-t border-[var(--border-color)]">
+          <div className="text-[9px] text-[var(--text-muted)] mb-1.5 flex items-center gap-1 flex-wrap">
+            <Lock size={9} /> Applying to:
+            <span className="font-mono font-bold text-[var(--text-muted)]">
+              {instance ? `~/.${agent.id}-${instance}/` : `~/.${agent.id}/`}
+            </span>
+            {instance && <span className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 font-bold">instance: {instance}</span>}
+            {!instance && <span className="px-1.5 py-0.5 rounded bg-white/10 text-[var(--text-muted)] font-bold">default</span>}
+          </div>
+          {instance ? (
+            <div className="space-y-2">
               <button
                 onClick={reconfigure}
                 disabled={busy || !target}
@@ -548,7 +576,8 @@ export default function HermesAgentWizard({ isOpen, onClose, connections = [], s
               <p className="text-[9px] text-[var(--text-muted)]">Applies the config above and starts this instance&apos;s gateway. Uninstall is done later from the instance dropdown.</p>
             </div>
           ) : (
-          <div className="flex items-center gap-2">
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-2">
             {status?.installed ? (
               <>
                 <button
@@ -580,32 +609,15 @@ export default function HermesAgentWizard({ isOpen, onClose, connections = [], s
                 {busy ? 'Installing… (can take 5–15 min)' : 'One-Click Install'}
               </button>
             )}
+            </div>
+            {status?.installed && (
+              <p className="text-[9px] text-[var(--text-muted)]">
+                <span className="text-emerald-400/80 font-bold">Update &amp; Restart</span> keeps token/memories · <span className="text-indigo-400/80 font-bold">One-Click Reinstall</span> wipes config &amp; memories and installs from scratch
+              </p>
+            )}
           </div>
           )}
-          {!instance && status?.installed && (
-            <p className="text-[10px] text-[var(--text-muted)] mt-1">
-              <span className="text-emerald-400/80 font-bold">Update &amp; Restart</span> keeps token/memories · <span className="text-indigo-400/80 font-bold">One-Click Reinstall</span> wipes this instance&apos;s config &amp; memories and installs from scratch
-            </p>
-          )}
-
-          {/* ── Danger zone — kept at the bottom, separated from safe actions ── */}
-          {status?.installed && (
-            <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-3 space-y-2">
-              <div className="text-[10px] font-bold text-red-300 flex items-center gap-1.5">
-                <Trash2 size={11} /> Danger zone
-              </div>
-              <p className="text-[9px] text-[var(--text-muted)]">
-                Uninstall removes the agent runtime from this server. {instance ? `This also deletes the instance "${instance}" including its config, memories & sessions.` : 'Optionally delete all data (config, memories, sessions) with the checkbox above.'}
-              </p>
-              <button
-                onClick={uninstall}
-                disabled={busy}
-                className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-red-500/10 text-red-400 text-xs font-bold hover:bg-red-500/20 disabled:opacity-50 transition cursor-pointer"
-              >
-                <Trash2 size={12} /> Uninstall {agent.name}{instance ? ` (${instance})` : ''}
-              </button>
-            </div>
-          )}
+          </div>
 
           {/* Install-target chooser (fire alert) */}
       {showChooser && (

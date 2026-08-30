@@ -233,7 +233,6 @@ export default function AIAgentsApp({ apiFetch }) {
   const socketRef = useRef(null);
   const rtcPeerRef = useRef(null);
   const logPreRef = useRef(null);
-  const [autoHeal, setAutoHeal] = useState(false);
   const autoHealRef = useRef(false);
   // userStopped persists across page refresh via sessionStorage
   const stoppedKey = `agent-stopped:${agentId}:${target || ''}`;
@@ -276,6 +275,20 @@ export default function AIAgentsApp({ apiFetch }) {
   const activeInstance = instanceSel[instKey] || '';
   const instRef = useRef('');
   useEffect(() => { instRef.current = activeInstance; }, [activeInstance]);
+  // autoHeal is per agent+instance (keyed), persisted in localStorage —
+  // enabling it on the default must NOT auto-restart other instances.
+  const healKey = `${agentId}:${activeInstance || 'default'}:${target || ''}`;
+  const [autoHealMap, setAutoHealMap] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('agent-autoheal') || '{}'); } catch { return {}; }
+  });
+  const autoHeal = !!autoHealMap[healKey];
+  const setAutoHeal = (v) => {
+    setAutoHealMap((m) => {
+      const next = { ...m, [healKey]: !!v };
+      try { localStorage.setItem('agent-autoheal', JSON.stringify(next)); } catch { /* ignore */ }
+      return next;
+    });
+  };
   // Instance-scoped home dir for display hints: '' → ~/.hermes, 'bot2' → ~/.hermes-bot2
   const instHome = (inst) => `~/.${agent.id}${inst ? `-${inst}` : ''}`;
 
@@ -1029,7 +1042,7 @@ export default function AIAgentsApp({ apiFetch }) {
   useEffect(() => { agentRef.current = agent; }, [agent]);
   const targetRef = useRef(target);
   useEffect(() => { targetRef.current = target; }, [target]);
-  useEffect(() => { autoHealRef.current = autoHeal; }, [autoHeal]);
+  useEffect(() => { autoHealRef.current = autoHeal; }, [autoHeal, healKey]);
   useEffect(() => { userStoppedRef.current = userStopped; }, [userStopped]);
 
   // re-sync userStopped from sessionStorage when agent/target changes
@@ -1060,9 +1073,15 @@ export default function AIAgentsApp({ apiFetch }) {
     const t0 = setTimeout(check, 15000);
     const iv = setInterval(check, 60000);
     return () => { cancelled = true; clearTimeout(t0); clearInterval(iv); };
-  }, [target, agentId, autoHeal]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [target, agentId, autoHeal, healKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const inputCls = 'w-full bg-black/30 border border-[var(--border-color)] rounded-lg px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-400/50';
+  // Safely render a value as text: React throws "object as a React child" when
+  // a non-primitive (e.g. an accidental component/object) lands in a text slot.
+  const txt = (v) => {
+    if (v == null) return '';
+    return (typeof v === 'string' || typeof v === 'number') ? String(v) : String(v);
+  };
   const btn = 'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-bold transition cursor-pointer disabled:opacity-40';
 
   if (!isSupporter && !isAdmin) {
@@ -1283,15 +1302,15 @@ export default function AIAgentsApp({ apiFetch }) {
             </span>
             {details.version && (
               <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/5 border border-[var(--border-color)] text-[var(--text-muted)] font-mono">
-                {details.version.match(/v?[0-9]+\.[0-9]+(\.[0-9]+)?(-[0-9]+)?/)?.[0] || details.version.split('\n')[0].slice(0, 30)}
+                {txt(details.version.match(/v?[0-9]+\.[0-9]+(\.[0-9]+)?(-[0-9]+)?/)?.[0] || details.version.split('\n')[0].slice(0, 30))}
               </span>
             )}
             {details.binPath && (
-              <span className="text-[9px] font-mono text-[var(--text-muted)] opacity-70 truncate max-w-[220px] hidden sm:inline" title={`Binary path: ${details.binPath}`}>
-                {details.binPath}
+              <span className="text-[9px] font-mono text-[var(--text-muted)] opacity-70 truncate max-w-[220px] hidden sm:inline" title={`Binary path: ${txt(details.binPath)}`}>
+                {txt(details.binPath)}
               </span>
             )}
-            {details.isNanobot !== true && details.model && <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-300">🧠 {details.model}</span>}
+            {details.isNanobot !== true && details.model && <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-300">🧠 {txt(details.model)}</span>}
             {details.isNanobot === true && details.models?.length > 1 && (
               <span className="flex items-center gap-1">
                 <span className="text-[10px] text-indigo-200">🧠</span>
@@ -1313,8 +1332,8 @@ export default function AIAgentsApp({ apiFetch }) {
                 </select>
               </span>
             )}
-            {details.isNanobot === true && details.models?.length <= 1 && details.model && <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-300">🧠 {details.model}</span>}
-            {details.service && <span className="text-[10px] text-[var(--text-muted)]">{details.service} service</span>}
+            {details.isNanobot === true && details.models?.length <= 1 && details.model && <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-300">🧠 {txt(details.model)}</span>}
+            {details.service && <span className="text-[10px] text-[var(--text-muted)]">{txt(details.service)} service</span>}
             <span className="ml-auto flex items-center gap-1">
               {!details.running && <button onClick={() => gatewayOp('start')} disabled={!!busyMsg} className={`${btn} bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20`}><Play size={11} /> Start</button>}
               {details.running && <button onClick={() => gatewayOp('stop')} disabled={!!busyMsg} className={`${btn} bg-red-500/10 text-red-400 hover:bg-red-500/20`}><Square size={11} /> Stop</button>}
@@ -1407,7 +1426,7 @@ export default function AIAgentsApp({ apiFetch }) {
                   {[['Version', details.version || '—'], ['Model', details.model || '—'], ['Service', details.service || '—'], ['Skills', String((details.skills || []).length)]].map(([k, v]) => (
                     <div key={k} className="rounded-lg bg-black/30 border border-[var(--border-color)] px-3 py-2">
                       <div className="text-[9px] uppercase tracking-wider font-bold text-[var(--text-muted)]">{k}</div>
-                      <div className="text-xs font-bold mt-0.5 truncate" title={v}>{v}</div>
+                      <div className="text-xs font-bold mt-0.5 truncate" title={txt(v)}>{txt(v)}</div>
                     </div>
                   ))}
                 </div>
@@ -1417,6 +1436,20 @@ export default function AIAgentsApp({ apiFetch }) {
                     {(details.envKeys || []).map(k => <span key={k} className="px-2 py-0.5 rounded-md bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-[10px] font-mono">{k}</span>)}
                     {(details.envKeys || []).length === 0 && <span className="text-[10px] text-[var(--text-muted)]">none yet — use the install wizard to add API keys / messenger tokens</span>}
                   </div>
+                </div>
+                {/* ── Maintenance row — settings, watchdog, uninstall (kept near the top for clarity) ── */}
+                <div className="rounded-xl border border-[var(--border-color)] bg-black/20 p-2.5 flex items-center gap-2 flex-wrap">
+                  <label className="flex items-center gap-1.5 text-[10px] text-[var(--text-muted)] cursor-pointer select-none" title="Watches the gateway process and restarts it automatically if it crashes">
+                    <input type="checkbox" checked={autoHeal} onChange={e => setAutoHeal(e.target.checked)} className="accent-emerald-500" />
+                    <Zap size={10} className="text-emerald-400" /> Auto-restart (watchdog){activeInstance ? ` · ${activeInstance}` : ' · default'}
+                  </label>
+                  <span className="flex-1" />
+                  <button onClick={() => setShowWizard(true)} title="Update settings (API key, model, endpoints)" className={`${btn} bg-indigo-500/15 text-indigo-300 hover:bg-indigo-500/25 !py-1 !px-2.5`}>
+                    <Settings2 size={11} /> Reconfigure
+                  </button>
+                  <button onClick={uninstall} disabled={!!busyMsg} title={`Uninstall ${agent.name}${activeInstance ? ` (deletes instance "${activeInstance}" incl. config, memories & sessions)` : ' — removes the agent runtime from this server'}`} className={`${btn} text-red-400/70 hover:text-red-300 hover:bg-red-500/10 !py-1 !px-2 border border-transparent hover:border-red-500/30`}>
+                    <Trash2 size={11} />{activeInstance ? ` Remove "${activeInstance}"` : ' Uninstall'}
+                  </button>
                 </div>
                 {/* ── Pairing & Access Approval Card ── */}{agent.id === 'zeroclaw' ? (
                   <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/5 p-4 space-y-3">
@@ -1571,27 +1604,6 @@ export default function AIAgentsApp({ apiFetch }) {
                   </div>
                 )}
 
-                {/* ── Danger zone — uninstall, kept at the bottom ── */}
-                <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-3 flex items-center justify-between gap-2 flex-wrap">
-                  <div>
-                    <div className="text-[10px] font-bold text-red-300 flex items-center gap-1.5">
-                      <Trash2 size={11} /> Danger zone
-                    </div>
-                    <div className="text-[9px] text-[var(--text-muted)]">
-                      Uninstall removes the agent runtime from this server{activeInstance ? ` and deletes the instance "${activeInstance}"` : ''}.
-                    </div>
-                  </div>
-                  <button onClick={uninstall} disabled={!!busyMsg} className={`${btn} bg-red-500/10 text-red-400 hover:bg-red-500/20 font-bold`}>
-                    <Trash2 size={11} /> Uninstall {agent.name}{activeInstance ? ` (${activeInstance})` : ''}
-                  </button>
-                </div>
-                <label className="flex items-center gap-1.5 text-[10px] text-[var(--text-muted)] cursor-pointer">
-                  <input type="checkbox" checked={autoHeal} onChange={e => setAutoHeal(e.target.checked)} className="accent-emerald-500" />
-                  Auto-restart gateway if it dies unexpectedly (watchdog)
-                </label>
-                <button onClick={() => setShowWizard(true)} className={`${btn} bg-indigo-500/15 text-indigo-300 hover:bg-indigo-500/25`}>
-                  <Settings2 size={11} /> Reconfigure / Update settings
-                </button>
               </div>
             )}
 
