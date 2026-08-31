@@ -452,8 +452,8 @@ echo "===ENVKEYS==="
           instancesRemain = Array.isArray(instList) && instList.length > 0;
         } catch { /* non-fatal: fall through to the normal removal */ }
       }
-      const binRm = (inst || instancesRemain)
-        ? '' // instances share the globally-installed binary — leave it alone
+      const binRm = (inst || (instancesRemain && !purge))
+        ? '' // non-purge keeps the binary for surviving instances; purge wipes them first
         : `(npm -g rm openclaw 2>/dev/null || true); rm -f "$HOME/.openclaw/local/bin/openclaw" "$HOME/.local/bin/openclaw" /usr/local/bin/openclaw /usr/bin/openclaw /usr/sbin/openclaw; `;
       // Full purge of the DEFAULT also wipes every instance home (and kills
       // their daemons) so uninstall is genuinely clean — no orphan entries.
