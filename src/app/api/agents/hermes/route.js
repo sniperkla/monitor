@@ -1200,6 +1200,25 @@ fi
         { timeoutMs: 60000 });
     }
 
+    // 5b. Fresh install must persist model + messenger token into config.yaml the
+    // same way reconfigure does. The generic loop above only writes keys present
+    // in `settings`; the model is sent as `settings.model` and the Telegram token
+    // is sent as `env.TELEGRAM_BOT_TOKEN` (not a dotted settings key), so without
+    // this both are silently dropped on a fresh install. Mirror the reconfigure
+    // path (model.default + gateway.platforms.telegram.token) so install == update.
+    const tgtModel = (config.settings && config.settings.model)
+      || (config.env && (config.env.MODEL || config.env.HERMES_MODEL || config.env.DEFAULT_MODEL))
+      || '';
+    const tgtTok = (config.env && config.env.TELEGRAM_BOT_TOKEN) || '';
+    if (tgtModel || tgtTok) {
+      await execCommand(sshConfig, `
+        export PATH="${BIN_DIR}:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+        HB="$([ -x "$HOME/.local/bin/hermes" ] && echo "$HOME/.local/bin/hermes" || command -v hermes || echo "/usr/local/bin/hermes")"
+        ${tgtModel ? `${HERMES_ENV} $HB config set model.default ${JSON.stringify(String(tgtModel))} 2>&1 | tail -1 || true` : 'true'}
+        ${tgtTok ? `${HERMES_ENV} $HB config set gateway.platforms.telegram.token ${JSON.stringify(String(tgtTok))} 2>&1 | tail -1 || true` : 'true'}
+        true`, { pool: false, timeoutMs: 40000 });
+    }
+
     // 6. Gateway service (system > user+linger > background daemon)
     let startMethod = method;
     if (startMethod === 'auto') startMethod = hasSystemd ? (hasSudo ? 'system' : 'user') : 'nohup';
