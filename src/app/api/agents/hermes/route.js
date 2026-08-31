@@ -3,7 +3,7 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
 import { dispatchWithLiveLogs } from '@/app/api/agents/_jobs';
-import { parseInst, gatewayUnit, ensureInstanceUnit, writeInstanceEnv, sdAvailable, sdInstanceCtl, copyInstanceBin } from '../_multi-instance';
+import { parseInst, gatewayUnit, ensureInstanceUnit, writeInstanceEnv, sdAvailable, sdInstanceCtl, copyInstanceBin, listInstances, instancePorts, instanceIsolationEnv } from '../_multi-instance';
 import { execDetached } from '@/app/api/agents/_remote-bg';
 import { logger } from '@/lib/logger';
 
@@ -26,6 +26,68 @@ import { logger } from '@/lib/logger';
  */
 
 const INSTALLER_URL = 'https://hermes-agent.nousresearch.com/install.sh';
+
+/**
+ * Shared .env upsert program (Python) used by BOTH install and reconfigure.
+ *
+ * Every submitted KEY=VALUE line is upserted into the target .env: existing
+ * keys are replaced in place, new keys are appended, and unrelated keys are
+ * preserved. Values may contain '=' (base64 tokens), and the result is written
+ * with mode 0600.
+ *
+ * NOTE: do not re-implement this as generated shell. A previous shell version
+ * emitted `index(\$0, ...)` into awk (double-escaped in this JS template
+ * literal), which failed awk and left only the LAST submitted key in the file.
+ */
+export function buildEnvUpsertPy(envEntries) {
+  const payload = Buffer.from(envEntries.map(([k, v]) => `${k}=${v}`).join('\n'), 'utf8').toString('base64');
+  return [
+    'import os, base64',
+    `lines_raw = base64.b64decode('${payload}').decode('utf-8').splitlines()`,
+    `ep = (os.environ.get('HERMES_HOME') or os.path.expanduser('~/.hermes')) + '/.env'`,
+    `os.makedirs(os.path.dirname(ep), exist_ok=True)`,
+    `existing = open(ep).read().splitlines() if os.path.exists(ep) else []`,
+    `upsert = {}`,
+    `for ln in lines_raw:`,
+    `    idx = ln.find('=')`,
+    `    if idx > 0: upsert[ln[:idx]] = ln[idx+1:]`,
+    // Rebuild the file from the submitted order: every pre-existing occurrence
+    // of an upserted key is dropped, so duplicate stale entries cannot survive.
+    `result = [ln for ln in existing if ln.find('=') <= 0 or ln[:ln.find('=')] not in upsert]`,
+    `written = set()`,
+    `for ln in existing:`,
+    `    idx = ln.find('=')`,
+    `    if idx > 0 and ln[:idx] in upsert and ln[:idx] not in written:`,
+    `        result.append(ln[:idx] + '=' + upsert[ln[:idx]])`,
+    `        written.add(ln[:idx])`,
+    `for k, v in upsert.items():`,
+    `    if k not in written:`,
+    `        result.append(k + '=' + v)`,
+    `        written.add(k)`,
+    `open(ep, 'w').write('\\n'.join(result) + '\\n')`,
+    `os.chmod(ep, 0o600)`,
+    `print('ENV_UPDATED')`,
+  ].join('\n');
+}
+
+const PROVIDER_ENV_KEYS = Object.freeze({
+  openrouter: 'OPENROUTER_API_KEY',
+  openai: 'OPENAI_API_KEY',
+  anthropic: 'ANTHROPIC_API_KEY',
+});
+
+// Provider metadata is supplied by the easy-mode wizard to validate that a
+// gateway never starts with only a messenger token. Do not trust arbitrary env
+// names from clients: accept known providers or a conservative custom key name.
+function providerEnvKey(provider) {
+  const id = String(provider?.id || '').trim().toLowerCase();
+  if (PROVIDER_ENV_KEYS[id]) return PROVIDER_ENV_KEYS[id];
+  if (id === 'custom') {
+    const key = String(provider?.envKey || '').trim();
+    return /^[A-Z][A-Z0-9_]*$/.test(key) ? key : '';
+  }
+  return '';
+}
 
 function maskSecretString(val) {
   if (!val || typeof val !== 'string') return val;
@@ -70,7 +132,13 @@ for hp in $(pgrep -f '[h]ermes.*gatew[a]y' 2>/dev/null; pgrep -f '[h]ermes_cli.*
   [ -n "$hp" ] || continue
   HME="$(tr '\\0' '\\n' < /proc/$hp/environ 2>/dev/null | sed -n 's/^HERMES_HOME=//p' | head -1)"
   [ -n "$HME" ] || HME="$(tr '\\0' '\\n' < /proc/$hp/cmdline 2>/dev/null | grep -o '\\.hermes[-a-zA-Z0-9_]*' | head -1)"
-  if [ -z "$HME" ]; then PROC=1; break; fi
+  # A process carrying NO home marker cannot be attributed to this instance.
+  # For the default install we keep the legacy lenient behaviour (an
+  # unattributed gateway is assumed to be the default's). For a TAGGED instance
+  # it must be ignored: it belongs to a sibling or the default, and counting it
+  # would make every instance report itself as running whenever any other
+  # hermes gateway on the box is up — the core cross-instance leak.
+  if [ -z "$HME" ]; then ${tag ? 'continue' : 'PROC=1; break'}; fi
   case "$HME" in *".hermes${tag ? '-' + tag : ''}") PROC=1; break ;; esac
 done`;
 
@@ -78,18 +146,27 @@ done`;
 // `tag` scopes every process check to one instance home ('' = default install).
 const statusScript = (tag = '') => `
 ${tag ? `export HERMES_HOME="$HOME/.hermes-${tag}"` : ''}
-export PATH="$HOME/.local/bin:/usr/local/lib/hermes-agent/venv/bin:$HOME/.hermes/hermes-agent/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+HH="\${HERMES_HOME:-$HOME/.hermes}"
+# Instance-scoped PATH: a tagged instance must resolve "hermes" from its OWN
+# copied runtime tree. The DEFAULT home's venv is deliberately kept off a
+# tagged instance's PATH — otherwise every spawned instance would execute the
+# default install's code and all of them would share a single runtime.
+if [ -n "${tag}" ]; then
+  export PATH="\${HH}/hermes-agent/venv/bin:/usr/local/lib/hermes-agent/venv/bin:$HOME/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+else
+  export PATH="$HOME/.local/bin:/usr/local/lib/hermes-agent/venv/bin:$HOME/.hermes/hermes-agent/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+fi
 BIN="$(command -v hermes 2>/dev/null || true)"
-[ -z "$BIN" ] && for p in "$HOME/.local/bin/hermes" "/usr/local/bin/hermes" "/usr/bin/hermes" "$HOME/.hermes/hermes-agent/venv/bin/hermes" "/usr/local/lib/hermes-agent/venv/bin/hermes" "/usr/local/lib/hermes-agent/hermes"; do [ -x "$p" ] && BIN="$p" && break; done
+[ -z "$BIN" ] && for p in "\${HH}/hermes-agent/venv/bin/hermes" "/usr/local/lib/hermes-agent/venv/bin/hermes" "/usr/local/lib/hermes-agent/hermes" "$HOME/.local/bin/hermes" "/usr/local/bin/hermes" "/usr/bin/hermes"; do [ -x "$p" ] && BIN="$p" && break; done
 if [ -n "$BIN" ]; then echo "BIN=SET"; else echo "BIN=UNSET"; fi
 VER=NONE
 [ -n "$BIN" ] && VER="$($BIN --version 2>/dev/null | tail -1 | cut -c1-40)"
 echo "VERSION=$VER"
-CODE=0; [ -d "$HOME/.hermes/hermes-agent" ] && CODE=1
+CODE=0; [ -d "$HH/hermes-agent" ] && CODE=1
 echo "CODE=$CODE"
-CFG=0; [ -f "$HOME/.hermes/config.yaml" ] && CFG=1
+CFG=0; [ -f "$HH/config.yaml" ] && CFG=1
 echo "CONFIG=$CFG"
-ENVF=0; [ -f "$HOME/.hermes/.env" ] && ENVF=1
+ENVF=0; [ -f "$HH/.env" ] && ENVF=1
 echo "ENVFILE=$ENVF"
 USVC=0; command -v systemctl >/dev/null 2>&1 && systemctl --user is-active hermes-gate""way 2>/dev/null | grep -qx active && USVC=1
 SSVC=0; command -v systemctl >/dev/null 2>&1 && systemctl is-active hermes-gate""way 2>/dev/null | grep -qx active && SSVC=1
@@ -156,6 +233,26 @@ async function handleAgentAction(body, session, log = []) {
     const HH = inst ? `$HOME/.hermes-${inst}` : `$HOME/.hermes`;
     const HERMES_ENV = inst ? `export HERMES_HOME=$HOME/.hermes-${inst};` : '';
 
+    // ── Per-instance isolation ─────────────────────────────────────────────
+    // HERMES_HOME relocates config/.env/memories/logs, but Hermes keeps the
+    // kanban board, terminal sandbox, OAuth file and Codex home on SHARED
+    // absolute paths, and every instance would bind the same API server port.
+    // instanceIsolationEnv pins all of them inside this instance's home, and
+    // instancePorts gives it its own listening ports.
+    const [GW_API_PORT, GW_HOOK_PORT] = instancePorts('hermes', inst);
+    const ISO_ENV = instanceIsolationEnv('hermes', inst, HH);
+    // instance.env is consumed by BOTH start paths: the systemd template unit
+    // (EnvironmentFile=-%h/.hermes-%i/instance.env) and the legacy nohup start
+    // (set -a; . instance.env), so isolation holds regardless of supervisor.
+    // It is re-synced before every start so a pre-existing instance picks up
+    // the current allocation too.
+    const syncInstanceEnv = async (label) => {
+      if (!inst) return { ok: true, skipped: true };
+      const w = await writeInstanceEnv(sshConfig, HH, ISO_ENV, { expand: true });
+      if (!w.ok) log.push(`> [isolation] WARNING: could not write ${HH}/instance.env (${label}) — this instance may share state with siblings.`);
+      return w;
+    };
+
     // instance liveness: pidfile-first (fast) + systemd fallback (default).
     // kill -0 alone can false-positive after PID reuse, so the process cmdline
     // is verified to point inside this instance home (".hermes-<tag>").
@@ -191,6 +288,17 @@ async function handleAgentAction(body, session, log = []) {
       return r;
     };
     const b64 = (s) => Buffer.from(String(s), 'utf8').toString('base64');
+    // Shared .env upsert (see buildEnvUpsertPy) — identical writer for install
+    // and reconfigure so secrets cannot diverge between the two paths.
+    const runEnvUpsert = (entries, label) => run(label,
+      `${HERMES_ENV} echo '${b64(buildEnvUpsertPy(entries))}' | base64 -d | python3`, { timeoutMs: 30000 });
+    const hasPersistedEnvKey = async (key) => {
+      const keyCheck = b64(key);
+      const result = await execCommand(sshConfig,
+        `${HERMES_ENV} test -f "${HH}/.env" && KEY="$(echo '${keyCheck}' | base64 -d)" awk -F= '$1 == ENVIRON["KEY"] && length($2) > 0 { found=1 } END { exit found ? 0 : 1 }' "${HH}/.env"`,
+        { pool: false, timeoutMs: 15000 });
+      return result.code === 0;
+    };
 
     // ── Per-instance systemd template unit (Hermes) ─────────────────────────
     // Instances run as their own user-level cgroup (Restart=on-failure,
@@ -198,12 +306,27 @@ async function handleAgentAction(body, session, log = []) {
     // unavailable/failed so the legacy pidfile+nohup flow takes over.
     const sdHermesBranch = async (operation) => {
       if (!inst || !(await sdAvailable(sshConfig))) return null;
+      // Refresh instance.env before the unit is (re)started so the running
+      // process always picks up this instance's ports and pinned paths.
+      if (operation !== 'status' && operation !== 'stop') await syncInstanceEnv(`systemd ${operation}`);
       await ensureInstanceUnit(sshConfig, 'hermes', gatewayUnit('hermes', {
         description: 'Hermes gateway',
         envLines: [
-          'Environment=HERMES_HOME=%h/.hermes-%i',
+          // Order matters: systemd applies these in order, so the files are
+          // loaded first and the authoritative Environment= lines below win.
+          // Hermes keeps provider keys in .env. Load it directly so a
+          // systemd-managed spawned instance receives OPENROUTER_API_KEY and
+          // its own messenger credentials after reconfigure/install.
+          'EnvironmentFile=-%h/.hermes-%i/.env',
+          // Per-instance isolation (ports + pinned shared-state paths).
           'EnvironmentFile=-%h/.hermes-%i/instance.env',
-          'Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin',
+          // HERMES_HOME is derived from %i so it stays correct even if
+          // instance.env is missing or stale — a stale file must never be able
+          // to point this unit at another instance's home.
+          'Environment=HERMES_HOME=%h/.hermes-%i',
+          // The instance's OWN venv comes first: a tagged instance must resolve
+          // `hermes` from its copied runtime tree, never the shared/global one.
+          'Environment=PATH=%h/.hermes-%i/hermes-agent/venv/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin',
         ],
         execStart: `/bin/sh -c 'exec "$([ -x %h/.hermes-%i/hermes-agent/venv/bin/hermes ] && echo %h/.hermes-%i/hermes-agent/venv/bin/hermes || command -v hermes || echo %h/.local/bin/hermes)" gatew''ay run'`,
         logFile: '%h/.hermes-%i/logs/gateway.log',
@@ -231,6 +354,9 @@ async function handleAgentAction(body, session, log = []) {
         if (op !== 'status') {
           const sd = await sdHermesBranch(op);
           if (sd) return sd;
+          // systemd is unavailable → the legacy nohup path runs instead.
+          // Refresh instance.env so this start inherits the same isolation.
+          await syncInstanceEnv(`legacy ${op}`);
         }
       }
       return legacyGwCtl(op);
@@ -291,7 +417,10 @@ true`,
             .then(r => ({ ok: /GW_STOPPED/.test(r.stdout || ''), out: ((r.stdout || '') + (r.stderr || '')).slice(-400) }));
         }
         const preStop = (op === 'restart' || operation === 'restart') ? `if [ -f "${PIDF}" ]; then kill -9 $(cat "${PIDF}") 2>/dev/null; rm -f "${PIDF}"; sleep 1; fi; ` : '';
-        const startBackground = `mkdir -p "${HH}/logs"; ${HHX}setsid nohup sh -c 'exec ${JSON.stringify(binPath)} gateway run || exec ${JSON.stringify(binPath)} gateway' >> "${HH}/logs/gateway-nohup.log" 2>&1 < /dev/null & echo $! > "${PIDF}"; sleep 4; if kill -0 $(cat "${PIDF}") 2>/dev/null; then echo 'GW_UP'; else echo GW_DOWN; tail -5 "${HH}/logs/gateway-nohup.log" 2>/dev/null; fi`;
+        // instance.env is sourced FIRST so the pinned isolation paths and the
+        // per-instance ports are in the environment; .env is sourced after so a
+        // user-set variable in .env still wins.
+        const startBackground = `mkdir -p "${HH}/logs"; ${HHX}setsid nohup sh -c 'set -a; [ -f "${HH}/instance.env" ] && . "${HH}/instance.env"; [ -f "${HH}/.env" ] && . "${HH}/.env"; set +a; exec ${JSON.stringify(binPath)} gateway run || exec ${JSON.stringify(binPath)} gateway' >> "${HH}/logs/gateway-nohup.log" 2>&1 < /dev/null & echo $! > "${PIDF}"; sleep 4; if kill -0 $(cat "${PIDF}") 2>/dev/null; then echo 'GW_UP'; else echo GW_DOWN; tail -5 "${HH}/logs/gateway-nohup.log" 2>/dev/null; fi`;
         // Start, with self-healing: hermes tracks its own lifecycle via the
         // control socket, so a gateway the monitor cannot see (stale pidfile,
         // process started outside the monitor) makes `start` refuse with
@@ -374,25 +503,42 @@ done
     }
 
     if (action === 'spawn-instance') {
-      // Clone the default instance's identity files into a new HERMES_HOME and
-      // start it. The clone inherits the bot token — give it its own token via
-      // reconfigure right after, or the two instances will fight over getUpdates.
+      // Clone only non-secret identity/config files into a new HERMES_HOME.
+      // The instance intentionally gets an EMPTY .env (own credentials) but a
+      // VALID config.yaml cloned from the default — a 0-byte config.yaml makes
+      // the gateway unable to validate/persist pairing (codes report "expired")
+      // and leaves it without any model/telegram baseline. The wizard then
+      // overrides model/token on the instance only.
       const tag = String((config && config.tag) || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 24);
       if (!tag) return NextResponse.json({ success: false, error: 'Instance tag is required' }, { status: 400 });
       const r = await execCommand(sshConfig, `
-if [ -d "$HOME/.hermes-${tag}" ]; then echo "EXISTS"; exit 0; fi
-mkdir -p "$HOME/.hermes-${tag}"
-for f in config.yaml SOUL.md USER.md AGENTS.md MEMORY.md custom_instructions.txt prompt.txt; do
-  [ -f "$HOME/.hermes/$f" ] && cp "$HOME/.hermes/$f" "$HOME/.hermes-${tag}/$f"
-done
-# Fresh empty .env — instances are credential-isolated (own bot token/keys).
-: > "$HOME/.hermes-${tag}/.env"
-echo CLONED
+if [ -d "$HOME/.hermes-${tag}" ]; then
+  echo "EXISTS"
+else
+  # Fresh instance home with a valid default config.yaml (non-secret baseline).
+  # .env is the ONLY thing kept empty — credential isolation stays intact, but
+  # the gateway can start, persist pairing, and respond from the very first boot.
+  mkdir -p "$HOME/.hermes-${tag}" "$HOME/.hermes-${tag}/logs" "$HOME/.hermes-${tag}/memories" "$HOME/.hermes-${tag}/workspace" "$HOME/.hermes-${tag}/skills" "$HOME/.hermes-${tag}/sessions" "$HOME/.hermes-${tag}/kanban"
+  if [ -s "$HOME/.hermes/config.yaml" ]; then
+    cp "$HOME/.hermes/config.yaml" "$HOME/.hermes-${tag}/config.yaml"
+  else
+    : > "$HOME/.hermes-${tag}/config.yaml"
+  fi
+  : > "$HOME/.hermes-${tag}/.env"
+  echo CLONED_FRESH
+fi
+chmod 700 "$HOME/.hermes-${tag}" 2>/dev/null || true
+chmod 600 "$HOME/.hermes-${tag}/.env" 2>/dev/null || true
+chmod 600 "$HOME/.hermes-${tag}/config.yaml" 2>/dev/null || true
 `, { pool: false, timeoutMs: 30000 });
-      if (!/CLONED|EXISTS/.test(r.stdout || '')) {
+      if (!/CLONED_FRESH|EXISTS/.test(r.stdout || '')) {
         return NextResponse.json({ success: false, error: 'Failed to clone instance home: ' + ((r.stdout || '') + (r.stderr || '')).slice(-200), log });
       }
       const existed = /EXISTS/.test(r.stdout || '');
+      // Persist this instance's isolation contract — its own listening ports and
+      // every shared-state path pinned inside its own home — BEFORE it ever
+      // starts, so the first boot is already isolated.
+      await syncInstanceEnv('spawn');
       // Copy the hermes runtime tree into the instance home so it runs its OWN
       // binary (zeroclaw-style) — uninstalling the default won't break it.
       let binCopy = null;
@@ -400,13 +546,15 @@ echo CLONED
         const cp = await copyInstanceBin(sshConfig, 'hermes', tag, `$HOME/.hermes-${tag}`);
         binCopy = cp.err || (cp.copied ? 'own binary copied' : cp.already ? 'own binary already present' : 'no source to copy');
       }
-      const g = await gwCtl('start');
       return NextResponse.json({
         success: true,
         instance: tag,
         existed,
-        started: g.ok,
-        output: existed ? `Instance "${tag}" already existed — gateway ${g.ok ? 'running' : 'not started'}.` : `Instance "${tag}" spawned and ${g.ok ? 'running' : 'failed to start'}. ${binCopy}. Remember: give it its OWN bot token (reconfigure → env) or the two instances will fight over the same Telegram bot.`,
+        started: false,
+        needsConfiguration: true,
+        output: existed
+          ? `Instance "${tag}" already exists and is waiting for configuration.`
+          : `Instance "${tag}" is ready to configure. ${binCopy}. Add its own provider API key and messenger token, then install/reconfigure to start the gateway.`,
         log,
       });
     }
@@ -633,10 +781,13 @@ echo "$MDL"
     if (action === 'reconfigure') {
       const env = (config && config.env) || {};
       const settings = (config && config.settings) || {};
+      const requiredProviderKey = providerEnvKey(config && config.provider);
       const targetModel = settings.model || settings.default_model || env.MODEL || env.HERMES_MODEL || env.DEFAULT_MODEL || '';
+      // NOTE: the model is persisted as a config setting only. It used to be
+      // copied into env.MODEL too, but model ids are lowercase/slashed and were
+      // rejected by the env-name validation below.
       if (targetModel) {
         settings.model = targetModel;
-        env.MODEL = targetModel;
       }
 
       // ── Custom OpenAI-compatible endpoint (wizard "Custom…" provider) ──
@@ -659,41 +810,29 @@ echo "$MDL"
         }
       }
       const envKeys = Object.keys(env).filter(k => env[k] != null && env[k] !== '');
+      const invalidEnvKey = envKeys.find(k => !/^[A-Z][A-Z0-9_]*$/.test(k));
+      if (invalidEnvKey) {
+        return NextResponse.json({ success: false, error: `Invalid environment variable name: ${invalidEnvKey}` }, { status: 400 });
+      }
       const hasSettings = Object.keys(settings).filter(k => settings[k] != null && settings[k] !== '').length > 0;
       if (envKeys.length === 0 && !hasSettings) {
         return NextResponse.json({ success: false, error: 'No settings or env keys to update' }, { status: 400 });
       }
+      // A spawned/fresh instance has no previous credentials. Allow a
+      // messenger-only update only when the selected provider key is already
+      // safely present in this instance's .env; otherwise do not restart an
+      // unusable gateway.
+      if (requiredProviderKey && !String(env[requiredProviderKey] || '').trim()) {
+        if (!(await hasPersistedEnvKey(requiredProviderKey))) {
+          return NextResponse.json({
+            success: false,
+            error: `${requiredProviderKey} is required before this gateway can start. Paste the selected model provider API key and try again.`,
+          }, { status: 400 });
+        }
+      }
       if (envKeys.length > 0) {
-        const envLinesB64 = b64(envKeys.map(k => `${k}=${env[k]}`).join('\n'));
-        // Python script: upsert each KEY=VALUE line in .env, handles values with '=' (base64 tokens)
-        const envPy = [
-          'import os, base64',
-          `lines_raw = base64.b64decode('${envLinesB64}').decode('utf-8').splitlines()`,
-          `ep = (os.environ.get('HERMES_HOME') or os.path.expanduser('~/.hermes')) + '/.env'`,
-          `os.makedirs(os.path.dirname(ep), exist_ok=True)`,
-          `existing = open(ep).read().splitlines() if os.path.exists(ep) else []`,
-          `upsert = {}`,
-          `for ln in lines_raw:`,
-          `    idx = ln.find('=')`,
-          `    if idx > 0: upsert[ln[:idx]] = ln[idx+1:]`,
-          `result = []`,
-          `keys_done = set()`,
-          `for ln in existing:`,
-          `    idx = ln.find('=')`,
-          `    if idx > 0 and ln[:idx] in upsert:`,
-          `        result.append(ln[:idx] + '=' + upsert[ln[:idx]])`,
-          `        keys_done.add(ln[:idx])`,
-          `    else:`,
-          `        result.append(ln)`,
-          `for k, v in upsert.items():`,
-          `    if k not in keys_done: result.append(k + '=' + v)`,
-          `open(ep, 'w').write('\\n'.join(result) + '\\n')`,
-          `os.chmod(ep, 0o600)`,
-          `print('ENV_UPDATED')`,
-        ].join('\n');
-        const envPyB64 = b64(envPy);
         const envTargetLabel = inst ? `~/.hermes-${inst}/.env` : '~/.hermes/.env';
-        const w = await run(`write ${envTargetLabel}`, `${HERMES_ENV} echo '${envPyB64}' | base64 -d | python3`, { timeoutMs: 30000 });
+        const w = await runEnvUpsert(envKeys.map(k => [k, env[k]]), `write ${envTargetLabel}`);
         if (!/ENV_UPDATED/.test(w.stdout || '')) {
           return NextResponse.json({ success: false, error: `Failed to write ${envTargetLabel}`, log });
         }
@@ -717,7 +856,7 @@ for k, v in (new.items() if isinstance(new, dict) else []):
     if re.search(rf'^{re.escape(k)}:', text, re.M):
         text = re.sub(rf'^{re.escape(k)}:.*$', f'{k}: {sval}', text, count=1, flags=re.M)
     else:
-        text += f'\n{k}: {sval}\n'
+        text += f'\\n{k}: {sval}\\n'
 open(path, 'w').write(text)
 print('SETTINGS_MERGED')
 PY`, { timeoutMs: 30000 });
@@ -728,7 +867,7 @@ PY`, { timeoutMs: 30000 });
         await execCommand(sshConfig, `
           export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
           HB="$([ -x "$HOME/.local/bin/hermes" ] && echo "$HOME/.local/bin/hermes" || command -v hermes || echo "/usr/local/bin/hermes")"
-          $HB config set model ${JSON.stringify(targetModel)} 2>&1 || true
+          ${HERMES_ENV} $HB config set model ${JSON.stringify(targetModel)} 2>&1 || true
           command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx hermes-agent && docker exec hermes-agent hermes config set model ${JSON.stringify(targetModel)} 2>&1 || true
         `, { pool: false, timeoutMs: 30000 });
       }
@@ -829,7 +968,20 @@ DC=0; command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/de
 if [ "$DC" = '1' ]; then docker exec hermes-agent pgrep -f '[h]ermes.*gatew[a]y' >/dev/null 2>&1 && PROC=1; fi
 ALIVE=0; [ $SSVC = 1 -o $USVC = 1 -o $PROC = 1 ] && ALIVE=1
 echo "ALIVE=$ALIVE"
-PID=$(pgrep -f '[h]ermes.*gatew[a]y' | head -1)
+# Resolve the PID from this instance's OWN pidfile first. A bare
+# "pgrep -f '[h]ermes.*gatew[a]y' | head -1" matches EVERY instance on the box
+# and would report a sibling's uptime for this one.
+PID=""
+[ -f "${HH}/daemon.pid" ] && PID=$(cat "${HH}/daemon.pid" 2>/dev/null)
+if [ -z "$PID" ]; then
+  for hp in $(pgrep -f '[h]ermes.*gatew[a]y' 2>/dev/null); do
+    HME="$(tr '\\0' '\\n' < /proc/$hp/environ 2>/dev/null | sed -n 's/^HERMES_HOME=//p' | head -1)"
+    [ -n "$HME" ] || HME="$(tr '\\0' '\\n' < /proc/$hp/cmdline 2>/dev/null | grep -o '\\.hermes[-a-zA-Z0-9_]*' | head -1)"
+    # Unattributable process: only the DEFAULT install may adopt it.
+    if [ -z "$HME" ]; then ${inst ? 'continue' : 'PID="$hp"; break'}; fi
+    case "$HME" in *".hermes${inst ? '-' + inst : ''}") PID="$hp"; break ;; esac
+  done
+fi
 UP=0; [ -n "$PID" ] && UP=$(ps -o etimes= -p "$PID" 2>/dev/null | tr -d ' ')
 [ -z "$UP" ] && UP=0
 echo "UPTIME_SEC=$UP"
@@ -889,7 +1041,7 @@ fi
         { pool: false, timeoutMs: 15000 });
       const bp = (binR.stdout || '').match(/BIN=(.*)/)?.[1]?.trim() || 'hermes';
       const BP = JSON.stringify(bp);
-      const ENVX = `export PATH="${HH}/hermes-agent/venv/bin:$HOME/.local/bin:/usr/local/bin:$PATH"; set -a; [ -f "${HH}/.env" ] && . "${HH}/.env"; set +a`;
+      const ENVX = `export PATH="${HH}/hermes-agent/venv/bin:$HOME/.local/bin:/usr/local/bin:$PATH"; ${HERMES_ENV} set -a; [ -f "${HH}/.env" ] && . "${HH}/.env"; set +a`;
       const runCmd = platform && platform !== 'auto'
         ? `${ENVX}; ${BP} pairing approve ${JSON.stringify(platform)} ${JSON.stringify(code)} 2>&1 || ${BP} pairing approve ${JSON.stringify(code)} 2>&1`
         : `${ENVX}; ${BP} pairing approve ${JSON.stringify(code)} 2>&1 || ${BP} pairing approve telegram ${JSON.stringify(code)} 2>&1`;
@@ -905,7 +1057,7 @@ fi
         { pool: false, timeoutMs: 15000 });
       const bp = (binR.stdout || '').match(/BIN=(.*)/)?.[1]?.trim() || 'hermes';
       const BP = JSON.stringify(bp);
-      const ENVX = `export PATH="${HH}/hermes-agent/venv/bin:$HOME/.local/bin:/usr/local/bin:$PATH"`;
+      const ENVX = `export PATH="${HH}/hermes-agent/venv/bin:$HOME/.local/bin:/usr/local/bin:$PATH"; ${HERMES_ENV}`;
       const r = await execCommand(sshConfig,
         `${ENVX}; ${BP} pairing list 2>&1 || true; { [ -f "${HH}/logs/gateway-nohup.log" ] && tail -n 60 "${HH}/logs/gateway-nohup.log"; } || { [ -f "${HH}/logs/gateway.log" ] && tail -n 60 "${HH}/logs/gateway.log"; } || true`,
         { pool: false, timeoutMs: 20000 });
@@ -1015,7 +1167,13 @@ fi
 
     const method = ['auto', 'system', 'user', 'nohup'].includes(config.method) ? config.method : 'auto';
     const skipBrowser = config.skipBrowser !== false; // default: headless-safe
-
+    const requiredProviderKey = providerEnvKey(config.provider);
+    if (requiredProviderKey && !String(config.env?.[requiredProviderKey] || '').trim()) {
+      return NextResponse.json({
+        success: false,
+        error: `${requiredProviderKey} is required for a fresh install. Paste the selected model provider API key before installing.`,
+      }, { status: 400 });
+    }
     // ── 0. Docker-isolated target ────────────────────────────────────────────
     const DOCKER_IMAGES = {
       ubuntu: 'ubuntu:24.04', debian: 'debian:12', alma: 'almalinux:9', rocky: 'rockylinux:9',
@@ -1170,26 +1328,59 @@ fi
 
     // 4. Merge secrets into ~/.hermes/.env (never clobbers existing keys)
     const envEntries = Object.entries(config.env || {}).filter(([k, v]) => k && v != null && String(v).trim() !== '');
-    // Upsert helper: replace KEY= lines, append new ones. Used for both the
-    // pre-uninstall .env backup (safety net) and the wizard payload (wins).
-    const upsertEnvFn = `upsert_env() { while IFS= read -r line; do case "$line" in ''|'#'*) continue ;; esac; k=\${line%%=*}; [ -z "$k" ] && continue; awk -v pre="$k=" 'index(\\$0, pre) != 1' "${HH}/.env" > "${HH}/.env.tmp"; mv "${HH}/.env.tmp" "${HH}/.env"; printf '%s\\n' "$line" >> "${HH}/.env"; done < "$1"; }`;
+    const invalidEnvKey = envEntries.find(([k]) => !/^[A-Z][A-Z0-9_]*$/.test(k))?.[0];
+    if (invalidEnvKey) {
+      return NextResponse.json({ success: false, error: `Invalid environment variable name: ${invalidEnvKey}` }, { status: 400 });
+    }
     const envTargetLabel = `${inst ? `~/.hermes-${inst}` : '~/.hermes'}/.env`;
-    await run(`write ${envEntries.length} key(s) to ${envTargetLabel}`, `
-        mkdir -p "${HH}" && touch "${HH}/.env"
-        ${upsertEnvFn}
-        # Safety net: restore keys from the pre-uninstall backup first — a
-        # reinstall with an empty/stale wizard form must never silently drop a
-        # working provider key. Payload keys are upserted on top and win.
-        [ -f "${HH}.env.bak" ] && upsert_env "${HH}.env.bak" || true
-        echo '${envEntries.length > 0 ? b64(envEntries.map(([k, v]) => `${k}=${String(v).trim()}`).join('\n')) : ''}' > /tmp/.hermes-env-merge.zero
-        if [ -s /tmp/.hermes-env-merge.zero ] && [ "$(wc -c < /tmp/.hermes-env-merge.zero)" -gt 1 ]; then
-          base64 -d /tmp/.hermes-env-merge.zero > /tmp/.hermes-env-merge 2>/dev/null
-          upsert_env /tmp/.hermes-env-merge
-          rm -f "${HH}.env.bak"
-        fi
-        rm -f /tmp/.hermes-env-merge.zero /tmp/.hermes-env-merge
-        chmod 600 "${HH}/.env"
-        echo ENV_MERGED`, { timeoutMs: 30000 });
+    await run(`ensure ${envTargetLabel}`, `mkdir -p "${HH}" && touch "${HH}/.env" && chmod 600 "${HH}/.env"`, { timeoutMs: 15000 });
+    // Safety net: restore keys from the pre-uninstall backup first — a
+    // reinstall with an empty/stale wizard form must never silently drop a
+    // working provider key. Payload keys are upserted on top and win.
+    const backupProbe = b64([
+      'import os',
+      `p = os.path.expanduser("${HH}.env.bak")`,
+      'if not os.path.exists(p):',
+      '    print("BACKUP_NONE")',
+      'else:',
+      '    for ln in open(p).read().splitlines():',
+      '        idx = ln.find("=")',
+      '        if idx > 0:',
+      '            print(ln[:idx])',
+      '    print("BACKUP_DONE")',
+    ].join('\n'));
+    const backupEntries = await run('read backup credentials', `echo '${backupProbe}' | base64 -d | python3`, { timeoutMs: 15000 });
+    const backupKeys = [...new Set([...(backupEntries.stdout || '').matchAll(/^([A-Z][A-Z0-9_]*)$/gm)].map(m => m[1]))];
+    if (backupKeys.length > 0) {
+      const restored = await run('restore backup credentials', `
+        python3 - <<'PY'
+import os
+src = os.path.expanduser("${HH}.env.bak")
+dst = os.path.expanduser("${HH}/.env")
+keys = set("${backupKeys.join(',')}".split(','))
+if os.path.exists(src):
+    keep = [ln for ln in open(src).read().splitlines()
+            if ln.find('=') > 0 and ln[:ln.find('=')] in keys]
+    cur = [ln for ln in (open(dst).read().splitlines() if os.path.exists(dst) else [])
+           if not (ln.find('=') > 0 and ln[:ln.find('=')] in keys)]
+    text = '\\n'.join(cur + keep) + '\\n'
+    open(dst, 'w').write(text)
+    os.chmod(dst, 0o600)
+    print('BACKUP_RESTORED')
+PY`, { timeoutMs: 30000 });
+      if (/BACKUP_RESTORED/.test(restored.stdout || '')) {
+        await run('clear backup', `rm -f "${HH}.env.bak"`, { timeoutMs: 15000 });
+      }
+    }
+    if (envEntries.length > 0) {
+      const envWrite = await runEnvUpsert(
+        envEntries.map(([k, v]) => [k, String(v).trim()]),
+        `write ${envEntries.length} key(s) to ${envTargetLabel}`,
+      );
+      if (!/ENV_UPDATED/.test(envWrite.stdout || '')) {
+        return NextResponse.json({ success: false, error: `Failed to save credentials to ${envTargetLabel}; gateway was not started.`, log });
+      }
+    }
 
     // 5. Apply config.yaml settings via the official CLI (handles dotted keys)
     const settingsEntries = Object.entries(config.settings || {}).filter(([, v]) => v != null && String(v).trim() !== '');
@@ -1202,6 +1393,34 @@ fi
       await run(`hermes config set ${key}${inst ? ` (→ ~/.hermes-${inst})` : ''}`,
         `${ENVPREFIX}; ${HERMES_ENV} ${HB} config set ${key} ${JSON.stringify(String(value))} 2>&1 | tail -2`,
         { timeoutMs: 60000 });
+    }
+
+    // 5a. Guarantee the submitted settings land in config.yaml even if
+    // `hermes config set` failed silently above. Spawned instances start with a
+    // deliberately EMPTY config.yaml (spawn-instance truncates it), so any
+    // swallowed CLI error left the whole file empty — the same direct merge the
+    // reconfigure path uses, HERMES_HOME-qualified, makes install == update.
+    if (settingsEntries.length > 0) {
+      const mergeB64 = b64(JSON.stringify(Object.fromEntries(settingsEntries)));
+      const cfgTargetLabel = inst ? `~/.hermes-${inst}/config.yaml` : '~/.hermes/config.yaml';
+      await run(`merge ${cfgTargetLabel} settings (guaranteed write)`, `${HERMES_ENV}
+        python3 - <<'PY' 2>&1 || true
+import json, os, base64, re
+path = (os.environ.get('HERMES_HOME') or os.path.expanduser('~/.hermes')) + '/config.yaml'
+os.makedirs(os.path.dirname(path), exist_ok=True)
+if not os.path.exists(path):
+    open(path, 'w').close()
+new = json.loads(base64.b64decode('${mergeB64}').decode('utf-8'))
+text = open(path).read() if os.path.getsize(path) else ''
+for k, v in (new.items() if isinstance(new, dict) else []):
+    sval = 'true' if v is True else ('false' if v is False else str(v))
+    if re.search(rf'^{re.escape(k)}:', text, re.M):
+        text = re.sub(rf'^{re.escape(k)}:.*$', f'{k}: {sval}', text, count=1, flags=re.M)
+    else:
+        text += f'\\n{k}: {sval}\\n'
+open(path, 'w').write(text)
+print('SETTINGS_MERGED')
+PY`, { timeoutMs: 30000 });
     }
 
     // 5b. Fresh install must persist model + messenger token into config.yaml the
@@ -1228,7 +1447,28 @@ fi
     if (startMethod === 'auto') startMethod = hasSystemd ? (hasSudo ? 'system' : 'user') : 'nohup';
 
     let svcOk = false;
-    if (startMethod === 'system' && hasSystemd && !dockerMode) {
+    if (inst && !dockerMode) {
+      // ── Tagged instance ──────────────────────────────────────────────────
+      // Hermes derives BOTH its gateway pidfile and its systemd unit name from
+      // HERMES_HOME. `hermes gateway install` without HERMES_HOME set would
+      // rewrite and start the DEFAULT instance's unit — installing one instance
+      // would clobber another. The per-instance template unit is tried first,
+      // and every fallback exports HERMES_HOME so the service identity stays
+      // qualified to this instance.
+      await syncInstanceEnv('install');
+      if (startMethod !== 'nohup') {
+        const sd = await sdHermesBranch('start');
+        svcOk = !!(sd && sd.ok);
+      }
+      if (!svcOk && startMethod !== 'nohup' && hasSystemd) {
+        await run('install instance service (HERMES_HOME-qualified)',
+          `${ENVPREFIX}; ${HERMES_ENV} ${HB} gateway install 2>&1 | tail -5; ${HERMES_ENV} ${HB} gateway start 2>&1 | tail -3; echo SVC_DONE`,
+          { timeoutMs: 120000 });
+        const chk = await execCommand(sshConfig, wrap(`systemctl --user is-active hermes-gate""ay@${inst} 2>/dev/null`), { pool: false, timeoutMs: 15000 });
+        svcOk = /active/.test(chk.stdout || '');
+        if (!svcOk) log.push('> Instance systemd unit not active — falling back to background daemon...');
+      }
+    } else if (startMethod === 'system' && hasSystemd && !dockerMode) {
       const S = hasSudo ? 'sudo -n -E' : '';
       await run('install boot-time system service',
         `${ENVPREFIX}; $S ${HB} gateway install --system 2>&1 | tail -6; $S ${HB} gateway start --system 2>&1 | tail -3; echo SVC_DONE`,
@@ -1237,7 +1477,7 @@ fi
       svcOk = /active/.test(chk.stdout || '');
       if (!svcOk) log.push('> Systemd service not active on this environment — falling back to background daemon...');
     }
-    if (!svcOk && (startMethod === 'user' || (startMethod === 'system' && hasSystemd)) && hasSystemd && !dockerMode) {
+    if (!svcOk && !inst && (startMethod === 'user' || (startMethod === 'system' && hasSystemd)) && hasSystemd && !dockerMode) {
       await run('install user service + enable lingering',
         `${ENVPREFIX}; ${HB} gateway install 2>&1 | tail -5; ${HB} gateway start 2>&1 | tail -3; ${hasSudo ? `sudo -n loginctl enable-linger "$(id -un)" 2>/dev/null;` : ''} echo SVC_DONE`,
         { timeoutMs: 120000 });
@@ -1252,7 +1492,9 @@ fi
         // always reports the gateway up, even right after it died.
         // HERMES_HOME is exported so the instance-scoped scan can attribute
         // this process to its own home instead of the default install.
-        `${ENVPREFIX}; export HERMES_HOME="${HH}"; mkdir -p "${HH}/logs"; setsid nohup sh -c 'set -a; [ -f "${HH}/.env" ] && . "${HH}/.env"; set +a; export PATH="${BIN_DIR}:$HOME/.local/bin:/usr/local/bin:$PATH"; exec ${HB} gatew""ay run || exec ${HB} gatew""ay' >> "${HH}/logs/gateway-nohup.log" 2>&1 < /dev/null & sleep 3; { pgrep -f '[h]ermes.*gatew[a]y' || pgrep -f '[h]ermes gatew[a]y'; } >/dev/null 2>&1 && echo GW_RUNNING || echo GW_PENDING`,
+        // instance.env is sourced first (isolation paths + own ports), .env
+        // second so a user-set variable in .env still wins.
+        `${ENVPREFIX}; export HERMES_HOME="${HH}"; mkdir -p "${HH}/logs"; setsid nohup sh -c 'set -a; [ -f "${HH}/instance.env" ] && . "${HH}/instance.env"; [ -f "${HH}/.env" ] && . "${HH}/.env"; set +a; export PATH="${BIN_DIR}:$HOME/.local/bin:/usr/local/bin:$PATH"; exec ${HB} gatew""ay run || exec ${HB} gatew""ay' >> "${HH}/logs/gateway-nohup.log" 2>&1 < /dev/null & sleep 3; { pgrep -f '[h]ermes.*gatew[a]y' || pgrep -f '[h]ermes gatew[a]y'; } >/dev/null 2>&1 && echo GW_RUNNING || echo GW_PENDING`,
         { timeoutMs: 30000 });
     }
 
