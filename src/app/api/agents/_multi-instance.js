@@ -224,7 +224,7 @@ export async function copyInstanceBin(sshConfig, agentId, tag, HH) {
 # is self-contained (default rm -rf cannot break it).
 NEWPY="${dst}/${plan.py}"
 BINDIR="${dst}/${pyDir}"
-for f in "${BINDIR}/"*; do
+for f in "\${BINDIR}/"*; do
   [ -f "$f" ] || continue
   head1=$(head -1 "$f" 2>/dev/null)
   case "$head1" in

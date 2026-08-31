@@ -610,7 +610,7 @@ export default function HermesAgentWizard({ isOpen, onClose, connections = [], s
           )}
 
           {/* ── Danger zone — kept at the bottom, separated from safe actions ── */}
-          {status?.installed && (
+          {status?.installed && !spawnMode && (
             <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-3 space-y-2">
               <div className="text-[10px] font-bold text-red-300 flex items-center gap-1.5">
                 <Trash2 size={11} /> Danger zone
