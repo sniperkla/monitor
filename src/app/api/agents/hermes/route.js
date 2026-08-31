@@ -870,8 +870,8 @@ PY`, { timeoutMs: 30000 });
         await execCommand(sshConfig, `
           export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
           HB="$([ -x "$HOME/.local/bin/hermes" ] && echo "$HOME/.local/bin/hermes" || command -v hermes || echo "/usr/local/bin/hermes")"
-          ${HERMES_ENV} $HB config set model ${JSON.stringify(targetModel)} 2>&1 || true
-          command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx hermes-agent && docker exec hermes-agent hermes config set model ${JSON.stringify(targetModel)} 2>&1 || true
+          ${HERMES_ENV} $HB config set model.default ${JSON.stringify(targetModel)} 2>&1 || true
+          command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx hermes-agent && docker exec hermes-agent hermes config set model.default ${JSON.stringify(targetModel)} 2>&1 || true
         `, { pool: false, timeoutMs: 30000 });
       }
 
