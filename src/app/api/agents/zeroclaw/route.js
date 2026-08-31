@@ -466,6 +466,9 @@ echo "===ENVKEYS==="
       // Instance uninstall must never kill other instances or remove the
       // shared binary — only its own pidfile & home.
       if (inst) {
+        // Stop and disable systemd supervision before deleting the instance home;
+        // the service otherwise recreates it and it remains in the selector.
+        await sdInstanceCtl(sshConfig, 'zeroclaw', inst, 'stop');
         await run('stop instance (pidfile-scoped)', `if [ -f "${PIDF}" ]; then p=$(cat "${PIDF}"); kill "$p" 2>/dev/null; sleep 1; kill -9 "$p" 2>/dev/null; rm -f "${PIDF}"; fi; true`);
       } else {
         await run('stop & unregister service', `${ENVX}; p="$(command -v zeroclaw 2>/dev/null)"; [ -n "$p" ] && $p service uninstall 2>/dev/null; systemctl --user disable --now zeroclaw 2>/dev/null; true`);
@@ -478,7 +481,7 @@ echo "===ENVKEYS==="
         ? '' // instances share the globally-installed binary — leave it alone
         : `HAS_INST=$(ls -d "$HOME/.zeroclaw-"* 2>/dev/null | head -1); if [ -z "$HAS_INST" ]; then rm -f "$HOME/.local/bin/zeroclaw" "$HOME/.cargo/bin/zeroclaw" /usr/local/bin/zeroclaw; echo BIN_REMOVED; else echo BIN_KEPT_FOR_INSTANCES; fi; `;
       const rmCmd = inst
-        ? `rm -rf "${HH}"; echo REMOVED_INSTANCE`   // instances: always remove the whole isolated home
+        ? `rm -rf "${HH}"; [ ! -e "${HH}" ] && echo REMOVED_INSTANCE || { echo INSTANCE_HOME_REMAINS; exit 1; }`   // instances: always remove the whole isolated home
         : purge
           ? `${binRm}rm -rf "${HH}"; echo REMOVED_ALL`
           : `${binRm}rm -rf "${HH}/logs"; echo REMOVED_CODE`;
@@ -569,7 +572,7 @@ echo "===ENVKEYS==="
           # Clean up any previously generated invalid channels_config without bot_token
           python3 -c "
 import os, re
-p = os.path.expanduser('~/.zeroclaw/config.toml')
+p = os.path.expandvars('${HH}/config.toml')
 if os.path.exists(p):
     t = open(p).read()
     if 'bot_token' not in t and '[channels_config' in t:
@@ -590,7 +593,7 @@ if os.path.exists(p):
         const envPy = [
           'import os, base64',
           `lines_raw = base64.b64decode('${envLinesB64}').decode('utf-8').splitlines()`,
-          `ep = os.path.expanduser('~/.zeroclaw/.env')`,
+          `ep = os.path.expandvars('${HH}/.env')`,
           `os.makedirs(os.path.dirname(ep), exist_ok=True)`,
           `existing = open(ep).read().splitlines() if os.path.exists(ep) else []`,
           `upsert = {}`,
@@ -622,7 +625,7 @@ if os.path.exists(p):
           'import os, re, base64, json',
           `s = json.loads(base64.b64decode('${setB64}').decode('utf-8'))`,
           `e = json.loads(base64.b64decode('${envB64}').decode('utf-8'))`,
-          `p = os.path.expanduser('~/.zeroclaw/config.toml')`,
+          `p = os.path.expandvars('${HH}/config.toml')`,
           `os.makedirs(os.path.dirname(p), exist_ok=True)`,
           `text = open(p).read() if os.path.exists(p) else ''`,
           `NL = chr(10)`,
@@ -818,7 +821,7 @@ if os.path.exists(p):
           'import os, re, base64, json',
           `s = json.loads(base64.b64decode('${setB64}').decode('utf-8'))`,
           `e = json.loads(base64.b64decode('${envB64}').decode('utf-8'))`,
-          `p = os.path.expanduser('~/.zeroclaw/config.toml')`,
+          `p = os.path.expandvars('${HH}/config.toml')`,
           `os.makedirs(os.path.dirname(p), exist_ok=True)`,
           `text = open(p).read() if os.path.exists(p) else ''`,
           `NL = chr(10)`,
@@ -1134,7 +1137,7 @@ echo "TG=$TG"
       const pairPy = [
         'import os, re, json, base64',
         `uid = ${JSON.stringify(code)}`,
-        `p = os.path.expanduser('~/.zeroclaw/config.toml')`,
+        `p = os.path.expandvars('${HH}/config.toml')`,
         `text = open(p).read() if os.path.exists(p) else ''`,
         `def add_user(content, u):`,
         `    for sec in ['[channels_config.telegram]', '[telegram]']:`,
@@ -1296,7 +1299,7 @@ echo "TG=$TG"
           "    open(env_p, 'w').write(e)",
           "    print('TG_REMOVED' if uid not in (','.join(users)) else 'TG_STILL_PRESENT')",
           "# /bind stores peers in config.toml [peer_groups.*].external_peers - remove there too",
-          "cfg_p = os.path.expanduser('~/.zeroclaw/config.toml')",
+          "cfg_p = os.path.expandvars('${HH}/config.toml')",
           "cfg = open(cfg_p).read() if os.path.exists(cfg_p) else ''",
           "if uid in cfg:",
           "    q = chr(34)",

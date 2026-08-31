@@ -28,9 +28,12 @@ function extractCfgPyBlocks() {
   const src = fs.readFileSync(ROUTE, 'utf8');
   const blocks = [...src.matchAll(/const cfgPy = \[([\s\S]*?)\]\.join/g)];
   assert.equal(blocks.length, 2, 'route should contain exactly 2 cfgPy blocks (install + reconfigure)');
+  // The cfgPy scripts interpolate ${HH} (e.g. `p = os.path.expandvars('${HH}/config.toml')`)
+  // as a JS template value at runtime. Provide a sane HH (+ the base64 payloads
+  // the scripts read) so the extracted block evaluates and yields valid Python.
   const setB64 = Buffer.from(JSON.stringify({ model: 'm' })).toString('base64');
   const envB64 = Buffer.from(JSON.stringify({ MODEL: 'm' })).toString('base64');
-  return blocks.map((m) => eval(`[ ${m[1]} ]`).join('\n'));
+  return blocks.map((m) => eval(`const HH = '$HOME/.zeroclaw'; const setB64 = '${setB64}'; const envB64 = '${envB64}'; [ ${m[1]} ]`).join('\n'));
 }
 
 test('both zeroclaw cfgPy scripts are syntactically valid Python', () => {
