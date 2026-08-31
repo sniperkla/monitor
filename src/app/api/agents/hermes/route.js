@@ -1393,8 +1393,12 @@ PY`, { timeoutMs: 30000 });
       settingsEntries.push(['auxiliary.free_only', 'true']);
     }
     for (const [key, value] of settingsEntries) {
-      await run(`hermes config set ${key}${inst ? ` (→ ~/.hermes-${inst})` : ''}`,
-        `${ENVPREFIX}; ${HERMES_ENV} ${HB} config set ${key} ${JSON.stringify(String(value))} 2>&1 | tail -2`,
+      // 'model' must use the dotted key 'model.default' — a bare 'model' writes
+      // a top-level scalar that clobbers the whole model block (invalid YAML),
+      // causing hermes to lose the model and fall back to z-ai/glm-5.2.
+      const dotted = key === 'model' ? 'model.default' : key;
+      await run(`hermes config set ${dotted}${inst ? ` (→ ~/.hermes-${inst})` : ''}`,
+        `${ENVPREFIX}; ${HERMES_ENV} ${HB} config set ${dotted} ${JSON.stringify(String(value))} 2>&1 | tail -2`,
         { timeoutMs: 60000 });
     }
 
