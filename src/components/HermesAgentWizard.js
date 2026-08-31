@@ -1,6 +1,6 @@
 'use client';
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { X, Send, Loader2, Bot, Box, Server as ServerIcon, MonitorCog, CheckCircle2, XCircle, Trash2, Settings2, Zap, Sparkles, ExternalLink, UserPlus, Lock } from 'lucide-react';
+import { X, Send, Loader2, Bot, Box, Server as ServerIcon, MonitorCog, CheckCircle2, XCircle, Trash2, Settings2, Zap, Sparkles, ExternalLink, UserPlus, Lock, Plus } from 'lucide-react';
 import ThemeSelect from '@/components/common/ThemeSelect';
 
 /**
@@ -41,9 +41,13 @@ const DISTROS = [
 
 const THEMED_SELECT_CLS = 'w-full bg-black/40 border border-[var(--border-color)] rounded-lg px-3 py-2 text-[11px] text-[var(--text-primary)] cursor-pointer focus:outline-none focus:border-indigo-400/50 [&>option]:bg-[#1a1a2e] [&>option]:text-white';
 
-export default function HermesAgentWizard({ isOpen, onClose, connections = [], selectedId, apiFetch, agentApi = '/api/agents/hermes', agent = { id: 'hermes', name: 'Hermes Agent', by: 'Nous Research', docsUrl: 'https://hermes-agent.nousresearch.com/docs/' }, onLog, onActionStart, onActionEnd, instance = '' }) {
+export default function HermesAgentWizard({ isOpen, onClose, connections = [], selectedId, apiFetch, agentApi = '/api/agents/hermes', agent = { id: 'hermes', name: 'Hermes Agent', by: 'Nous Research', docsUrl: 'https://hermes-agent.nousresearch.com/docs/' }, onLog, onActionStart, onActionEnd, instance = '', spawnMode = false, onSpawned = null }) {
   const [mode, setMode] = useState('easy');
   const [target, setTarget] = useState(selectedId || connections[0]?._id || '');
+  // Spawn mode: the wizard collects the NEW instance's tag + credentials BEFORE
+  // anything is created, then chains spawn → configure → start in one flow.
+  const [spawnTag, setSpawnTag] = useState('');
+  const [spawnedTag, setSpawnedTag] = useState('');
   // easy state
   const [provider, setProvider] = useState('openrouter');
   const [apiKey, setApiKey] = useState('');
@@ -74,15 +78,15 @@ export default function HermesAgentWizard({ isOpen, onClose, connections = [], s
   const [lightweight, setLightweight] = useState(false);
 
   const doFetch = apiFetch || fetch;
-  const call = useCallback(async (action, extra = {}) => {
+  const call = useCallback(async (action, extra = {}, instOv) => {
     const res = await doFetch(agentApi, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ connectionId: target, action, instance: instance || undefined, ...extra }),
+      body: JSON.stringify({ connectionId: target, action, instance: (instOv || spawnedTag || instance) || undefined, ...extra }),
     });
     return res.json();
-  }, [doFetch, target, agentApi]);
+  }, [doFetch, target, agentApi, instance, spawnedTag]);
 
   // Live action logs — global on/off setting (persisted). When ON, long-running
   // actions run as background jobs and their log streams in line by line.
@@ -240,7 +244,68 @@ export default function HermesAgentWizard({ isOpen, onClose, connections = [], s
       if (allowedIds.trim()) env.DISCORD_ALLOWED_USERS = allowedIds.trim();
       else if (!isReconfig) env.DISCORD_ALLOW_ALL_USERS = 'true';
     }
-    return { config: { env, settings, method, skipBrowser } };
+    return {
+      config: {
+        env,
+        settings,
+        method,
+        skipBrowser,
+        provider: {
+          id: prov.id,
+          envKey: (isCustom ? customEnvKey.trim() : prov.envKey) || 'CUSTOM_LLM_API_KEY',
+        },
+      },
+    };
+  };
+
+  // ── SPAWN MODE — collect credentials FIRST, then create+configure+start.
+  // The modal opens before anything exists; on submit we spawn the instance,
+  // then reconfigure it with the submitted env/settings, then start it. This
+  // avoids the old flow where an empty instance was created first and the
+  // config modal appeared too late (unconfigured gateway → pairing fails).
+  const spawnNewInstance = async () => {
+    setBusy(true); setLog([]); setDone(null);
+    try {
+      const tag = String(spawnTag || '').trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 24);
+      if (!tag) { setDone({ ok: false, detail: 'Enter an instance name to continue.' }); setBusy(false); return; }
+      // Validate at least a provider key (like fresh install).
+      const advHasInput = mode === 'advanced' && !!(advEnv.trim() || advSettings.trim());
+      if (mode === 'easy' && !apiKey.trim() && !advHasInput) {
+        setDone({ ok: false, detail: `Enter the model provider API key before spawning the instance.` });
+        setBusy(false);
+        return;
+      }
+      setSpawnedTag(tag);
+      onActionStart?.(`Spawning ${agent.name} instance "${tag}"…`);
+      const append = (line) => { setLog(prev => [...prev, line]); onLog?.(line); };
+      // 1. spawn (fresh, isolated home). Target the new tag explicitly.
+      const sp = liveLogs ? await callLive('spawn-instance', { instance: tag, config: { tag } }, append)
+                          : await call('spawn-instance', { instance: tag, config: { tag } }, tag);
+      if (!sp?.success && !sp?.existed) {
+        setDone({ ok: false, detail: sp?.error || `Failed to spawn instance "${tag}".` });
+        setBusy(false);
+        return;
+      }
+      // 2. reconfigure the new instance with the submitted credentials; let the
+      //    cratch payload carry them. It will write model/provider/token and
+      //    restart the gateway (hermes config.yaml populated from the default).
+      const r = liveLogs ? await callLive('reconfigure', { instance: tag, ...buildPayload() }, append)
+                         : await call('reconfigure', { instance: tag, ...buildPayload() }, tag);
+      const ok = r?.success || r?.error?.startsWith('No settings or env'); // benign no-op acceptable
+      const detail = ok
+        ? `Instance "${tag}" spawned and configured. ${(r?.output || '').trim() ? r.output : 'Gateway starting — message it to test.'}`
+        : (r?.error || 'Instance created but configure step failed.');
+      if (ok) {
+        setSuccessDetail(detail);
+        setShowSuccess(true);
+        onSpawned?.(tag);
+      } else {
+        setDone({ ok: false, detail });
+      }
+    } catch (e) {
+      setLog(prev => [...prev, `ERROR: ${e.message}`]);
+      setDone({ ok: false, detail: e.message });
+    } finally { setBusy(false); onActionEnd?.(); }
   };
 
   const install = async () => {
@@ -258,6 +323,16 @@ export default function HermesAgentWizard({ isOpen, onClose, connections = [], s
       const hasInput = !!(apiKey.trim() || model.trim() || tok1.trim() || customBaseUrl.trim() || advHasInput);
       if (!hasInput) {
         setDone({ ok: false, detail: 'Nothing entered — enter at least an API key/model to install.' });
+        setBusy(false);
+        return;
+      }
+      // One-click install deliberately purges the target first. Do not allow a
+      // Telegram-only submission to erase a working configuration and then
+      // create a gateway with no model provider credentials.
+      if (mode === 'easy' && !apiKey.trim()) {
+        const prov = PROVIDERS.find(x => x.id === provider) || PROVIDERS[0];
+        const keyName = prov.custom ? (customEnvKey.trim() || 'CUSTOM_LLM_API_KEY') : prov.envKey;
+        setDone({ ok: false, detail: `Enter the ${keyName} model provider API key before installing.` });
         setBusy(false);
         return;
       }
@@ -563,7 +638,30 @@ export default function HermesAgentWizard({ isOpen, onClose, connections = [], s
             {instance && <span className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 font-bold">instance: {instance}</span>}
             {!instance && <span className="px-1.5 py-0.5 rounded bg-white/10 text-[var(--text-muted)] font-bold">default</span>}
           </div>
-          {instance ? (
+          {spawnMode ? (
+            <div className="space-y-2">
+              <input
+                value={spawnTag}
+                onChange={e => setSpawnTag(e.target.value.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 24))}
+                placeholder={`New ${agent.name} instance name (e.g. bot2)`}
+                onKeyDown={e => { if (e.key === 'Enter' && spawnTag.trim()) spawnNewInstance(); }}
+                className="w-full bg-black/40 border border-[var(--border-color)] rounded-lg px-3 py-2 text-xs text-white placeholder:text-[var(--text-muted)] focus:outline-none focus:border-indigo-400"
+                disabled={busy}
+                autoFocus
+              />
+              <button
+                onClick={spawnNewInstance}
+                disabled={busy || !spawnTag.trim()}
+                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-white text-xs font-bold disabled:opacity-50 transition cursor-pointer"
+              >
+                {busy ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+                Create &amp; Configure
+              </button>
+              <p className="text-[9px] text-[var(--text-muted)]">
+                Enters its name + credentials above, then creates, configures and starts the instance in one flow.
+              </p>
+            </div>
+          ) : instance ? (
             <div className="space-y-2">
               <button
                 onClick={reconfigure}

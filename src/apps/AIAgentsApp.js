@@ -155,6 +155,9 @@ export default function AIAgentsApp({ apiFetch }) {
     liveLogBoxRef.current.scrollTop = liveLogBoxRef.current.scrollHeight;
   }, [liveLogLines]);
   const [showWizard, setShowWizard] = useState(false);
+  // When true, opening the wizard runs in "spawn new instance" mode (name field
+  // + Create & Configure) instead of the normal install/reconfigure view.
+  const [spawnWizardMode, setSpawnWizardMode] = useState(false);
   const [purge, setPurge] = useState(false);
   const [showUninstallModal, setShowUninstallModal] = useState(false);
   // env tab (unmasked)
@@ -409,23 +412,11 @@ export default function AIAgentsApp({ apiFetch }) {
 
   // Spawn a new agent instance (clones the default install, starts it)
   const spawnInstance = () => {
-    showPrompt(`New ${agent.name} instance name (letters/numbers/-, e.g. bot2):`, (tagRaw) => {
-      const tag = String(tagRaw || '').trim();
-      if (!tag) return;
-      setSpawningInstance(true);
-      call('spawn-instance', { instance: tag, config: { tag } })
-        .then(r => {
-          setNotice({ ok: r?.success !== false, text: r?.output || r?.error || `Instance ${tag} spawned` });
-          refreshInstances();
-          setInstanceSel(m => ({ ...m, [instKey]: tag }));
-          loadDetails();
-          // Auto-open the configure wizard so the new instance gets its OWN
-          // API key / token (the clone carries an empty .env, not the default's).
-          setTimeout(() => setShowWizard(true), 350);
-        })
-        .catch(e => setNotice({ ok: false, text: `Spawn failed: ${e?.message || e}` }))
-        .finally(() => setSpawningInstance(false));
-    }, '', `Spawn ${agent.name} instance`);
+    // Open the wizard FIRST in spawn mode so the user enters the new instance's
+    // name + API key/model/token BEFORE anything is created. The wizard then
+    // chains spawn → configure → start in one flow (no empty uneconfiged first boot).
+    setSpawnWizardMode(true);
+    setShowWizard(true);
   };
 
   // ── Strict mode: provision one dedicated Linux user per friend ──
@@ -2735,6 +2726,13 @@ export default function AIAgentsApp({ apiFetch }) {
         agentApi={agent.api}
         agent={{ id: agent.id, name: agent.name, by: agent.by, docsUrl: agent.docs, logo: agent.logo }}
         instance={activeInstance || ''}
+        spawnMode={spawnWizardMode}
+        onSpawned={(tag) => {
+          setSpawnWizardMode(false);
+          refreshInstances();
+          setInstanceSel(m => ({ ...m, [instKey]: tag }));
+          loadDetails();
+        }}
         onActionStart={(label) => {
           setLiveLogLines([`> Starting ${label}...`, '> Connecting to remote server...']);
           setLiveLogAction(label);

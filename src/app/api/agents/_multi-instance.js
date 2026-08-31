@@ -27,6 +27,65 @@ export function instancePort(agentId, inst, base = 18000) {
   return port;
 }
 
+// Several distinct ports for one instance (e.g. API server + webhook listener).
+// Each port is derived from a DIFFERENT salt so they are independent draws from
+// the hash instead of adjacent integers (adjacent ports are far more likely to
+// collide with another instance's allocation). Returns [] for the default
+// install, which keeps the agent's own shipped defaults.
+export function instancePorts(agentId, inst, suffixes = ['api', 'hook']) {
+  if (!inst) return [];
+  return suffixes.map((s) => instancePort(agentId, `${inst}#${s}`));
+}
+
+// ── Per-instance isolation environment ────────────────────────────────────
+// Relocating the home dir (<AGENT>_HOME) moves config, secrets, memories and
+// logs — but it is NOT sufficient on its own. Hermes keeps several subsystems
+// on ABSOLUTE paths outside the home, so two concurrent instances with
+// different HERMES_HOME values still share them:
+//
+//   HERMES_KANBAN_HOME / _DB / _WORKSPACES_ROOT
+//       the kanban board (database + workspaces + worklogs). Left unset, Hermes
+//       resolves the board from a SHARED root, so every instance would read and
+//       mutate the same tasks and the same workspace files.
+//   HERMES_KANBAN_BOARD
+//       pins which board a process — and the scheduler's worker subprocesses —
+//       may see. Without it workers can reach tasks belonging to a sibling.
+//   TERMINAL_SANDBOX_DIR  → ~/.hermes/sandboxes  (shared shell workspace)
+//   HERMES_OAUTH_FILE     → ~/.hermes/auth.json  (shared OAuth credentials)
+//   CODEX_HOME            → ~/.codex             (shared Codex config + auth)
+//   HERMES_WRITE_SAFE_ROOT
+//       hard-blocks write_file/patch outside the listed roots.
+//   API_SERVER_PORT / WEBHOOK_PORT
+//       the gateway's listening sockets; every instance would otherwise bind
+//       the same default port and only the first would ever start.
+//
+// Pinning all of them inside the instance home is what makes "separate memory,
+// separate credentials, separate filesystem access and no shared runtime state"
+// true for concurrently running instances.
+export function instanceIsolationEnv(agentId, inst, home) {
+  if (!inst) return {}; // default install keeps the agent's shipped defaults
+  // HERMES_KANBAN_BOARD must be a slug: lowercase alphanumeric plus - and _.
+  const board = String(inst).toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 64) || 'default';
+  const [apiPort, hookPort] = instancePorts(agentId, inst, ['api', 'hook']);
+  if (agentId !== 'hermes') {
+    return { [`${String(agentId).toUpperCase()}_HOME`]: home };
+  }
+  const env = {
+    HERMES_HOME: home,
+    HERMES_KANBAN_HOME: `${home}/kanban`,
+    HERMES_KANBAN_DB: `${home}/kanban/kanban.db`,
+    HERMES_KANBAN_WORKSPACES_ROOT: `${home}/kanban/workspaces`,
+    HERMES_KANBAN_BOARD: board,
+    TERMINAL_SANDBOX_DIR: `${home}/sandboxes`,
+    HERMES_OAUTH_FILE: `${home}/auth.json`,
+    CODEX_HOME: `${home}/codex`,
+    HERMES_WRITE_SAFE_ROOT: [home, `${home}/sandboxes`, `${home}/workspace`].join(':'),
+  };
+  if (apiPort) env.API_SERVER_PORT = String(apiPort);
+  if (hookPort) env.WEBHOOK_PORT = String(hookPort);
+  return env;
+}
+
 // pidfile-scoped liveness: returns shell that echoes PID_ALIVE=1/0.
 // `kill -0` alone can false-positive after the OS reuses the PID, so the
 // process cmdline is also verified to point inside this instance home.
@@ -141,31 +200,31 @@ echo CLONED
   };
 }
 
-// Per-instance binary isolation (zeroclaw blueprint). Each agent's runtime is a
-// self-contained tree that an instance can execute from its OWN home dir:
-//   hermes   -> ~/.hermes-<tag>/hermes-agent/   (code + venv, hard-linked)
-//   nanobot  -> ~/.nanobot-<tag>/venv/          (python venv, hard-linked)
-//   openclaw -> ~/.openclaw-<tag>/install/      (node dist bundle, hard-linked)
-// Hard links (cp -al) make the copy INSTANT and ~0 extra disk while still being
-// an independent tree: `rm -rf` on the default leaves the inodes alive because
-// the instance's links hold them, and instance upgrades never touch the default
-// (and vice-versa). Falls back to a full copy when src/dst are on different
-// filesystems (hard links cannot cross mounts). Shebangs are rewritten to the
-// instance-local interpreter so the copied venv is self-contained.
+// Per-instance binary isolation. Each instance executes from its own runtime
+// tree under its own home. Hermes deliberately uses a FULL COPY (not hard links):
+// a hard-linked Python runtime still shares package files with the default and
+// is not complete isolation when an upgrade or repair mutates those files.
+// The lighter hard-link optimization remains available for the other agents.
 export async function copyInstanceBin(sshConfig, agentId, tag, HH) {
   if (!tag) return { copied: false, bin: '', err: 'no tag' };
   const plan = {
-    hermes: { dstRoot: 'hermes-agent', src: '/usr/local/lib/hermes-agent', bin: 'hermes-agent/venv/bin/hermes', py: 'venv/bin/python' },
+    hermes: { dstRoot: 'hermes-agent', src: '', bin: 'hermes-agent/venv/bin/hermes', py: 'venv/bin/python', fullCopy: true },
     nanobot: { dstRoot: 'venv', src: '$HOME/.nanobot/venv', bin: 'venv/bin/nanobot', py: 'venv/bin/python' },
     openclaw: { dstRoot: 'install', src: '$HOME/.openclaw/local', bin: 'install/bin/openclaw', py: null },
   }[agentId];
   if (!plan) return { copied: false, bin: '', err: `unsupported ${agentId}` };
   const dst = `${HH}/${plan.dstRoot}`;
+  // Directory holding the venv's console scripts ("venv/bin/python" →
+  // "venv/bin"). Computed in JS, NOT with the shell's ${var%/*}: inside a JS
+  // template literal the "${" opens an interpolation, so "/*" is parsed as the
+  // start of a BLOCK COMMENT that swallows the rest of the script.
+  const pyDir = plan.py ? plan.py.replace(/\/[^/]*$/, '') : '';
   const fixShebang = plan.py ? `
 # Rewrite bin/* shebangs to the instance-local interpreter so the copied venv
 # is self-contained (default rm -rf cannot break it).
 NEWPY="${dst}/${plan.py}"
-for f in "${dst}/bin/"*; do
+BINDIR="${dst}/${pyDir}"
+for f in "${BINDIR}/"*; do
   [ -f "$f" ] || continue
   head1=$(head -1 "$f" 2>/dev/null)
   case "$head1" in
@@ -182,9 +241,19 @@ if [ -n "$SP" ] && [ "$SRC" != "$dst" ]; then
   done
 fi
 ` : '';
-  const cmd = `
-[ -d "${dst}" ] && echo ALREADY && exit 0
-mkdir -p "${HH}"
+  const sourceBlock = plan.fullCopy ? `
+# Hermes installs may be user-local or root-wide. Select the default runtime
+# without falling back to a shared live path at execution time.
+SRC=""
+for candidate in "$HOME/.hermes/hermes-agent" "/usr/local/lib/hermes-agent" "/opt/hermes-agent"; do
+  if [ -d "$candidate" ]; then SRC="$candidate"; break; fi
+done
+[ -n "$SRC" ] || { echo NO_SRC; exit 0; }
+# cp -a is intentional for Hermes: no hard-linked code, venv, plugins or
+# package metadata is shared with the default instance.
+cp -a "$SRC" "${dst}" 2>/dev/null || { echo COPY_FAIL; exit 0; }
+echo COPY_FULL
+` : `
 SRC="${plan.src}"
 [ -e "$SRC" ] || { echo NO_SRC; exit 0; }
 if cp -al "$SRC" "${dst}" 2>/dev/null; then
@@ -195,10 +264,13 @@ else
   echo COPY_FAIL
   exit 0
 fi
+`;
+  const cmd = `
+[ -d "${dst}" ] && echo ALREADY && exit 0
+mkdir -p "${HH}"
+${sourceBlock}
 rm -f "${dst}/daemon.pid" 2>/dev/null
-# Strip copied bytecode: hard-linked .pyc files can go stale the moment the
-# default gateway recompiles a module (marshal version/mtime mismatch ->
-# "bad marshal data" at import). Python regenerates them on first run.
+# Strip copied bytecode: stale .pyc files can fail after a Python/runtime change.
 find "${dst}" -depth -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null
 find "${dst}" -name '*.pyc' -delete 2>/dev/null
 ${fixShebang}
@@ -339,12 +411,28 @@ echo UNIT_OK
 }
 
 // Write the per-instance env file consumed by the template unit.
-export async function writeInstanceEnv(sshConfig, home, entries = {}) {
+//
+// `expand: true` writes the file through an UNQUOTED heredoc so the remote shell
+// resolves `$HOME` to the real home directory. This is required whenever the
+// values are paths: systemd does NOT expand environment variables (or `$HOME`)
+// inside an EnvironmentFile, so a literal `HERMES_HOME=$HOME/.hermes-bot2`
+// would leave the instance pointed at a non-existent directory. The nohup
+// fallback sources the same file, so both paths need real absolute paths.
+export async function writeInstanceEnv(sshConfig, home, entries = {}, { expand = false } = {}) {
+  // A newline would terminate the KEY=value line early and inject arbitrary
+  // content into the file; a backtick would enable command substitution when
+  // the heredoc is unquoted.
+  const clean = (s) => String(s).replace(/[\r\n]+/g, ' ').replace(/`/g, '');
+  // Keys must not contain whitespace, '=', quotes, '$' or a backtick — any of
+  // those could terminate the line early or (in expand mode) be expanded by the
+  // shell. Deliberately permissive otherwise, so existing callers passing
+  // non-identifier keys keep working exactly as before.
   const lines = Object.entries(entries)
-    .filter(([, v]) => v !== null && v !== undefined && v !== '')
-    .map(([k, v]) => `${k}=${v}`);
+    .filter(([k, v]) => /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/.test(String(k)) && v !== null && v !== undefined && v !== '')
+    .map(([k, v]) => `${k}=${clean(v)}`);
   if (lines.length === 0) return { ok: true, skipped: true };
-  const cmd = `mkdir -p "${home}"\ncat > "${home}/instance.env" <<'ENV_EOF'\n${lines.join('\n')}\nENV_EOF\necho ENV_OK`;
+  const delim = expand ? 'ENV_EOF' : "'ENV_EOF'";
+  const cmd = `mkdir -p "${home}"\ncat > "${home}/instance.env" <<${delim}\n${lines.join('\n')}\nENV_EOF\necho ENV_OK`;
   const r = await execCommand(sshConfig, cmd, { pool: false, timeoutMs: 15000 });
   return { ok: /ENV_OK/.test(r.stdout || '') };
 }

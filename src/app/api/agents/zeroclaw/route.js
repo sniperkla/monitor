@@ -308,6 +308,16 @@ EOF
         `mkdir -p "${HH}/logs" "${HH}/bin" "${HH}/data" "${HH}/workspace"; if [ ! -f "${HH}/config.toml" ]; then printf 'schema_version = 3\\n' > "${HH}/config.toml"; fi; mkdir -p "${HH}/bin"; SRC=$(command -v zeroclaw 2>/dev/null || echo "$HOME/.cargo/bin/zeroclaw"); if [ -x "$SRC" ]; then cp -f "$SRC" "${HH}/bin/zeroclaw"; chmod 755 "${HH}/bin/zeroclaw"; fi; echo FRESH_HOME_READY`,
         { pool: false, timeoutMs: 30000 });
       const clone = { ok: /FRESH_HOME_READY/.test(seedRes.stdout || ''), existed: false };
+      // Do not fail the whole spawn just because the shared binary is missing
+      // (e.g. a source-built install outside PATH) — the wizard can still
+      // configure this instance and One-Click Install restores the binary.
+      if (!clone.ok) {
+        log.push(`> [spawn] home seed did not confirm: ${((seedRes.stdout || '') + (seedRes.stderr || '')).slice(-300)}`);
+      }
+      // The instance is intentionally NOT started here. A blank config.toml has
+      // no provider key, no model and no channel, so starting now would only
+      // produce a crash-looping daemon. The auto-opened wizard writes real
+      // credentials and starts it (Save & Start).
       // True per-instance binary isolation: give each instance its own copy of
       // the shared binary at ~/.zeroclaw-<tag>/bin/zeroclaw. Then uninstalling
       // the default (which removes the shared ~/.cargo/bin/zeroclaw) never
@@ -317,15 +327,26 @@ EOF
           `export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$HOME/bin:/root/.local/bin:/root/.cargo/bin:/usr/local/bin:/usr/bin:/usr/sbin:$PATH"; SRC=$(command -v zeroclaw 2>/dev/null || echo "$HOME/.cargo/bin/zeroclaw"); mkdir -p "${HH}/bin"; if [ -x "$SRC" ]; then cp -f "$SRC" "${HH}/bin/zeroclaw"; chmod 755 "${HH}/bin/zeroclaw"; echo BIN_COPIED; else echo BIN_SRC_MISSING; fi`,
           { pool: false, timeoutMs: 30000 });
       }
-      const g = await gwCtl('start');
+      // Seed the per-instance dashboard port so two instances never collide on
+      // the default 42617. This is non-secret config, safe to write on spawn.
+      if (GW_PORT) {
+        const bpSeed = await execCommand(sshConfig, binPath(), { pool: false, timeoutMs: 15000 });
+        const seedBin = (bpSeed.stdout || '').match(/BIN=(.*)/)?.[1]?.trim();
+        if (seedBin) {
+          await execCommand(sshConfig,
+            `${ENVX}; ${JSON.stringify(seedBin)} config set gateway.port ${GW_PORT} --config-dir "${HH}" --no-interactive 2>/dev/null || true`,
+            { pool: false, timeoutMs: 30000 });
+        }
+      }
       return NextResponse.json({
-        success: true,
+        success: clone.ok,
         instance: tag,
         existed: clone.existed,
-        started: g.ok,
-        output: clone.existed
-          ? `Instance "${tag}" already existed — daemon ${g.ok ? 'running' : 'not started'}.`
-          : `Instance "${tag}" created fully isolated (nothing seeded from default). Configure it in the setup wizard — give it its OWN bot token so instances don't fight over the same Telegram bot.`,
+        started: false,
+        needsConfiguration: true,
+        error: clone.ok ? undefined : `Failed to create instance "${tag}" home. See log.`,
+        output: `Instance "${tag}" created fully isolated (nothing seeded from default). Add its own provider API key, model and bot token, then Save & Start — give each instance its OWN bot token so they don't fight over the same Telegram bot.`,
+        log,
       });
     }
 
