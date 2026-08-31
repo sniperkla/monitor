@@ -561,11 +561,48 @@ PYEOF
       if (!NB) return NextResponse.json({ success: false, error: 'Installer finished but nanobot binary was not found. See log.', log });
       const NBE = JSON.stringify(NB);
 
-      // 4. Merge ~/.nanobot/config.json (deep-merge via python3, shipped as b64)
-      const cfg = typeof config.configJson === 'object' && config.configJson ? config.configJson : {};
+      // 4. Build config.json from the wizard's env + settings (same as reconfigure).
+      // The wizard sends config.env (API keys, tokens, MODEL) and config.settings
+      // (model), NOT configJson - so a fresh install must derive providers /
+      // modelPresets / channels the same way reconfigure does, otherwise the
+      // model & messenger token are silently dropped on first install.
+      const env = (config && config.env) || {};
+      const settings = (config && config.settings) || {};
+      const PROVIDER_FROM_KEY = { OPENROUTER_API_KEY: 'openrouter', OPENAI_API_KEY: 'openai', ANTHROPIC_API_KEY: 'anthropic', CUSTOM_LLM_API_KEY: 'custom' };
+      const modelFromSettings = (settings.model || settings.default_model) || env.MODEL || env.NANOBOT_MODEL || env.DEFAULT_MODEL || null;
+      const providerName = Object.entries(env).map(([k, v]) => ({ k, v, p: PROVIDER_FROM_KEY[k] })).find(x => x.p && x.v);
+      const newCfg = {};
+      const customBaseUrl = String(env.OPENAI_BASE_URL || env.OPENAI_API_BASE || '').trim();
+      if (providerName) {
+        const pcfg = { apiKey: providerName.v };
+        if (providerName.p === 'custom' && customBaseUrl) pcfg.api_base = customBaseUrl;
+        newCfg.providers = { [providerName.p]: pcfg };
+        if (modelFromSettings) {
+          newCfg.modelPresets = { primary: { provider: providerName.p, model: modelFromSettings, maxTokens: 8192, contextWindowTokens: 65536 } };
+          newCfg.agents = { defaults: { model_preset: 'primary', modelPreset: 'primary' } };
+        }
+      } else if (modelFromSettings) {
+        newCfg.modelPresets = { primary: { model: modelFromSettings } };
+      }
+      if (inst && GW_PORT) {
+        newCfg.channels = newCfg.channels || {};
+        newCfg.channels.websocket = { ...(newCfg.channels.websocket || {}), port: GW_PORT + 1 };
+      }
+      const tgToken = env.TELEGRAM_BOT_TOKEN || env.TELEGRAM_TOKEN;
+      const tgAllowed = env.TELEGRAM_ALLOWED_USERS ? env.TELEGRAM_ALLOWED_USERS.split(',').map(s => s.trim()).filter(Boolean) : null;
+      if (tgToken) {
+        newCfg.channels = newCfg.channels || {};
+        newCfg.channels.telegram = { enabled: true, token: tgToken, ...(tgAllowed ? { allowFrom: tgAllowed } : {}) };
+      }
+      // Merge any explicit configJson on top (advanced users / presets).
+      const cfg = { ...((typeof config.configJson === 'object' && config.configJson) || {}), ...newCfg };
+      // Persist all env entries into the .env sidecar (Env tab reads it).
+      const envWrite = Object.entries(env).filter(([k, v]) => k && v != null && String(v).trim() !== '');
+      const envB64n = b64(envWrite.map(([k, v]) => `${k}=${v}`).join('\n'));
       const cfgB64 = b64(JSON.stringify(cfg));
       await run(`merge ${inst ? `~/.nanobot-${inst}` : '~/.nanobot'}/config.json`, [
         `export NB_HOME="${HH}"; mkdir -p "${HH}"`,
+        envWrite.length ? `echo '${envB64n}' | base64 -d > "${HH}/.env"; chmod 600 "${HH}/.env"` : 'true',
         `echo '${b64(JSON.stringify(cfg))}' | base64 -d > /tmp/.nb-new.json`,
         `cat > /tmp/.nb-merge.py <<'PYEOF'`,
         'import json, os, sys',

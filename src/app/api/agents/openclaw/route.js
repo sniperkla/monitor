@@ -563,6 +563,39 @@ echo "===ENVKEYS==="
         }
       }
 
+      // 3b. Persist the model + messenger token into openclaw.json on a FRESH
+      // install (same as reconfigure). Without this the model/token land only
+      // in .env and the gateway starts unconfigured.
+      const envI = (config && config.env) || {};
+      const settingsI = (config && config.settings) || {};
+      const targetModelI = (settingsI.model || settingsI.default_model) || envI.MODEL || envI.OPENCLAW_MODEL || envI.DEFAULT_MODEL || '';
+      if (targetModelI || envI.TELEGRAM_BOT_TOKEN) {
+        const ocPatch = {};
+        if (envI.TELEGRAM_BOT_TOKEN) {
+          const allowFrom = String(envI.TELEGRAM_ALLOWED_USERS || '').split(',').map(s => s.trim()).filter(Boolean);
+          ocPatch.channels = { telegram: { enabled: true, botToken: envI.TELEGRAM_BOT_TOKEN, dmPolicy: 'allowlist', ...(allowFrom.length ? { allowFrom } : {}) } };
+        }
+        if (targetModelI) ocPatch.agents = { defaults: { model: targetModelI } };
+        const setB64i = b64(JSON.stringify(ocPatch));
+        await run('merge model + telegram into openclaw.json', `
+          export OC_HOME="${HH}"
+          python3 -c "
+import json, os, base64
+p = (os.getenv('OC_HOME') or os.path.expanduser('~/.openclaw')) + '/openclaw.json'
+cur = json.load(open(p)) if os.path.exists(p) else {}
+s = json.loads(base64.b64decode('${setB64i}').decode('utf8'))
+cur.pop('defaultModel', None)
+cur.pop('model', None)
+def dm(a, b):
+    for k, v in b.items():
+        if isinstance(v, dict) and isinstance(a.get(k), dict): dm(a[k], v)
+        else: a[k] = v
+dm(cur, s)
+open(p, 'w').write(json.dumps(cur, indent=2))
+print('MODEL_TG_MERGED')
+" 2>&1 | tail -2`, { timeoutMs: 30000 });
+      }
+
       // 4. Gateway daemon — systemd user unit when available, else nohup.
       const gw = await gwCtl('start');
       const startMethod = gw.ok ? (p('INITD') === '1' ? 'systemd-user' : 'nohup') : 'manual';
