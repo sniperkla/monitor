@@ -112,10 +112,26 @@ export async function listInstances(sshConfig, agentId) {
 DE=0; [ -d "$HOME/.${agentId}" ] && DE=1
 echo "DEFAULT_EXISTS=$DE"
 PR=0; [ -f "$HOME/.${agentId}/daemon.pid" ] && kill -0 $(cat "$HOME/.${agentId}/daemon.pid") 2>/dev/null && PR=1
+[ -f "$HOME/.${agentId}/gateway.pid" ] && kill -0 $(cat "$HOME/.${agentId}/gateway.pid") 2>/dev/null && PR=1
+if [ "$PR" = 0 ]; then
+  { systemctl is-active ${agentId}-gate""way 2>/dev/null || systemctl is-active ${agentId} 2>/dev/null || systemctl --user is-active ${agentId}-gate""way 2>/dev/null || systemctl --user is-active ${agentId} 2>/dev/null; } | grep -qx active && PR=1
+fi
 if [ "$PR" = 0 ]; then
   case "${agentId}" in
     nanobot)  pgrep -f "nanobot gateway --config $HOME/.${agentId}/config.json" >/dev/null 2>&1 && PR=1 ;;
     zeroclaw) pgrep -f "zeroclaw.*--config-dir $HOME/.${agentId}" >/dev/null 2>&1 && PR=1 ;;
+    openclaw) pgrep -f "openclaw.*--config $HOME/.${agentId}" >/dev/null 2>&1 && PR=1 ;;
+    hermes)
+      for hp in $(pgrep -f '[h]ermes.*gatew[a]y' 2>/dev/null; pgrep -f '[h]ermes_cli.*gatew[a]y' 2>/dev/null); do
+        [ -n "$hp" ] || continue
+        HME="$(tr '\\0' '\\n' < /proc/$hp/environ 2>/dev/null | sed -n 's/^HERMES_HOME=//p' | head -1)"
+        [ -n "$HME" ] || HME="$(tr '\\0' '\\n' < /proc/$hp/cmdline 2>/dev/null | grep -o '\\.hermes[-a-zA-Z0-9_]*' | head -1)"
+        if [ -z "$HME" ] || [ "$HME" = "$HOME/.hermes" ] || [ "$HME" = ".hermes" ]; then PR=1; break; fi
+      done
+      if [ "$PR" = 0 ]; then
+        command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx hermes-agent && PR=1
+      fi
+      ;;
   esac
 fi
 # Hermes self-reports its own lifecycle via control socket — catches gateways
@@ -130,31 +146,45 @@ fi
 echo "PROC=$PR"
 for d in "$HOME"/.${agentId}-*; do
   [ -d "$d" ] || continue
-  tag="$(basename "$d")"
-  echo "INSTANCE_DIR=\${tag#.${agentId}-}"
-done
-for d in "$HOME"/.${agentId}-*; do
-  [ -d "$d" ] || continue
-  tag="$(basename "$d")"
-  RUN=0; [ -f "$d/daemon.pid" ] && kill -0 "$(cat "$d/daemon.pid")" 2>/dev/null && RUN=1
+  tname="$(basename "$d")"
+  tag="\${tname#.${agentId}-}"
+  case "$tag" in docker|bak|*.bak|*.old|tmp|*.env.bak|*.config.yaml.bak) continue ;; esac
+  VALID=0
+  if [ -f "$d/config.yaml" ] || [ -f "$d/config.json" ] || [ -f "$d/config.toml" ] || [ -f "$d/.env" ] || [ -f "$d/instance.env" ] || [ -d "$d/hermes-agent" ] || [ -f "$d/daemon.pid" ] || [ -f "$d/gateway.pid" ]; then
+    VALID=1
+  fi
+  RUN=0
+  [ -f "$d/daemon.pid" ] && kill -0 "$(cat "$d/daemon.pid")" 2>/dev/null && RUN=1
+  [ -f "$d/gateway.pid" ] && kill -0 "$(cat "$d/gateway.pid")" 2>/dev/null && RUN=1
   if [ "$RUN" = 0 ]; then
     export XDG_RUNTIME_DIR="/run/user/$(id -u)" 2>/dev/null
-    systemctl --user is-active "${agentId}-gatew""ay@\${tag#.${agentId}-}" 2>/dev/null | grep -qx active && RUN=1
+    { systemctl --user is-active "${agentId}-gatew""ay@\${tag}" 2>/dev/null || systemctl --user is-active "${agentId}@\${tag}" 2>/dev/null || systemctl is-active "${agentId}-gatew""ay@\${tag}" 2>/dev/null; } | grep -qx active && RUN=1
     # process-cmdline fallback: catches gateways started without a pidfile
     if [ "$RUN" = 0 ]; then
       case "${agentId}" in
         nanobot)  pgrep -f "nanobot gateway --config $d/config.json" >/dev/null 2>&1 && RUN=1 ;;
         zeroclaw) pgrep -f "zeroclaw.*--config-dir $d" >/dev/null 2>&1 && RUN=1 ;;
+        openclaw) pgrep -f "openclaw.*--config $d" >/dev/null 2>&1 && RUN=1 ;;
+        hermes)
+          for hp in $(pgrep -f '[h]ermes.*gatew[a]y' 2>/dev/null; pgrep -f '[h]ermes_cli.*gatew[a]y' 2>/dev/null); do
+            [ -n "$hp" ] || continue
+            HME="$(tr '\\0' '\\n' < /proc/$hp/environ 2>/dev/null | sed -n 's/^HERMES_HOME=//p' | head -1)"
+            [ -n "$HME" ] || HME="$(tr '\\0' '\\n' < /proc/$hp/cmdline 2>/dev/null | grep -o '\\.hermes[-a-zA-Z0-9_]*' | head -1)"
+            case "$HME" in *".\${tname}"|*".\${tname}/") RUN=1; break ;; esac
+          done
+          ;;
       esac
     fi
     # Hermes fallback: control-socket self-report (stale-pidfile proof)
     if [ "$RUN" = 0 ] && [ "${agentId}" = "hermes" ]; then
-      export PATH="$HOME/.local/bin:/usr/local/lib/hermes-agent/venv/bin:$HOME/.hermes/hermes-agent/venv/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+      export PATH="$d/hermes-agent/venv/bin:$HOME/.local/bin:/usr/local/lib/hermes-agent/venv/bin:$HOME/.hermes/hermes-agent/venv/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
       HB=$(command -v hermes 2>/dev/null)
-      [ -n "$HB" ] && { HERMES_HOME="$d" timeout 12 "$HB" gatew""ay status 2>/dev/null | grep -q 'is running' && RUN=1; }
+      [ -n "$HB" ] && { HERMES_HOME="$d" timeout 8 "$HB" gatew""ay status 2>/dev/null | grep -q 'is running' && RUN=1; }
     fi
   fi
-  echo "TAGRUN=\${tag#.${agentId}-}:$RUN"
+  if [ "$RUN" = 1 ] || [ "$VALID" = 1 ]; then
+    echo "TAGRUN=\${tag}:$RUN"
+  fi
 done
 `, { timeoutMs: 60000 });
   const out = r.stdout || '';
@@ -459,7 +489,7 @@ export async function sdInstanceCtl(sshConfig, agentId, inst, op) {
   }
   if (op === 'stop') {
     const r = await execCommand(sshConfig,
-      `${XF} systemctl --user disable --now ${U} 2>/dev/null; systemctl --user stop ${U} 2>/dev/null; systemctl --user reset-failed ${U} 2>/dev/null || true; echo SD_STOPPED`,
+      `${XF} systemctl --user disable --now ${U} 2>/dev/null; systemctl --user stop ${U} 2>/dev/null; systemctl --user reset-failed ${U} 2>/dev/null; rm -f "$HOME/.config/systemd/user/default.target.wants/${agentId}-gatew\"\"ay@${inst}.service" "$HOME/.config/systemd/user/multi-user.target.wants/${agentId}-gatew\"\"ay@${inst}.service" 2>/dev/null; systemctl --user daemon-reload 2>/dev/null || true; echo SD_STOPPED`,
       { pool: false, timeoutMs: 45000 });
     return { ok: /SD_STOPPED/.test(r.stdout || ''), out: ((r.stdout || '') + (r.stderr || '')).slice(-300), via: 'systemd' };
   }

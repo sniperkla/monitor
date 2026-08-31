@@ -449,7 +449,7 @@ echo "===ENVKEYS==="
       if (!inst) {
         try {
           const instList = await listInstances(sshConfig, 'openclaw');
-          instancesRemain = Array.isArray(instList) && instList.length > 0;
+          instancesRemain = Array.isArray(instList) && instList.filter(i => i.tag && i.tag !== inst).length > 0;
         } catch { /* non-fatal: fall through to the normal removal */ }
       }
       const binRm = (inst || (instancesRemain && !purge))

@@ -16,7 +16,7 @@ import ThemeSelect from '@/components/common/ThemeSelect';
  */
 
 const PROVIDERS = [
-  { id: 'openrouter', label: 'OpenRouter', envKey: 'OPENROUTER_API_KEY', model: '', placeholder: 'anthropic/claude-3.5-sonnet', hint: 'One key, 300+ models (recommended). Get a key at openrouter.ai/keys — enter model ID (e.g. anthropic/claude-3.5-sonnet)' },
+  { id: 'openrouter', label: 'OpenRouter', envKey: 'OPENROUTER_API_KEY', model: '', placeholder: 'openrouter/free (or anthropic/claude-3.5-sonnet)', hint: 'One key, 300+ models (recommended). e.g. openrouter/free, anthropic/claude-3.5-sonnet' },
   { id: 'openai', label: 'OpenAI', envKey: 'OPENAI_API_KEY', model: '', placeholder: 'gpt-4o', hint: 'platform.openai.com/api-keys' },
   { id: 'anthropic', label: 'Anthropic', envKey: 'ANTHROPIC_API_KEY', model: '', placeholder: 'claude-3-5-sonnet-20241022', hint: 'console.anthropic.com → API keys' },
   { id: 'custom', label: 'Custom…', envKey: '', model: '', placeholder: 'model-name', hint: 'Bring your own OpenAI-compatible endpoint (Ollama, vLLM, LM Studio, Groq, Together, etc.). Pick the env-var name and paste the key.', custom: true },
@@ -215,10 +215,13 @@ export default function HermesAgentWizard({ isOpen, onClose, connections = [], s
   const buildEasyPayload = () => {
     const isReconfig = !!(status && (status.installed || status.running || status.binPath));
     const env = {}, settings = {};
-    if (model) settings.model = model;
+    if (model.trim()) settings.model = model.trim();
 
     const prov = PROVIDERS.find(x => x.id === provider) || PROVIDERS[0];
     const isCustom = !!prov.custom;
+    if (!isCustom && prov.id) {
+      settings['model.provider'] = prov.id;
+    }
 
     if (apiKey.trim()) {
       const envKey = (isCustom ? customEnvKey.trim() : prov.envKey) || 'CUSTOM_LLM_API_KEY';

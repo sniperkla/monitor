@@ -521,12 +521,10 @@ export default function AIAgentsApp({ apiFetch }) {
         r = await call(action, extra);
       }
       const elapsed = ((Date.now() - startTs) / 1000).toFixed(1);
-      if (Array.isArray(r?.log) && r.log.length) {
-        setLiveLogLines(prev => {
-          const set = new Set(prev);
-          const added = r.log.filter(l => !set.has(l));
-          return [...prev, ...added, `— done in ${elapsed}s —`];
-        });
+      if (liveLogs) {
+        setLiveLogLines(prev => [...prev, `— done in ${elapsed}s —`]);
+      } else if (Array.isArray(r?.log) && r.log.length) {
+        setLiveLogLines(prev => [...prev, ...r.log.flatMap(l => String(l).split('\n')), `— done in ${elapsed}s —`]);
       } else {
         const ok = r?.success !== false;
         const msg = r?.output ? String(r.output).trim() : (ok ? 'done' : (r?.error || 'failed'));
@@ -558,11 +556,7 @@ export default function AIAgentsApp({ apiFetch }) {
       const r = await fn();
       const elapsed = ((Date.now() - startTs) / 1000).toFixed(1);
       if (Array.isArray(r?.log) && r.log.length) {
-        setLiveLogLines(prev => {
-          const set = new Set(prev);
-          const added = r.log.filter(l => !set.has(l));
-          return [...prev, ...added, `— done in ${elapsed}s —`];
-        });
+        setLiveLogLines(prev => [...prev, ...r.log.flatMap(l => String(l).split('\n')), `— done in ${elapsed}s —`]);
       } else {
         const ok = r?.success !== false;
         const msg = r?.output
@@ -621,17 +615,20 @@ export default function AIAgentsApp({ apiFetch }) {
   const doUninstall = (wantsPurge) => {
     setShowUninstallModal(false);
     setPurge(wantsPurge);
-    const removedInstance = activeInstance;
-    return callAction('Uninstall', 'uninstall', { purge: wantsPurge }).then(async (r) => {
-      if (r?.success !== false && removedInstance) {
-        // Remove the deleted tag immediately, then reconcile with the server.
-        setInstanceList(m => ({
-          ...m,
-          [instKey]: (m[instKey] || []).filter(i => i.tag !== removedInstance),
-        }));
-      }
-      // After uninstall the instance list / selected target may be gone —
-      // fall back to default and await an authoritative list refresh.
+    const removedInstance = activeInstance; // snapshot before async
+    // Immediately clear activeInstance / instRef.current locally BEFORE firing callAction
+    // so that any internal loadDetails() or effect triggered by callAction queries the default instance
+    // instead of querying the instance that is being deleted.
+    if (removedInstance) {
+      instRef.current = '';
+      setInstanceSel(m => ({ ...m, [instKey]: '' }));
+      setInstanceList(m => ({
+        ...m,
+        [instKey]: (m[instKey] || []).filter(i => i.tag !== removedInstance),
+      }));
+    }
+    return callAction('Uninstall', 'uninstall', { instance: removedInstance || undefined, purge: wantsPurge }).then(async (r) => {
+      instRef.current = '';
       setInstanceSel(m => ({ ...m, [instKey]: '' }));
       await refreshInstances();
       await loadDetails();
@@ -841,8 +838,8 @@ export default function AIAgentsApp({ apiFetch }) {
     const instTag = activeInstance ? `-${activeInstance}` : '';
     const homePref = `$HOME/.${agentId}${instTag}`;
 
-    // Single-line tail command that continuously follows daemon logs with -F
-    const tailCmd = `stty -echo 2>/dev/null; mkdir -p "${homePref}/logs"; touch "${homePref}/logs/daemon.log"; LOGF="$(ls -1t "${homePref}/logs/"*.log 2>/dev/null | head -1)"; [ -z "$LOGF" ] && LOGF="${homePref}/logs/daemon.log"; tail -n 100 -F "$LOGF" 2>/dev/null || journalctl --user -u ${agentId} --no-pager -n 100 -f 2>/dev/null\n`;
+    // Single-line tail command that continuously follows daemon logs with -F (read-only, never creates dirs)
+    const tailCmd = `stty -echo 2>/dev/null; if [ -d "${homePref}/logs" ]; then LOGF="$(ls -1t "${homePref}/logs/"*.log 2>/dev/null | head -1)"; [ -n "$LOGF" ] && tail -n 100 -F "$LOGF" 2>/dev/null; fi || journalctl --user -u ${agentId} --no-pager -n 100 -f 2>/dev/null\n`;
 
     // ── HTTP snapshot (one-shot, used as initial seed or error fallback) ──
     const fetchSnapshot = async () => {
@@ -2763,52 +2760,74 @@ export default function AIAgentsApp({ apiFetch }) {
                 <div className="flex items-center gap-3">
                   <div className="flex-shrink-0 w-10 h-10 rounded-full bg-red-500/15 border border-red-500/30 flex items-center justify-center text-lg">🗑️</div>
                   <div>
-                    <h2 className="text-base font-bold text-white">Uninstall {agent.name}{activeInstance ? ` — ${activeInstance}` : ''}</h2>
+                    <h2 className="text-base font-bold text-white">{activeInstance ? `Delete Instance "${activeInstance}"` : `Uninstall ${agent.name}`}</h2>
                     <p className="text-[11px] text-[var(--text-muted)] mt-0.5">
-                      {activeInstance ? `Targeting the instance "${activeInstance}" (${home}). This removes only that instance.` : 'Choose how much to remove from the server (default install).'}
+                      {activeInstance ? `This will stop and permanently delete the entire directory ${home}.` : 'Choose how much to remove from the server (default install).'}
                     </p>
                   </div>
                 </div>
 
-                <div className="space-y-2">
-                  {/* Option A — binary only */}
-                  <button
-                    onClick={() => doUninstall(false)}
-                    className="w-full text-left rounded-xl border border-[var(--border-color)] bg-white/5 hover:bg-white/10 hover:border-indigo-400/40 transition p-4 group cursor-pointer"
-                  >
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="text-sm font-bold text-white group-hover:text-indigo-300 transition">Remove binary only</span>
-                      <span className="ml-auto text-[9px] px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 font-bold">SAFE</span>
+                {activeInstance ? (
+                  <div className="space-y-3">
+                    <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-4 text-xs text-[var(--text-muted)] leading-relaxed">
+                      This will stop the <span className="font-mono text-white font-bold">{activeInstance}</span> gateway and completely remove <span className="font-mono text-red-400 font-bold">{home}</span> including all its config, memories, sessions, and environment.
                     </div>
-                    <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">
-                      Removes the <span className="font-mono text-white/70">{agent.name.toLowerCase()}</span> binary only.{' '}
-                      <span className="text-emerald-400">{home} config, memories &amp; sessions are kept</span> — you can reinstall anytime and pick up where you left off.
-                    </p>
-                  </button>
-
-                  {/* Option B — full purge */}
-                  <button
-                    onClick={() => doUninstall(true)}
-                    className="w-full text-left rounded-xl border border-red-500/20 bg-red-500/5 hover:bg-red-500/10 hover:border-red-500/40 transition p-4 group cursor-pointer"
-                  >
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="text-sm font-bold text-white group-hover:text-red-300 transition">Full purge</span>
-                      <span className="ml-auto text-[9px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-300 font-bold">DESTRUCTIVE</span>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setShowUninstallModal(false)}
+                        className="flex-1 py-2.5 rounded-xl text-xs font-bold text-[var(--text-muted)] hover:text-white border border-[var(--border-color)] hover:border-white/20 transition cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={() => doUninstall(true)}
+                        className="flex-1 py-2.5 rounded-xl text-xs font-bold text-white bg-red-500 hover:bg-red-600 shadow-lg shadow-red-500/20 transition cursor-pointer"
+                      >
+                        Delete {home}
+                      </button>
                     </div>
-                    <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">
-                      Removes the binary <span className="text-red-400">and deletes {home}</span> including all config, memories &amp; sessions. This cannot be undone.
-                    </p>
-                  </button>
-                </div>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {/* Option A — binary only */}
+                    <button
+                      onClick={() => doUninstall(false)}
+                      className="w-full text-left rounded-xl border border-[var(--border-color)] bg-white/5 hover:bg-white/10 hover:border-indigo-400/40 transition p-4 group cursor-pointer"
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-sm font-bold text-white group-hover:text-indigo-300 transition">Remove binary only</span>
+                        <span className="ml-auto text-[9px] px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 font-bold">SAFE</span>
+                      </div>
+                      <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">
+                        Removes the <span className="font-mono text-white/70">{agent.name.toLowerCase()}</span> binary only.{' '}
+                        <span className="text-emerald-400">{home} config, memories &amp; sessions are kept</span> — you can reinstall anytime and pick up where you left off.
+                      </p>
+                    </button>
 
-                <div className="pt-1">
-                  <button
-                    onClick={() => setShowUninstallModal(false)}
-                    className="w-full py-2 rounded-xl text-[11px] font-bold text-[var(--text-muted)] hover:text-white border border-[var(--border-color)] hover:border-white/20 transition cursor-pointer"
-                  >
-                    Cancel
-                  </button>
-                </div>
+                    {/* Option B — full purge */}
+                    <button
+                      onClick={() => doUninstall(true)}
+                      className="w-full text-left rounded-xl border border-red-500/20 bg-red-500/5 hover:bg-red-500/10 hover:border-red-500/40 transition p-4 group cursor-pointer"
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-sm font-bold text-white group-hover:text-red-300 transition">Full purge</span>
+                        <span className="ml-auto text-[9px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-300 font-bold">DESTRUCTIVE</span>
+                      </div>
+                      <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">
+                        Removes the binary <span className="text-red-400 font-bold">and deletes {home}</span> including all config, memories &amp; sessions. This cannot be undone.
+                      </p>
+                    </button>
+
+                    <div className="pt-1">
+                      <button
+                        onClick={() => setShowUninstallModal(false)}
+                        className="w-full py-2 rounded-xl text-[11px] font-bold text-[var(--text-muted)] hover:text-white border border-[var(--border-color)] hover:border-white/20 transition cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </div>

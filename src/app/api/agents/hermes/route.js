@@ -70,6 +70,107 @@ export function buildEnvUpsertPy(envEntries) {
   ].join('\n');
 }
 
+/**
+ * Hermes keeps the model under a NESTED `model:` block, so `model.default` —
+ * never a bare `model` — is the key both `hermes config set` and config.yaml
+ * actually use. The CLI loop and the direct-YAML merge must agree on this
+ * mapping: a top-level `model: <id>` scalar clobbers the whole block and leaves
+ * invalid YAML, which makes hermes drop the model and silently fall back to its
+ * built-in default (z-ai/glm-5.2).
+ */
+function dottedSettingKey(key) {
+  return key === 'model' ? 'model.default' : key;
+}
+
+/**
+ * Shared config.yaml merge program (Python) used by BOTH install and
+ * reconfigure — mirrors buildEnvUpsertPy so the two paths cannot diverge.
+ *
+ * Dotted keys are treated as nested YAML paths (hermes' own convention), so
+ * `model` lands inside the existing `model:` block as `default:` instead of
+ * overwriting the block header with a scalar. Files are edited line-wise:
+ *   • an existing scalar is promoted to a block header rather than clobbered
+ *   • a missing path is appended at the correct indent
+ *   • strings that are not plain-safe (contain ':', '#', quotes, …) are JSON
+ *     quoted so the emitted YAML always re-parses
+ *
+ * NOTE: do not re-implement this as a `^key:` regex substitution. That matched
+ * the *block header* line for `model` and replaced it with a scalar, orphaning
+ * the indented children — invalid YAML, model lost, fallback to z-ai/glm-5.2.
+ */
+export function buildSettingsMergePy(settings) {
+  const entries = (Array.isArray(settings) ? settings : Object.entries(settings || {}))
+    .filter(([k, v]) => k != null && String(k).trim() !== '' && v != null && String(v).trim() !== '');
+  const payload = Buffer.from(
+    JSON.stringify(entries.map(([k, v]) => [dottedSettingKey(String(k).trim()), v])),
+    'utf8',
+  ).toString('base64');
+  return [
+    'import json, os, base64, re',
+    `new = json.loads(base64.b64decode('${payload}').decode('utf-8'))`,
+    `path = (os.environ.get('HERMES_HOME') or os.path.expanduser('~/.hermes')) + '/config.yaml'`,
+    `os.makedirs(os.path.dirname(path), exist_ok=True)`,
+    `lines = open(path).read().splitlines() if os.path.exists(path) else []`,
+    `def _ind(l): return len(l) - len(l.lstrip(' '))`,
+    `def _blank(l): return l.strip() == ''`,
+    `def _fmt(v):`,
+    `    if isinstance(v, bool): return 'true' if v else 'false'`,
+    `    if isinstance(v, (int, float)): return str(v)`,
+    `    s = str(v)`,
+    `    if s == '': return '""'`,
+    `    low = s.lower()`,
+    `    if low == 'true': return 'true'`,
+    `    if low == 'false': return 'false'`,
+    `    if re.match(r'^[A-Za-z0-9_][A-Za-z0-9_./-]*$', s) and low not in ('null', 'yes', 'no', 'on', 'off', '~'):`,
+    `        return s`,
+    `    return json.dumps(s, ensure_ascii=False)`,
+    `def _end(i, base):`,
+    `    j = i + 1`,
+    `    while j < len(lines):`,
+    `        if _blank(lines[j]):`,
+    `            k = j`,
+    `            while k < len(lines) and _blank(lines[k]): k += 1`,
+    `            if k < len(lines) and _ind(lines[k]) > base:`,
+    `                j = k; continue`,
+    `            break`,
+    `        if _ind(lines[j]) <= base: break`,
+    `        j += 1`,
+    `    return j`,
+    `def _set(parts, val, ind, start, end):`,
+    `    key = parts[0]`,
+    `    pat = re.compile(r'^([A-Za-z0-9_.\\-]+)\\s*:\\s*(.*)$')`,
+    `    i = None`,
+    `    for j in range(start, end):`,
+    `        l = lines[j]`,
+    `        if _blank(l) or _ind(l) != ind: continue`,
+    `        m = pat.match(l)`,
+    `        if m and m.group(1) == key:`,
+    `            i = j; break`,
+    `    if i is None:`,
+    `        while end > start and _blank(lines[end-1]): end -= 1`,
+    `        if len(parts) == 1:`,
+    `            lines.insert(end, ' ' * ind + key + ': ' + _fmt(val))`,
+    `        else:`,
+    `            lines.insert(end, ' ' * ind + key + ':')`,
+    `            for d in range(1, len(parts)):`,
+    `                lines.insert(end + d, ' ' * (ind + 2*d) + parts[d] + (': ' + _fmt(val) if d == len(parts)-1 else ':'))`,
+    `        return`,
+    `    e = _end(i, ind)`,
+    `    if len(parts) == 1:`,
+    `        lines[i:e] = [' ' * ind + key + ': ' + _fmt(val)]`,
+    `        return`,
+    `    m = pat.match(lines[i])`,
+    `    if m and m.group(2).strip() != '':`,
+    `        lines[i] = ' ' * ind + key + ':'`,
+    `    _set(parts[1:], val, ind + 2, i + 1, e)`,
+    `for k, v in new:`,
+    `    _set(str(k).split('.'), v, 0, 0, len(lines))`,
+    `open(path, 'w').write('\\n'.join(lines) + ('\\n' if lines else ''))`,
+    `os.chmod(path, 0o600)`,
+    `print('SETTINGS_MERGED')`,
+  ].join('\n');
+}
+
 const PROVIDER_ENV_KEYS = Object.freeze({
   openrouter: 'OPENROUTER_API_KEY',
   openai: 'OPENAI_API_KEY',
@@ -168,6 +269,8 @@ CFG=0; [ -f "$HH/config.yaml" ] && CFG=1
 echo "CONFIG=$CFG"
 ENVF=0; [ -f "$HH/.env" ] && ENVF=1
 echo "ENVFILE=$ENVF"
+DIR=0; [ -d "$HH" ] && DIR=1
+echo "DIR=$DIR"
 USVC=0; command -v systemctl >/dev/null 2>&1 && systemctl --user is-active hermes-gate""way 2>/dev/null | grep -qx active && USVC=1
 SSVC=0; command -v systemctl >/dev/null 2>&1 && systemctl is-active hermes-gate""way 2>/dev/null | grep -qx active && SSVC=1
 ${procScan(tag)}
@@ -472,34 +575,8 @@ true`,
     };
     // ── Multi-instance: list + spawn ────────────────────────────────────────
     if (action === 'instances') {
-      // List installed instances: ~/.hermes (default) + any ~/.hermes-<tag>
-      const r = await execCommand(sshConfig, `
-          DEFAULT_EXISTS=0; [ -d "$HOME/.hermes" ] && DEFAULT_EXISTS=1\nPROC=0; [ -f "$HOME/.hermes/daemon.pid" ] && kill -0 $(cat "$HOME/.hermes/daemon.pid") 2>/dev/null && PROC=1\n{ systemctl --user is-active hermes-gate\\way 2>/dev/null || systemctl is-active hermes-gate\\way 2>/dev/null; } | grep -qx active && PROC=1\necho "PROC=$PROC"
-echo "DEFAULT_EXISTS=$DEFAULT_EXISTS"
-for d in "$HOME"/.hermes-*; do
-  [ -d "$d" ] || continue
-  tag="$(basename "$d")"
-  echo "INSTANCE_DIR=\${tag#.hermes-}"
-done
-for d in "$HOME"/.hermes-*; do
-  [ -d "$d" ] || continue
-  tag="$(basename "$d")"
-  PIDF="$d/daemon.pid"
-  RUN=0; [ -f "$PIDF" ] && kill -0 "$(cat "$PIDF")" 2>/dev/null && RUN=1
-  if [ "$RUN" = 0 ]; then
-    export XDG_RUNTIME_DIR="/run/user/$(id -u)" 2>/dev/null
-    systemctl --user is-active "hermes-gate""way@\${tag#.hermes-}" 2>/dev/null | grep -qx active && RUN=1
-  fi
-  echo "TAGRUN=\${tag#.hermes-}:$RUN"
-done
-`, { pool: true, timeoutMs: 20000 });
-      const out = r.stdout || '';
-      const instances = [];
-      if (/DEFAULT_EXISTS=1/.test(out)) instances.push({ tag: '', running: /PROC=1/.test(out) });
-      for (const m of out.matchAll(/TAGRUN=([^:\n]+):(\d)/g)) {
-        instances.push({ tag: m[1], running: m[2] === '1' });
-      }
-      return NextResponse.json({ success: true, instances });
+      const list = await listInstances(sshConfig, 'hermes');
+      return NextResponse.json({ success: true, instances: list });
     }
 
     if (action === 'spawn-instance') {
@@ -562,15 +639,16 @@ chmod 600 "$HOME/.hermes-${tag}/config.yaml" 2>/dev/null || true
     if (action === 'status') {
       const r = await execCommand(sshConfig, statusScript(inst), { pool: true, timeoutMs: 30000 });
       const parse = (k) => (r.stdout || '').match(new RegExp(`${k}=(.*)`))?.[1]?.trim();
-      const hostInstalled = parse('BIN') === 'SET';
+      const hostInstalled = parse('BIN') === 'SET' && (parse('DIR') === '1' || parse('CONFIG') === '1' || parse('ENVFILE') === '1' || parse('CODE') === '1');
       const inContainer = parse('DCONT') === '1';
       const containerGatewayUp = parse('CGW') === '1';
       const containerVersion = parse('CVERSION') || null;
       const running = parse('USVC') === '1' || parse('SSVC') === '1' || parse('PROC') === '1' || (inContainer && containerGatewayUp);
+      const isInstalled = hostInstalled || (inContainer && (containerGatewayUp || !!containerVersion)) || running;
       return NextResponse.json({
         success: true,
-        installed: hostInstalled || inContainer,
-        version: hostInstalled ? parse('VERSION') : (containerVersion || parse('VERSION')),
+        installed: isInstalled,
+        version: isInstalled ? (hostInstalled ? parse('VERSION') : (containerVersion || parse('VERSION'))) : null,
         running,
         service: parse('SSVC') === '1' ? 'system' : parse('USVC') === '1' ? 'user' : parse('PROC') === '1' ? 'process' : (inContainer && containerGatewayUp) ? 'docker' : null,
         hasConfig: parse('CONFIG') === '1',
@@ -581,55 +659,74 @@ chmod 600 "$HOME/.hermes-${tag}/config.yaml" 2>/dev/null || true
 
     // ── UNINSTALL ───────────────────────────────────────────────────────────
     if (action === 'uninstall') {
-      // Instance uninstall must never kill other instances (broad pkill
-      // matches every hermes gateway on the box), touch the shared systemd
-      // unit, or remove the shared binary — only its own pidfile & home.
+      // ── INSTANCE UNINSTALL (early return — never touches default) ──────
       if (inst) {
-        // A systemd-managed template unit can recreate its home on restart.
-        // Disable it first, then retain the pidfile cleanup for legacy nohup instances.
+        // Stop the systemd template unit first (if it was managed by systemd).
         await sdInstanceCtl(sshConfig, 'hermes', inst, 'stop');
-        await run('stop instance (pidfile-scoped)', `if [ -f "${HH}/daemon.pid" ]; then p=$(cat "${HH}/daemon.pid"); kill "$p" 2>/dev/null; sleep 1; kill -9 "$p" 2>/dev/null; rm -f "${HH}/daemon.pid"; fi; true`);
-      } else {
-        await run('stop system service', `(sudo -n systemctl disable --now hermes-gate""way 2>/dev/null || systemctl disable --now hermes-gate""way 2>/dev/null); true`);
-        await run('stop user service', `export XDG_RUNTIME_DIR="/run/user/$(id -u)"; systemctl --user disable --now hermes-gate""way 2>/dev/null; true`);
-        // Selective stray-kill: only default gateways (no per-instance home), so
-        // spawned instances survive a default stop/uninstall (zeroclaw blueprint).
-        await run('stop stray processes', `for p in $(pgrep -f '[h]ermes.*gatew[a]y' 2>/dev/null; pgrep -f '[h]ermes-agent/hermes' 2>/dev/null); do grep -qaE 'HERMES_HOME=.+\.hermes-[^ /]' /proc/$p/environ 2>/dev/null || kill -9 $p 2>/dev/null; done; true`);
-        // Remove isolated Docker container (if any); data volume kept unless purge.
-        await run('remove docker container', `command -v docker >/dev/null 2>&1 && docker rm -f hermes-agent 2>/dev/null; ${purge ? `rm -rf "$HOME/.hermes-docker" 2>/dev/null;` : ''} true`);
+
+        // Kill any nohup/background process running from this instance's home.
+        // Scoped strictly to PIDs whose HERMES_HOME matches this tagged home
+        // so the default gateway and other instances are never touched.
+        await run('stop instance process', `\
+for p in $(pgrep -f '[h]ermes.*gatew[a]y' 2>/dev/null; pgrep -f '[h]ermes_cli.*gatew[a]y' 2>/dev/null); do
+  [ -d "/proc/$p" ] || continue
+  HME="$(tr '\\0' '\\n' < /proc/$p/environ 2>/dev/null | sed -n 's/^HERMES_HOME=//p' | head -1)"
+  [ -n "$HME" ] || HME="$(tr '\\0' '\\n' < /proc/$p/cmdline 2>/dev/null | grep -o '\\.hermes[-a-zA-Z0-9_]*' | head -1)"
+  case "$HME" in *".hermes-${inst}"|*".hermes-${inst}/") kill -9 "$p" 2>/dev/null || true ;; esac
+done
+if [ -f "${HH}/daemon.pid" ]; then
+  _p=$(cat "${HH}/daemon.pid" 2>/dev/null); [ -n "$_p" ] && { kill "$_p" 2>/dev/null; sleep 1; kill -9 "$_p" 2>/dev/null; }; rm -f "${HH}/daemon.pid"
+fi
+if [ -f "${HH}/gateway.pid" ]; then
+  _p=$(cat "${HH}/gateway.pid" 2>/dev/null); [ -n "$_p" ] && { kill "$_p" 2>/dev/null; sleep 1; kill -9 "$_p" 2>/dev/null; }; rm -f "${HH}/gateway.pid"
+fi
+true`);
+
+        // Remove the isolated home and all associated instance files.
+        const instR = await run('remove instance home',
+          `rm -rf "${HH}" "$HOME/.hermes-${inst}"* 2>/dev/null; [ ! -e "${HH}" ] && echo REMOVED_INSTANCE || { echo INSTANCE_HOME_REMAINS; exit 1; }`);
+        const ok = /REMOVED_INSTANCE/.test(instR.stdout || '');
+        return NextResponse.json({ success: ok, purged: purge, removedInstance: inst, log });
       }
-      // Share the globally-installed binary/venv. Removing it while any instance
-      // still exists breaks restart for those instances — skip when siblings remain.
+
+      // ── DEFAULT UNINSTALL ───────────────────────────────────────────────
+      await run('stop system service', `(sudo -n systemctl disable --now hermes-gate""way 2>/dev/null || systemctl disable --now hermes-gate""way 2>/dev/null); true`);
+      await run('stop user service', `export XDG_RUNTIME_DIR="/run/user/$(id -u)"; systemctl --user disable --now hermes-gate""way 2>/dev/null; true`);
+      // Selective stray-kill: only default gateways (no per-instance HERMES_HOME),
+      // so spawned instances survive a default stop/uninstall.
+      await run('stop stray processes', `\
+for p in $(pgrep -f '[h]ermes.*gatew[a]y' 2>/dev/null; pgrep -f '[h]ermes-agent/hermes' 2>/dev/null); do
+  grep -qaE 'HERMES_HOME=.+\\.hermes-[^ /]' /proc/$p/environ 2>/dev/null || kill -9 $p 2>/dev/null
+done; true`);
+      // Remove isolated Docker container; data volume kept unless purge.
+      await run('remove docker container', `command -v docker >/dev/null 2>&1 && docker rm -f hermes-agent 2>/dev/null; ${purge ? `rm -rf "$HOME/.hermes-docker" 2>/dev/null;` : ''} true`);
+
+      // Share the globally-installed binary/venv. Keep it when tagged instances
+      // still exist and this is not a full purge.
       let instancesRemain = false;
-      if (!inst) {
-        try {
-          const instList = await listInstances(sshConfig, 'hermes');
-          instancesRemain = Array.isArray(instList) && instList.length > 0;
-        } catch { /* non-fatal */ }
-      }
-      const binRm = (inst || (instancesRemain && !purge))
-        ? '' // non-purge keeps the binary for surviving instances; purge wipes them first
-        : `rm -f "$HOME/.local/bin/hermes" /usr/local/bin/hermes; `;
-      const libRm = purge && !inst && !instancesRemain ? ' /usr/local/lib/hermes-agent' : '';
-      // Full purge of the DEFAULT also wipes every instance home (and kills
-      // their daemons) so uninstall is genuinely clean — no orphan entries.
-      // Full purge kills EVERY gateway (default + instances) and wipes every
-      // instance home. $$ exclusion: the script's own bash -c cmdline contains
-      // the pgrep pattern — without excluding it the loop kills itself.
-      const instWipe = (!inst && purge)
+      try {
+        const instList = await listInstances(sshConfig, 'hermes');
+        instancesRemain = Array.isArray(instList) && instList.filter(i => i.tag && i.tag.trim()).length > 0;
+      } catch { /* non-fatal */ }
+
+      // Safety net: back up .env so a subsequent fresh install can restore keys.
+      await run('backup .env', `cp "${HH}/.env" "${HH}.env.bak" 2>/dev/null; cp "${HH}/config.yaml" "${HH}.config.yaml.bak" 2>/dev/null; true`);
+
+      // Full purge kills EVERY remaining gateway and wipes every instance home.
+      // $$ exclusion: the pgrep pattern is on this script's own cmdline — skip self.
+      const instWipe = purge
         ? `for p in $(pgrep -f '[h]ermes.*gatew[a]y' 2>/dev/null); do [ "$p" = "$$" ] && continue; kill -9 $p 2>/dev/null; done; rm -rf "$HOME/.hermes-"* 2>/dev/null; `
         : '';
-      // Safety net: keep the current .env outside the home dir so a subsequent
-      // fresh install can restore keys the user forgot to re-enter (the wizard
-      // form starts empty, and One-Click Reinstall would otherwise destroy a
-      // working provider key).
-      await run('backup .env (survives purge)', `cp "${HH}/.env" "${HH}.env.bak" 2>/dev/null; cp "${HH}/config.yaml" "${HH}.config.yaml.bak" 2>/dev/null; true`);
-      const rmCmd = inst
-        ? `rm -rf "${HH}"; [ ! -e "${HH}" ] && echo REMOVED_INSTANCE || { echo INSTANCE_HOME_REMAINS; exit 1; }`   // instances: always remove the whole isolated home
-        : purge
-          ? `${instWipe}${binRm}rm -rf "${HH}"${libRm}; echo REMOVED_ALL`
-          : `${binRm}rm -rf "${HH}/hermes-agent"${libRm}; echo REMOVED_CODE`;
-      const r = await run(inst ? 'remove instance (isolated home)' : purge ? 'remove binary, code & all config' : 'remove binary & code (config kept)', rmCmd);
+      // Keep binary if tagged instances still exist and this is not a full purge.
+      const binRm = (!purge && instancesRemain)
+        ? ''
+        : `rm -f "$HOME/.local/bin/hermes" /usr/local/bin/hermes 2>/dev/null; sudo -n rm -f /usr/local/bin/hermes 2>/dev/null; `;
+      const libRm = (purge && !instancesRemain) ? ' /usr/local/lib/hermes-agent' : '';
+
+      const rmCmd = purge
+        ? `${instWipe}${binRm}rm -rf "${HH}"${libRm} 2>/dev/null; echo REMOVED_ALL`
+        : `${binRm}rm -rf "${HH}/hermes-agent"${libRm} 2>/dev/null; echo REMOVED_CODE`;
+      const r = await run(purge ? 'remove binary, code & all config' : 'remove binary & code (config kept)', rmCmd);
       const ok = /REMOVED/.test(r.stdout || '');
       return NextResponse.json({ success: ok, purged: purge, log });
     }
@@ -680,7 +777,9 @@ echo "SSVC=$SSVC"; echo "USVC=$USVC"; echo "PROC=$PROC"; echo "SYSTEMD=$SYSTEMD"
 echo "===VERSION==="
 [ -n "$BIN" ] && "$BIN" --version 2>/dev/null | tail -1 | cut -c1-40
 echo "===MODEL==="
-MDL="$( [ -n "$BIN" ] && "$BIN" config get model 2>/dev/null | tail -1 || true )"
+MDL="$( [ -n "$BIN" ] && "$BIN" config get model.default 2>/dev/null | tail -1 || true )"
+[ -z "$MDL" ] && MDL="$( [ -n "$BIN" ] && "$BIN" config get model 2>/dev/null | tail -1 || true )"
+[ -z "$MDL" ] && MDL="$(grep -E '^\s*default:' "${HH}/config.yaml" 2>/dev/null | head -1 | awk '{print $2}' | tr -d '"' | tr -d "'")"
 [ -z "$MDL" ] && MDL="$(grep -E '^model:' "${HH}/config.yaml" 2>/dev/null | head -1 | awk '{print $2}' | tr -d '"' | tr -d "'")"
 [ -z "$MDL" ] && MDL="$(grep -E '^(MODEL|HERMES_MODEL|DEFAULT_MODEL)=' "${HH}/.env" 2>/dev/null | head -1 | cut -d= -f2-)"
 echo "$MDL"
@@ -715,21 +814,22 @@ echo "$MDL"
       try { memoryPrompt = Buffer.from(section('MEMORY_B64', 'RUNNING'), 'base64').toString('utf8'); } catch { /* none */ }
 
       // Binary may live on the host OR inside the hermes-agent docker container
+      const dirExists = await execCommand(sshConfig, `[ -d "${HH}" ] && echo "DIR_EXISTS" || true`, { pool: true, timeoutMs: 15000 });
+      const hasHomeDir = /DIR_EXISTS/.test(dirExists.stdout || '');
       const binR2 = await execCommand(sshConfig,
         `p="$(export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"; command -v hermes 2>/dev/null)"; [ -n "$p" ] && echo "BIN=$p"; command -v docker >/dev/null 2>&1 && docker exec hermes-agent sh -c 'command -v hermes' 2>/dev/null | head -1 | { read -r cp2; [ -n "$cp2" ] && echo "CBIN=$cp2"; }; true`,
         { pool: true, timeoutMs: 30000 });
       const dout = binR2.stdout || '';
       const remoteBinPath = (dout.match(/BIN=(.*)/)?.[1] || dout.match(/CBIN=(.*)/)?.[1] || '').trim();
-      const installed = !!remoteBinPath;
-      let running = /SSVC=1|USVC=1|PROC=1/.test(section('RUNNING', 'VERSION')) || (installed && /PROC=1/.test(section('RUNNING', 'VERSION')));
-      running = (await pidAlive()) === true; // pidfile-scoped (never pgrep, which matches other instances)
+      let running = (await pidAlive()) === true; // pidfile-scoped (never pgrep, which matches other instances)
+      const installed = (!!remoteBinPath && hasHomeDir) || running;
       return NextResponse.json({
         success: true,
         installed,
         version: section('VERSION', 'MODEL') || null,
         model: section('MODEL') || null,
         running,
-        binPath: remoteBinPath || null,
+        binPath: installed ? (remoteBinPath || null) : null,
         service: /SSVC=1/.test(out) ? 'system' : /USVC=1/.test(out) ? 'user' : /PROC=1/.test(out) ? 'process' : null,
         hasSystemd: /SYSTEMD=1/.test(section('RUNNING', 'VERSION')),
         // Intentionally NOT masked: these fields round-trip through the config
@@ -842,36 +942,32 @@ echo "$MDL"
       }
 
       // also merge settings (model, platform toggles) into config.yaml if provided
-      if (hasSettings) {
-        const setB64 = b64(JSON.stringify(settings));
-        const cfgTargetLabel = inst ? `~/.hermes-${inst}/config.yaml` : '~/.hermes/config.yaml';
-        await run(`merge ${cfgTargetLabel} settings`, `${HERMES_ENV}
-          export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:\$PATH"
-          python3 - <<'PY' 2>/dev/null || true
-import json, os, base64, re
-path = (os.environ.get('HERMES_HOME') or os.path.expanduser('~/.hermes')) + '/config.yaml'
-if not os.path.exists(path):
-    open(path, 'w').close()
-new = json.loads(base64.b64decode('${setB64}').decode('utf-8'))
-text = open(path).read() if os.path.getsize(path) else ''
-for k, v in (new.items() if isinstance(new, dict) else []):
-    sval = 'true' if v is True else ('false' if v is False else str(v))
-    if re.search(rf'^{re.escape(k)}:', text, re.M):
-        text = re.sub(rf'^{re.escape(k)}:.*$', f'{k}: {sval}', text, count=1, flags=re.M)
-    else:
-        text += f'\\n{k}: {sval}\\n'
-open(path, 'w').write(text)
-print('SETTINGS_MERGED')
-PY`, { timeoutMs: 30000 });
+      const detectedProv = (config && config.provider && config.provider.id && config.provider.id !== 'custom')
+        ? config.provider.id
+        : (env.OPENROUTER_API_KEY ? 'openrouter' : (env.OPENAI_API_KEY ? 'openai' : (env.ANTHROPIC_API_KEY ? 'anthropic' : null)));
+
+      if (hasSettings || detectedProv) {
+        const settingsEntries = Object.entries(settings).filter(([, v]) => v != null && String(v).trim() !== '');
+        if (detectedProv && !settingsEntries.some(([k]) => k === 'model.provider')) {
+          settingsEntries.push(['model.provider', detectedProv]);
+        }
+        if (settingsEntries.length > 0) {
+          const cfgTargetLabel = inst ? `~/.hermes-${inst}/config.yaml` : '~/.hermes/config.yaml';
+          await run(`merge ${cfgTargetLabel} settings`, `${HERMES_ENV}
+            export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:\$PATH"
+            echo '${b64(buildSettingsMergePy(settingsEntries))}' | base64 -d | python3`, { timeoutMs: 30000 });
+        }
       }
 
-      // Sync active model to hermes CLI directly
-      if (targetModel) {
+      // Sync active model and provider to hermes CLI directly
+      if (targetModel || detectedProv) {
         await execCommand(sshConfig, `
           export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
           HB="$([ -x "$HOME/.local/bin/hermes" ] && echo "$HOME/.local/bin/hermes" || command -v hermes || echo "/usr/local/bin/hermes")"
-          ${HERMES_ENV} $HB config set model.default ${JSON.stringify(targetModel)} 2>&1 || true
-          command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx hermes-agent && docker exec hermes-agent hermes config set model.default ${JSON.stringify(targetModel)} 2>&1 || true
+          ${targetModel ? `${HERMES_ENV} $HB config set model.default ${JSON.stringify(targetModel)} 2>&1 || true` : 'true'}
+          ${detectedProv ? `${HERMES_ENV} $HB config set model.provider ${JSON.stringify(detectedProv)} 2>&1 || true` : 'true'}
+          ${targetModel ? `command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx hermes-agent && docker exec hermes-agent hermes config set model.default ${JSON.stringify(targetModel)} 2>&1 || true` : 'true'}
+          ${detectedProv ? `command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx hermes-agent && docker exec hermes-agent hermes config set model.provider ${JSON.stringify(detectedProv)} 2>&1 || true` : 'true'}
         `, { pool: false, timeoutMs: 30000 });
       }
 
@@ -1392,11 +1488,24 @@ PY`, { timeoutMs: 30000 });
     if (config.lightweight && !settingsEntries.some(([k]) => k === 'auxiliary.free_only')) {
       settingsEntries.push(['auxiliary.free_only', 'true']);
     }
+    const detectedInstallProv = (config.provider && config.provider.id && config.provider.id !== 'custom')
+      ? config.provider.id
+      : (config.env?.OPENROUTER_API_KEY ? 'openrouter' : (config.env?.OPENAI_API_KEY ? 'openai' : (config.env?.ANTHROPIC_API_KEY ? 'anthropic' : null)));
+    if (detectedInstallProv && !settingsEntries.some(([k]) => k === 'model.provider')) {
+      settingsEntries.push(['model.provider', detectedInstallProv]);
+    }
+    const tgtModel = (config.settings && config.settings.model)
+      || (config.env && (config.env.MODEL || config.env.HERMES_MODEL || config.env.DEFAULT_MODEL))
+      || '';
+    if (tgtModel && !settingsEntries.some(([k]) => k === 'model' || k === 'model.default')) {
+      settingsEntries.push(['model.default', tgtModel]);
+    }
+
     for (const [key, value] of settingsEntries) {
       // 'model' must use the dotted key 'model.default' — a bare 'model' writes
       // a top-level scalar that clobbers the whole model block (invalid YAML),
       // causing hermes to lose the model and fall back to z-ai/glm-5.2.
-      const dotted = key === 'model' ? 'model.default' : key;
+      const dotted = dottedSettingKey(key);
       await run(`hermes config set ${dotted}${inst ? ` (→ ~/.hermes-${inst})` : ''}`,
         `${ENVPREFIX}; ${HERMES_ENV} ${HB} config set ${dotted} ${JSON.stringify(String(value))} 2>&1 | tail -2`,
         { timeoutMs: 60000 });
@@ -1407,44 +1516,30 @@ PY`, { timeoutMs: 30000 });
     // deliberately EMPTY config.yaml (spawn-instance truncates it), so any
     // swallowed CLI error left the whole file empty — the same direct merge the
     // reconfigure path uses, HERMES_HOME-qualified, makes install == update.
+    // NOTE: this MUST go through buildSettingsMergePy. A hand-rolled `^key:`
+    // regex merge wrote the RAW key, so `model` was emitted as a top-level
+    // scalar that clobbered the nested `model:` block → invalid YAML → hermes
+    // dropped the model and fell back to z-ai/glm-5.2.
     if (settingsEntries.length > 0) {
-      const mergeB64 = b64(JSON.stringify(Object.fromEntries(settingsEntries)));
       const cfgTargetLabel = inst ? `~/.hermes-${inst}/config.yaml` : '~/.hermes/config.yaml';
-      await run(`merge ${cfgTargetLabel} settings (guaranteed write)`, `${HERMES_ENV}
-        python3 - <<'PY' 2>&1 || true
-import json, os, base64, re
-path = (os.environ.get('HERMES_HOME') or os.path.expanduser('~/.hermes')) + '/config.yaml'
-os.makedirs(os.path.dirname(path), exist_ok=True)
-if not os.path.exists(path):
-    open(path, 'w').close()
-new = json.loads(base64.b64decode('${mergeB64}').decode('utf-8'))
-text = open(path).read() if os.path.getsize(path) else ''
-for k, v in (new.items() if isinstance(new, dict) else []):
-    sval = 'true' if v is True else ('false' if v is False else str(v))
-    if re.search(rf'^{re.escape(k)}:', text, re.M):
-        text = re.sub(rf'^{re.escape(k)}:.*$', f'{k}: {sval}', text, count=1, flags=re.M)
-    else:
-        text += f'\\n{k}: {sval}\\n'
-open(path, 'w').write(text)
-print('SETTINGS_MERGED')
-PY`, { timeoutMs: 30000 });
+      await run(`merge ${cfgTargetLabel} settings (guaranteed write)`,
+        `${HERMES_ENV} ${ENVPREFIX}; echo '${b64(buildSettingsMergePy(settingsEntries))}' | base64 -d | python3`,
+        { timeoutMs: 30000 });
     }
 
-    // 5b. Fresh install must persist model + messenger token into config.yaml the
+    // 5b. Fresh install must persist model + provider + messenger token into config.yaml the
     // same way reconfigure does. The generic loop above only writes keys present
     // in `settings`; the model is sent as `settings.model` and the Telegram token
     // is sent as `env.TELEGRAM_BOT_TOKEN` (not a dotted settings key), so without
     // this both are silently dropped on a fresh install. Mirror the reconfigure
-    // path (model.default + gateway.platforms.telegram.token) so install == update.
-    const tgtModel = (config.settings && config.settings.model)
-      || (config.env && (config.env.MODEL || config.env.HERMES_MODEL || config.env.DEFAULT_MODEL))
-      || '';
+    // path (model.default + model.provider + gateway.platforms.telegram.token) so install == update.
     const tgtTok = (config.env && config.env.TELEGRAM_BOT_TOKEN) || '';
-    if (tgtModel || tgtTok) {
+    if (tgtModel || detectedInstallProv || tgtTok) {
       await execCommand(sshConfig, `
         export PATH="${BIN_DIR}:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
         HB="$([ -x "$HOME/.local/bin/hermes" ] && echo "$HOME/.local/bin/hermes" || command -v hermes || echo "/usr/local/bin/hermes")"
         ${tgtModel ? `${HERMES_ENV} $HB config set model.default ${JSON.stringify(String(tgtModel))} 2>&1 | tail -1 || true` : 'true'}
+        ${detectedInstallProv ? `${HERMES_ENV} $HB config set model.provider ${JSON.stringify(String(detectedInstallProv))} 2>&1 | tail -1 || true` : 'true'}
         ${tgtTok ? `${HERMES_ENV} $HB config set gateway.platforms.telegram.token ${JSON.stringify(String(tgtTok))} 2>&1 | tail -1 || true` : 'true'}
         true`, { pool: false, timeoutMs: 40000 });
     }

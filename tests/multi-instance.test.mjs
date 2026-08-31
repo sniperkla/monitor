@@ -83,14 +83,14 @@ test('tagged instance uninstall disables its systemd unit before removing its ho
     const route = readFileSync(`src/app/api/agents/${agent}/route.js`, 'utf8');
     const uninstall = route.slice(route.indexOf("if (action === 'uninstall')"), route.indexOf("if (action === 'install')"));
     assert.match(uninstall, new RegExp(`sdInstanceCtl\\(sshConfig, '${agent}', inst, 'stop'\\)`), `${agent} must disable its tagged systemd unit`);
-    assert.match(uninstall, /stop instance \(pidfile-scoped\)|const stopCmd = inst/, `${agent} keeps legacy pidfile cleanup`);
+    assert.match(uninstall, /stop instance \(pidfile-scoped\)|stop instance process|const stopCmd = inst/, `${agent} keeps legacy pidfile cleanup`);
     assert.match(uninstall, /INSTANCE_HOME_REMAINS/, `${agent} must fail when its tagged home survives removal`);
   }
 });
 
 test('hermes route: spawned instances isolate credentials and wait for configuration', () => {
   const route = readFileSync('src/app/api/agents/hermes/route.js', 'utf8');
-  assert.match(route, /stop instance \(pidfile-scoped\)/);
+  assert.match(route, /stop instance \(pidfile-scoped\)|stop instance process/);
   const spawn = route.slice(route.indexOf("if (action === 'spawn-instance')"), route.indexOf("if (action === 'status')"));
   // Spawn builds a FRESH home instead of cloning the default's files, so there
   // must be no copy of anything out of ~/.hermes — no config.yaml, prompts,

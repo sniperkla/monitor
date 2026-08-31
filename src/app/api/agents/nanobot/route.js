@@ -465,7 +465,7 @@ PYEOF
       if (!inst) {
         try {
           const instList = await listInstances(sshConfig, 'nanobot');
-          instancesRemain = Array.isArray(instList) && instList.length > 0;
+          instancesRemain = Array.isArray(instList) && instList.filter(i => i.tag && i.tag !== inst).length > 0;
         } catch { /* non-fatal */ }
       }
       const binRm = (inst || (instancesRemain && !purge))
