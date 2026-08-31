@@ -468,6 +468,11 @@ echo CLONED
       const instWipe = (!inst && purge)
         ? `for p in $(pgrep -f '[h]ermes.*gatew[a]y' 2>/dev/null); do grep -qaE 'HERMES_HOME=.+\.hermes-[^ /]' /proc/$p/environ 2>/dev/null && kill -9 $p 2>/dev/null; done; rm -rf "$HOME/.hermes-"* 2>/dev/null; `
         : '';
+      // Safety net: keep the current .env outside the home dir so a subsequent
+      // fresh install can restore keys the user forgot to re-enter (the wizard
+      // form starts empty, and One-Click Reinstall would otherwise destroy a
+      // working provider key).
+      await run('backup .env (survives purge)', `cp "${HH}/.env" "${HH}.env.bak" 2>/dev/null; cp "${HH}/config.yaml" "${HH}.config.yaml.bak" 2>/dev/null; true`);
       const rmCmd = inst
         ? `rm -rf "${HH}"; [ ! -e "${HH}" ] && echo REMOVED_INSTANCE || { echo INSTANCE_HOME_REMAINS; exit 1; }`   // instances: always remove the whole isolated home
         : purge
@@ -1165,27 +1170,26 @@ fi
 
     // 4. Merge secrets into ~/.hermes/.env (never clobbers existing keys)
     const envEntries = Object.entries(config.env || {}).filter(([k, v]) => k && v != null && String(v).trim() !== '');
-    if (envEntries.length > 0) {
-      const envBlock = envEntries.map(([k, v]) => `${k}=${String(v).trim()}`).join('\n');
-      // NOTE: trailing newline is REQUIRED — `while read` drops an unterminated
-    // final line, which silently lost the last .env key.
-    const envPayload = envBlock.endsWith('\n') ? envBlock : envBlock + '\n';
-    await run(`write ${envEntries.length} key(s) to ${inst ? `~/.hermes-${inst}` : '~/.hermes'}/.env`, `
+    // Upsert helper: replace KEY= lines, append new ones. Used for both the
+    // pre-uninstall .env backup (safety net) and the wizard payload (wins).
+    const upsertEnvFn = `upsert_env() { while IFS= read -r line; do case "$line" in ''|'#'*) continue ;; esac; k=\${line%%=*}; [ -z "$k" ] && continue; awk -v pre="$k=" 'index(\\$0, pre) != 1' "${HH}/.env" > "${HH}/.env.tmp"; mv "${HH}/.env.tmp" "${HH}/.env"; printf '%s\\n' "$line" >> "${HH}/.env"; done < "$1"; }`;
+    const envTargetLabel = `${inst ? `~/.hermes-${inst}` : '~/.hermes'}/.env`;
+    await run(`write ${envEntries.length} key(s) to ${envTargetLabel}`, `
         mkdir -p "${HH}" && touch "${HH}/.env"
-        echo '${b64(envPayload)}' | base64 -d > /tmp/.hermes-env-merge
-        while IFS= read -r line; do
-          case "$line" in ''|'#'*) continue ;; esac
-          k=\${line%%=*}
-          # NOTE: awk prefix match — grep BRE \$\\{k\\} would be an invalid interval
-          # expression on GNU grep and silently truncate the whole .env file.
-          awk -v pre="$k=" 'index(\$0, pre) != 1' "\${HH}/.env" > "\${HH}/.env.tmp"
-          mv "\${HH}/.env.tmp" "\${HH}/.env"
-          printf '%s\n' "\$line" >> "\${HH}/.env"
-        done < /tmp/.hermes-env-merge
-        rm -f /tmp/.hermes-env-merge
+        ${upsertEnvFn}
+        # Safety net: restore keys from the pre-uninstall backup first — a
+        # reinstall with an empty/stale wizard form must never silently drop a
+        # working provider key. Payload keys are upserted on top and win.
+        [ -f "${HH}.env.bak" ] && upsert_env "${HH}.env.bak" || true
+        echo '${envEntries.length > 0 ? b64(envEntries.map(([k, v]) => `${k}=${String(v).trim()}`).join('\n')) : ''}' > /tmp/.hermes-env-merge.zero
+        if [ -s /tmp/.hermes-env-merge.zero ] && [ "$(wc -c < /tmp/.hermes-env-merge.zero)" -gt 1 ]; then
+          base64 -d /tmp/.hermes-env-merge.zero > /tmp/.hermes-env-merge 2>/dev/null
+          upsert_env /tmp/.hermes-env-merge
+          rm -f "${HH}.env.bak"
+        fi
+        rm -f /tmp/.hermes-env-merge.zero /tmp/.hermes-env-merge
         chmod 600 "${HH}/.env"
         echo ENV_MERGED`, { timeoutMs: 30000 });
-    }
 
     // 5. Apply config.yaml settings via the official CLI (handles dotted keys)
     const settingsEntries = Object.entries(config.settings || {}).filter(([, v]) => v != null && String(v).trim() !== '');
