@@ -456,7 +456,8 @@ PYEOF
         ? `if [ -f "${PIDF}" ]; then p=$(cat "${PIDF}"); kill "$p" 2>/dev/null; sleep 1; kill -9 "$p" 2>/dev/null; rm -f "${PIDF}"; fi; true`
         // Selective kill: only default (no per-instance --config home). Never kill
         // instance gateways so they survive a default stop/uninstall.
-        : `for p in $(pgrep -f '[n]anobot' 2>/dev/null); do grep -qaE -- '--config ${HOME}/.nanobot?-' /proc/$p/cmdline 2>/dev/null || grep -qa -- '-.nanobot-' /proc/$p/cmdline 2>/dev/null || kill -9 $p 2>/dev/null; done; true`;
+        // Bracketed pgrep cannot match this script's own cmdline (self-kill guard).
+        : `for p in $(pgrep -f '[n]anobot gatew' 2>/dev/null); do grep -qa -- '--config' /proc/$p/cmdline 2>/dev/null || kill -9 $p 2>/dev/null; done; true`;
       await run('stop gateway', stopCmd);
       // Share the globally-installed binary/venv. Removing while any instance
       // exists breaks restart for those instances — skip when siblings remain.
@@ -467,8 +468,8 @@ PYEOF
           instancesRemain = Array.isArray(instList) && instList.length > 0;
         } catch { /* non-fatal */ }
       }
-      const binRm = (inst || instancesRemain)
-        ? '' // instances share the globally-installed binary — leave it alone
+      const binRm = (inst || (instancesRemain && !purge))
+        ? '' // non-purge keeps the binary for surviving instances; purge wipes them first
         : `rm -f "$HOME/.local/bin/nanobot" "$HOME/.nanobot/venv/bin/nanobot" /usr/local/bin/nanobot /usr/bin/nanobot 2>/dev/null; pipx uninstall nanobot-ai 2>/dev/null; pipx uninstall nanobot 2>/dev/null; `;
       const rmCmd = inst
         ? `rm -rf "${HH}" 2>/dev/null; [ ! -e "${HH}" ] && echo REMOVED_INSTANCE || { echo INSTANCE_HOME_REMAINS; exit 1; }`   // instances: always remove the whole isolated home
@@ -476,7 +477,7 @@ PYEOF
           // Only this install's home. Previously `/home/*/.nanobot` was also
           // removed, which as root wiped EVERY user's agent home (including
           // provisioned "friend" users). zeroclaw scopes purge to ${HH} too.
-          ? `for p in $(pgrep -f '[n]anobot' 2>/dev/null); do grep -qaE -- '-.nanobot-' /proc/$p/cmdline 2>/dev/null && kill -9 $p 2>/dev/null; done; rm -rf "$HOME/.nanobot-"* 2>/dev/null; ${binRm}rm -rf "${HH}" "$HOME/.cache/nanobot" /tmp/.nb* 2>/dev/null; echo REMOVED_ALL`
+          ? `pkill -9 -f '[n]anobot gatew' 2>/dev/null; rm -rf "$HOME/.nanobot-"* 2>/dev/null; ${binRm}rm -rf "${HH}" "$HOME/.cache/nanobot" /tmp/.nb* 2>/dev/null; echo REMOVED_ALL`
           : `${binRm}rm -rf "$HOME/.nanobot/venv" "$HOME/.cache/nanobot" "${HH}/logs" 2>/dev/null; echo REMOVED_CODE`;
       const r = await run(inst ? 'remove instance (isolated home)' : purge ? 'remove nanobot binary & all data' : 'remove nanobot binary & venv (config kept)', `export PATH="$HOME/.local/bin:$HOME/.nanobot/venv/bin:/usr/local/bin:$PATH"; ${rmCmd}`);
       const ok = /REMOVED/.test(r.stdout || '');

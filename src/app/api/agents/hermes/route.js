@@ -607,14 +607,17 @@ chmod 600 "$HOME/.hermes-${tag}/config.yaml" 2>/dev/null || true
           instancesRemain = Array.isArray(instList) && instList.length > 0;
         } catch { /* non-fatal */ }
       }
-      const binRm = (inst || instancesRemain)
-        ? '' // instances share the globally-installed binary — leave it alone
+      const binRm = (inst || (instancesRemain && !purge))
+        ? '' // non-purge keeps the binary for surviving instances; purge wipes them first
         : `rm -f "$HOME/.local/bin/hermes" /usr/local/bin/hermes; `;
       const libRm = purge && !inst && !instancesRemain ? ' /usr/local/lib/hermes-agent' : '';
       // Full purge of the DEFAULT also wipes every instance home (and kills
       // their daemons) so uninstall is genuinely clean — no orphan entries.
+      // Full purge kills EVERY gateway (default + instances) and wipes every
+      // instance home. $$ exclusion: the script's own bash -c cmdline contains
+      // the pgrep pattern — without excluding it the loop kills itself.
       const instWipe = (!inst && purge)
-        ? `for p in $(pgrep -f '[h]ermes.*gatew[a]y' 2>/dev/null); do grep -qaE 'HERMES_HOME=.+\.hermes-[^ /]' /proc/$p/environ 2>/dev/null && kill -9 $p 2>/dev/null; done; rm -rf "$HOME/.hermes-"* 2>/dev/null; `
+        ? `for p in $(pgrep -f '[h]ermes.*gatew[a]y' 2>/dev/null); do [ "$p" = "$$" ] && continue; kill -9 $p 2>/dev/null; done; rm -rf "$HOME/.hermes-"* 2>/dev/null; `
         : '';
       // Safety net: keep the current .env outside the home dir so a subsequent
       // fresh install can restore keys the user forgot to re-enter (the wizard
