@@ -269,7 +269,6 @@ export default function AIAgentsApp({ apiFetch }) {
   // ── Multi-instance support (every agent): selected instance + list ──
   const [instanceSel, setInstanceSel] = useState({});
   const [instanceList, setInstanceList] = useState({});
-  const [instanceListTick, setInstanceListTick] = useState(0);
   const [spawningInstance, setSpawningInstance] = useState(false);
   const instKey = `${agent.id}:${target}`;
   const activeInstance = instanceSel[instKey] || '';
@@ -391,16 +390,22 @@ export default function AIAgentsApp({ apiFetch }) {
     finally { setLoading(false); }
   }, [target, call, agent.id, promptActiveFile]);
 
-  // Instance list (multi-instance) — refetched on demand
-  const refreshInstances = useCallback(() => setInstanceListTick(t => t + 1), []);
+  // Instance list (multi-instance) — fetch directly so callers can await a
+  // confirmed list after an uninstall rather than leaving a stale selector.
+  const refreshInstances = useCallback(async () => {
+    if (!target) return [];
+    try {
+      const r = await call('instances');
+      const instances = Array.isArray(r?.instances) ? r.instances : [];
+      setInstanceList(m => ({ ...m, [instKey]: instances }));
+      return instances;
+    } catch {
+      return null;
+    }
+  }, [target, call, instKey]);
   useEffect(() => {
-    if (!target) return;
-    let cancelled = false;
-    call('instances').then(r => {
-      if (!cancelled && r?.instances) setInstanceList(m => ({ ...m, [instKey]: r.instances }));
-    }).catch(() => {});
-    return () => { cancelled = true; };
-  }, [agent.id, target, instanceListTick, call, instKey]); // eslint-disable-line react-hooks/exhaustive-deps
+    refreshInstances();
+  }, [refreshInstances]);
 
   // Spawn a new agent instance (clones the default install, starts it)
   const spawnInstance = () => {
@@ -625,12 +630,20 @@ export default function AIAgentsApp({ apiFetch }) {
   const doUninstall = (wantsPurge) => {
     setShowUninstallModal(false);
     setPurge(wantsPurge);
-    return callAction('Uninstall', 'uninstall', { purge: wantsPurge }).then((r) => {
+    const removedInstance = activeInstance;
+    return callAction('Uninstall', 'uninstall', { purge: wantsPurge }).then(async (r) => {
+      if (r?.success !== false && removedInstance) {
+        // Remove the deleted tag immediately, then reconcile with the server.
+        setInstanceList(m => ({
+          ...m,
+          [instKey]: (m[instKey] || []).filter(i => i.tag !== removedInstance),
+        }));
+      }
       // After uninstall the instance list / selected target may be gone —
-      // refresh and fall back to the default ('').
-      refreshInstances();
+      // fall back to default and await an authoritative list refresh.
       setInstanceSel(m => ({ ...m, [instKey]: '' }));
-      loadDetails();
+      await refreshInstances();
+      await loadDetails();
       return r;
     });
   };
@@ -806,6 +819,14 @@ export default function AIAgentsApp({ apiFetch }) {
 
     let active = true;
     let hasReceivedData = false; // Track if any data has come through
+    // Timers owned by the EFFECT, not by the socket handler.
+    // They used to be declared inside the `ssh:connected` handler below, and that
+    // handler ended with `return () => clearInterval(pollInterval)` — but that
+    // return value goes to socket.io, which discards it. The effect's own cleanup
+    // never cleared them, so the 5s poll kept firing after teardown. Declaring
+    // them here lets the cleanup at the bottom of this effect cancel them.
+    let pollInterval = null;
+    let placeholderTimer = null;
     console.log(`[Agent Logs] useEffect triggered: tab=${tab}, target=${target}, agentId=${agentId}`);
     const selectedConn = connectionsRef.current?.find(c => c._id === target);
     if (!selectedConn) {
@@ -885,14 +906,10 @@ export default function AIAgentsApp({ apiFetch }) {
       console.log(`[Agent Logs] Socket disconnected: ${reason}`);
     });
 
-    socket.on('connect_error', (err) => {
-      console.error('[Agent Logs] Socket connection error:', err.message);
-    });
-    
-    socket.on('ssh:error', (err) => {
-      console.error('[Agent Logs] SSH error:', err);
-    });
-    
+    // (ssh:error / connect_error are registered ONCE each, further down, where
+    // they also fall back to an HTTP snapshot. They used to be registered twice
+    // — this logging-only pair plus that one — and socket.io invokes every
+    // registered listener for an event, so the duplicate was dead weight.)
     socket.on('ssh:close', () => {
       console.log('[Agent Logs] SSH session closed');
     });
@@ -948,7 +965,7 @@ export default function AIAgentsApp({ apiFetch }) {
       // WORKAROUND: Poll for new logs every 5 seconds instead of tail -F
       // tail -F doesn't stream continuously over SSH exec
       let lastFetchTime = Date.now();
-      const pollInterval = setInterval(() => {
+      pollInterval = setInterval(() => {
         if (!active) {
           clearInterval(pollInterval);
           return;
@@ -956,13 +973,13 @@ export default function AIAgentsApp({ apiFetch }) {
         console.log('[Agent Logs] Polling for new logs...');
         fetchSnapshot();
       }, 5000); // Poll every 5 seconds
-      
+
       // Initial fetch
       console.log('[Agent Logs] Fetching initial logs...');
       fetchSnapshot();
-      
+
       // Show a helpful message after 3 seconds if no logs appear
-      setTimeout(() => {
+      placeholderTimer = setTimeout(() => {
         if (!active || hasReceivedData) {
           console.log(`[Agent Logs] Placeholder check at 3s: active=${active}, hasReceivedData=${hasReceivedData} - skipping`);
           return;
@@ -970,11 +987,10 @@ export default function AIAgentsApp({ apiFetch }) {
         console.log(`[Agent Logs] No logs after 3s, showing placeholder for ${agentId}`);
         setLogText(`[SSH connection established]\n\nConnected to ${selectedConn.name || selectedConn.host} successfully.\nAuto-refreshing every 5 seconds...\n\nIf no logs appear:\n• The agent gateway might not be running\n• Try starting/restarting the gateway from the Overview tab\n• Click the "Refresh" button above to fetch logs manually\n`);
       }, 3000);
-      
-      // Cleanup on unmount
-      return () => {
-        clearInterval(pollInterval);
-      };
+      // NOTE: intentionally no cleanup returned here. This is a socket.io event
+      // handler and socket.io DISCARDS handler return values — the old
+      // `return () => clearInterval(pollInterval)` never ran. Both timers are now
+      // cancelled by the effect's own cleanup at the bottom of this effect.
     });
 
     socket.on('ssh:data', (data) => {
@@ -1006,13 +1022,15 @@ export default function AIAgentsApp({ apiFetch }) {
     });
 
     // ── Path 3: HTTP snapshot fallback on error ──
-    socket.on('ssh:error', () => {
+    socket.on('ssh:error', (err) => {
+      console.error('[Agent Logs] SSH error:', err);
       if (!active) return;
       setLogStreamMode('http');
       fetchSnapshot();
     });
 
-    socket.on('connect_error', () => {
+    socket.on('connect_error', (err) => {
+      console.error('[Agent Logs] Socket connection error:', err?.message);
       if (!active) return;
       setLogStreamMode('http');
       fetchSnapshot();
@@ -1020,6 +1038,11 @@ export default function AIAgentsApp({ apiFetch }) {
 
     return () => {
       active = false;
+      // Cancel the timers created inside the `ssh:connected` handler above.
+      // Without this the 5s snapshot poll outlives the effect and keeps POSTing
+      // after the user switches tabs or the component unmounts.
+      if (pollInterval) clearInterval(pollInterval);
+      if (placeholderTimer) clearTimeout(placeholderTimer);
       if (socketRef.current) {
         try { socketRef.current.emit('agent:logs:stop'); } catch {}
         socketRef.current.removeAllListeners();

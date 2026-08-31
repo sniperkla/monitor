@@ -130,10 +130,25 @@ export default function ActivityApp() {
   // Initial load + reload on filter change
   useEffect(() => { load({}); /* eslint-disable-next-line */ }, [category]);
 
-  // Debounced search
+  // Keep a ref to the current `load` so the 30s auto-refresh below always calls
+  // the latest closure. Depending on `load` directly would re-create the interval
+  // on every search keystroke; depending on nothing captured a stale `load` that
+  // still had `search === ''`, so each tick overwrote filtered results with
+  // unfiltered data.
+  const loadRef = useRef(load);
+  useEffect(() => { loadRef.current = load; }, [load]);
+
+  // Debounced search.
+  // Effects always run once on mount, so without the guard below this fired a
+  // SECOND /api/activity call 350ms after the initial load in the effect above.
+  const didInitialSearchRef = useRef(false);
   useEffect(() => {
+    if (!didInitialSearchRef.current) {
+      didInitialSearchRef.current = true;
+      return;
+    }
     clearTimeout(searchTimer.current);
-    searchTimer.current = setTimeout(() => load({}), 350);
+    searchTimer.current = setTimeout(() => loadRef.current({}), 350);
     return () => clearTimeout(searchTimer.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search]);
@@ -146,7 +161,9 @@ export default function ActivityApp() {
   // (The previous deps `[category, cursor]` also meant each new interval
   //  overlapped with the one being torn down, producing duplicate requests.)
   useEffect(() => {
-    const iv = setInterval(() => load({}), 30_000);
+    // Call through the ref so the tick uses the CURRENT `load` (latest search /
+    // cursor) instead of the first-render closure.
+    const iv = setInterval(() => loadRef.current({}), 30_000);
     return () => clearInterval(iv);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [category]);

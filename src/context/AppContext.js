@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useReducer, useCallback, useEffect, useRef } from 'react';
+import { createContext, useContext, useReducer, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useSession, signIn } from 'next-auth/react';
 import { useVault } from '@/context/VaultContext';
 import { getLocalConnections } from '@/utils/localConnections';
@@ -388,7 +388,11 @@ export function AppProvider({ children }) {
     }
   }, []);
 
-  // 2. Sync DB config from Vault when vault is unlocked
+  // 2. Sync DB config from Vault when vault is unlocked.
+  // This effect must ONLY sync config — it must NOT call fetchConnections().
+  // It keys on dbConfig identity, and effect 5 below also refetches on
+  // dbConfig.uri, so fetching here fires a DUPLICATE request on every unlock.
+  // The transition refetch now lives in its own effect (2b) below.
   useEffect(() => {
     if (vaultStatus === 'unlocked' && decryptedUri) {
       // Only update if different to prevent loops
@@ -398,17 +402,30 @@ export function AppProvider({ children }) {
           payload: { uri: decryptedUri, tunnel: decryptedTunnel || null },
         });
       }
-      // Refetch on the locked/setup -> unlocked transition: any fetch that ran
-      // before unlock went out WITHOUT the x-mongodb-uri header (center DB),
-      // leaving a stale/empty connection list until the next full page reload.
-      fetchConnections();
     } else if (vaultStatus === 'no_auth') {
       // Not logged in and no vault — ensure config is empty
       if (state.dbConfig?.uri) {
         dispatch({ type: 'SET_DB_CONFIG', payload: { uri: '', tunnel: null } });
       }
     }
-  }, [vaultStatus, decryptedUri, decryptedTunnel, state.dbConfig?.uri, state.dbConfig?.tunnel, fetchConnections]);
+  }, [vaultStatus, decryptedUri, decryptedTunnel, state.dbConfig?.uri, state.dbConfig?.tunnel]);
+
+  // 2b. Refetch EXACTLY ONCE on the locked/setup -> unlocked transition.
+  // Any fetch that ran before unlock went out WITHOUT the x-mongodb-uri header
+  // (center DB), leaving a stale/empty connection list until a full reload.
+  // Leaving unlocked clears the dedup cache so a second user on this browser
+  // cannot be served the previous user's cached GET responses.
+  const prevVaultStatusRef = useRef(null);
+  useEffect(() => {
+    const prev = prevVaultStatusRef.current;
+    prevVaultStatusRef.current = vaultStatus;
+    if (prev === null) return; // first pass — effect 5 already fetches on mount
+    if (prev === 'unlocked') {
+      clearDedupCache();
+      return;
+    }
+    if (vaultStatus === 'unlocked') fetchConnections();
+  }, [vaultStatus, fetchConnections]);
 
 
   // 3. Auto-detect local relay on mount (if discovery server running on localhost:48923)
@@ -592,8 +609,36 @@ export function AppProvider({ children }) {
     }
   }, [state.activeTerminals, state.activeFileManagers, state.activeDatabaseBrowsers, state.standaloneTerminals, state.standaloneDatabaseBrowsers, state.activeTerminalId, state.activeDatabaseBrowserId, state.activeFileManagerId, state.view]);
 
+  // Memoize the context value. Without this, every AppProvider render produces a
+  // NEW object, re-rendering EVERY consumer in the tree — including renders that
+  // come from VaultProvider above us, where `state` has not changed at all.
+  // That re-render storm is what turns any unstable dep anywhere in the app into
+  // a request loop. `dispatch` is stable and `state` only changes on dispatch,
+  // so this memo now only invalidates on a genuine state change.
+  const value = useMemo(() => ({
+    state,
+    dispatch,
+    fetchConnections,
+    apiFetch,
+    relayInfo: state.relayInfo,
+    connectionsReady: state.connectionsReady,
+    mongoDown: state.mongoDown,
+    relayDown: state.relayDown,
+    autoSwitchedToServer: state.autoSwitchedToServer,
+  }), [
+    state,
+    dispatch,
+    fetchConnections,
+    apiFetch,
+    state.relayInfo,
+    state.connectionsReady,
+    state.mongoDown,
+    state.relayDown,
+    state.autoSwitchedToServer,
+  ]);
+
   return (
-    <AppContext.Provider value={{ state, dispatch, fetchConnections, apiFetch, relayInfo: state.relayInfo, connectionsReady: state.connectionsReady, mongoDown: state.mongoDown, relayDown: state.relayDown, autoSwitchedToServer: state.autoSwitchedToServer }}>
+    <AppContext.Provider value={value}>
       {children}
     </AppContext.Provider>
   );

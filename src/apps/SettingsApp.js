@@ -1296,16 +1296,29 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
       setRelayInstallSuccess(true);
       addNotification({ title: 'Relay Connected!', message: 'Your local relay agent is now running.', type: 'success' });
       
-      // Auto-swap to SSH connection mode to local relay
-      localStorage.setItem('ssh_monitor_ssh_mode', 'local');
-      window.dispatchEvent(new Event('ssh-mode-changed'));
-      
-      // Auto-select preferred relay to this new local relay
+      // Auto-select the new relay as preferred FIRST, then swap mode.
+      // ORDER MATTERS: /api/connections routes localhost databases via the
+      // x-preferred-relay header, which apiFetch reads from localStorage at call
+      // time. The old code dispatched the refetch BEFORE writing this key, so the
+      // request always went out with the previous relay — or with none at all.
       const relayName = newRelay.relayName || newRelay.relayId;
       localStorage.setItem('ssh_monitor_preferred_relay', relayName);
       setPreferredRelay(relayName);
+
+      // Auto-swap to SSH connection mode to local relay
+      localStorage.setItem('ssh_monitor_ssh_mode', 'local');
+
+      // Fetch DIRECTLY instead of relying solely on the 'ssh-mode-changed'
+      // listener in AppContext. That listener bails out when the composed
+      // "mode:relay" string is unchanged, and on a re-install it always is —
+      // ssh_monitor_ssh_mode is sticky and AppContext's own mount-time detection
+      // already set it to 'local'. That is why the connection list stayed stale
+      // after a successful install. (dispatchEvent is kept for other listeners;
+      // if it also triggers a fetch, dedupedFetch coalesces the two.)
+      fetchConnections();
+      window.dispatchEvent(new Event('ssh-mode-changed'));
     }
-  }, [relays, existingRelayIds, relayWaiting, relayModalOpen, relayInstallSuccess, addNotification]);
+  }, [relays, existingRelayIds, relayWaiting, relayModalOpen, relayInstallSuccess, addNotification, fetchConnections]);
 
   const handleGenerateRelayToken = async () => {
     setRelayLoading(true);
@@ -1352,6 +1365,11 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
         localStorage.removeItem('ssh_monitor_preferred_relay');
         setPreferredRelay(null);
       }
+      // Refetch: localhost connections are routed through the preferred relay, so
+      // dropping it changes what /api/connections can actually reach. Nothing
+      // dispatches 'ssh-mode-changed' here, and that listener would suppress the
+      // fetch anyway whenever the mode string happens to be unchanged.
+      fetchConnections();
       addNotification({ title: 'Relay Disconnected', message: `"${targetId}" has been disconnected.`, type: 'info' });
     } catch (e) {
       console.error(e);
@@ -1364,6 +1382,9 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
       setRelayToken(null);
       setRelayConnected(false);
       setRelays([]);
+      // Same reasoning as handleDisconnectRelay: without a relay, localhost
+      // connections become unreachable, so the list must be rebuilt.
+      fetchConnections();
       addNotification({ title: t('settings_ui.relay.toasts.tokenRevoked'), message: t('settings_ui.relay.toasts.tokenRevokedMsg'), type: 'info' });
     } catch {}
   };

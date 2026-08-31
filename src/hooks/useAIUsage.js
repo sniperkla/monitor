@@ -146,6 +146,7 @@ export function useAIUsage() {
 
   useEffect(() => {
     mountedRef.current = true;
+    let initTimer = null; // cleared in the cleanup below
 
     // Register as subscriber for cache updates
     const handleCacheUpdate = (newUsage) => {
@@ -177,8 +178,10 @@ export function useAIUsage() {
     if (!globalCache.data && !isAnotherInstanceInitializing() && !globalCache.pendingPromise) {
       markInitializing();
       fetchUsage().finally(() => {
-        // Clear the initializing mark after a delay to allow other instances to see the cache
-        setTimeout(clearInitializing, 1000);
+        // Clear the initializing mark after a delay to allow other instances to see the cache.
+        // Tracked so the effect cleanup can cancel it — otherwise an unmount within
+        // 1s lets this fire late and clear the flag a remount has just re-armed.
+        initTimer = setTimeout(clearInitializing, 1000);
       });
     } else if (globalCache.data) {
       // Use cached data immediately
@@ -188,6 +191,7 @@ export function useAIUsage() {
 
     return () => {
       mountedRef.current = false;
+      if (initTimer) clearTimeout(initTimer);
       globalCache.subscribers.delete(handleCacheUpdate);
       if (broadcastChannelRef.current) {
         broadcastChannelRef.current.close();
@@ -195,7 +199,12 @@ export function useAIUsage() {
     };
   }, [fetchUsage]);
 
-  return { usage, loading, error, refresh: () => fetchUsage(true) };
+  // Memoize: a fresh arrow here gave `refresh` a NEW identity on every render.
+  // `useAIUsagePolling` lists `refresh` in its dependency array, so it destroyed
+  // and re-armed its 2s setTimeout + poll setInterval on every single render.
+  const refresh = useCallback(() => fetchUsage(true), [fetchUsage]);
+
+  return { usage, loading, error, refresh };
 }
 
 // Hook for polling with cross-tab coordination and optional notifications

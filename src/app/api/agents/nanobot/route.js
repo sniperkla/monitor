@@ -476,7 +476,7 @@ PYEOF
           // Only this install's home. Previously `/home/*/.nanobot` was also
           // removed, which as root wiped EVERY user's agent home (including
           // provisioned "friend" users). zeroclaw scopes purge to ${HH} too.
-          ? `${binRm}rm -rf "${HH}" "$HOME/.cache/nanobot" /tmp/.nb* 2>/dev/null; echo REMOVED_ALL`
+          ? `for p in $(pgrep -f '[n]anobot' 2>/dev/null); do grep -qaE -- '-.nanobot-' /proc/$p/cmdline 2>/dev/null && kill -9 $p 2>/dev/null; done; rm -rf "$HOME/.nanobot-"* 2>/dev/null; ${binRm}rm -rf "${HH}" "$HOME/.cache/nanobot" /tmp/.nb* 2>/dev/null; echo REMOVED_ALL`
           : `${binRm}rm -rf "$HOME/.nanobot/venv" "$HOME/.cache/nanobot" "${HH}/logs" 2>/dev/null; echo REMOVED_CODE`;
       const r = await run(inst ? 'remove instance (isolated home)' : purge ? 'remove nanobot binary & all data' : 'remove nanobot binary & venv (config kept)', `export PATH="$HOME/.local/bin:$HOME/.nanobot/venv/bin:/usr/local/bin:$PATH"; ${rmCmd}`);
       const ok = /REMOVED/.test(r.stdout || '');

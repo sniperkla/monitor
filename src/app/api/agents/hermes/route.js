@@ -463,10 +463,15 @@ echo CLONED
         ? '' // instances share the globally-installed binary — leave it alone
         : `rm -f "$HOME/.local/bin/hermes" /usr/local/bin/hermes; `;
       const libRm = purge && !inst && !instancesRemain ? ' /usr/local/lib/hermes-agent' : '';
+      // Full purge of the DEFAULT also wipes every instance home (and kills
+      // their daemons) so uninstall is genuinely clean — no orphan entries.
+      const instWipe = (!inst && purge)
+        ? `for p in $(pgrep -f '[h]ermes.*gatew[a]y' 2>/dev/null); do grep -qaE 'HERMES_HOME=.+\.hermes-[^ /]' /proc/$p/environ 2>/dev/null && kill -9 $p 2>/dev/null; done; rm -rf "$HOME/.hermes-"* 2>/dev/null; `
+        : '';
       const rmCmd = inst
         ? `rm -rf "${HH}"; [ ! -e "${HH}" ] && echo REMOVED_INSTANCE || { echo INSTANCE_HOME_REMAINS; exit 1; }`   // instances: always remove the whole isolated home
         : purge
-          ? `${binRm}rm -rf "${HH}"${libRm}; echo REMOVED_ALL`
+          ? `${instWipe}${binRm}rm -rf "${HH}"${libRm}; echo REMOVED_ALL`
           : `${binRm}rm -rf "${HH}/hermes-agent"${libRm}; echo REMOVED_CODE`;
       const r = await run(inst ? 'remove instance (isolated home)' : purge ? 'remove binary, code & all config' : 'remove binary & code (config kept)', rmCmd);
       const ok = /REMOVED/.test(r.stdout || '');

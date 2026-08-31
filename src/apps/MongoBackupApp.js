@@ -470,23 +470,6 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
     }
   };
 
-  // Auto-refresh execution history every 10 seconds when on History tab
-  useEffect(() => {
-    if (activeTab !== 'history') return;
-    
-    // Initial fetch
-    fetchHistory();
-    fetchAllCronLogs();
-    
-    // Set up polling
-    const interval = setInterval(() => {
-      fetchHistory();
-      fetchAllCronLogs();
-    }, 10000); // 10 seconds
-    
-    return () => clearInterval(interval);
-  }, [activeTab]);
-
   const fetchCronLog = async (job) => {
     if (!job.targetSshConnId) return;
     setCronLogLoading(prev => ({ ...prev, [job.id]: true }));
@@ -515,6 +498,35 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
   const fetchAllCronLogs = () => {
     jobs.filter(j => j.targetSshConnId && j.schedule !== 'manual').forEach(j => fetchCronLog(j));
   };
+
+  // Refs to the current fetchers. Depending on the functions directly would
+  // re-create the interval on every render (both are recreated each render);
+  // omitting them entirely — as this did before — froze the interval to the
+  // FIRST-render closures, so `fetchAllCronLogs` kept filtering a stale `jobs`
+  // array for the lifetime of the tab.
+  // NOTE: must stay BELOW both fetchHistory and fetchAllCronLogs, which are
+  // `const` arrows and therefore in the temporal dead zone above this point.
+  const fetchHistoryRef = useRef(fetchHistory);
+  const fetchAllCronLogsRef = useRef(fetchAllCronLogs);
+  useEffect(() => { fetchHistoryRef.current = fetchHistory; }, [fetchHistory]);
+  useEffect(() => { fetchAllCronLogsRef.current = fetchAllCronLogs; }, [fetchAllCronLogs]);
+
+  // Auto-refresh execution history every 10 seconds when on History tab
+  useEffect(() => {
+    if (activeTab !== 'history') return;
+
+    // Initial fetch
+    fetchHistoryRef.current();
+    fetchAllCronLogsRef.current();
+
+    // Set up polling (reads the refs so each tick uses the latest closures)
+    const interval = setInterval(() => {
+      fetchHistoryRef.current();
+      fetchAllCronLogsRef.current();
+    }, 10000); // 10 seconds
+
+    return () => clearInterval(interval);
+  }, [activeTab]);
 
   const handleClearHistory = async () => {
     if (!confirm('Are you sure you want to clear all backup history logs?')) return;

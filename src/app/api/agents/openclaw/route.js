@@ -455,10 +455,15 @@ echo "===ENVKEYS==="
       const binRm = (inst || instancesRemain)
         ? '' // instances share the globally-installed binary — leave it alone
         : `(npm -g rm openclaw 2>/dev/null || true); rm -f "$HOME/.openclaw/local/bin/openclaw" "$HOME/.local/bin/openclaw" /usr/local/bin/openclaw /usr/bin/openclaw /usr/sbin/openclaw; `;
+      // Full purge of the DEFAULT also wipes every instance home (and kills
+      // their daemons) so uninstall is genuinely clean — no orphan entries.
+      const instWipe = (!inst && purge)
+        ? `pkill -f '[o]penclaw.*gatew[a]y' 2>/dev/null; rm -rf "$HOME/.openclaw-"* 2>/dev/null; `
+        : '';
       const rmCmd = inst
         ? `rm -rf "${HH}"; [ ! -e "${HH}" ] && echo REMOVED_INSTANCE || { echo INSTANCE_HOME_REMAINS; exit 1; }`   // instances: always remove the whole isolated home
         : purge
-          ? `${binRm}rm -rf "${HH}"; echo REMOVED_ALL`
+          ? `${instWipe}${binRm}rm -rf "${HH}"; echo REMOVED_ALL`
           : `${binRm}rm -rf "${HH}/local" "${HH}/logs"; echo REMOVED_CODE`;
       const r = await run(inst ? 'remove instance (isolated home)' : purge ? 'remove binary, code & all data' : 'remove binary & code (config kept)', rmCmd);
       const ok = /REMOVED/.test(r.stdout || '');

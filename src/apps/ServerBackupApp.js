@@ -367,7 +367,18 @@ export default function ServerBackupApp({ windowId = 'server-backup', activeTab:
     setIsUploadingR2(false);
   };
 
+  // Holds the cancel function for the currently-active status poll.
+  // `pollStatus` used to RETURN a cleanup function that every call site
+  // discarded, so the 3s poll survived unmount and a second backup stacked a
+  // second overlapping poll on top of the first.
+  const stopStatusPollRef = useRef(null);
+
   const pollStatus = (connId, logFile, outFile) => {
+    // Cancel any poll still running from a previous backup before starting new one
+    if (stopStatusPollRef.current) {
+      stopStatusPollRef.current();
+      stopStatusPollRef.current = null;
+    }
     const interval = setInterval(async () => {
       try {
         const res = await apiFetch(`/api/server-backup/status?connectionId=${connId}&logFile=${encodeURIComponent(logFile)}&outFile=${encodeURIComponent(outFile)}`);
@@ -405,8 +416,19 @@ export default function ServerBackupApp({ windowId = 'server-backup', activeTab:
         console.error('Poll error:', err);
       }
     }, 3000);
-    return () => clearInterval(interval);
+    const cleanup = () => clearInterval(interval);
+    stopStatusPollRef.current = cleanup;
+    return cleanup;
   };
+
+  // Stop the backup status poll when the app window closes. Without this the
+  // 3s interval keeps hitting /api/server-backup/status forever.
+  useEffect(() => () => {
+    if (stopStatusPollRef.current) {
+      stopStatusPollRef.current();
+      stopStatusPollRef.current = null;
+    }
+  }, []);
 
   const handleStartBackup = async () => {
     if (!connectionId) return addNotification({ title: 'Error', message: 'Select a server connection', type: 'error' });
@@ -522,7 +544,9 @@ export default function ServerBackupApp({ windowId = 'server-backup', activeTab:
       setTransferId(tid);
       setTransferProgress('Transferring...');
 
-      // Poll for progress
+      // Poll for progress — cancel any previous transfer poll first so starting a
+      // second transfer cannot stack a second interval on the first.
+      if (transferPollRef.current) clearInterval(transferPollRef.current);
       transferPollRef.current = setInterval(async () => {
         try {
           const pr = await apiFetch(`/api/server-backup/transfer?transferId=${tid}`);
@@ -558,6 +582,16 @@ export default function ServerBackupApp({ windowId = 'server-backup', activeTab:
       addNotification({ title: 'Error', message: err.message, type: 'error' });
     }
   };
+
+  // Stop the 800ms transfer poll when the app window closes. It was previously
+  // only cleared on completed/failed/cancelled, so closing the window mid-transfer
+  // left it polling /api/server-backup/transfer forever.
+  useEffect(() => () => {
+    if (transferPollRef.current) {
+      clearInterval(transferPollRef.current);
+      transferPollRef.current = null;
+    }
+  }, []);
 
   const handleCancelTransfer = async () => {
     if (!transferId) return;

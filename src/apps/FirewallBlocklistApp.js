@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   TriangleAlert, ChevronDown, ChevronUp, Copy, FileUp, BrickWallShield, Globe2, Info,
@@ -267,7 +267,16 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
   const { state: appState, apiFetch } = useApp();
   const { state: osState, addNotification, showConfirm } = useOS();
   const { t } = useTranslation();
-  const connections = (appState?.connections || []).filter(connection => connection.type !== 'database');
+  // Memoize: a bare .filter() returns a NEW array on every render, so every
+  // effect listing `connections` in its dependency array re-ran on every render.
+  // The worst case was the realtime socket below (line ~593): this component
+  // re-renders ~1x/sec from the very telemetry stream it opens, so the socket was
+  // torn down and re-created — and `telemetry:start_stream` re-emitted — once per
+  // second. Identity is now stable unless appState.connections actually changes.
+  const connections = useMemo(
+    () => (appState?.connections || []).filter(connection => connection.type !== 'database'),
+    [appState?.connections]
+  );
   const [connectionId, setConnectionId] = useState('');
   const [activeTab, setActiveTab] = useState('manual'); // 'manual' | 'schedule' | 'controls'
   const [showOnboarding, setShowOnboarding] = useState(false);
@@ -643,9 +652,13 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
 
   useEffect(() => {
     if (!connectionId || !status?.blocklist?.active) return undefined;
+    // Skip the 10s HTTP poll while the realtime agent stream is already pushing
+    // the same counters once per second — otherwise we pay for both transports
+    // and the poll overwrites stream data with a 10s-old snapshot.
+    if (realtimeActive) return undefined;
     const timer = window.setInterval(loadStatus, 10000);
     return () => window.clearInterval(timer);
-  }, [connectionId, loadStatus, status?.blocklist?.active]);
+  }, [connectionId, loadStatus, status?.blocklist?.active, realtimeActive]);
 
   const loadSourceStatus = useCallback(async () => {
     if (!connectionId) return;

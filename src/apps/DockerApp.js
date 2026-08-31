@@ -291,7 +291,14 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
   
   // Connection selection
   const { connections, dbConfig } = state;
-  const sshConnections = connections.filter(c => c.type !== 'database');
+  // Memoize: a bare .filter() returns a NEW array on every render, so any effect
+  // listing `sshConnections` in its dependency array re-ran on every render. It is
+  // currently saved only by the `if (selectedConnection) return;` guard in the
+  // effect below — remove that guard and it becomes an instant loop.
+  const sshConnections = useMemo(
+    () => connections.filter(c => c.type !== 'database'),
+    [connections]
+  );
   const [selectedConnection, setSelectedConnection] = useState(initialConnection || null);
 
   const initialConnIdRef = useRef(initialConnectionId);

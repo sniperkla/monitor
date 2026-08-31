@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   CloudSync, HardDrive, RefreshCw, Terminal, CircleCheckBig, TriangleAlert,
   Plus, Trash2, Folder, File, Play, Shield, Settings, Server, Database,
@@ -612,7 +612,13 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   
   // Read connections directly from AppContext so all apps share the same source of truth
-  const connections = (appState?.connections || []).filter(c => c.type !== 'database');
+  // Memoize: a bare .filter() returns a NEW array on every render, so every effect
+  // listing `connections` in its dependency array re-ran on every render (the
+  // effect at :730 was saved from looping only by an early-return guard).
+  const connections = useMemo(
+    () => (appState?.connections || []).filter(c => c.type !== 'database'),
+    [appState?.connections]
+  );
   const [selectedConnId, setSelectedConnId] = useState('');
   const [activeTab, setActiveTabState] = useState(propActiveTab || 'setup'); // 'setup' | 'remotes' | 'backup' | 'browser'
   const setActiveTab = (tab) => {
@@ -873,6 +879,13 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
     return () => { if (interval) clearInterval(interval); };
   }, [activeJob, isJobRunning, selectedConnId, apiFetch]);
 
+  // Ref mirror of `targetPath`, which is bound directly to the Destination Path
+  // text input. Listing the raw value in the dependency array below meant every
+  // keystroke destroyed and recreated the 3s interval; the effect only needs the
+  // value at the moment it fires, so it reads the ref instead.
+  const targetPathRef = useRef(targetPath);
+  useEffect(() => { targetPathRef.current = targetPath; }, [targetPath]);
+
   // Poll most-recently-modified rclone log for Schedules tab (covers cron-triggered jobs)
   useEffect(() => {
     if (!selectedConnId || activeTab !== 'crons') return;
@@ -885,7 +898,7 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
       try {
         // Find the latest modified rclone cron log across persistent and /tmp paths
         const res = await apiFetch(
-          `/api/rclone/history?connectionId=${selectedConnId}&latestLog=1&target=${encodeURIComponent(targetPath || '')}`,
+          `/api/rclone/history?connectionId=${selectedConnId}&latestLog=1&target=${encodeURIComponent(targetPathRef.current || '')}`,
         );
         const data = await res.json();
         if (data?.success && data.latestLog) {
@@ -897,7 +910,7 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
       } catch (_) {}
     }, 3000);
     return () => { if (interval) clearInterval(interval); };
-  }, [selectedConnId, activeTab, apiFetch, targetPath, activeJob, isJobRunning]);
+  }, [selectedConnId, activeTab, apiFetch, activeJob, isJobRunning]);
 
   const selectedConn = connections?.find(c => (c.id || c._id) === selectedConnId);
 
@@ -1156,17 +1169,25 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
   };
 
   // ⚡ Real-Time Auto-Refresh Effect for Backup History (6s Interval)
+  // Ref to the current `fetchHistory` so the 6s tick always calls the latest
+  // closure. It closes over `targetPath`, so without this the auto-refresh would
+  // keep querying with whatever targetPath was when the interval was last armed.
+  const fetchHistoryRef = useRef(fetchHistory);
+  useEffect(() => { fetchHistoryRef.current = fetchHistory; }, [fetchHistory]);
+
   useEffect(() => {
     if (!autoRefreshHistory || !selectedConnId) return;
 
     const interval = setInterval(() => {
       if (activeTab === 'history' || activeTab === 'backup') {
-        fetchHistory(true);
+        fetchHistoryRef.current(true);
       }
     }, 6000);
 
     return () => clearInterval(interval);
-  }, [autoRefreshHistory, selectedConnId, activeTab, targetPath]);
+    // `targetPath` was listed here but is never read in the body — it is bound to
+    // a text input, so every keystroke destroyed and recreated this 6s interval.
+  }, [autoRefreshHistory, selectedConnId, activeTab]);
 
   const handleSaveCron = async () => {
     if (!sourcePath || !targetPath) {

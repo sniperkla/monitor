@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useReducer, useEffect, useState, useRef, useCallback } from 'react';
+import { createContext, useContext, useReducer, useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { useSession } from 'next-auth/react';
 import i18n from '@/lib/i18n';
 import { AppRegistry } from '@/apps/AppRegistry';
@@ -1679,74 +1679,169 @@ export function OSProvider({ children }) {
     };
   }, [state.currentDesktopId, state.desktops, state.keyboardShortcuts]);
 
+  // ── Dispatch wrappers ────────────────────────────────────────────────────
+  // These were previously inline arrows inside the provider `value` object,
+  // which meant a brand-new function identity on EVERY render. Consumers that
+  // put them in a dependency array (e.g. SettingsApp's SSE effect) therefore
+  // tore down and rebuilt their connections on every render. `dispatch` from
+  // useReducer is stable, so these can be permanently stable too.
+  const setTerminalSettings = useCallback(
+    (settings) => dispatch({ type: 'SET_TERMINAL_SETTINGS', payload: settings }), []);
+  // Icon groups
+  const createIconGroup = useCallback(
+    (name, position, iconIds) => dispatch({ type: 'CREATE_ICON_GROUP', payload: { name, position, iconIds } }), []);
+  const deleteIconGroup = useCallback(
+    (id) => dispatch({ type: 'DELETE_ICON_GROUP', payload: id }), []);
+  const renameIconGroup = useCallback(
+    (id, name) => dispatch({ type: 'RENAME_ICON_GROUP', payload: { id, name } }), []);
+  const updateIconGroupPosition = useCallback(
+    (id, position) => dispatch({ type: 'UPDATE_ICON_GROUP_POSITION', payload: { id, position } }), []);
+  const addToIconGroup = useCallback(
+    (groupId, iconId) => dispatch({ type: 'ADD_TO_ICON_GROUP', payload: { groupId, iconId } }), []);
+  const removeFromIconGroup = useCallback(
+    (groupId, iconId) => dispatch({ type: 'REMOVE_FROM_ICON_GROUP', payload: { groupId, iconId } }), []);
+  // Pinned apps
+  const pinApp = useCallback(
+    (appId) => dispatch({ type: 'PIN_APP', payload: appId }), []);
+  const unpinApp = useCallback(
+    (appId) => dispatch({ type: 'UNPIN_APP', payload: appId }), []);
+
+  // Memoize the context value. Without this, every OSProvider render hands a NEW
+  // object to every consumer, re-rendering the whole app even when `state` is
+  // unchanged. That re-render storm is what amplifies unstable dep arrays
+  // elsewhere into repeated network requests.
+  const value = useMemo(() => ({
+    state,
+    openWindow,
+    closeWindow,
+    focusWindow,
+    toggleMinimize,
+    toggleMaximize,
+    snapWindow,
+    setGlassmorphism,
+    setGlassIntensity,
+    setIconSize,
+    setIconStyle,
+    setBrightness,
+    setUiScale,
+    setNotifications,
+    saveSettings,
+    addCustomWallpaper,
+    removeCustomWallpaper,
+    setSortBy,
+    setWallpaper,
+    updateIconPosition,
+    setLanguage,
+    setSelectedIcons,
+    updateMultipleIconPositions,
+    updateWindowPosition,
+    updateWindowProps,
+    minimizeAll,
+    restoreAll,
+    setExportNaming,
+    setAiHistory,
+    setSshAiHistory,
+    setSshAiPrefs,
+    setDeferredPrompt,
+    addNotification,
+    removeNotification,
+    updateNotification,
+    showAlert,
+    showModal,
+    showConfirm,
+    showPrompt,
+    closeModal,
+    // Virtual desktops
+    switchDesktop,
+    switchToNextDesktop,
+    switchToPrevDesktop,
+    addDesktop,
+    renameDesktop,
+    removeDesktop,
+    reorderDesktops,
+    moveWindowToDesktop,
+    setKeyboardShortcuts,
+    setTaskbarPosition,
+    setWindowLayout,
+    setTheme,
+    // Dispatch wrappers (hoisted above)
+    setTerminalSettings,
+    createIconGroup,
+    deleteIconGroup,
+    renameIconGroup,
+    updateIconGroupPosition,
+    addToIconGroup,
+    removeFromIconGroup,
+    pinApp,
+    unpinApp,
+    dispatch,
+  }), [
+    state,
+    openWindow,
+    closeWindow,
+    focusWindow,
+    toggleMinimize,
+    toggleMaximize,
+    snapWindow,
+    setGlassmorphism,
+    setGlassIntensity,
+    setIconSize,
+    setIconStyle,
+    setBrightness,
+    setUiScale,
+    setNotifications,
+    saveSettings,
+    addCustomWallpaper,
+    removeCustomWallpaper,
+    setSortBy,
+    setWallpaper,
+    updateIconPosition,
+    setLanguage,
+    setSelectedIcons,
+    updateMultipleIconPositions,
+    updateWindowPosition,
+    updateWindowProps,
+    minimizeAll,
+    restoreAll,
+    setExportNaming,
+    setAiHistory,
+    setSshAiHistory,
+    setSshAiPrefs,
+    setDeferredPrompt,
+    addNotification,
+    removeNotification,
+    updateNotification,
+    showAlert,
+    showModal,
+    showConfirm,
+    showPrompt,
+    closeModal,
+    switchDesktop,
+    switchToNextDesktop,
+    switchToPrevDesktop,
+    addDesktop,
+    renameDesktop,
+    removeDesktop,
+    reorderDesktops,
+    moveWindowToDesktop,
+    setKeyboardShortcuts,
+    setTaskbarPosition,
+    setWindowLayout,
+    setTheme,
+    setTerminalSettings,
+    createIconGroup,
+    deleteIconGroup,
+    renameIconGroup,
+    updateIconGroupPosition,
+    addToIconGroup,
+    removeFromIconGroup,
+    pinApp,
+    unpinApp,
+    dispatch,
+  ]);
+
   return (
-    <OSContext.Provider value={{ 
-      state, 
-      openWindow, 
-      closeWindow, 
-      focusWindow, 
-      toggleMinimize, 
-      toggleMaximize,
-      snapWindow, 
-      setGlassmorphism,
-      setGlassIntensity,
-      setIconSize, 
-      setIconStyle,
-      setBrightness,
-      setUiScale,
-      setNotifications,
-      saveSettings,
-      addCustomWallpaper,
-      removeCustomWallpaper,
-      setSortBy, 
-      setWallpaper, 
-      updateIconPosition, 
-      setLanguage, 
-      setSelectedIcons, 
-      updateMultipleIconPositions,
-      updateWindowPosition,
-      updateWindowProps,
-      minimizeAll,
-      restoreAll,
-      setExportNaming,
-      setAiHistory,
-      setSshAiHistory,
-      setSshAiPrefs,
-      setDeferredPrompt,
-      addNotification,
-      removeNotification,
-      updateNotification,
-      showAlert,
-      showModal,
-      showConfirm,
-      showPrompt,
-      closeModal,
-      // Virtual desktops
-      switchDesktop,
-      switchToNextDesktop,
-      switchToPrevDesktop,
-      addDesktop,
-      renameDesktop,
-      removeDesktop,
-      reorderDesktops,
-      moveWindowToDesktop,
-      setKeyboardShortcuts,
-      setTaskbarPosition,
-      setWindowLayout,
-      setTheme,
-      setTerminalSettings: (settings) => dispatch({ type: 'SET_TERMINAL_SETTINGS', payload: settings }),
-      // Icon groups
-      createIconGroup: (name, position, iconIds) => dispatch({ type: 'CREATE_ICON_GROUP', payload: { name, position, iconIds } }),
-      deleteIconGroup: (id) => dispatch({ type: 'DELETE_ICON_GROUP', payload: id }),
-      renameIconGroup: (id, name) => dispatch({ type: 'RENAME_ICON_GROUP', payload: { id, name } }),
-      updateIconGroupPosition: (id, position) => dispatch({ type: 'UPDATE_ICON_GROUP_POSITION', payload: { id, position } }),
-      addToIconGroup: (groupId, iconId) => dispatch({ type: 'ADD_TO_ICON_GROUP', payload: { groupId, iconId } }),
-      removeFromIconGroup: (groupId, iconId) => dispatch({ type: 'REMOVE_FROM_ICON_GROUP', payload: { groupId, iconId } }),
-      // Pinned apps
-      pinApp: (appId) => dispatch({ type: 'PIN_APP', payload: appId }),
-      unpinApp: (appId) => dispatch({ type: 'UNPIN_APP', payload: appId }),
-      dispatch,
-    }}>
+    <OSContext.Provider value={value}>
       {children}
     </OSContext.Provider>
   );

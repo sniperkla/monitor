@@ -541,7 +541,7 @@ export default function HermesAgentWizard({ isOpen, onClose, connections = [], s
                 <Trash2 size={11} /> Danger zone
               </div>
               <p className="text-[9px] text-[var(--text-muted)]">
-                Uninstall removes the agent runtime from this server. {instance ? `This also deletes the instance "${instance}" including its config, memories & sessions.` : 'Optionally delete all data (config, memories, sessions) with the checkbox above.'}
+                Uninstall removes the agent runtime from this server. {instance ? `This also deletes the instance "${instance}" including its config, memories & sessions.` : 'Full purge also deletes every spawned instance (config, memories & sessions). Untick purge to keep instance homes.'}
               </p>
               <button
                 onClick={uninstall}

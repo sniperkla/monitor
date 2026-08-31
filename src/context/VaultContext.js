@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
+import { createContext, useContext, useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useSession } from 'next-auth/react';
 import { encryptWithPassword, decryptWithPassword, hashPassword } from '@/utils/clientCrypto';
 
@@ -398,33 +398,64 @@ export function VaultProvider({ children }) {
     setIsDismissed(false);
   }, []);
 
+  // Memoize the context value. VaultProvider sits ABOVE AppProvider, so an
+  // unmemoized object here re-renders the ENTIRE tree (including every
+  // AppContext consumer) on every vault render. That re-render storm is the
+  // amplifier that turns any unstable dep anywhere into a request loop.
+  // getMasterPassword / verifyMasterPassword are hoisted into useCallback so new
+  // arrows on every render do not invalidate the memo.
+  const getMasterPassword = useCallback(() => masterPwdRef.current, []);
+
+  const verifyMasterPassword = useCallback(async (password) => {
+    if (!vaultData?.passwordHash || !vaultData?.salt) return false;
+    const hash = await hashPassword(password, vaultData.salt);
+    return hash === vaultData.passwordHash;
+  }, [vaultData?.passwordHash, vaultData?.salt]);
+
+  const value = useMemo(() => ({
+    vaultStatus,     // 'loading' | 'no_auth' | 'setup' | 'locked' | 'unlocked'
+    decryptedUri,    // Plain URI (only in memory when unlocked)
+    decryptedTunnel, // SSH tunnel config (only in memory when unlocked)
+    error,           // Error message
+    unlockVault,     // (masterPassword) => Promise<uri>
+    setupVault,      // (mongoUri, masterPassword) => Promise<boolean>
+    lockVault,       // () => void
+    clearVault,      // () => Promise<void>
+    verifyRecovery,  // (code) => Promise<response>
+    requestRecovery, // () => Promise<response>
+    fetchVault,      // () => refresh vault state
+    hasLegacyUri,    // boolean
+    legacyUri,       // string (if available)
+    isDismissed,     // boolean
+    dismissVault,    // () => void
+    showVault,       // () => void
+    isConfigured: vaultStatus !== 'setup' && vaultStatus !== 'loading',
+    isUnlocked: vaultStatus === 'unlocked',
+    getMasterPassword, // Returns cached password or null (memory only)
+    verifyMasterPassword,
+  }), [
+    vaultStatus,
+    decryptedUri,
+    decryptedTunnel,
+    error,
+    unlockVault,
+    setupVault,
+    lockVault,
+    clearVault,
+    verifyRecovery,
+    requestRecovery,
+    fetchVault,
+    hasLegacyUri,
+    legacyUri,
+    isDismissed,
+    dismissVault,
+    showVault,
+    getMasterPassword,
+    verifyMasterPassword,
+  ]);
+
   return (
-    <VaultContext.Provider value={{
-      vaultStatus,     // 'loading' | 'no_auth' | 'setup' | 'locked' | 'unlocked'
-      decryptedUri,    // Plain URI (only in memory when unlocked)
-      decryptedTunnel, // SSH tunnel config (only in memory when unlocked)
-      error,           // Error message
-      unlockVault,     // (masterPassword) => Promise<uri>
-      setupVault,      // (mongoUri, masterPassword) => Promise<boolean>
-      lockVault,       // () => void
-      clearVault,      // () => Promise<void>
-      verifyRecovery,  // (code) => Promise<response>
-      requestRecovery, // () => Promise<response>
-      fetchVault,      // () => refresh vault state
-      hasLegacyUri,    // boolean
-      legacyUri,       // string (if available)
-      isDismissed,     // boolean
-      dismissVault,    // () => void
-      showVault,        // () => void
-      isConfigured: vaultStatus !== 'setup' && vaultStatus !== 'loading',
-      isUnlocked: vaultStatus === 'unlocked',
-      getMasterPassword: () => masterPwdRef.current, // Returns cached password or null (memory only)
-      verifyMasterPassword: async (password) => {
-        if (!vaultData?.passwordHash || !vaultData?.salt) return false;
-        const hash = await hashPassword(password, vaultData.salt);
-        return hash === vaultData.passwordHash;
-      }
-    }}>
+    <VaultContext.Provider value={value}>
       {children}
     </VaultContext.Provider>
   );
