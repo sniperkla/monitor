@@ -1,7 +1,6 @@
 import NextAuth from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { authOptions, sanitizeCallbackUrl } from "@/lib/auth";
 import { NextResponse } from "next/server";
-import { sanitizeCallbackUrl } from "@/lib/auth";
 
 const handler = NextAuth(authOptions);
 
@@ -28,50 +27,39 @@ function checkSigninRateLimit(request) {
 }
 
 /**
- * Sanitize the callbackUrl query parameter BEFORE the request reaches NextAuth.
+ * Validate the callbackUrl query parameter BEFORE the request reaches NextAuth.
  *
  * NextAuth's built-in signin page renders callbackUrl as a hidden input in the
- * form. If an attacker sends `?callbackUrl=https://evil.com`, that value is
- * embedded in the HTML. The `redirect` callback later rejects external origins,
- * but we should never let the malicious value reach the rendered form in the
- * first place — defence in depth.
+ * form. If an attacker sends `?callbackUrl=https://evil.com`, that value would
+ * be embedded in the HTML. Instead of silently rewriting the URL (which can
+ * cause 500 errors when NextAuth receives a plain Request instead of a
+ * NextRequest), we reject invalid callback values with a clear HTTP 400.
  *
- * For GET requests to the signin page: if callbackUrl is an external URL not
- * on the allowlist, rewrite the request URL so callbackUrl is replaced with
- * '/' (safe relative path).
+ * Valid callbackUrl values:
+ *   - Relative paths starting with a single '/' (e.g. '/', '/dashboard')
+ *   - Absolute URLs on the same origin as the request
+ *   - Absolute URLs on the explicit allowlist (NEXTAUTH_URL, AUTH_URL,
+ *     CALLBACK_URL_ALLOWLIST env vars)
+ *
+ * @param {Request} request
+ * @returns {NextResponse|null} a 400 response if invalid, or null if OK
  */
-function sanitizeSigninCallbackUrl(request) {
+function validateCallbackUrl(request) {
   const url = new URL(request.url);
   const cb = url.searchParams.get('callbackUrl');
-  if (!cb) return request; // nothing to sanitize
+  if (!cb) return null; // no callbackUrl — nothing to validate
 
-  // Allow relative paths (already validated by the redirect callback).
-  // Strip protocol-relative and backslash tricks.
-  if (cb.startsWith('/') && !cb.startsWith('//') && !cb.startsWith('\\')) {
-    return request;
-  }
+  if (sanitizeCallbackUrl(cb, url.origin)) return null;
 
-  // Absolute URL — check against the allowlist. If it passes, leave it.
-  try {
-    const cbOrigin = new URL(cb).origin;
-    if (sanitizeCallbackUrl(cb, url.origin)) {
-      return request; // same-origin or explicitly allowlisted
-    }
-  } catch {
-    // Malformed URL — fall through to sanitization.
-  }
-
-  // External or malformed — replace callbackUrl with '/' so the form's
-  // hidden input carries a safe value. NextAuth will redirect to baseUrl
-  // after login, which is the app root.
-  url.searchParams.set('callbackUrl', '/');
-  // Build a fresh Request with the sanitized URL. Preserve method and headers;
-  // GET has no body so we don't need to pass it through.
-  const sanitizedRequest = new Request(url, {
-    method: request.method,
-    headers: request.headers,
-  });
-  return sanitizedRequest;
+  // Invalid callbackUrl — return 400 with a clear error message instead of
+  // letting NextAuth process a request that will either 500 or redirect
+  // somewhere unexpected.
+  return NextResponse.json(
+    {
+      error: 'Invalid callbackUrl. Only same-origin URLs or relative paths are allowed.',
+    },
+    { status: 400 }
+  );
 }
 
 async function rateLimitedHandler(request, context) {
@@ -87,11 +75,11 @@ async function rateLimitedHandler(request, context) {
     );
   }
 
-  // Sanitize callbackUrl on GET (form rendering) — prevent the attacker value
-  // from being embedded in the hidden input before NextAuth renders the page.
-  if (request.method === 'GET' && url.pathname.includes('/signin')) {
-    request = sanitizeSigninCallbackUrl(request);
-  }
+  // Validate callbackUrl on GET (form rendering) and POST (form submission).
+  // Returns 400 for invalid values — no 500, no open redirect, no hidden
+  // input carrying an attacker URL.
+  const validationError = validateCallbackUrl(request);
+  if (validationError) return validationError;
 
   return handler(request, context);
 }
