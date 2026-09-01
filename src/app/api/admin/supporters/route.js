@@ -1,23 +1,12 @@
 import { NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth/next';
-import { authOptions } from '@/lib/auth';
 import connectDB from '@/lib/mongodb';
 import User from '@/models/User.js';
 import SystemSetting from '@/models/SystemSetting';
 import { extendExpiry, invalidateSupporter, DEFAULT_GRANT_DAYS } from '@/utils/supporter';
 import { logger } from '@/lib/logger';
+import { requireAdmin } from '@/lib/requireAdmin';
 
 export const dynamic = 'force-dynamic';
-
-async function requireAdmin() {
-  const session = await getServerSession(authOptions);
-  if (!session) return { error: NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 }) };
-  const adminEmail = process.env.ADMIN_EMAIL;
-  if (session.user.role !== 'admin' && (!adminEmail || session.user.email !== adminEmail)) {
-    return { error: NextResponse.json({ success: false, error: 'Forbidden: Admin access required' }, { status: 403 }) };
-  }
-  return { session };
-}
 
 /**
  * Kill the user's relay tokens + active relay connections.
@@ -127,9 +116,9 @@ export async function GET() {
  */
 export async function POST(request) {
   try {
-    const { session, error } = await requireAdmin();
+    const { user: adminUser, error } = await requireAdmin();
     if (error) return error;
-    const adminEmail = session.user.email;
+    const adminEmail = adminUser?.email || '';
 
     const body = await request.json().catch(() => ({}));
     const action = String(body.action || '');
@@ -139,16 +128,16 @@ export async function POST(request) {
     }
 
     await connectDB(process.env.MONGODB_URI, true);
-    const user = await User.findOne({ email });
-    if (!user) {
+    const targetUser = await User.findOne({ email });
+    if (!targetUser) {
       return NextResponse.json({ success: false, error: 'User not found' }, { status: 404 });
     }
 
     if (action === 'grant') {
       const days = Number(body.days) > 0 ? Number(body.days) : DEFAULT_GRANT_DAYS;
-      const s = user.supporter || {};
+      const s = targetUser.supporter || {};
       const newExpiry = extendExpiry(s.expiresAt, days);
-      user.supporter = {
+      targetUser.supporter = {
         ...(s || {}),
         status: true,
         expiresAt: newExpiry,
@@ -158,25 +147,25 @@ export async function POST(request) {
         note: String(body.note || s.note || '').slice(0, 300),
         request: s.request?.status === 'pending' ? { ...s.request, status: 'granted' } : (s.request || { status: 'pending' }),
       };
-      await user.save();
+      await targetUser.save();
       invalidateSupporter(email);
       return NextResponse.json({ success: true, message: `Granted ${days} day(s) to ${email}`, expiresAt: newExpiry });
     }
 
     if (action === 'revoke') {
-      const s = user.supporter || {};
-      user.supporter = { ...(s || {}), status: false };
-      await user.save();
+      const s = targetUser.supporter || {};
+      targetUser.supporter = { ...(s || {}), status: false };
+      await targetUser.save();
       invalidateSupporter(email);
       if (global.__relaySupporterCache instanceof Map) global.__relaySupporterCache.clear();
-      killUserRelays(email, user);
+      killUserRelays(email, targetUser);
       return NextResponse.json({ success: true, message: `Revoked supporter access for ${email}` });
     }
 
     if (action === 'dismiss') {
-      const s = user.supporter || {};
-      user.supporter = { ...(s || {}), request: { ...(s.request || {}), status: 'dismissed' } };
-      await user.save();
+      const s = targetUser.supporter || {};
+      targetUser.supporter = { ...(s || {}), request: { ...(s.request || {}), status: 'dismissed' } };
+      await targetUser.save();
       return NextResponse.json({ success: true, message: `Dismissed request from ${email}` });
     }
 

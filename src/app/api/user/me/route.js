@@ -45,9 +45,6 @@ export async function GET(request) {
       return NextResponse.json({ success: false, error: 'User not found' }, { status: 404 });
     }
 
-    const isAdminEmail =
-      !!process.env.ADMIN_EMAIL && dbUser.email === process.env.ADMIN_EMAIL;
-
     const supporter = await getSupporterStatus(dbUser.email).catch(() => ({
       isSupporter: false,
       isAdmin: false,
@@ -56,8 +53,8 @@ export async function GET(request) {
 
     return NextResponse.json({
       success: true,
-      role: dbUser.role || (isAdminEmail ? 'admin' : 'user'),
-      isAdmin: (dbUser.role || (isAdminEmail ? 'admin' : 'user')) === 'admin',
+      role: dbUser.role || 'user',
+      isAdmin: dbUser.role === 'admin',
       vaultConfigured: !!dbUser.vault?.isConfigured,
       isSupporter: !!supporter.isSupporter,
       supporterExpiresAt: supporter.expiresAt || null,

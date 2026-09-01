@@ -1,25 +1,13 @@
 import { NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth/next';
-import { authOptions } from '@/lib/auth';
 import connectDB from '@/lib/mongodb';
 import SystemSetting from '@/models/SystemSetting';
 import { logger } from '@/lib/logger';
+import { requireAdmin } from '@/lib/requireAdmin';
 
 export async function POST(req) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session) {
-      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const adminList = String(process.env.ADMIN_EMAIL || '')
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean);
-
-    if (adminList.length === 0 || !adminList.includes(String(session.user?.email || ''))) {
-      return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 });
-    }
+    const { error } = await requireAdmin();
+    if (error) return error;
 
     await connectDB(process.env.MONGODB_URI, true);
 

@@ -3,22 +3,13 @@ import fs from 'fs';
 import path from 'path';
 import connectDB from '@/lib/mongodb';
 import SystemSetting from '@/models/SystemSetting';
-import { getServerSession } from 'next-auth/next';
-import { authOptions } from '@/lib/auth';
 import { logger } from '@/lib/logger';
+import { requireAdmin } from '@/lib/requireAdmin';
 
 export async function GET(req) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session) {
-      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-    }
-    
-    // RBAC: Check for admin access
-    const adminEmail = process.env.ADMIN_EMAIL;
-    if (session.user.role !== 'admin' && (!adminEmail || session.user.email !== adminEmail)) {
-      return NextResponse.json({ success: false, error: 'Forbidden: Admin access required' }, { status: 403 });
-    }
+    const { error } = await requireAdmin();
+    if (error) return error;
 
     // Ensure DB connection
     await connectDB();

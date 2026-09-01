@@ -116,8 +116,6 @@ export const authOptions = {
         }
         recordLoginSuccess({ email: cleanEmail });
 
-        const isAdminEmail = !!process.env.ADMIN_EMAIL && dbUser.email === process.env.ADMIN_EMAIL;
-
         const supporterActive = dbUser.role === 'admin' ||
           !!(dbUser.supporter?.status &&
             (!dbUser.supporter?.expiresAt || new Date(dbUser.supporter.expiresAt).getTime() > Date.now()));
@@ -127,7 +125,7 @@ export const authOptions = {
           name: dbUser.name,
           email: dbUser.email,
           image: dbUser.image || null,
-          role: dbUser.role || (isAdminEmail ? 'admin' : 'user'),
+          role: dbUser.role || 'user',
           vaultConfigured: !!dbUser.vault?.isConfigured,
           isSupporter: supporterActive,
         };

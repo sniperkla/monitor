@@ -1,11 +1,10 @@
 import { NextResponse } from 'next/server';
 import crypto from 'crypto';
-import { getServerSession } from 'next-auth/next';
-import { authOptions } from '@/lib/auth';
 import connectDB from '@/lib/mongodb';
 import SystemSetting from '@/models/SystemSetting';
 import { DEFAULT_GRANT_DAYS } from '@/utils/supporter';
 import { logger } from '@/lib/logger';
+import { requireAdmin } from '@/lib/requireAdmin';
 
 export const dynamic = 'force-dynamic';
 
@@ -25,14 +24,8 @@ function generateCode() {
  */
 export async function POST(request) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session) {
-      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-    }
-    const adminEmail = process.env.ADMIN_EMAIL;
-    if (session.user.role !== 'admin' && (!adminEmail || session.user.email !== adminEmail)) {
-      return NextResponse.json({ success: false, error: 'Forbidden: Admin access required' }, { status: 403 });
-    }
+    const { error } = await requireAdmin();
+    if (error) return error;
 
     const body = await request.json().catch(() => ({}));
     const count = Math.min(Math.max(Number(body.count) || 1, 1), 100);
@@ -88,14 +81,8 @@ export async function POST(request) {
  */
 export async function GET() {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session) {
-      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-    }
-    const adminEmail = process.env.ADMIN_EMAIL;
-    if (session.user.role !== 'admin' && (!adminEmail || session.user.email !== adminEmail)) {
-      return NextResponse.json({ success: false, error: 'Forbidden: Admin access required' }, { status: 403 });
-    }
+    const { error } = await requireAdmin();
+    if (error) return error;
 
     await connectDB(process.env.MONGODB_URI, true);
     const setting = await SystemSetting.findOne({ key: CODES_KEY });
