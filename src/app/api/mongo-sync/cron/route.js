@@ -6,6 +6,7 @@ import { SystemSettingRepository } from '@/lib/repositories/SystemSettingReposit
 import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
 import { decrypt } from '@/utils/encryption';
+import { shellQuote } from '@/utils/shellQuote';
 
 function parseCronExpr(schedule) {
   if (!schedule) return '0 2 * * *';
@@ -197,6 +198,17 @@ export async function POST(req) {
     } else {
       const conn = await connRepo.findById(connectionId);
       if (!conn) return NextResponse.json({ success: false, error: 'MongoDB connection not found' }, { status: 404 });
+
+      // Ownership enforcement: the record is resolved through an unscoped repo,
+      // so without this check any authenticated caller could pass another
+      // tenant's connectionId and have that tenant's MongoDB URI — including
+      // its credentials — baked into the generated cron script.
+      // Connections created before multi-tenancy carry no owner and stay
+      // readable; an owned connection is restricted to its owner. Mirrors the
+      // check in getSshConfig().
+      if (conn.userId && String(conn.userId) !== String(userId)) {
+        return NextResponse.json({ success: false, error: 'Access denied: this connection belongs to another user' }, { status: 403 });
+      }
       mongoUri = buildMongoUri(conn.toObject ? conn.toObject() : conn);
     }
 
@@ -597,7 +609,7 @@ echo "INSTALLED_SUCCESS"
     let probeWarnings = [];
     if (probeLogPath) {
       try {
-        const probeResult = await execCommand(sshConfig, `cat "${probeLogPath}" 2>/dev/null || echo "(probe log not found)"`);
+        const probeResult = await execCommand(sshConfig, `cat ${shellQuote(probeLogPath)} 2>/dev/null || echo "(probe log not found)"`);
         probeLogContent = probeResult.stdout.trim();
         // Extract any ❌ ERROR lines as warnings to surface in the UI
         probeWarnings = (probeLogContent || '').split('\n')

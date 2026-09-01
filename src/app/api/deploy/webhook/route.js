@@ -1286,6 +1286,9 @@ fi
           // ── Write both scripts via SFTP ─────────────────────────────────
           // Write the user command script FIRST via SFTP (no echo/base64 — avoids shell length limits)
           // Then write the outer run script which references it
+          // `projectId` is validated against /^[a-zA-Z0-9_-]{1,60}$/ at the
+          // request entry point, so both values below are shell-safe. The
+          // replace() is kept as a second line of defence.
           tmuxSession = `deploy-${projectId.replace(/[^a-zA-Z0-9_-]/g, '-')}`.slice(0, 60);
           const tmuxWrapperPath = `/tmp/deploy_tmux_${projectId}.sh`;
 
@@ -1483,7 +1486,26 @@ export async function POST(request) {
   try {
     const { searchParams } = new URL(request.url);
     const token = searchParams.get('token');
-    let projectId = searchParams.get('project') || 'default';
+
+    // Validate the project identifier once, at the point it enters. It is used
+    // to build the settings key, a remote script path
+    // (/tmp/deploy_tmux_<id>.sh) and a tmux session name — the latter two are
+    // interpolated into shell commands, where only the tmux session name was
+    // previously sanitized. Constraining it here means every downstream use is
+    // safe by construction, instead of depending on a sanitizer being applied
+    // at each individual interpolation site.
+    //
+    // Rejected values return 400 rather than falling back to 'default': a
+    // silent fallback would let a crafted `project` value deploy the default
+    // project instead of the one it named.
+    const rawProjectId = searchParams.get('project');
+    let projectId = 'default';
+    if (rawProjectId && rawProjectId !== 'default') {
+      if (!/^[a-zA-Z0-9_-]{1,60}$/.test(rawProjectId)) {
+        return NextResponse.json({ success: false, error: 'Invalid project identifier' }, { status: 400 });
+      }
+      projectId = rawProjectId;
+    }
     let dbKey = projectId === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${projectId}`;
 
     let rawBodyText = '';

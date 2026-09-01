@@ -47,9 +47,13 @@ export async function POST(request) {
           const diag = new ConnectionRepository(db);
           const row = await diag.findById(connectionId);
           if (row) {
+            // Deliberately does NOT name the owner: echoing row.email here let
+            // an authenticated caller enumerate connection IDs and harvest
+            // other tenants' email addresses. The lookup only distinguishes
+            // "owned by someone else" from "does not exist".
             return NextResponse.json({
               success: false,
-              error: `This server belongs to another account${row.email ? ` (${row.email})` : ''}. Log in as the owner to run checks on it.`,
+              error: 'This server belongs to another account. Log in as the owner to run checks on it.',
             }, { status: 403 });
           }
           return NextResponse.json({
