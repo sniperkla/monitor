@@ -744,18 +744,10 @@ base64 < "${HH}/.env" 2>/dev/null || true
 echo "===ENVKEYS==="
 grep -E '^[A-Z_]+=' "${HH}/.env" 2>/dev/null | cut -d= -f1 || true
 echo "===SKILLS==="
-# Hermes nests skills as skills/<category>/<skill-name>/; also support flat
-# skills/<skill-name>/ installs. Emit skill NAMES (not category folders).
-{ for d in "${HH}/skills"/*/; do
-    [ -d "$d" ] || continue
-    for s in "$d"*/; do
-      [ -d "$s" ] || continue
-      basename "$s"
-    done
-  done
-  for s in "${HH}/skills"/*/; do
-    [ -d "$s" ] || continue
-    [ -f "\${s}SKILL.md" ] && basename "$s"
+# Hermes nests skills as skills/<category>/<skill-name>/; also support flat skills/<skill-name>/
+{
+  find "${HH}/skills" -name "SKILL.md" -o -name "skill.md" 2>/dev/null | while read -r f; do
+    basename "$(dirname "$f")"
   done
 } 2>/dev/null | sort -u | grep -v '^$' || true
 echo "===PROMPT_B64==="
@@ -1236,6 +1228,21 @@ fi
           success: (r.stdout || '').includes('OP_DONE'),
           output: ((r.stdout || '') + (r.stderr || '')).slice(-3000),
         });
+      }
+
+      if (op === 'install-content') {
+        const rawName = String(config.name || config.id || '').trim();
+        const skillName = rawName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9_-]/g, '').slice(0, 64) || 'custom-skill';
+        let content = String(config.content || '').trim();
+        if (!content) {
+          content = `# ${rawName}\n\nSkill definition for ${rawName}.\n`;
+        }
+        const b64 = Buffer.from(content, 'utf8').toString('base64');
+        await execCommand(sshConfig,
+          `mkdir -p "${HH}/skills/custom/${skillName}"; printf '%s' "${b64}" | base64 -d > "${HH}/skills/custom/${skillName}/SKILL.md"`,
+          { pool: false, timeoutMs: 30000 });
+        const g = await gwCtl('restart');
+        return NextResponse.json({ success: true, restarted: g.ok, output: `Installed skill "${rawName}" with full content` });
       }
       return NextResponse.json({ success: false, error: `Unknown skills op: ${op}` }, { status: 400 });
     }

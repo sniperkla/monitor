@@ -132,13 +132,20 @@ Keywords:`
             const textContent = content.find(c => c.type === 'text');
             content = textContent ? textContent.text : String(content);
         }
+        const name = s.name || s.title || 'Untitled Skill';
+        const description = s.description || s.summary || '';
+        const githubUrl = s.githubUrl || item.githubUrl || '';
+        
         return {
-            id: s.id || s._id || s.slug || item.file_id || '', // Ensure we have a valid ID
-            name: s.name || s.title || 'Untitled Skill',
-            description: s.description || s.summary || '',
+            id: s.id || s._id || s.slug || item.file_id || '',
+            name,
+            author: s.author || item.author || '',
+            description,
+            githubUrl,
+            skillUrl: s.skillUrl || item.skillUrl || '',
             stars: s.stars || item.stars || 0,
             version: s.version || item.version || '1.0.0',
-            content: content // Ensure content is always mapped correctly
+            content: content // May be populated, or resolved on install via githubUrl/fallback
         };
     });
 

@@ -41,6 +41,143 @@ const DISTROS = [
 
 const THEMED_SELECT_CLS = 'w-full bg-black/40 border border-[var(--border-color)] rounded-lg px-3 py-2 text-[11px] text-[var(--text-primary)] cursor-pointer focus:outline-none focus:border-indigo-400/50 [&>option]:bg-[#1a1a2e] [&>option]:text-white';
 
+function extractExistingConfig(details) {
+  if (!details) return null;
+  const envMap = {};
+  if (details.envText) {
+    for (const line of String(details.envText).split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const eq = trimmed.indexOf('=');
+      if (eq > 0) {
+        const k = trimmed.slice(0, eq).trim();
+        const v = trimmed.slice(eq + 1).trim();
+        envMap[k] = v;
+      }
+    }
+  }
+
+  let parsedJson = null;
+  if (details.configJson) {
+    try { parsedJson = typeof details.configJson === 'object' ? details.configJson : JSON.parse(details.configJson); } catch {}
+  }
+
+  // 1. Model
+  let modelVal = details.model || '';
+  if (!modelVal) {
+    modelVal = envMap.MODEL || envMap.DEFAULT_MODEL || envMap.HERMES_MODEL || envMap.OPENCLAW_MODEL || envMap.ZEROCLAW_MODEL || envMap.NANOBOT_MODEL || '';
+  }
+  if (!modelVal && parsedJson) {
+    modelVal = parsedJson.agents?.defaults?.model || parsedJson.modelPresets?.primary?.model || parsedJson.defaultModel || parsedJson.model || '';
+  }
+  if (!modelVal && details.configYaml) {
+    const m = details.configYaml.match(/(?:default|model):\s*["']?([^"'\r\n#]+)["']?/);
+    if (m) modelVal = m[1].trim();
+  }
+  if (!modelVal && details.configToml) {
+    const m = details.configToml.match(/model\s*=\s*"([^"]+)"/);
+    if (m) modelVal = m[1].trim();
+  }
+
+  // 2. Base URL
+  const baseUrlVal = envMap.OPENAI_BASE_URL || envMap.OPENAI_API_BASE || envMap.LLM_API_BASE || envMap.CUSTOM_LLM_BASE_URL || parsedJson?.providers?.custom?.api_base || '';
+
+  // 3. Provider & API Key
+  let provId = 'openrouter';
+  let keyVal = '';
+  let customKeyName = 'CUSTOM_LLM_API_KEY';
+
+  if (envMap.OPENROUTER_API_KEY) {
+    provId = 'openrouter';
+    keyVal = envMap.OPENROUTER_API_KEY;
+  } else if (envMap.OPENAI_API_KEY && !baseUrlVal) {
+    provId = 'openai';
+    keyVal = envMap.OPENAI_API_KEY;
+  } else if (envMap.ANTHROPIC_API_KEY) {
+    provId = 'anthropic';
+    keyVal = envMap.ANTHROPIC_API_KEY;
+  } else if (envMap.CUSTOM_LLM_API_KEY || (envMap.OPENAI_API_KEY && baseUrlVal)) {
+    provId = 'custom';
+    keyVal = envMap.CUSTOM_LLM_API_KEY || envMap.OPENAI_API_KEY || '';
+    customKeyName = 'CUSTOM_LLM_API_KEY';
+  } else if (parsedJson?.providers) {
+    const pKeys = Object.keys(parsedJson.providers);
+    if (pKeys.includes('openrouter')) {
+      provId = 'openrouter';
+      keyVal = parsedJson.providers.openrouter.apiKey || '';
+    } else if (pKeys.includes('openai') && !baseUrlVal) {
+      provId = 'openai';
+      keyVal = parsedJson.providers.openai.apiKey || '';
+    } else if (pKeys.includes('anthropic')) {
+      provId = 'anthropic';
+      keyVal = parsedJson.providers.anthropic.apiKey || '';
+    } else if (pKeys.includes('custom') || baseUrlVal) {
+      provId = 'custom';
+      keyVal = parsedJson.providers?.custom?.apiKey || parsedJson.providers?.openai?.apiKey || '';
+    }
+  } else {
+    const otherKey = Object.keys(envMap).find(k => k.endsWith('_API_KEY') && !['TELEGRAM_API_KEY', 'TELEGRAM_BOT_TOKEN'].includes(k));
+    if (otherKey) {
+      provId = 'custom';
+      keyVal = envMap[otherKey];
+      customKeyName = otherKey;
+    }
+  }
+
+  if (baseUrlVal && provId === 'openrouter' && !envMap.OPENROUTER_API_KEY) {
+    provId = 'custom';
+  }
+
+  // 4. Messenger & Tokens
+  let messengerId = 'telegram';
+  let t1 = '';
+  let t2 = '';
+  let allowIds = '';
+
+  const tgTok = envMap.TELEGRAM_BOT_TOKEN || envMap.TELEGRAM_TOKEN || parsedJson?.channels?.telegram?.token || parsedJson?.channels?.telegram?.botToken || '';
+  const tgAllow = envMap.TELEGRAM_ALLOWED_USERS || (Array.isArray(parsedJson?.channels?.telegram?.allowFrom) ? parsedJson.channels.telegram.allowFrom.join(',') : '');
+
+  const lineTok = envMap.LINE_CHANNEL_ACCESS_TOKEN || envMap.LINE_ACCESS_TOKEN || '';
+  const lineSec = envMap.LINE_CHANNEL_SECRET || envMap.LINE_SECRET || '';
+  const lineAllow = envMap.LINE_ALLOWED_USERS || '';
+
+  const dcTok = envMap.DISCORD_BOT_TOKEN || envMap.DISCORD_TOKEN || '';
+  const dcAllow = envMap.DISCORD_ALLOWED_USERS || '';
+
+  if (lineTok) {
+    messengerId = 'line';
+    t1 = lineTok;
+    t2 = lineSec;
+    allowIds = lineAllow;
+  } else if (dcTok) {
+    messengerId = 'discord';
+    t1 = dcTok;
+    allowIds = dcAllow;
+  } else {
+    messengerId = 'telegram';
+    t1 = tgTok;
+    allowIds = tgAllow;
+  }
+
+  const hasExisting = !!(keyVal || modelVal || t1 || baseUrlVal || details.envText || details.installed);
+
+  return {
+    provider: provId,
+    apiKey: keyVal,
+    model: modelVal,
+    customEnvKey: customKeyName,
+    customBaseUrl: baseUrlVal,
+    messenger: messengerId,
+    tok1: t1,
+    tok2: t2,
+    allowedIds: allowIds,
+    envText: details.envText || '',
+    configContent: details.configYaml || details.configJson || details.configToml || '',
+    hasExisting,
+    envMap,
+  };
+}
+
 export default function HermesAgentWizard({ isOpen, onClose, connections = [], selectedId, apiFetch, agentApi = '/api/agents/hermes', agent = { id: 'hermes', name: 'Hermes Agent', by: 'Nous Research', docsUrl: 'https://hermes-agent.nousresearch.com/docs/' }, onLog, onActionStart, onActionEnd, instance = '', spawnMode = false, onSpawned = null }) {
   const [mode, setMode] = useState('easy');
   const [target, setTarget] = useState(selectedId || connections[0]?._id || '');
@@ -65,6 +202,8 @@ export default function HermesAgentWizard({ isOpen, onClose, connections = [], s
   const [skipBrowser, setSkipBrowser] = useState(true);
   // shared state
   const [status, setStatus] = useState(null);
+  const [existingConfig, setExistingConfig] = useState(null);
+  const [loadingDetails, setLoadingDetails] = useState(false);
   const [log, setLog] = useState([]);
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(null);
@@ -142,21 +281,43 @@ export default function HermesAgentWizard({ isOpen, onClose, connections = [], s
 
   const loadStatus = useCallback(async () => {
     if (!target) return;
-    setStatus(null);
-    // NOTE: intentionally do NOT pre-fill API key / model / tokens from the
-    // server — the form always starts FRESH so a reconfigure never silently
-    // re-saves old values. The user enters only what they want to change.
+    setLoadingDetails(true);
     try {
-      const st = await call('status').catch(() => null);
-      setStatus(st);
+      const [st, det] = await Promise.all([
+        call('status').catch(() => null),
+        call('details').catch(() => null),
+      ]);
+      const mergedStatus = { ...(st || {}), ...(det || {}) };
+      setStatus(mergedStatus);
+
+      if (!spawnMode && (mergedStatus.installed || mergedStatus.hasConfig || mergedStatus.hasEnvFile || (det && (det.envText || det.configJson || det.configYaml || det.configToml || det.model)))) {
+        const ext = extractExistingConfig(det || mergedStatus);
+        if (ext && ext.hasExisting) {
+          setExistingConfig(ext);
+          setProvider(ext.provider);
+          setApiKey(ext.apiKey);
+          setModel(ext.model);
+          setCustomEnvKey(ext.customEnvKey);
+          setCustomBaseUrl(ext.customBaseUrl);
+          setMessenger(ext.messenger);
+          setTok1(ext.tok1);
+          setTok2(ext.tok2);
+          setAllowedIds(ext.allowedIds);
+          if (ext.envText) setAdvEnv(ext.envText);
+          if (ext.configContent) setAdvSettings(ext.configContent);
+        }
+      }
     } catch {
       setStatus(null);
+    } finally {
+      setLoadingDetails(false);
     }
-  }, [target, call]);
+  }, [target, call, spawnMode]);
 
   useEffect(() => {
     if (isOpen) {
       setStatus(null);
+      setExistingConfig(null);
       setApiKey('');
       setModel('');
       setTok1('');
@@ -179,6 +340,7 @@ export default function HermesAgentWizard({ isOpen, onClose, connections = [], s
   useEffect(() => {
     setTarget(selectedId || connectionsRef.current[0]?._id || '');
     setStatus(null);
+    setExistingConfig(null);
     setLog([]);
     setDone(null);
     setShowChooser(false);
@@ -190,6 +352,45 @@ export default function HermesAgentWizard({ isOpen, onClose, connections = [], s
     setAdvEnv('');
     setAdvSettings('');
   }, [selectedId, connectionKey, agent.id]);
+
+  const handleSelectProvider = (pid) => {
+    setProvider(pid);
+    const provObj = PROVIDERS.find(x => x.id === pid);
+    if (existingConfig?.envMap) {
+      if (provObj?.envKey && existingConfig.envMap[provObj.envKey]) {
+        setApiKey(existingConfig.envMap[provObj.envKey]);
+      } else if (pid === existingConfig.provider && existingConfig.apiKey) {
+        setApiKey(existingConfig.apiKey);
+      }
+    }
+    if (provObj?.model && !model) {
+      setModel(provObj.model);
+    }
+  };
+
+  const handleSelectMessenger = (mid) => {
+    setMessenger(mid);
+    if (existingConfig?.envMap) {
+      if (mid === 'telegram') {
+        const t = existingConfig.envMap.TELEGRAM_BOT_TOKEN || existingConfig.envMap.TELEGRAM_TOKEN || '';
+        if (t) setTok1(t);
+        const a = existingConfig.envMap.TELEGRAM_ALLOWED_USERS || '';
+        if (a) setAllowedIds(a);
+      } else if (mid === 'line') {
+        const t = existingConfig.envMap.LINE_CHANNEL_ACCESS_TOKEN || existingConfig.envMap.LINE_ACCESS_TOKEN || '';
+        if (t) setTok1(t);
+        const s = existingConfig.envMap.LINE_CHANNEL_SECRET || existingConfig.envMap.LINE_SECRET || '';
+        if (s) setTok2(s);
+        const a = existingConfig.envMap.LINE_ALLOWED_USERS || '';
+        if (a) setAllowedIds(a);
+      } else if (mid === 'discord') {
+        const t = existingConfig.envMap.DISCORD_BOT_TOKEN || existingConfig.envMap.DISCORD_TOKEN || '';
+        if (t) setTok1(t);
+        const a = existingConfig.envMap.DISCORD_ALLOWED_USERS || '';
+        if (a) setAllowedIds(a);
+      }
+    }
+  };
 
   const buildPayload = () => {
     const base = mode === 'advanced' ? buildAdvancedPayload() : buildEasyPayload();
@@ -530,20 +731,41 @@ export default function HermesAgentWizard({ isOpen, onClose, connections = [], s
           {/* Easy mode fields */}
           {mode === 'easy' && (
             <div className="space-y-3">
+              {existingConfig?.hasExisting && (
+                <div className="flex items-center justify-between text-[11px] px-3.5 py-2 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-300">
+                  <span className="flex items-center gap-1.5 flex-wrap">
+                    <Settings2 size={13} className="shrink-0 text-indigo-400" />
+                    <span>Current configuration loaded. Change only what you need — other values remain unchanged.</span>
+                  </span>
+                  {loadingDetails && <Loader2 size={12} className="animate-spin text-indigo-400 shrink-0 ml-2" />}
+                </div>
+              )}
+
               {/* Step 1: brain */}
               <div>
-                <label className="text-[10px] uppercase tracking-wider font-bold text-[var(--text-muted)]">1 · Brain — LLM provider</label>
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] uppercase tracking-wider font-bold text-[var(--text-muted)]">1 · Brain — LLM provider</label>
+                  {existingConfig?.provider && (
+                    <span className="text-[9px] text-[var(--text-muted)]">
+                      Current: <span className="text-white font-medium">{PROVIDERS.find(p => p.id === existingConfig.provider)?.label || existingConfig.provider}</span>
+                    </span>
+                  )}
+                </div>
                 <div className="grid grid-cols-3 gap-1.5 mt-1">
                   {PROVIDERS.map(x => (
-                    <button key={x.id} onClick={() => { setProvider(x.id); if (x.model) setModel(x.model); }} className={`px-2 py-1.5 rounded-lg text-[10px] font-bold border transition cursor-pointer ${provider === x.id ? 'bg-indigo-500/20 border-indigo-400/40 text-indigo-300' : 'bg-black/20 border-[var(--border-color)] text-[var(--text-muted)] hover:bg-white/5'}`}>
+                    <button key={x.id} onClick={() => handleSelectProvider(x.id)} className={`px-2 py-1.5 rounded-lg text-[10px] font-bold border transition cursor-pointer ${provider === x.id ? 'bg-indigo-500/20 border-indigo-400/40 text-indigo-300' : 'bg-black/20 border-[var(--border-color)] text-[var(--text-muted)] hover:bg-white/5'}`}>
                       {x.label}
                     </button>
                   ))}
                 </div>
                 <p className="text-[10px] text-[var(--text-muted)] mt-1.5">{prov.hint}</p>
                 <div className="grid grid-cols-2 gap-2 mt-2">
-                  <input className={inputCls} placeholder="API key" value={apiKey} onChange={e => setApiKey(e.target.value)} type="password" autoComplete="off" />
-                  <input className={inputCls} placeholder={`Model (e.g. ${prov.placeholder || 'anthropic/claude-3.5-sonnet'})`} value={model} onChange={e => setModel(e.target.value)} />
+                  <div>
+                    <input className={inputCls} placeholder={existingConfig?.apiKey ? 'Current API key (edit to change)' : 'API key'} value={apiKey} onChange={e => setApiKey(e.target.value)} type="password" autoComplete="off" />
+                  </div>
+                  <div>
+                    <input className={inputCls} placeholder={existingConfig?.model ? `Current: ${existingConfig.model}` : `Model (e.g. ${prov.placeholder || 'anthropic/claude-3.5-sonnet'})`} value={model} onChange={e => setModel(e.target.value)} />
+                  </div>
                 </div>
                 {isCustom && (
                   <div className="grid grid-cols-2 gap-2 mt-2">
@@ -555,23 +777,30 @@ export default function HermesAgentWizard({ isOpen, onClose, connections = [], s
 
               {/* Step 2: messenger */}
               <div>
-                <label className="text-[10px] uppercase tracking-wider font-bold text-[var(--text-muted)]">2 · Chat with it via</label>
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] uppercase tracking-wider font-bold text-[var(--text-muted)]">2 · Chat with it via</label>
+                  {existingConfig?.messenger && (
+                    <span className="text-[9px] text-[var(--text-muted)]">
+                      Current: <span className="text-white font-medium">{MESSENGERS.find(m => m.id === existingConfig.messenger)?.label || existingConfig.messenger}</span>
+                    </span>
+                  )}
+                </div>
                 <div className="grid grid-cols-3 gap-1.5 mt-1">
                   {MESSENGERS.map(x => (
-                    <button key={x.id} onClick={() => setMessenger(x.id)} className={`px-2 py-1.5 rounded-lg text-[10px] font-bold border transition cursor-pointer ${messenger === x.id ? 'bg-indigo-500/20 border-indigo-400/40 text-indigo-300' : 'bg-black/20 border-[var(--border-color)] text-[var(--text-muted)] hover:bg-white/5'}`}>
+                    <button key={x.id} onClick={() => handleSelectMessenger(x.id)} className={`px-2 py-1.5 rounded-lg text-[10px] font-bold border transition cursor-pointer ${messenger === x.id ? 'bg-indigo-500/20 border-indigo-400/40 text-indigo-300' : 'bg-black/20 border-[var(--border-color)] text-[var(--text-muted)] hover:bg-white/5'}`}>
                       {x.label}
                     </button>
                   ))}
                 </div>
                 <p className="text-[10px] text-[var(--text-muted)] mt-1.5">{mes.hint}</p>
                 <div className={`grid gap-2 mt-2 ${messenger === 'line' ? 'grid-cols-2' : 'grid-cols-2'}`}>
-                  <input className={inputCls} placeholder={messenger === 'line' ? 'Channel access token' : 'Bot token'} value={tok1} onChange={e => setTok1(e.target.value)} type="password" autoComplete="off" />
+                  <input className={inputCls} placeholder={existingConfig?.tok1 ? 'Current token (edit to change)' : (messenger === 'line' ? 'Channel access token' : 'Bot token')} value={tok1} onChange={e => setTok1(e.target.value)} type="password" autoComplete="off" />
                   {messenger === 'line'
-                    ? <input className={inputCls} placeholder="Channel secret" value={tok2} onChange={e => setTok2(e.target.value)} type="password" autoComplete="off" />
-                    : <input className={inputCls} placeholder="Your user ID (optional)" value={allowedIds} onChange={e => setAllowedIds(e.target.value)} />}
+                    ? <input className={inputCls} placeholder={existingConfig?.tok2 ? 'Current secret' : 'Channel secret'} value={tok2} onChange={e => setTok2(e.target.value)} type="password" autoComplete="off" />
+                    : <input className={inputCls} placeholder={existingConfig?.allowedIds ? `Current IDs: ${existingConfig.allowedIds}` : 'Your user ID (optional)'} value={allowedIds} onChange={e => setAllowedIds(e.target.value)} />}
                 </div>
                 {messenger === 'line' && (
-                  <input className={`${inputCls} mt-2`} placeholder="Allowed user IDs, comma-separated (optional — empty = allow all)" value={allowedIds} onChange={e => setAllowedIds(e.target.value)} />
+                  <input className={`${inputCls} mt-2`} placeholder={existingConfig?.allowedIds ? `Current IDs: ${existingConfig.allowedIds}` : 'Allowed user IDs, comma-separated (optional — empty = allow all)'} value={allowedIds} onChange={e => setAllowedIds(e.target.value)} />
                 )}
               </div>
             </div>

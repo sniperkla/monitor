@@ -952,6 +952,22 @@ print('MCP_ADDED')
         const g = await gwCtl('restart');
         return NextResponse.json({ success: true, restarted: g.ok, output: `Configured MCP skill ${skillName}` });
       }
+
+      if (op === 'install-content') {
+        const rawName = String(config.name || config.id || '').trim();
+        const skillDir = rawName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9_-]/g, '').slice(0, 64) || 'custom-skill';
+        let content = String(config.content || '').trim();
+        if (!content) {
+          content = `# ${rawName}\n\nSkill definition for ${rawName}.\n`;
+        }
+        const contentB64 = b64(content);
+        await run('install skill content', `
+          export PATH="$HOME/.openclaw/local/bin:$HOME/.local/bin:/usr/local/bin:$PATH"
+          mkdir -p "${HH}/skills/${skillDir}"
+          python3 -c "import base64; open('${HH}/skills/${skillDir}/SKILL.md','w').write(base64.b64decode('${contentB64}').decode('utf8'))" 2>/dev/null || true`);
+        const g = await gwCtl('restart');
+        return NextResponse.json({ success: true, restarted: g.ok, output: `Installed skill "${rawName}" with full content` });
+      }
       return NextResponse.json({ success: false, error: `Unknown skills op: ${op}` }, { status: 400 });
     }
 

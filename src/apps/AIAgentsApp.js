@@ -223,6 +223,12 @@ export default function AIAgentsApp({ apiFetch }) {
   const [catalogExpanded, setCatalogExpanded] = useState(false);
   const [sharedExpanded, setSharedExpanded] = useState(false);
   const skillSearchBoxRef = useRef(null);
+  // ClawHub (SkillsMP) marketplace search
+  const [hubQuery, setHubQuery] = useState('');
+  const [hubResults, setHubResults] = useState([]);
+  const [hubLoading, setHubLoading] = useState(false);
+  const [hubError, setHubError] = useState('');
+  const [hubSearched, setHubSearched] = useState(false);
   // logs tab & WebRTC streamline
   const [logText, setLogText] = useState('');
   
@@ -609,6 +615,148 @@ export default function AIAgentsApp({ apiFetch }) {
   const removeSkill = (name) => callAction(`Remove skill ${name}`, 'skills', { config: { op: 'remove', name } });
   const installSkill = () => { if (skillInput.trim()) { const id = skillInput.trim(); setSkillInput(''); return callAction(`Install skill ${id}`, 'skills', { config: { op: 'install', id } }); } };
   const toggleBundled = (optOut) => callAction(optOut ? 'Disable bundled skills' : 'Re-enable bundled skills', 'skills', { config: { op: optOut ? 'opt-out' : 'opt-in' } });
+
+  // ClawHub marketplace search + install
+  const searchHub = useCallback(async (overrideQ) => {
+    const q = (typeof overrideQ === 'string' ? overrideQ : hubQuery).trim();
+    if (!q) {
+      setHubResults([]);
+      setHubSearched(false);
+      setHubLoading(false);
+      return;
+    }
+    setHubLoading(true); setHubError(''); setHubSearched(true);
+    try {
+      const res = await doFetch('/api/skills/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ q, type: 'smart' }),
+      });
+      const data = await res.json();
+      if (data.success) setHubResults(data.skills || []);
+      else setHubError(data.error || 'Search failed');
+    } catch (e) { setHubError(e.message); }
+    finally { setHubLoading(false); }
+  }, [doFetch, hubQuery]);
+
+  // Live autocomplete / auto-search debounce as user types
+  useEffect(() => {
+    const q = hubQuery.trim();
+    if (!q) {
+      setHubResults([]);
+      setHubSearched(false);
+      setHubLoading(false);
+      return;
+    }
+    if (q.length < 2) return;
+    const timer = setTimeout(() => {
+      searchHub(q);
+    }, 380);
+    return () => clearTimeout(timer);
+  }, [hubQuery, searchHub]);
+
+  // Helper to fetch live raw GitHub markdown or generate complete SKILL.md
+  const resolveSkillContent = async (skill) => {
+    if (skill.content && skill.content.trim().length > 20) return skill.content.trim();
+    const gh = skill.githubUrl?.trim();
+    if (gh) {
+      const candidates = [];
+      const treeMatch = gh.match(/github\.com\/([^/]+)\/([^/]+)\/tree\/([^/]+)\/(.+)/);
+      if (treeMatch) {
+        const [, owner, repo, branch, path] = treeMatch;
+        const cleanPath = path.replace(/\/$/, '');
+        if (cleanPath.endsWith('.md')) {
+          candidates.push(`https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${cleanPath}`);
+        } else {
+          candidates.push(
+            `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${cleanPath}/SKILL.md`,
+            `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${cleanPath}/skill.md`,
+            `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${cleanPath}/README.md`
+          );
+        }
+      } else {
+        const blobMatch = gh.match(/github\.com\/([^/]+)\/([^/]+)\/blob\/([^/]+)\/(.+)/);
+        if (blobMatch) {
+          const [, owner, repo, branch, path] = blobMatch;
+          candidates.push(`https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${path}`);
+        } else {
+          const repoMatch = gh.match(/github\.com\/([^/]+)\/([^/]+)/);
+          if (repoMatch) {
+            const [, owner, repo] = repoMatch;
+            candidates.push(
+              `https://raw.githubusercontent.com/${owner}/${repo}/main/SKILL.md`,
+              `https://raw.githubusercontent.com/${owner}/${repo}/master/SKILL.md`,
+              `https://raw.githubusercontent.com/${owner}/${repo}/main/README.md`
+            );
+          }
+        }
+      }
+      for (const url of candidates) {
+        try {
+          const res = await fetch(url);
+          if (res.ok) {
+            const text = await res.text();
+            if (text && text.trim().length > 10) return text.trim();
+          }
+        } catch (_) {}
+      }
+    }
+
+    const safeName = skill.name || skill.id || 'Custom Skill';
+    const safeDesc = skill.description || `Tool and skill definition for ${safeName}.`;
+    return [
+      '---',
+      `name: ${safeName}`,
+      `description: "${safeDesc.replace(/"/g, '\\"')}"`,
+      `keywords: [${safeName.toLowerCase().replace(/[^a-z0-9]+/g, ', ')}]`,
+      'source: clawhub',
+      '---',
+      '',
+      `# ${safeName}`,
+      '',
+      safeDesc,
+      '',
+      '## Instructions & Capabilities',
+      `- You have the ability to execute tasks for: ${safeName}.`,
+      `- Follow user instructions closely when invoking tools or processing requests related to ${safeName}.`,
+    ].join('\n');
+  };
+
+  const installHubSkill = async (skill) => {
+    const rawName = skill.name || skill.id || 'custom-skill';
+    const skillSlug = rawName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9_-]/g, '').slice(0, 64);
+    const label = `Install "${rawName}" from ClawHub`;
+    setBusyMsg(label); setNotice(null);
+    setLiveLogLines([`> ${label}...`, '> Resolving skill definition and instructions...']);
+    setLiveLogAction(label); setLiveLogOpen(true); setLiveLogMinimized(false);
+    try {
+      const resolvedContent = await resolveSkillContent(skill);
+      setLiveLogLines(prev => [...prev, `> Loaded skill content (${resolvedContent.length} bytes), writing to remote agent...`]);
+      // Write SKILL.md over SSH to remote agent instance
+      const r = await call('skills', { config: { op: 'install-content', name: rawName, id: skill.id, content: resolvedContent } });
+      const ok = r?.success !== false;
+      setNotice({ ok, text: r?.output || r?.error || label });
+      setLiveLogLines(prev => [...prev, ok ? `✓ Installed ${rawName}` : `✗ ${r?.error || 'Failed'}`]);
+      if (ok) {
+        setDetails(prev => {
+          if (!prev) return prev;
+          const currentSkills = prev.skills || [];
+          const entry = skillSlug || rawName;
+          if (!currentSkills.includes(entry) && !currentSkills.includes(rawName)) {
+            return { ...prev, skills: [entry, ...currentSkills] };
+          }
+          return prev;
+        });
+      }
+      await loadDetails();
+    } catch (e) {
+      setNotice({ ok: false, text: `${label}: ${e.message}` });
+      setLiveLogLines(prev => [...prev, `✗ ERROR: ${e.message}`]);
+    } finally {
+      setBusyMsg('');
+    }
+  };
   const uninstall = () => {
     setShowUninstallModal(true);
   };
@@ -2302,7 +2450,105 @@ export default function AIAgentsApp({ apiFetch }) {
 
               return (
                 <div className="space-y-4">
-                  {/* Search Bar & Autocomplete */}
+                  {/* ── For Nanobot: ClawHub Marketplace is at the very top ── */}
+                  {agent.id === 'nanobot' && (
+                    <div className="rounded-xl border border-[var(--border-color)] bg-black/30 p-4 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="text-[12px] font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+                          <Sparkles size={14} className="text-indigo-400" />
+                          ClawHub Marketplace
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-300 font-normal normal-case tracking-normal">powered by SkillsMP</span>
+                        </div>
+                      </div>
+                      <p className="text-[11px] text-[var(--text-muted)]">
+                        Search and install live community skills and tool definitions directly into Nanobot.
+                      </p>
+                      <div className="flex gap-2">
+                        <div className="relative flex-1">
+                          {hubLoading ? (
+                            <Loader2 size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-indigo-400 animate-spin pointer-events-none" />
+                          ) : (
+                            <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)] pointer-events-none" />
+                          )}
+                          <input
+                            className={`${inputCls} !pl-9`}
+                            placeholder="Type to search ClawHub skills live… (e.g. weather forecast, crypto price, docker, github)"
+                            value={hubQuery}
+                            onChange={e => setHubQuery(e.target.value)}
+                            onKeyDown={e => e.key === 'Enter' && searchHub()}
+                          />
+                          {hubQuery && (
+                            <button
+                              onClick={() => { setHubQuery(''); setHubResults([]); setHubSearched(false); }}
+                              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] text-[var(--text-muted)] hover:text-white px-1.5 py-0.5 rounded bg-white/5 cursor-pointer"
+                            >
+                              esc
+                            </button>
+                          )}
+                        </div>
+                        <button
+                          onClick={() => searchHub()}
+                          disabled={hubLoading || !hubQuery.trim()}
+                          className={`${btn} bg-indigo-500 hover:bg-indigo-400 text-white whitespace-nowrap px-4`}
+                        >
+                          {hubLoading ? <Loader2 size={11} className="animate-spin" /> : <Search size={11} />} Search
+                        </button>
+                      </div>
+
+                      {hubError && (
+                        <div className="text-[11px] text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
+                          {hubError}
+                        </div>
+                      )}
+
+                      {hubSearched && !hubLoading && hubResults.length === 0 && !hubError && (
+                        <div className="text-center py-6 text-[11px] text-[var(--text-muted)]">
+                          <Search size={18} className="mx-auto mb-2 opacity-40" />
+                          No skills found for &ldquo;{hubQuery}&rdquo;. Try different keywords.
+                        </div>
+                      )}
+
+                      {hubLoading && (
+                        <div className="text-center py-6 text-[11px] text-[var(--text-muted)] flex items-center justify-center gap-2">
+                          <Loader2 size={14} className="animate-spin text-indigo-400" /> Searching ClawHub…
+                        </div>
+                      )}
+
+                      {hubResults.length > 0 && (
+                        <div className="rounded-xl border border-[var(--border-color)] bg-black/40 divide-y divide-[var(--border-color)] max-h-80 overflow-y-auto">
+                          {hubResults.map(skill => {
+                            const isInstalled = (details?.skills || []).some(s => s.toLowerCase().includes((skill.name || skill.id || '').toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')));
+                            return (
+                              <div key={skill.id} className="flex items-start justify-between gap-3 px-4 py-3 hover:bg-white/[0.02] transition">
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-center gap-2 mb-0.5">
+                                    <span className="text-xs font-bold text-white">{skill.name}</span>
+                                    {isInstalled && <span className="text-[8px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300">Installed</span>}
+                                    {skill.stars > 0 && <span className="text-[9px] text-amber-400">★ {skill.stars}</span>}
+                                    {skill.version && <span className="text-[9px] text-[var(--text-muted)] font-mono">v{skill.version}</span>}
+                                  </div>
+                                  <div className="text-[10px] text-[var(--text-muted)] line-clamp-2 leading-relaxed">{skill.description || 'No description available.'}</div>
+                                </div>
+                                <button
+                                  onClick={() => installHubSkill(skill)}
+                                  disabled={!!busyMsg}
+                                  className={`shrink-0 text-[10px] font-bold px-3 py-1.5 rounded-lg flex items-center gap-1 transition cursor-pointer ${
+                                    isInstalled ? 'bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/20' : 'bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/30'
+                                  }`}
+                                >
+                                  {isInstalled ? <Check size={10} /> : <Plus size={10} />}
+                                  {isInstalled ? 'Reinstall' : 'Install'}
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Search Bar & Autocomplete (for non-Nanobot agents) */}
+                  {agent.id !== 'nanobot' && (
                   <div className="relative" ref={skillSearchBoxRef}>
                     <div className="flex gap-2">
                       <div className="relative flex-1">
@@ -2396,8 +2642,10 @@ export default function AIAgentsApp({ apiFetch }) {
                       </div>
                     )}
                   </div>
+                  )}
 
-                  {/* Category Filter Chips */}
+                  {/* Category Filter Chips (for non-Nanobot agents) */}
+                  {agent.id !== 'nanobot' && (
                   <div className="flex flex-wrap items-center gap-1.5">
                     {CATEGORIES.map(c => (
                       <button
@@ -2413,9 +2661,10 @@ export default function AIAgentsApp({ apiFetch }) {
                       </button>
                     ))}
                   </div>
+                  )}
 
-                  {/* Universal Skills (shared across all agents) */}
-                  {filteredShared.length > 0 && (
+                  {/* Universal Skills (shared across all agents, hidden for Nanobot which uses ClawHub) */}
+                  {agent.id !== 'nanobot' && filteredShared.length > 0 && (
                     <div>
                       <button
                         onClick={() => setSharedExpanded(x => !x)}
@@ -2476,7 +2725,8 @@ export default function AIAgentsApp({ apiFetch }) {
                     </div>
                   )}
 
-                  {/* Agent-Specific Skill Hub Grid */}
+                  {/* Agent-Specific Skill Hub Grid (hidden for Nanobot — ClawHub is used instead) */}
+                  {agent.id !== 'nanobot' && (
                   <div>
                     <button
                       onClick={() => setCatalogExpanded(x => !x)}
@@ -2550,6 +2800,8 @@ export default function AIAgentsApp({ apiFetch }) {
                     )}
                   </div>
 
+                  )}
+
                   {/* Installed Skills List */}
                   <div className="space-y-2 pt-2">
                     <div className="flex items-center justify-between">
@@ -2597,6 +2849,106 @@ export default function AIAgentsApp({ apiFetch }) {
                       </div>
                     )}
                   </div>
+
+                  {/* ── ClawHub Marketplace Search (for non-Nanobot agents) ── */}
+                  {agent.id !== 'nanobot' && (
+                  <div className="pt-2">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="text-[11px] font-bold text-[var(--text-muted)] uppercase tracking-wider flex items-center gap-1.5">
+                        <Sparkles size={12} className="text-indigo-400" />
+                        ClawHub Marketplace
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-300 font-normal normal-case tracking-normal">powered by SkillsMP</span>
+                      </div>
+                    </div>
+                    <div className="flex gap-2 mb-3">
+                      <div className="relative flex-1">
+                        {hubLoading ? (
+                          <Loader2 size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-indigo-400 animate-spin pointer-events-none" />
+                        ) : (
+                          <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)] pointer-events-none" />
+                        )}
+                        <input
+                          className={`${inputCls} !pl-9`}
+                          placeholder="Type to search ClawHub skills live… (e.g. weather forecast, docker monitor)"
+                          value={hubQuery}
+                          onChange={e => setHubQuery(e.target.value)}
+                          onKeyDown={e => e.key === 'Enter' && searchHub()}
+                        />
+                        {hubQuery && (
+                          <button
+                            onClick={() => { setHubQuery(''); setHubResults([]); setHubSearched(false); }}
+                            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] text-[var(--text-muted)] hover:text-white px-1.5 py-0.5 rounded bg-white/5 cursor-pointer"
+                          >
+                            esc
+                          </button>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => searchHub()}
+                        disabled={hubLoading || !hubQuery.trim()}
+                        className={`${btn} bg-indigo-500 hover:bg-indigo-400 text-white whitespace-nowrap px-4`}
+                      >
+                        {hubLoading ? <Loader2 size={11} className="animate-spin" /> : <Search size={11} />} Search
+                      </button>
+                    </div>
+
+                    {hubError && (
+                      <div className="text-[11px] text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 mb-2">
+                        {hubError}
+                      </div>
+                    )}
+
+                    {hubSearched && !hubLoading && hubResults.length === 0 && !hubError && (
+                      <div className="text-center py-6 text-[11px] text-[var(--text-muted)]">
+                        <Search size={18} className="mx-auto mb-2 opacity-40" />
+                        No skills found for &ldquo;{hubQuery}&rdquo;. Try different keywords.
+                      </div>
+                    )}
+
+                    {hubLoading && (
+                      <div className="text-center py-6 text-[11px] text-[var(--text-muted)] flex items-center justify-center gap-2">
+                        <Loader2 size={14} className="animate-spin text-indigo-400" /> Searching ClawHub…
+                      </div>
+                    )}
+
+                    {hubResults.length > 0 && (
+                      <div className="rounded-xl border border-[var(--border-color)] bg-black/20 divide-y divide-[var(--border-color)] max-h-80 overflow-y-auto">
+                        {hubResults.map(skill => {
+                          const isInstalled = (details?.skills || []).some(s => s.toLowerCase().includes((skill.name || skill.id || '').toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')));
+                          return (
+                            <div key={skill.id} className="flex items-start justify-between gap-3 px-4 py-3 hover:bg-white/[0.02] transition">
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-2 mb-0.5">
+                                  <span className="text-xs font-bold text-white">{skill.name}</span>
+                                  {isInstalled && <span className="text-[8px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300">Installed</span>}
+                                  {skill.stars > 0 && (
+                                    <span className="text-[9px] text-amber-400 flex items-center gap-0.5">★ {skill.stars}</span>
+                                  )}
+                                  {skill.version && (
+                                    <span className="text-[9px] text-[var(--text-muted)] font-mono">v{skill.version}</span>
+                                  )}
+                                </div>
+                                <div className="text-[10px] text-[var(--text-muted)] line-clamp-2 leading-relaxed">{skill.description || 'No description available.'}</div>
+                              </div>
+                              <button
+                                onClick={() => installHubSkill(skill)}
+                                disabled={!!busyMsg}
+                                className={`shrink-0 text-[10px] font-bold px-3 py-1.5 rounded-lg flex items-center gap-1 transition cursor-pointer ${
+                                  isInstalled
+                                    ? 'bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/20'
+                                    : 'bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/30'
+                                }`}
+                              >
+                                {isInstalled ? <Check size={10} /> : <Plus size={10} />}
+                                {isInstalled ? 'Reinstall' : 'Install'}
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                  )}
                 </div>
               );
             })()}

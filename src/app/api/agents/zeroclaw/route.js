@@ -885,9 +885,34 @@ if os.path.exists(p):
           `    prov = 'openai'`,
           `elif e.get('ANTHROPIC_API_KEY'):`,
           `    prov = 'anthropic'`,
+          `if not prov:`,
+          `    for env_ln in open(ep).read().splitlines() if os.path.exists(ep) else []:`,
+          `        if env_ln.startswith('OPENROUTER_API_KEY=') and env_ln.split('=', 1)[1].strip():`,
+          `            prov = 'openrouter'`,
+          `            break`,
+          `        elif env_ln.startswith('OPENAI_API_KEY=') and env_ln.split('=', 1)[1].strip():`,
+          `            prov = 'openai'`,
+          `            break`,
+          `        elif env_ln.startswith('ANTHROPIC_API_KEY=') and env_ln.split('=', 1)[1].strip():`,
+          `            prov = 'anthropic'`,
+          `            break`,
+          `    if not prov:`,
+          `        m_prov = re.search(r'\[providers\.models\.([a-zA-Z0-9_-]+)\.default\]', text)`,
+          `        if m_prov: prov = m_prov.group(1)`,
           `if prov:`,
           `    key = e.get(prov.upper() + '_API_KEY') or e.get('API_KEY') or s.get('api_key') or ''`,
+          `    if not key:`,
+          `        for env_ln in open(ep).read().splitlines() if os.path.exists(ep) else []:`,
+          `            if env_ln.startswith(prov.upper() + '_API_KEY=') and env_ln.split('=', 1)[1].strip():`,
+          `                key = env_ln.split('=', 1)[1].strip()`,
+          `                break`,
+          `        if not key:`,
+          `            m_key = re.search(r'\[providers\.models\.' + re.escape(prov) + r'\.default\][\s\S]*?api_key\s*=\s*"([^"]+)"', text)`,
+          `            if m_key: key = m_key.group(1)`,
           `    model = (s.get('model') or s.get('default_model') or e.get('MODEL') or e.get('ZEROCLAW_MODEL') or e.get('DEFAULT_MODEL') or '')`,
+          `    if not model:`,
+          `        m_mod = re.search(r'\[providers\.models\.' + re.escape(prov) + r'\.default\][\s\S]*?model\s*=\s*"([^"]+)"', text)`,
+          `        if m_mod: model = m_mod.group(1)`,
           `    if key:`,
           `        header = '[providers.models.' + prov + '.default]'`,
           `        text = drop(text, re.escape(header))`,
@@ -897,6 +922,14 @@ if os.path.exists(p):
           `        text = text.rstrip(NL) + NL + NL + block + NL`,
           `# telegram channel alias — user access is granted via 'zeroclaw channel bind-telegram <id>'`,
           `tok = e.get('TELEGRAM_BOT_TOKEN') or s.get('telegram_token') or ''`,
+          `if not tok:`,
+          `    for env_ln in open(ep).read().splitlines() if os.path.exists(ep) else []:`,
+          `        if env_ln.startswith('TELEGRAM_BOT_TOKEN=') and env_ln.split('=', 1)[1].strip():`,
+          `            tok = env_ln.split('=', 1)[1].strip()`,
+          `            break`,
+          `    if not tok:`,
+          `        m_tok = re.search(r'\[channels\.telegram\.default\][\s\S]*?bot_token\s*=\s*"([^"]+)"', text)`,
+          `        if m_tok: tok = m_tok.group(1)`,
           `if tok:`,
           `    text = drop(text, r'\\[channels\\.telegram\\.[^\\]]+\]')`,
           `    block = '[channels.telegram.default]' + NL + 'enabled = true' + NL + 'bot_token = "' + tok + '"' + NL`,
@@ -1099,6 +1132,21 @@ echo "TG=$TG"
         const ok = !/error|failed|not found/i.test((r.stdout || '') + (r.stderr || '')) || /Scaffolded|installed|SCAFFOLLED/i.test(r.stdout || '');
         const g = await gwCtl('restart');
         return NextResponse.json({ success: ok, restarted: g.ok, output: ((r.stdout || '') + (r.stderr || '')).slice(-500) });
+      }
+
+      if (op === 'install-content') {
+        const rawName = String(config.name || config.id || '').trim();
+        const skillName = rawName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9_-]/g, '').slice(0, 64) || 'custom-skill';
+        let content = String(config.content || '').trim();
+        if (!content) {
+          content = `# ${rawName}\n\nSkill definition for ${rawName}.\n`;
+        }
+        const b64 = Buffer.from(content, 'utf8').toString('base64');
+        await execCommand(sshConfig,
+          `${ENVX}; mkdir -p "${HH}/skills/${skillName}"; printf '%s' "${b64}" | base64 -d > "${HH}/skills/${skillName}/SKILL.md"`,
+          { pool: false, timeoutMs: 30000 });
+        const g = await gwCtl('restart');
+        return NextResponse.json({ success: true, restarted: g.ok, output: `Installed skill "${rawName}" with full content` });
       }
       return NextResponse.json({ success: false, error: `Unknown skills op: ${op}` }, { status: 400 });
     }

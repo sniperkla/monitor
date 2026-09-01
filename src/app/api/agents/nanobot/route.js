@@ -242,7 +242,7 @@ BIN="$(command -v nanobot 2>/dev/null || true)"
 echo "===CONFIG_B64==="
 base64 < "${HH}/config.json" 2>/dev/null || true
 echo "===SKILLS==="
-[ -d "${HH}/workspace/skills" ] && ls -1 "${HH}/workspace/skills" 2>/dev/null | grep -v '^\.' || true
+{ [ -d "${HH}/workspace/skills" ] && ls -1 "${HH}/workspace/skills" 2>/dev/null; [ -d "${HH}/skills" ] && ls -1 "${HH}/skills" 2>/dev/null; [ -d "$HOME/.nanobot/workspace/skills" ] && ls -1 "$HOME/.nanobot/workspace/skills" 2>/dev/null; [ -d "$HOME/.nanobot/skills" ] && ls -1 "$HOME/.nanobot/skills" 2>/dev/null; } | grep -v '^\.' | sort -u || true
 echo "===PLUGINS==="
 [ -n "$BIN" ] && "$BIN" plugins list 2>/dev/null || true
 echo "===PROMPT_B64==="
@@ -607,7 +607,8 @@ PYEOF
         `echo '${b64(JSON.stringify(cfg))}' | base64 -d > /tmp/.nb-new.json`,
         `cat > /tmp/.nb-merge.py <<'PYEOF'`,
         'import json, os, sys',
-        "path = os.environ.get('NB_HOME') or os.path.expanduser('~/.nanobot/config.json')",
+        "home = os.environ.get('NB_HOME') or os.path.expanduser('~/.nanobot')",
+        "path = os.path.join(home, 'config.json')",
         'new = json.load(open(sys.argv[1]))',
         'cur = {}',
         'if os.path.exists(path):',
@@ -743,7 +744,8 @@ if not old_provider:
 # Replace (not deep-merge) the provider/model/agent sections so stale providers
 # (e.g. openrouter) don't linger when the user switched to custom.
 for k in ('providers', 'modelPresets', 'agents'):
-    cur.pop(k, None)
+    if k in new:
+        cur.pop(k, None)
 def dm(a, b):
     for k, v in b.items():
         if isinstance(v, dict) and isinstance(a.get(k), dict): dm(a[k], v)
@@ -991,6 +993,22 @@ echo "TG=$TG"
         }
         const g = await gwCtl('restart');
         return NextResponse.json({ success: true, restarted: g.ok, output: logMsg });
+      }
+
+      if (op === 'install-content') {
+        const rawName = String(config.name || config.id || '').trim();
+        const skillName = rawName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9_-]/g, '').slice(0, 64) || 'custom-skill';
+        let content = String(config.content || '').trim();
+        if (!content) {
+          content = `# ${rawName}\n\nSkill definition for ${rawName}.\n`;
+        }
+        // Write SKILL.md over SSH to both workspace/skills and skills
+        const b64 = Buffer.from(content, 'utf8').toString('base64');
+        await execCommand(sshConfig,
+          `${ENVX}; mkdir -p "${HH}/workspace/skills/${skillName}" "${HH}/skills/${skillName}"; printf '%s' "${b64}" | base64 -d | tee "${HH}/workspace/skills/${skillName}/SKILL.md" > "${HH}/skills/${skillName}/SKILL.md"`,
+          { pool: false, timeoutMs: 30000 });
+        const g = await gwCtl('restart');
+        return NextResponse.json({ success: true, restarted: g.ok, output: `Installed skill "${rawName}" with full content` });
       }
       return NextResponse.json({ success: false, error: `Unknown skills op: ${op}` }, { status: 400 });
     }
