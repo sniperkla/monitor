@@ -4,13 +4,13 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
 import { MAX_BLOCKLIST_ENTRIES, normalizeEntry, remoteClientIps, sanitizeManualEntries, buildManualSetCommands, buildDropRuleCommands, buildSnapshotSaveCommands, buildRestoreServiceExec, buildAllowlistRestoreFragment } from '@/lib/firewallBlocklist';
+import { shellQuote } from '@/utils/shellQuote';
 
 const SCRIPT = '$HOME/.monitor-firewall-source-update.sh';
 const LOG = '$HOME/.monitor-firewall-source-update.log';
 const LOCK = '$HOME/.monitor-firewall-source-update.lock';
 const MARKER = '# monitor-firewall-source-update';
 
-const shellQuote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
 const matchesConfirmation = (value) => {
   const v = String(value || '').trim().toLowerCase();
   return v === 'confirm' || v === 'apply' || v === 'yes' || v === 'ok' || v.startsWith('confirm');

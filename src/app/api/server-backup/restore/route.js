@@ -7,6 +7,7 @@ import { writeFile, unlink } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { logger } from '@/lib/logger';
+import { shellQuote } from '@/utils/shellQuote';
 
 export async function POST(request) {
   let tempFile = null;
@@ -42,7 +43,10 @@ export async function POST(request) {
     } else if (restoreType === 'database-postgres') {
       command = `mkdir -p /tmp/dbrestore_${restoreId} && tar -xzf ${remotePath} -C /tmp/dbrestore_${restoreId} && pg_restore -d postgres /tmp/dbrestore_${restoreId}/dump.dump 2>&1; rm -rf /tmp/dbrestore_${restoreId} ${remotePath}`;
     } else {
-      command = `mkdir -p ${restorePath} && tar -xzf ${remotePath} -C ${restorePath} 2>&1; rm -f ${remotePath}`;
+      // CRITICAL: restorePath is user-supplied — must be safely quoted to
+      // prevent command injection (e.g. restorePath="; rm -rf /").
+      const safeRestorePath = shellQuote(restorePath);
+      command = `mkdir -p ${safeRestorePath} && tar -xzf ${remotePath} -C ${safeRestorePath} 2>&1; rm -f ${remotePath}`;
     }
 
     const result = await execCommand(sshConfig, command);

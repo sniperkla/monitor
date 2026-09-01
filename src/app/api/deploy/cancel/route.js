@@ -6,6 +6,7 @@ import { broadcastDeploymentStatus } from '@/app/api/deploy/sse/route';
 import { getRunning, clearRunning } from '@/lib/deployProcesses';
 import { resolveUserIdQuery, normalizeUserId } from '@/lib/deployUserQuery';
 import { logger } from '@/lib/logger';
+import { shellQuote } from '@/utils/shellQuote';
 
 async function updateStatusToCancelled(projectId, message, userId = 'global') {
   try {
@@ -63,7 +64,9 @@ export async function POST(request) {
         // Kill tmux deploy session + cleanup temp files on the remote server
         try {
           const tmuxSession = `deploy-${projectId.replace(/[^a-zA-Z0-9_-]/g, '-')}`.slice(0, 60);
-          running.conn.exec(`tmux kill-session -t ${tmuxSession} 2>/dev/null; rm -f /tmp/deploy_${tmuxSession}.log /tmp/deploy_tmux_${projectId}.sh; true`, () => {});
+          const qSession = shellQuote(tmuxSession);
+          const qProject = shellQuote(projectId.replace(/[^a-zA-Z0-9_-]/g, '-'));
+          running.conn.exec(`tmux kill-session -t ${qSession} 2>/dev/null; rm -f /tmp/deploy_${qSession}.log /tmp/deploy_tmux_${qProject}.sh; true`, () => {});
         } catch {}
         try { running.conn.end(); } catch (e) { logger.warn('[deploy/cancel] Failed to end SSH connection:', e.message); }
       }

@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { getSshConfig, execCommand, sftpTransfer } from '../_ssh';
 import crypto from 'crypto';
+import { logger } from '@/lib/logger';
 
 export async function POST(request) {
   try {
@@ -99,6 +100,10 @@ done
 log "Recreating ${inspectCount} container(s)..."
 `;
       for (const name of inspectList) {
+        // Docker container names are restricted to this character set. Reject
+        // archive-controlled names outside it before embedding them into the
+        // generated shell script and file paths.
+        if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(name)) continue;
         restoreScript += `
 # --- Container: ${name} ---
 if [ -f ${extractPath}/inspect_${name}.json ]; then
@@ -120,112 +125,67 @@ if [ -f ${extractPath}/inspect_${name}.json ]; then
       $DOCKER pull "$IMAGE" 2>&1 | tail -1
     fi
 
-    # Build docker run command from inspect data
-    RUN_ARGS=""
-
-    # Environment variables
-    while IFS= read -r env; do
-      [ -n "$env" ] && RUN_ARGS="$RUN_ARGS -e $env"
-    done < <(cat ${extractPath}/inspect_${name}.json | python3 -c "
+    # Build docker run arguments as a Bash array. The backup archive controls
+    # every value below, so never concatenate them into a command string or use
+    # eval: env values, bind paths, image names, and commands may contain shell
+    # metacharacters.
+    INSPECT_FILE="${extractPath}/inspect_${name}.json"
+    RUN_ARGS=()
+    while IFS= read -r -d '' ARG; do RUN_ARGS+=("$ARG"); done < <(python3 - "$INSPECT_FILE" <<'PY'
 import json, sys
-data = json.load(sys.stdin)
-for e in data.get('Config', {}).get('Env', []):
-    if not e.startswith('PATH='):
-        print(e)
-" 2>/dev/null || true)
 
-    # Port bindings
-    while IFS= read -r port; do
-      [ -n "$port" ] && RUN_ARGS="$RUN_ARGS -p $port"
-    done < <(cat ${extractPath}/inspect_${name}.json | python3 -c "
-import json, sys
-data = json.load(sys.stdin)
-bindings = data.get('HostConfig', {}).get('PortBindings', {}) or {}
-for container_port, host_list in bindings.items():
-    cp = container_port.split('/')[0]
-    for h in (host_list or []):
-        hp = h.get('HostPort', '')
-        hip = h.get('HostIp', '0.0.0.0')
+def emit(value):
+    sys.stdout.buffer.write(str(value).encode('utf-8', 'surrogateescape') + b'\0')
+
+with open(sys.argv[1], encoding='utf-8') as handle:
+    data = json.load(handle)
+config = data.get('Config', {}) or {}
+host = data.get('HostConfig', {}) or {}
+for value in config.get('Env', []) or []:
+    if value and not value.startswith('PATH='):
+        emit('-e'); emit(value)
+for container_port, bindings in (host.get('PortBindings', {}) or {}).items():
+    cp = str(container_port).split('/')[0]
+    for binding in bindings or []:
+        hp = binding.get('HostPort', '')
+        hip = binding.get('HostIp', '0.0.0.0')
         if hp:
-            if hip and hip != '0.0.0.0':
-                print(f'{hip}:{hp}:{cp}')
-            else:
-                print(f'{hp}:{cp}')
-" 2>/dev/null || true)
-
-    # Volume mounts (bind mounts)
-    while IFS= read -r bind; do
-      [ -n "$bind" ] && RUN_ARGS="$RUN_ARGS -v $bind"
-    done < <(cat ${extractPath}/inspect_${name}.json | python3 -c "
+            emit('-p'); emit(f'{hip}:{hp}:{cp}' if hip and hip != '0.0.0.0' else f'{hp}:{cp}')
+for value in host.get('Binds', []) or []:
+    if value:
+        emit('-v'); emit(value)
+for mount in data.get('Mounts', []) or []:
+    if mount.get('Type') == 'volume' and mount.get('Name') and mount.get('Destination'):
+        emit('-v'); emit(f"{mount['Name']}:{mount['Destination']}")
+network = host.get('NetworkMode', 'default')
+if network and network != 'default':
+    emit('--network'); emit(network)
+restart = host.get('RestartPolicy', {}) or {}
+restart_name = restart.get('Name', 'no')
+if restart_name and restart_name != 'no':
+    value = restart_name
+    if restart.get('MaximumRetryCount', 0):
+        value = f"{value}:{restart['MaximumRetryCount']}"
+    emit('--restart'); emit(value)
+hostname = config.get('Hostname', '')
+if hostname:
+    emit('--hostname'); emit(hostname)
+emit('--name'); emit(sys.argv[1].rsplit('/inspect_', 1)[-1].rsplit('.json', 1)[0])
+PY
+)
+    CMD=()
+    while IFS= read -r -d '' ARG; do CMD+=("$ARG"); done < <(python3 - "$INSPECT_FILE" <<'PY'
 import json, sys
-data = json.load(sys.stdin)
-for b in data.get('HostConfig', {}).get('Binds', []) or []:
-    print(b)
-" 2>/dev/null || true)
-
-    # Named volumes via Mounts
-    while IFS= read -r mount; do
-      [ -n "$mount" ] && RUN_ARGS="$RUN_ARGS -v $mount"
-    done < <(cat ${extractPath}/inspect_${name}.json | python3 -c "
-import json, sys
-data = json.load(sys.stdin)
-for m in data.get('Mounts', []) or []:
-    if m.get('Type') == 'volume':
-        name = m.get('Name', '')
-        dest = m.get('Destination', '')
-        if name and dest:
-            print(f'{name}:{dest}')
-" 2>/dev/null || true)
-
-    # Network mode
-    NETWORK=$(cat ${extractPath}/inspect_${name}.json | python3 -c "
-import json, sys
-data = json.load(sys.stdin)
-nm = data.get('HostConfig', {}).get('NetworkMode', 'default')
-print(nm if nm and nm != 'default' else '')
-" 2>/dev/null || true)
-    [ -n "$NETWORK" ] && RUN_ARGS="$RUN_ARGS --network $NETWORK"
-
-    # Restart policy
-    RESTART=$(cat ${extractPath}/inspect_${name}.json | python3 -c "
-import json, sys
-data = json.load(sys.stdin)
-rp = data.get('HostConfig', {}).get('RestartPolicy', {}) or {}
-name = rp.get('Name', 'no')
-if name and name != 'no':
-    mc = rp.get('MaximumRetryCount', 0)
-    if mc:
-        print(f'{name}:{mc}')
-    else:
-        print(name)
-" 2>/dev/null || true)
-    [ -n "$RESTART" ] && RUN_ARGS="$RUN_ARGS --restart $RESTART"
-
-    # Hostname
-    HOSTNAME=$(cat ${extractPath}/inspect_${name}.json | python3 -c "
-import json, sys
-data = json.load(sys.stdin)
-h = data.get('Config', {}).get('Hostname', '')
-print(h)
-" 2>/dev/null || true)
-    [ -n "$HOSTNAME" ] && RUN_ARGS="$RUN_ARGS --hostname $HOSTNAME"
-
-    # Container name
-    RUN_ARGS="$RUN_ARGS --name ${name}"
-
-    # Command
-    CMD=$(cat ${extractPath}/inspect_${name}.json | python3 -c "
-import json, sys
-import { logger } from '@/lib/logger';
-data = json.load(sys.stdin)
-cmd = data.get('Config', {}).get('Cmd')
-if cmd:
-    print(' '.join(cmd))
-" 2>/dev/null || true)
+with open(sys.argv[1], encoding='utf-8') as handle:
+    data = json.load(handle)
+for value in data.get('Config', {}).get('Cmd', []) or []:
+    sys.stdout.buffer.write(str(value).encode('utf-8', 'surrogateescape') + b'\0')
+PY
+)
 
     log "  Starting container: ${name} (image: $IMAGE)"
-    log "  Args: $RUN_ARGS"
-    eval "$DOCKER run -d $RUN_ARGS $IMAGE $CMD" 2>&1 | while read line; do log "    $line"; done
+    log "  Args: \${#RUN_ARGS[@]} arguments"
+    $DOCKER run -d "\${RUN_ARGS[@]}" "$IMAGE" "\${CMD[@]}" 2>&1 | while read line; do log "    $line"; done
     log "  Container ${name} started."
   fi
 else
@@ -262,18 +222,22 @@ echo "---END---"
       });
     }
 
-    // 4. Execute the restore script
+    // 4. Execute the restore script.
+    // Transferred as base64 rather than a heredoc: the script embeds container
+    // names read out of the backup archive, and a quoted heredoc is still
+    // terminated early by a line matching the delimiter.
     const scriptPath = `/tmp/docker_restore_${restoreId}.sh`;
-    const writeScript = `cat > ${scriptPath} <<'RESTORE_EOF'\n${restoreScript}\nRESTORE_EOF\nchmod +x ${scriptPath}`;
+    const qScriptPath = shellQuote(scriptPath);
+    const writeScript = `printf '%s' ${shellQuote(Buffer.from(restoreScript, 'utf8').toString('base64'))} | base64 -d > ${qScriptPath} && chmod +x ${qScriptPath}`;
     await execCommand(targetSshConfig, writeScript);
 
-    const result = await execCommand(targetSshConfig, `bash ${scriptPath} 2>&1; echo "EXIT_CODE=$?"`);
+    const result = await execCommand(targetSshConfig, `bash ${qScriptPath} 2>&1; echo "EXIT_CODE=$?"`);
 
     const exitCode = result.stdout.match(/EXIT_CODE=(\d+)/)?.[1];
     const resultLog = result.stdout.match(/---RESULT---\n([\s\S]*?)---END---/)?.[1]?.trim();
 
     // Cleanup script
-    await execCommand(targetSshConfig, `rm -f ${scriptPath}`);
+    await execCommand(targetSshConfig, `rm -f ${qScriptPath}`);
 
     return NextResponse.json({
       success: exitCode === '0',

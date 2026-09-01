@@ -1,8 +1,9 @@
-import 
+import
  { NextResponse } from 'next/server';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
 import { logger } from '@/lib/logger';
 import { auditLog } from '@/lib/auditLog';
+import { shellQuote, shellArg, shellInt } from '@/utils/shellQuote';
 
 function quote(str) {
   return `'${String(str).replace(/'/g, `'\\''`)}'`;
@@ -156,16 +157,22 @@ export async function GET(req) {
 
     const sshConfig = await getSshConfig(connectionId, { sshMode, preferredRelay });
 
-    // Read latest log output
-    const logRes = await execCommand(sshConfig, `cat "${logFile}" 2>/dev/null || echo "Log initializing in tmux..."`);
+    // Read latest log output — logFile is user-supplied, must be safely quoted
+    const safeLogFile = shellQuote(logFile);
+    const logRes = await execCommand(sshConfig, `cat ${safeLogFile} 2>/dev/null || echo "Log initializing in tmux..."`);
     
     // Check if tmux session or process is still running
     let isRunning = false;
     if (sessionName) {
-      const tmuxCheck = await execCommand(sshConfig, `tmux has-session -t "${sessionName}" 2>/dev/null`);
+      const safeSession = shellQuote(sessionName);
+      const tmuxCheck = await execCommand(sshConfig, `tmux has-session -t ${safeSession} 2>/dev/null`);
       isRunning = tmuxCheck.code === 0;
     } else if (pid) {
-      const psRes = await execCommand(sshConfig, `ps -p ${pid} 2>/dev/null | grep ${pid}`);
+      const safePid = shellInt(pid);
+      if (!safePid) {
+        return NextResponse.json({ success: false, error: 'Invalid pid' }, { status: 400 });
+      }
+      const psRes = await execCommand(sshConfig, `ps -p ${safePid} 2>/dev/null | grep ${safePid}`);
       isRunning = psRes.code === 0;
     }
 

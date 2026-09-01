@@ -3,6 +3,7 @@ import connectDB from '@/lib/mongodb';
 import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import { decrypt } from '@/utils/encryption';
 import { logger } from '@/lib/logger';
+import { shellQuote } from '@/utils/shellQuote';
 
 const isLocalhost = (host) => /^(localhost|127\.0\.0\.1)$/.test(host);
 
@@ -335,8 +336,10 @@ export function sftpReadStream(sshConfig, filePath) {
   return new Promise((resolve, reject) => {
     const conn = new Client();
     conn.on('ready', () => {
-      // Use raw cat stream for max throughput
-      conn.exec(`cat ${JSON.stringify(filePath)}`, (err, stream) => {
+      // Use raw cat stream for max throughput.
+      // NOTE: JSON.stringify() is NOT shell-safe — it leaves `$`, backticks and
+      // `!` intact, so a path containing $(...) would execute. Use shellQuote.
+      conn.exec(`cat ${shellQuote(filePath)}`, (err, stream) => {
         if (err) {
           // Fallback to SFTP if exec channel fails
           return conn.sftp((sftpErr, sftp) => {
@@ -399,7 +402,7 @@ export function sftpTransfer(sourceConfig, sourcePath, targetConfig, targetPath,
 
       // Check if source is directory or single file
       const isDir = await new Promise((res) => {
-        srcConn.exec(`[ -d ${JSON.stringify(sourcePath)} ] && echo DIR || echo FILE`, (err, stream) => {
+        srcConn.exec(`[ -d ${shellQuote(sourcePath)} ] && echo DIR || echo FILE`, (err, stream) => {
           if (err) return res(false);
           let out = '';
           stream.on('data', d => out += d.toString());
@@ -410,9 +413,10 @@ export function sftpTransfer(sourceConfig, sourcePath, targetConfig, targetPath,
 
       // Upfront accurate total size detection (5s timeout max)
       const totalSize = await new Promise((res) => {
+        const qSizePath = shellQuote(sourcePath);
         const sizeCmd = isDir
-          ? `du -sb "${sourcePath}" 2>/dev/null | cut -f1`
-          : `stat -c%s "${sourcePath}" 2>/dev/null || wc -c < "${sourcePath}" 2>/dev/null || echo 0`;
+          ? `du -sb ${qSizePath} 2>/dev/null | cut -f1`
+          : `stat -c%s ${qSizePath} 2>/dev/null || wc -c < ${qSizePath} 2>/dev/null || echo 0`;
         const timer = setTimeout(() => res(0), 5000);
         try {
           srcConn.exec(sizeCmd, (err, stream) => {
@@ -449,12 +453,15 @@ export function sftpTransfer(sourceConfig, sourcePath, targetConfig, targetPath,
       const path = require('path');
       const targetDir = path.posix.dirname(targetPath);
 
+      const qSrc = shellQuote(sourcePath);
+      const qTarget = shellQuote(targetPath);
+      const qTargetDir = shellQuote(targetDir);
       const cmdSrc = isDir
-        ? `tar cf - -C ${JSON.stringify(sourcePath)} . 2>/dev/null`
-        : `cat ${JSON.stringify(sourcePath)}`;
+        ? `tar cf - -C ${qSrc} . 2>/dev/null`
+        : `cat ${qSrc}`;
       const cmdDest = isDir
-        ? `rm -rf ${JSON.stringify(targetPath)} && mkdir -p ${JSON.stringify(targetPath)} && tar xf - -C ${JSON.stringify(targetPath)} 2>/dev/null`
-        : `mkdir -p ${JSON.stringify(targetDir)} && cat > ${JSON.stringify(targetPath)}`;
+        ? `rm -rf ${qTarget} && mkdir -p ${qTarget} && tar xf - -C ${qTarget} 2>/dev/null`
+        : `mkdir -p ${qTargetDir} && cat > ${qTarget}`;
 
       srcConn.exec(cmdSrc, (err, srcStream) => {
         if (err) return onErr(err);

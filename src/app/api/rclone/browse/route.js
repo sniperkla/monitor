@@ -1,14 +1,9 @@
 import { NextResponse } from 'next/server';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
 import { logger } from '@/lib/logger';
+import { shellQuoteExpandHome } from '@/utils/shellQuote';
 
-function quote(str) {
-  const s = String(str);
-  if (s.includes('$HOME') || s.startsWith('~')) {
-    return `"${s.replace(/"/g, '\\"')}"`;
-  }
-  return `'${s.replace(/'/g, `'\\''`)}'`;
-}
+const quote = shellQuoteExpandHome;
 
 export async function GET(req) {
   try {

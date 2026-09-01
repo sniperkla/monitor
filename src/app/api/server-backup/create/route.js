@@ -4,6 +4,7 @@ import { authOptions } from '@/lib/auth';
 import { getSshConfig, execCommand } from '../_ssh';
 import crypto from 'crypto';
 import { logger } from '@/lib/logger';
+import { shellQuote, shellInt } from '@/utils/shellQuote';
 
 function buildBackupCommand(jobId, type, config) {
   const logFile = `/tmp/backup_${jobId}.log`;
@@ -12,13 +13,16 @@ function buildBackupCommand(jobId, type, config) {
 
   switch (type) {
     case 'webapp': {
-      const paths = (config.paths || []).filter(Boolean).join(' ');
-      const excludes = (config.excludes || []).map(e => `--exclude='${e}'`).join(' ');
-      cmd = `tar -czf ${outFile} ${excludes} -C / ${paths}`;
+      const paths = (config.paths || []).filter(Boolean).map(shellQuote).join(' ');
+      const excludes = (config.excludes || []).filter(Boolean).map(e => `--exclude=${shellQuote(e)}`).join(' ');
+      cmd = `tar -czf ${shellQuote(outFile)} ${excludes} -C / ${paths}`;
       break;
     }
     case 'docker': {
-      const containers = config.containers || [];
+      const containers = (config.containers || []).map((name) => String(name).trim()).filter(Boolean);
+      if (containers.some((name) => name !== 'all' && !/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(name))) {
+        throw new Error('Invalid Docker container name');
+      }
       const includeVolumes = config.includeVolumes !== false;
       const includeImages = config.includeImages !== false;
       cmd = `set -e\nmkdir -p /tmp/bk_${jobId}\n`;
@@ -26,13 +30,14 @@ function buildBackupCommand(jobId, type, config) {
       if (containers.length === 0 || containers.includes('all')) {
         cmd += `$DOCKER ps -a --format '{{.Names}}' > /tmp/bk_${jobId}/containers.txt\n`;
       } else {
-        cmd += `echo '${containers.join('\n')}' > /tmp/bk_${jobId}/containers.txt\n`;
+        const containerListB64 = Buffer.from(containers.join('\n'), 'utf8').toString('base64');
+        cmd += `printf '%s' ${shellQuote(containerListB64)} | base64 -d > /tmp/bk_${jobId}/containers.txt\n`;
       }
       // Collect images used by selected containers
       cmd += `IMAGES=""\n`;
       cmd += `while IFS= read -r c; do\n`;
       cmd += `  echo "[backup] Inspecting container: $c"\n`;
-      cmd += `  $DOCKER inspect "$c" > /tmp/bk_${jobId}/inspect_$c.json 2>/dev/null || true\n`;
+      cmd += `  $DOCKER inspect "$c" > /tmp/bk_${jobId}/inspect_$(printf '%s' "$c" | tr -c 'A-Za-z0-9_.-' '_').json 2>/dev/null || true\n`;
       cmd += `  IMG=$($DOCKER inspect "$c" --format '{{.Config.Image}}' 2>/dev/null || true)\n`;
       cmd += `  [ -n "$IMG" ] && IMAGES="$IMAGES $IMG"\n`;
       cmd += `  ROOT=$($DOCKER inspect "$c" --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' 2>/dev/null || true)\n`;
@@ -68,18 +73,23 @@ function buildBackupCommand(jobId, type, config) {
     }
     case 'database': {
       const { dbType, host, port, username, password, database } = config;
+      const qHost = shellQuote(host || '127.0.0.1');
+      const qPort = shellInt(port || (dbType === 'mongodb' ? 27017 : dbType === 'mysql' ? 3306 : 5432)) || (dbType === 'mongodb' ? '27017' : dbType === 'mysql' ? '3306' : '5432');
+      const qUser = shellQuote(username || (dbType === 'mysql' ? 'root' : 'postgres'));
+      const qDatabase = shellQuote(database || '');
+      const qPassword = password ? shellQuote(password) : '';
       cmd = `set -e\nmkdir -p /tmp/dbdump_${jobId}\n`;
       if (dbType === 'mongodb') {
-        const auth = username ? `--username '${username}' --password '${password}' --authenticationDatabase admin` : '';
+        const auth = username ? `--username ${qUser} --password ${qPassword} --authenticationDatabase admin` : '';
         cmd += `if command -v mongodump >/dev/null 2>&1; then MONGODUMP="mongodump"; elif command -v sudo >/dev/null 2>&1; then MONGODUMP="sudo mongodump"; else echo "mongodump not found"; exit 1; fi\n`;
-        cmd += `$MONGODUMP --host ${host || '127.0.0.1'} --port ${port || 27017} ${auth} --db ${database} --out /tmp/dbdump_${jobId} 2>&1\n`;
+        cmd += `$MONGODUMP --host ${qHost} --port ${qPort} ${auth} --db ${qDatabase} --out /tmp/dbdump_${jobId} 2>&1\n`;
       } else if (dbType === 'mysql') {
         cmd += `if command -v mysqldump >/dev/null 2>&1; then MYSQLDUMP="mysqldump"; elif command -v sudo >/dev/null 2>&1; then MYSQLDUMP="sudo mysqldump"; else echo "mysqldump not found"; exit 1; fi\n`;
-        cmd += `$MYSQLDUMP -h ${host || '127.0.0.1'} -P ${port || 3306} -u ${username || 'root'} ${password ? `-p'${password}'` : ''} ${database} > /tmp/dbdump_${jobId}/dump.sql 2>&1\n`;
+        cmd += `$MYSQLDUMP -h ${qHost} -P ${qPort} -u ${qUser} ${password ? `-p${qPassword}` : ''} ${qDatabase} > /tmp/dbdump_${jobId}/dump.sql 2>&1\n`;
       } else if (dbType === 'postgres') {
-        const pgEnv = password ? `PGPASSWORD='${password}'` : '';
+        const pgEnv = password ? `PGPASSWORD=${qPassword} ` : '';
         cmd += `if command -v pg_dump >/dev/null 2>&1; then PGDUMP="pg_dump"; elif command -v sudo >/dev/null 2>&1; then PGDUMP="sudo pg_dump"; else echo "pg_dump not found"; exit 1; fi\n`;
-        cmd += `${pgEnv} $PGDUMP -h ${host || '127.0.0.1'} -p ${port || 5432} -U ${username || 'postgres'} -d ${database} -F c -f /tmp/dbdump_${jobId}/dump.dump 2>&1\n`;
+        cmd += `${pgEnv}$PGDUMP -h ${qHost} -p ${qPort} -U ${qUser} -d ${qDatabase} -F c -f /tmp/dbdump_${jobId}/dump.dump 2>&1\n`;
       }
       cmd += `tar -czf ${outFile} -C /tmp/dbdump_${jobId} .\n`;
       cmd += `rm -rf /tmp/dbdump_${jobId}\n`;
@@ -99,9 +109,9 @@ function buildBackupCommand(jobId, type, config) {
       break;
     }
     case 'custom': {
-      const paths = (config.paths || []).filter(Boolean).join(' ');
-      const excludes = (config.excludes || []).map(e => `--exclude='${e}'`).join(' ');
-      cmd = `tar -czf ${outFile} ${excludes} -C / ${paths}`;
+      const paths = (config.paths || []).filter(Boolean).map(shellQuote).join(' ');
+      const excludes = (config.excludes || []).filter(Boolean).map(e => `--exclude=${shellQuote(e)}`).join(' ');
+      cmd = `tar -czf ${shellQuote(outFile)} ${excludes} -C / ${paths}`;
       break;
     }
     default:
@@ -109,15 +119,16 @@ function buildBackupCommand(jobId, type, config) {
   }
 
   const scriptFile = `/tmp/backup_${jobId}.sh`;
-  const fullCmd = [
-    `cat > ${scriptFile} <<'BACKUP_EOF'`,
+  const encodedScript = Buffer.from([
     `echo "[backup] Starting ${type} backup at $(date)"`,
     cmd,
     `echo "[backup] Backup complete: ${outFile}"`,
     `echo "---FINISHED---"`,
-    `BACKUP_EOF`,
-    `chmod +x ${scriptFile}`,
-    `nohup bash ${scriptFile} > ${logFile} 2>&1 &`,
+  ].join('\n'), 'utf8').toString('base64');
+  const fullCmd = [
+    `printf '%s' ${shellQuote(encodedScript)} | base64 -d > ${shellQuote(scriptFile)}`,
+    `chmod +x ${shellQuote(scriptFile)}`,
+    `nohup bash ${shellQuote(scriptFile)} > ${shellQuote(logFile)} 2>&1 &`,
     `echo "PID=$!"`,
   ].join('\n');
 

@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { getSshConfig, execCommand } from '../_ssh';
 import { logger } from '@/lib/logger';
+import { shellQuote } from '@/utils/shellQuote';
 
 export async function GET(request) {
   try {
@@ -19,8 +20,9 @@ export async function GET(request) {
 
     const sshConfig = await getSshConfig(connectionId);
 
-    // Read the compose file
-    const readResult = await execCommand(sshConfig, `cat '${filePath}' 2>/dev/null`);
+    // Read the compose file — filePath arrives from the query string, so it
+    // must be shell-quoted (a bare ' in the path would otherwise break out).
+    const readResult = await execCommand(sshConfig, `cat ${shellQuote(filePath)} 2>/dev/null`);
     if (readResult.code !== 0) {
       return NextResponse.json({ success: false, error: 'Failed to read compose file' }, { status: 400 });
     }
@@ -113,7 +115,9 @@ export async function GET(request) {
     // Get running containers and their actual port mappings
     try {
       // First try docker compose ps
-      const psResult = await execCommand(sshConfig, `cd '${composeDir}' && docker compose -f '${composeFileName}' ps --format json 2>/dev/null || docker-compose -f '${composeFileName}' ps --format json 2>/dev/null || echo "[]"`);
+      const qComposeDir = shellQuote(composeDir);
+      const qComposeFile = shellQuote(composeFileName);
+      const psResult = await execCommand(sshConfig, `cd ${qComposeDir} && docker compose -f ${qComposeFile} ps --format json 2>/dev/null || docker-compose -f ${qComposeFile} ps --format json 2>/dev/null || echo "[]"`);
       
       if (psResult.code === 0 && psResult.stdout.trim()) {
         const psLines = psResult.stdout.trim().split('\n').filter(l => l.trim());
@@ -140,7 +144,7 @@ export async function GET(request) {
         if (containerIds.length > 0) {
           for (const service of services.filter(s => s.running && s.containerId)) {
             try {
-              const inspectResult = await execCommand(sshConfig, `docker inspect --format '{{json .HostConfig.PortBindings}}' ${service.containerId} 2>/dev/null || echo "{}"`);
+              const inspectResult = await execCommand(sshConfig, `docker inspect --format '{{json .HostConfig.PortBindings}}' ${shellQuote(service.containerId)} 2>/dev/null || echo "{}"`);
               if (inspectResult.code === 0 && inspectResult.stdout.trim()) {
                 const portBindings = JSON.parse(inspectResult.stdout.trim());
                 const actualPorts = [];

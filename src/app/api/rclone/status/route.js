@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
 import { logger } from '@/lib/logger';
+import { shellQuote } from '@/utils/shellQuote';
 
 export async function GET(req) {
   try {
@@ -130,7 +131,8 @@ echo "$NPROC"
     // Read config file content / dumpconfig to get full remote details
     let configDump = '';
     if (configPath) {
-      const catRes = await execCommand(sshConfig, `cat "${configPath}" 2>/dev/null || sudo cat "${configPath}" 2>/dev/null || true`);
+      const qConfigPath = shellQuote(configPath);
+      const catRes = await execCommand(sshConfig, `cat ${qConfigPath} 2>/dev/null || sudo cat ${qConfigPath} 2>/dev/null || true`);
       configDump = catRes.stdout || '';
     }
     if (!configDump) {

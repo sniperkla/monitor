@@ -6,6 +6,8 @@ import { dispatchWithLiveLogs } from '@/app/api/agents/_jobs';
 import { parseInst, gatewayUnit, ensureInstanceUnit, writeInstanceEnv, sdAvailable, sdInstanceCtl, copyInstanceBin, listInstances, instancePorts, instanceIsolationEnv } from '../_multi-instance';
 import { execDetached } from '@/app/api/agents/_remote-bg';
 import { logger } from '@/lib/logger';
+import { shellQuote } from '@/utils/shellQuote';
+const sq = shellQuote;
 
 /**
  * Hermes Agent (Nous Research) one-click installer — deploys the real
@@ -493,15 +495,15 @@ true`,
       let PFX = '';
       let BINP;
       if (dcont && cbin) {
-        BINP = JSON.stringify(cbin);
+        BINP = sq(cbin);
         PFX = `docker exec hermes-agent sh -c `;
         return gwCtlExec(op, dcont, cbin);
       }
-      BINP = hbin ? JSON.stringify(hbin) : JSON.stringify('/usr/local/bin/hermes');
+      BINP = hbin ? sq(hbin) : sq('/usr/local/bin/hermes');
       return gwCtlHost(op, hbin || '/usr/local/bin/hermes', sysdLive);
 
       function gwCtlHost(operation, binPath, sysd) {
-        const binDir = JSON.stringify(binPath.replace(/\/\/[^/]+$/, ''));
+        const binDir = sq(binPath.replace(/\/\/[^/]+$/, ''));
         const ENVX = `export XDG_RUNTIME_DIR="/run/user/$(id -u)" 2>/dev/null; export PATH=${binDir}:$PATH`;
         // pidfile-scoped lifecycle (DEFAULT and tagged instances alike).
         // Every hermes gateway is tracked by $HH/daemon.pid. We never use
@@ -523,7 +525,7 @@ true`,
         // instance.env is sourced FIRST so the pinned isolation paths and the
         // per-instance ports are in the environment; .env is sourced after so a
         // user-set variable in .env still wins.
-        const startBackground = `mkdir -p "${HH}/logs"; ${HHX}setsid nohup sh -c 'set -a; [ -f "${HH}/instance.env" ] && . "${HH}/instance.env"; [ -f "${HH}/.env" ] && . "${HH}/.env"; set +a; exec ${JSON.stringify(binPath)} gateway run || exec ${JSON.stringify(binPath)} gateway' >> "${HH}/logs/gateway-nohup.log" 2>&1 < /dev/null & echo $! > "${PIDF}"; sleep 4; if kill -0 $(cat "${PIDF}") 2>/dev/null; then echo 'GW_UP'; else echo GW_DOWN; tail -5 "${HH}/logs/gateway-nohup.log" 2>/dev/null; fi`;
+        const startBackground = `mkdir -p "${HH}/logs"; ${HHX}setsid nohup sh -c 'set -a; [ -f "${HH}/instance.env" ] && . "${HH}/instance.env"; [ -f "${HH}/.env" ] && . "${HH}/.env"; set +a; exec ${sq(binPath)} gateway run || exec ${sq(binPath)} gateway' >> "${HH}/logs/gateway-nohup.log" 2>&1 < /dev/null & echo $! > "${PIDF}"; sleep 4; if kill -0 $(cat "${PIDF}") 2>/dev/null; then echo 'GW_UP'; else echo GW_DOWN; tail -5 "${HH}/logs/gateway-nohup.log" 2>/dev/null; fi`;
         // Start, with self-healing: hermes tracks its own lifecycle via the
         // control socket, so a gateway the monitor cannot see (stale pidfile,
         // process started outside the monitor) makes `start` refuse with
@@ -535,7 +537,7 @@ true`,
           if (/GW_UP/.test(out)) return { ok: true, out: out.slice(-200) };
           if (/already running/i.test(out)) {
             const r2 = await execCommand(sshConfig,
-              `${ENVX}; ${HHX}timeout 90 ${JSON.stringify(binPath)} gateway restart 2>&1 || ${startBackground}`,
+              `${ENVX}; ${HHX}timeout 90 ${sq(binPath)} gateway restart 2>&1 || ${startBackground}`,
               { pool: false, timeoutMs: 120000 });
             const chk = await execCommand(sshConfig, startAliveCheck, { pool: false, timeoutMs: 30000 });
             const ok = /ALIVE/.test(chk.stdout || '');
@@ -553,7 +555,7 @@ true`,
           .then(finishStart);
       }
       async function gwCtlExec(operation, cbin) {
-        const CB = JSON.stringify(cbin);
+        const CB = sq(cbin);
         if (operation === 'status') {
           const r = await execCommand(sshConfig, `docker exec hermes-agent pgrep -f '[h]ermes.*gatew[a]y' >/dev/null && echo ACTIVE || echo INACTIVE`, { pool: false, timeoutMs: 30000 });
           return { ok: true, active: /ACTIVE/.test(r.stdout || '') };
@@ -568,7 +570,7 @@ true`,
         const r = await execCommand(sshConfig,
           // Same self-match guard as the host path: the literal `gateway run`
           // sits on this very command line, so it is split (`gatew""ay`).
-          `docker exec -d hermes-agent bash -c 'mkdir -p /root/.hermes/logs && PATH=/usr/local/bin:/usr/bin:/bin:$PATH nohup sh -c "exec ${JSON.stringify(cbin)} gatew""ay run || exec ${JSON.stringify(cbin)} gatew""ay" >> /root/.hermes/logs/gateway-nohup.log 2>&1 < /dev/null &' && sleep 3 && docker exec hermes-agent pgrep -f '[h]ermes.*gatew[a]y' >/dev/null && echo GW_STARTED`,
+          `docker exec -d hermes-agent bash -c 'mkdir -p /root/.hermes/logs && PATH=/usr/local/bin:/usr/bin:/bin:$PATH nohup sh -c "exec ${sq(cbin)} gatew""ay run || exec ${sq(cbin)} gatew""ay" >> /root/.hermes/logs/gateway-nohup.log 2>&1 < /dev/null &' && sleep 3 && docker exec hermes-agent pgrep -f '[h]ermes.*gatew[a]y' >/dev/null && echo GW_STARTED`,
           { pool: false, timeoutMs: 60000 });
         return { ok: /GW_STARTED/.test(r.stdout || ''), out: (r.stdout || '').slice(-200) };
       }
@@ -956,17 +958,19 @@ echo "$MDL"
         await execCommand(sshConfig, `
           export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
           HB="$([ -x "$HOME/.local/bin/hermes" ] && echo "$HOME/.local/bin/hermes" || command -v hermes || echo "/usr/local/bin/hermes")"
-          ${targetModel ? `${HERMES_ENV} $HB config set model.default ${JSON.stringify(targetModel)} 2>&1 || true` : 'true'}
-          ${detectedProv ? `${HERMES_ENV} $HB config set model.provider ${JSON.stringify(detectedProv)} 2>&1 || true` : 'true'}
-          ${targetModel ? `command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx hermes-agent && docker exec hermes-agent hermes config set model.default ${JSON.stringify(targetModel)} 2>&1 || true` : 'true'}
-          ${detectedProv ? `command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx hermes-agent && docker exec hermes-agent hermes config set model.provider ${JSON.stringify(detectedProv)} 2>&1 || true` : 'true'}
+          ${targetModel ? `${HERMES_ENV} $HB config set model.default ${sq(targetModel)} 2>&1 || true` : 'true'}
+          ${detectedProv ? `${HERMES_ENV} $HB config set model.provider ${sq(detectedProv)} 2>&1 || true` : 'true'}
+          ${targetModel ? `command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx hermes-agent && docker exec hermes-agent hermes config set model.default ${sq(targetModel)} 2>&1 || true` : 'true'}
+          ${detectedProv ? `command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx hermes-agent && docker exec hermes-agent hermes config set model.provider ${sq(detectedProv)} 2>&1 || true` : 'true'}
         `, { pool: false, timeoutMs: 30000 });
       }
 
       // Custom endpoint → point hermes' model block at the custom provider/URL.
       // `hermes config set model.<nested>` supports dotted paths (verified).
       if (customProvider && customBaseUrl) {
-        const esc = (v) => JSON.stringify(v);
+        // Shell-context quoting (NOT JSON.stringify — that leaves `$` and
+        // backticks intact, and the remote shell would expand them).
+        const esc = (v) => sq(v);
         await execCommand(sshConfig, `
           export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
           HB="$([ -x "$HOME/.local/bin/hermes" ] && echo "$HOME/.local/bin/hermes" || command -v hermes || echo "/usr/local/bin/hermes")"
@@ -1131,11 +1135,11 @@ fi
         `p="$(export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"; command -v hermes 2>/dev/null)"; [ -z "$p" ] && for q in "$HOME/.local/bin/hermes" "/usr/local/bin/hermes" "${HH}/hermes-agent/venv/bin/hermes"; do [ -x "$q" ] && p="$q" && break; done; echo "BIN=$p"`,
         { pool: false, timeoutMs: 15000 });
       const bp = (binR.stdout || '').match(/BIN=(.*)/)?.[1]?.trim() || 'hermes';
-      const BP = JSON.stringify(bp);
+      const BP = sq(bp);
       const ENVX = `export PATH="${HH}/hermes-agent/venv/bin:$HOME/.local/bin:/usr/local/bin:$PATH"; ${HERMES_ENV} set -a; [ -f "${HH}/.env" ] && . "${HH}/.env"; set +a`;
       const runCmd = platform && platform !== 'auto'
-        ? `${ENVX}; ${BP} pairing approve ${JSON.stringify(platform)} ${JSON.stringify(code)} 2>&1 || ${BP} pairing approve ${JSON.stringify(code)} 2>&1`
-        : `${ENVX}; ${BP} pairing approve ${JSON.stringify(code)} 2>&1 || ${BP} pairing approve telegram ${JSON.stringify(code)} 2>&1`;
+        ? `${ENVX}; ${BP} pairing approve ${sq(platform)} ${sq(code)} 2>&1 || ${BP} pairing approve ${sq(code)} 2>&1`
+        : `${ENVX}; ${BP} pairing approve ${sq(code)} 2>&1 || ${BP} pairing approve telegram ${sq(code)} 2>&1`;
       const r = await run(`pairing approve ${platform ? platform + ' ' : ''}${code}`, runCmd);
       const out = ((r.stdout || '') + (r.stderr || '')).trim();
       const ok = !/error|failed|invalid/i.test(out) || /approved|success|paired/i.test(out);
@@ -1147,7 +1151,7 @@ fi
         `p="$(export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"; command -v hermes 2>/dev/null)"; [ -z "$p" ] && for q in "$HOME/.local/bin/hermes" "/usr/local/bin/hermes" "${HH}/hermes-agent/venv/bin/hermes"; do [ -x "$q" ] && p="$q" && break; done; echo "BIN=$p"`,
         { pool: false, timeoutMs: 15000 });
       const bp = (binR.stdout || '').match(/BIN=(.*)/)?.[1]?.trim() || 'hermes';
-      const BP = JSON.stringify(bp);
+      const BP = sq(bp);
       const ENVX = `export PATH="${HH}/hermes-agent/venv/bin:$HOME/.local/bin:/usr/local/bin:$PATH"; ${HERMES_ENV}`;
       const r = await execCommand(sshConfig,
         `${ENVX}; ${BP} pairing list 2>&1 || true; { [ -f "${HH}/logs/gateway-nohup.log" ] && tail -n 60 "${HH}/logs/gateway-nohup.log"; } || { [ -f "${HH}/logs/gateway.log" ] && tail -n 60 "${HH}/logs/gateway.log"; } || true`,
@@ -1196,7 +1200,9 @@ fi
       const binR = await execCommand(sshConfig,
         `p="$(export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"; command -v hermes)"; [ -z "$p" ] && [ -x "$HOME/.local/bin/hermes" ] && p="$HOME/.local/bin/hermes"; echo "BIN=$p"`,
         { pool: false, timeoutMs: 15000 });
-      const rb = (binR.stdout || '').match(/BIN=(.*)/)?.[1]?.trim();
+      // Resolved on the remote host, then re-injected into shell commands —
+      // quote it so a crafted binary path cannot break out.
+      const rb = sq((binR.stdout || '').match(/BIN=(.*)/)?.[1]?.trim() || '');
       if (!rb) return NextResponse.json({ success: false, error: 'hermes binary not found' }, { status: 400 });
 
       if (op === 'remove') {
@@ -1219,7 +1225,7 @@ fi
           }
           cmd = `${rb} skills install '${id}' --force --yes 2>&1 || ${rb} skills install '${id}' 2>&1`;
         } else if (op === 'reset') {
-          cmd = `${rb} skills reset '${String(config.name || '')}' --restore --yes 2>&1`;
+          cmd = `${rb} skills reset ${sq(String(config.name || ''))} --restore --yes 2>&1`;
         } else {
           cmd = `${rb} skills ${op}${op === 'opt-in' ? ' --sync' : ''} 2>&1`;
         }
@@ -1428,8 +1434,8 @@ fi
     if (!remoteBin) {
       return NextResponse.json({ success: false, error: 'Installer finished but the hermes binary was not found (~/.local/bin/hermes or /usr/local/bin/hermes). See log output.', log });
     }
-    const HB = JSON.stringify(remoteBin); // shell-quoted absolute path (root FHS installs → /usr/local/bin/hermes)
-    const BIN_DIR = String(remoteBin).replace(/\/hermes$/, '');
+    const HB = sq(remoteBin); // shell-quoted absolute path (root FHS installs → /usr/local/bin/hermes)
+    const BIN_DIR = sq(String(remoteBin).replace(/\/hermes$/, ''));
     const ENVPREFIX = `export PATH="${BIN_DIR}:$HOME/.local/bin:$PATH"; export XDG_RUNTIME_DIR="/run/user/$(id -u)"`;
 
     // 4. Merge secrets into ~/.hermes/.env (never clobbers existing keys)
@@ -1514,7 +1520,7 @@ PY`, { timeoutMs: 30000 });
       // causing hermes to lose the model and fall back to z-ai/glm-5.2.
       const dotted = dottedSettingKey(key);
       await run(`hermes config set ${dotted}${inst ? ` (→ ~/.hermes-${inst})` : ''}`,
-        `${ENVPREFIX}; ${HERMES_ENV} ${HB} config set ${dotted} ${JSON.stringify(String(value))} 2>&1 | tail -2`,
+        `${ENVPREFIX}; ${HERMES_ENV} ${HB} config set ${dotted} ${sq(String(value))} 2>&1 | tail -2`,
         { timeoutMs: 60000 });
     }
 
@@ -1545,9 +1551,9 @@ PY`, { timeoutMs: 30000 });
       await execCommand(sshConfig, `
         export PATH="${BIN_DIR}:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
         HB="$([ -x "$HOME/.local/bin/hermes" ] && echo "$HOME/.local/bin/hermes" || command -v hermes || echo "/usr/local/bin/hermes")"
-        ${tgtModel ? `${HERMES_ENV} $HB config set model.default ${JSON.stringify(String(tgtModel))} 2>&1 | tail -1 || true` : 'true'}
-        ${detectedInstallProv ? `${HERMES_ENV} $HB config set model.provider ${JSON.stringify(String(detectedInstallProv))} 2>&1 | tail -1 || true` : 'true'}
-        ${tgtTok ? `${HERMES_ENV} $HB config set gateway.platforms.telegram.token ${JSON.stringify(String(tgtTok))} 2>&1 | tail -1 || true` : 'true'}
+        ${tgtModel ? `${HERMES_ENV} $HB config set model.default ${sq(String(tgtModel))} 2>&1 | tail -1 || true` : 'true'}
+        ${detectedInstallProv ? `${HERMES_ENV} $HB config set model.provider ${sq(String(detectedInstallProv))} 2>&1 | tail -1 || true` : 'true'}
+        ${tgtTok ? `${HERMES_ENV} $HB config set gateway.platforms.telegram.token ${sq(String(tgtTok))} 2>&1 | tail -1 || true` : 'true'}
         true`, { pool: false, timeoutMs: 40000 });
     }
 

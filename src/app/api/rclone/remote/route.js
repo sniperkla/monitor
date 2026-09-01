@@ -1,10 +1,9 @@
 import { NextResponse } from 'next/server';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
 import { logger } from '@/lib/logger';
+import { shellQuote } from '@/utils/shellQuote';
 
-function quote(str) {
-  return `'${String(str).replace(/'/g, `'\\''`)}'`;
-}
+const quote = shellQuote;
 
 export async function POST(req) {
   try {

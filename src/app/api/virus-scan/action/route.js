@@ -4,6 +4,7 @@ import { authOptions } from '@/lib/auth';
 import connectDB from '@/lib/mongodb';
 import { getVirusScanModel } from '@/models/VirusScan';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
+import { shellQuote, shellInt } from '@/utils/shellQuote';
 
 const QUARANTINE_DIR = '/var/monitor-quarantine';
 
@@ -49,11 +50,17 @@ export async function POST(request) {
     // ---- Server-side actions ----
     const sshConfig = await getSshConfig(scan.connectionId, { userId });
     const exec = (cmd) => execCommand(sshConfig, cmd, { timeoutMs: 30000 });
-    const q = (s) => `'${String(s).replace(/'/g, `'\''`)}'`;
+    // NOTE: the inline escaper that used to live here wrote `'\''` inside a
+    // *template literal*, where \' collapses to a plain quote — so a path
+    // containing an apostrophe was mangled instead of escaped. Use the shared
+    // helper, which is correct for POSIX sh.
+    const q = shellQuote;
 
     if (action === 'kill') {
       if (!finding.pid) return NextResponse.json({ success: false, error: 'Finding has no PID' }, { status: 400 });
-      const r = await exec(`kill -9 ${parseInt(finding.pid, 10)} 2>&1; sleep 1; kill -0 ${parseInt(finding.pid, 10)} 2>/dev/null && echo ALIVE || echo DEAD`);
+      const safePid = shellInt(finding.pid);
+      if (!safePid) return NextResponse.json({ success: false, error: 'Invalid PID' }, { status: 400 });
+      const r = await exec(`kill -9 ${safePid} 2>&1; sleep 1; kill -0 ${safePid} 2>/dev/null && echo ALIVE || echo DEAD`);
       if (/ALIVE/.test(r.stdout)) {
         return NextResponse.json({ success: false, error: `Process ${finding.pid} could not be killed` }, { status: 500 });
       }

@@ -6,6 +6,8 @@ import { dispatchWithLiveLogs } from '@/app/api/agents/_jobs';
 import { execDetached } from '@/app/api/agents/_remote-bg';
 import { logger } from '@/lib/logger';
 import { parseInst, homeDir, instancePort, listInstances, cloneDefaultHome, pidAlive, gatewayUnit, ensureInstanceUnit, writeInstanceEnv, sdAvailable, sdInstanceCtl } from '../_multi-instance';
+import { shellQuote } from '@/utils/shellQuote';
+const sq = shellQuote;
 
 /**
  * ZeroClaw (zeroclaw-labs) one-click installer — deploys
@@ -138,7 +140,7 @@ async function handleAgentAction(body, session, log = []) {
       const binR = await execCommand(sshConfig, binPath(), { pool: false, timeoutMs: 15000 });
       const bp = (binR.stdout || '').match(/BIN=(.*)/)?.[1]?.trim();
       if (!bp) return { ok: false, out: 'zeroclaw binary not found. Please click "Install ZeroClaw" in the Overview tab.' };
-      const BP = JSON.stringify(bp);
+      const BP = sq(bp);
       if (inst) {
         // Tagged instance: preferred path = per-instance systemd template unit
         // (own cgroup + Restart=on-failure + NoNewPrivileges/PrivateTmp).
@@ -334,7 +336,7 @@ EOF
         const seedBin = (bpSeed.stdout || '').match(/BIN=(.*)/)?.[1]?.trim();
         if (seedBin) {
           await execCommand(sshConfig,
-            `${ENVX}; ${JSON.stringify(seedBin)} config set gateway.port ${GW_PORT} --config-dir "${HH}" --no-interactive 2>/dev/null || true`,
+            `${ENVX}; ${sq(seedBin)} config set gateway.port ${GW_PORT} --config-dir "${HH}" --no-interactive 2>/dev/null || true`,
             { pool: false, timeoutMs: 30000 });
         }
       }
@@ -587,7 +589,7 @@ echo "===ENVKEYS==="
       if (!zcBin) {
         return NextResponse.json({ success: false, error: 'Installer finished but the zeroclaw binary was not found — see log.', log });
       }
-      await run('zeroclaw --version', `${ENVX}; ${JSON.stringify(zcBin)} --version 2>&1 | head -1`, { timeoutMs: 60000 });
+      await run('zeroclaw --version', `${ENVX}; ${sq(zcBin)} --version 2>&1 | head -1`, { timeoutMs: 60000 });
 
       // Initialize default config.toml if it does not exist yet (clean schema_version = 3, no malformed sections)
       await execCommand(sshConfig, `
@@ -728,7 +730,7 @@ if os.path.exists(p):
       // 3. Daemon — register via `zeroclaw service install` only if systemd is PID 1
       const hasInit = p('INITD') === '1';
       if (hasInit) {
-        await run('register service', `${ENVX}; ${JSON.stringify(zcBin)} service install 2>&1 | tail -3 || true`, { timeoutMs: 60000 });
+        await run('register service', `${ENVX}; ${sq(zcBin)} service install 2>&1 | tail -3 || true`, { timeoutMs: 60000 });
       } else {
         log.push('$ register service — skipped (using background nohup daemon mode)');
       }
@@ -1099,7 +1101,7 @@ echo "TG=$TG"
       const ENVX = `export XDG_RUNTIME_DIR="/run/user/$(id -u)" 2>/dev/null; export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:$PATH"`;
       const binR0 = await execCommand(sshConfig, binPath(), { pool: false, timeoutMs: 15000 });
       const bp0 = (binR0.stdout || '').match(/BIN=(.*)/)?.[1]?.trim();
-      const BP0 = bp0 ? JSON.stringify(bp0) : 'zeroclaw';
+      const BP0 = bp0 ? sq(bp0) : 'zeroclaw';
       // Skills live in "bundles" — auto-configure the default bundle so
       // add/install works out of the box (scoped to this instance's config dir).
       const pre = `${ENVX}; ${BP0} config set skill_bundles.default.directory shared/skills/default ${CFG_DIR_ARG} 2>/dev/null; `;
@@ -1111,7 +1113,7 @@ echo "TG=$TG"
         }
         // Real zeroclaw-managed skills first; legacy dir/SOP layouts as fallback.
         const r = await execCommand(sshConfig,
-          `${pre}${BP0} skills remove ${JSON.stringify(name)} ${CFG_DIR_ARG} 2>&1 || rm -rf "${HH}/skills/${name}" "${HH}/sop/${name}.md" "${HH}/sop/${name}" 2>/dev/null; true`,
+          `${pre}${BP0} skills remove ${sq(name)} ${CFG_DIR_ARG} 2>&1 || rm -rf "${HH}/skills/${name}" "${HH}/sop/${name}.md" "${HH}/sop/${name}" 2>/dev/null; true`,
           { pool: false, timeoutMs: 30000 });
         const g = await gwCtl('restart');
         return NextResponse.json({ success: true, restarted: g.ok, output: ((r.stdout || '') + (r.stderr || '')).slice(-400) });
@@ -1126,8 +1128,8 @@ echo "TG=$TG"
         // URL / git repo / archive -> `skills install`; bare name -> scaffold via `skills add`
         const isSource = /^https?:\/\//.test(id) || /\.(git|zip|tgz|tar\.gz)$/.test(id);
         const cmd = isSource
-          ? `${pre}${BP0} skills install ${JSON.stringify(id)} ${CFG_DIR_ARG} 2>&1`
-          : `${pre}${BP0} skills add ${JSON.stringify(skillName)} --bundle default --description ${JSON.stringify('Skill ' + skillName)} ${CFG_DIR_ARG} 2>&1 || { mkdir -p "${HH}/skills/${skillName}" "${HH}/sop"; echo "# SOP: ${id}\n\nExecute ${skillName} standard operating procedure." > "${HH}/sop/${skillName}.md"; echo SCAFFOLLED; }`;
+          ? `${pre}${BP0} skills install ${sq(id)} ${CFG_DIR_ARG} 2>&1`
+          : `${pre}${BP0} skills add ${sq(skillName)} --bundle default --description ${sq('Skill ' + skillName)} ${CFG_DIR_ARG} 2>&1 || { mkdir -p "${HH}/skills/${skillName}" "${HH}/sop"; echo "# SOP: ${id}\n\nExecute ${skillName} standard operating procedure." > "${HH}/sop/${skillName}.md"; echo SCAFFOLLED; }`;
         const r = await execCommand(sshConfig, cmd, { pool: false, timeoutMs: 120000 });
         const ok = !/error|failed|not found/i.test((r.stdout || '') + (r.stderr || '')) || /Scaffolded|installed|SCAFFOLLED/i.test(r.stdout || '');
         const g = await gwCtl('restart');
@@ -1188,7 +1190,7 @@ echo "TG=$TG"
       if (!isGatewayCode) {
       await execCommand(sshConfig, `
         export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:$PATH"
-        zeroclaw channel bind-telegram ${JSON.stringify(code)} 2>&1 || true
+        zeroclaw channel bind-telegram ${sq(code)} 2>&1 || true
         # If bot token exists, clear any stale webhooks so long polling works immediately
         TOKEN="$(grep -oE 'bot_token\\s*=\\s*"[^"]+"' "${HH}/config.toml" 2>/dev/null | cut -d'"' -f2 || grep -oE 'TELEGRAM_BOT_TOKEN=[^ \\n]+' "${HH}/.env" 2>/dev/null | cut -d= -f2)"
         if [ -n "$TOKEN" ]; then
@@ -1200,7 +1202,7 @@ echo "TG=$TG"
       // 2. Try HTTP Gateway pairing (for dashboard / API / webhook access)
       const httpPairR = await execCommand(sshConfig, `
         curl -s -w "\\nHTTP_CODE:%{http_code}" -X POST http://127.0.0.1:${dashPort || 42617}/pair \
-          -H "X-Pairing-Code: ${code}" \
+          -H ${sq('X-Pairing-Code: ' + code)} \
           -H "Content-Type: application/json" \
           -d '{}' 2>/dev/null || true
       `, { pool: false, timeoutMs: 15000 });
@@ -1390,7 +1392,7 @@ echo "TG=$TG"
       }
 
       const flag = which === 'device' && device
-        ? `--rotate-device ${JSON.stringify(device)}`
+        ? `--rotate-device ${sq(device)}`
         : '--rotate'; // all
       const r = await execCommand(sshConfig,
         `export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:$PATH"; zeroclaw gateway get-paircode ${flag} --port ${dashPort || 42617} 2>&1 | head -20`,

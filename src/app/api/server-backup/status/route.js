@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { getSshConfig, execCommand } from '../_ssh';
 import { logger } from '@/lib/logger';
+import { shellQuote } from '@/utils/shellQuote';
 
 export async function GET(request) {
   try {
@@ -19,7 +20,8 @@ export async function GET(request) {
     }
 
     const sshConfig = await getSshConfig(connectionId);
-    const result = await execCommand(sshConfig, `cat ${logFile} 2>/dev/null; echo ""; ls -la ${outFile} 2>/dev/null | awk '{print $5}'`);
+    // logFile / outFile come straight from the query string — quote them.
+    const result = await execCommand(sshConfig, `cat ${shellQuote(logFile)} 2>/dev/null; echo ""; ls -la ${shellQuote(outFile)} 2>/dev/null | awk '{print $5}'`);
 
     const logs = result.stdout || '';
     const finished = logs.includes('---FINISHED---');

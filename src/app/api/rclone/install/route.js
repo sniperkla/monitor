@@ -1,10 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
 import { logger } from '@/lib/logger';
-
-function quote(str) {
-  return `'${String(str).replace(/'/g, `'\\''`)}'`;
-}
+import { shellQuote, shellInt } from '@/utils/shellQuote';
 
 export async function POST(req) {
   try {
@@ -88,7 +85,7 @@ export async function POST(req) {
     const decodeCmd = `(base64 -d 2>/dev/null || base64 -D 2>/dev/null || base64 --decode 2>/dev/null || openssl base64 -d 2>/dev/null)`;
 
     // Ensure log file exists with initial header so polling shows progress immediately
-    const initCmd = `echo ${quote("🚀 Initializing Rclone installer...\n--------------------------------------------------")} > ${quote(logFile)}`;
+    const initCmd = `echo ${shellQuote("🚀 Initializing Rclone installer...\n--------------------------------------------------")} > ${shellQuote(logFile)}`;
     await execCommand(sshConfig, initCmd);
 
     // Run inside tmux session if available, fallback to nohup
@@ -149,14 +146,21 @@ export async function GET(req) {
     const preferredRelay = req.headers.get('x-preferred-relay');
 
     const sshConfig = await getSshConfig(connectionId, { sshMode, preferredRelay });
-    const logRes = await execCommand(sshConfig, `cat "${logFile}" 2>/dev/null || echo "Initializing tmux terminal log..."`);
-    
+    // logFile / sessionName / pid all come from the query string. Double quotes
+    // are not enough — $(...) and backticks still expand inside them — so every
+    // value is shell-quoted (or validated as an integer) before use.
+    const logRes = await execCommand(sshConfig, `cat ${shellQuote(logFile)} 2>/dev/null || echo "Initializing tmux terminal log..."`);
+
     let isRunning = false;
     if (sessionName) {
-      const tmuxCheck = await execCommand(sshConfig, `tmux has-session -t "${sessionName}" 2>/dev/null`);
+      const tmuxCheck = await execCommand(sshConfig, `tmux has-session -t ${shellQuote(sessionName)} 2>/dev/null`);
       isRunning = tmuxCheck.code === 0;
     } else if (pid) {
-      const psRes = await execCommand(sshConfig, `ps -p ${pid} 2>/dev/null | grep ${pid}`);
+      const safePid = shellInt(pid);
+      if (!safePid) {
+        return NextResponse.json({ success: false, error: 'Invalid pid' }, { status: 400 });
+      }
+      const psRes = await execCommand(sshConfig, `ps -p ${safePid} 2>/dev/null | grep ${safePid}`);
       isRunning = psRes.code === 0;
     }
 

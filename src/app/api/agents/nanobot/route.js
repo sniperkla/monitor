@@ -6,6 +6,8 @@ import { dispatchWithLiveLogs } from '@/app/api/agents/_jobs';
 import { execDetached } from '@/app/api/agents/_remote-bg';
 import { logger } from '@/lib/logger';
 import { parseInst, homeDir, instancePort, listInstances, cloneDefaultHome, pidAlive, gatewayUnit, ensureInstanceUnit, writeInstanceEnv, sdAvailable, sdInstanceCtl, copyInstanceBin } from '../_multi-instance';
+import { shellQuote } from '@/utils/shellQuote';
+const sq = shellQuote;
 
 /**
  * Nanobot (HKUDS) one-click installer — deploys https://github.com/HKUDS/nanobot
@@ -227,7 +229,7 @@ async function handleAgentAction(body, session, log = []) {
       const binR = await execCommand(sshConfig, binPath(), { pool: false, timeoutMs: 15000 });
       const bp = (binR.stdout || '').match(/BIN=(.*)/)?.[1]?.trim();
       if (!bp) return { ok: false, out: 'nanobot binary not found' };
-      const BP = JSON.stringify(bp);
+      const BP = sq(bp);
       const ENVX = `export PATH="$HOME/.local/bin:$HOME/.nanobot/venv/bin:/usr/local/bin:$PATH"`;
       // Instance-aware launch: explicit config/workspace/port so multiple
       // gateways on the same server never share a data dir or bind port.
@@ -534,7 +536,7 @@ tail -n 30 "$LOG" 2>/dev/null | tail -5
       if (!preset) return NextResponse.json({ success: false, error: 'preset is required' }, { status: 400 });
       const r = await execCommand(sshConfig, `
 P="${HH}/config.json"
-python3 - "$P" "${preset}" <<'PYEOF'
+python3 - "$P" ${sq(preset)} <<'PYEOF'
 import json, sys
 path, preset = sys.argv[1], sys.argv[2]
 data = json.load(open(path))
@@ -700,7 +702,7 @@ PYEOF
       const binR = await execCommand(sshConfig, binPath(), { pool: false, timeoutMs: 15000 });
       const NB = (binR.stdout || '').match(/BIN=(.*)/)?.[1]?.trim() || null;
       if (!NB) return NextResponse.json({ success: false, error: 'Installer finished but nanobot binary was not found. See log.', log });
-      const NBE = JSON.stringify(NB);
+      const NBE = sq(NB);
 
       // 4. Build config.json from the wizard's env + settings (same as reconfigure).
       // The wizard sends config.env (API keys, tokens, MODEL) and config.settings
@@ -983,7 +985,7 @@ export PATH="$HOME/.local/bin:$HOME/.nanobot/venv/bin:/usr/local/bin:$PATH"
 P="${HH}/pairing.json"
 BP="$( (command -v nanobot || which nanobot) 2>/dev/null || echo $HOME/.local/bin/nanobot )"
 if [ ! -f "$P" ]; then echo NO_STORE; exit 0; fi
-python3 - "$P" "${code}" <<'PYEOF'
+python3 - "$P" ${sq(code)} <<'PYEOF'
 import json, sys, os
 path, code = sys.argv[1], sys.argv[2]
 data = json.load(open(path))
@@ -1103,7 +1105,7 @@ echo "TG=$TG"
       const op = config.op;
       const binR = await execCommand(sshConfig, binPath(), { pool: false, timeoutMs: 15000 });
       const bp = (binR.stdout || '').match(/BIN=(.*)/)?.[1]?.trim();
-      const BP = bp ? JSON.stringify(bp) : 'nanobot';
+      const BP = bp ? sq(bp) : 'nanobot';
       const ENVX = `export PATH="$HOME/.local/bin:$HOME/.nanobot/venv/bin:/usr/local/bin:$PATH"`;
 
       if (op === 'remove') {
@@ -1111,7 +1113,7 @@ echo "TG=$TG"
         if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(name)) {
           return NextResponse.json({ success: false, error: 'Invalid skill/plugin name' }, { status: 400 });
         }
-        await execCommand(sshConfig, `${ENVX}; ${BP} plugins disable ${JSON.stringify(name)} 2>/dev/null; rm -rf "${HH}/workspace/skills/${name}" 2>/dev/null; true`, { pool: false, timeoutMs: 30000 });
+        await execCommand(sshConfig, `${ENVX}; ${BP} plugins disable ${sq(name)} 2>/dev/null; rm -rf "${HH}/workspace/skills/${name}" 2>/dev/null; true`, { pool: false, timeoutMs: 30000 });
         const g = await gwCtl('restart');
         return NextResponse.json({ success: true, restarted: g.ok, log: [`Removed skill/plugin ${name}`] });
       }

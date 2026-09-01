@@ -23,7 +23,9 @@ export async function POST(request) {
 
     // 1. Read the compose file from source server
     logger.info(`[deploy-compose] Reading compose file from source: ${composeFilePath}`);
-    const readResult = await execCommand(sourceSshConfig, `cat '${composeFilePath}'`);
+    // composeFilePath is caller-supplied — shell-quote it before it reaches the shell.
+    const qComposeFilePath = shellQuote(composeFilePath);
+    const readResult = await execCommand(sourceSshConfig, `cat ${qComposeFilePath}`);
 
     if (readResult.code !== 0) {
       return NextResponse.json({ success: false, error: `Failed to read compose file: ${readResult.stderr}` }, { status: 400 });
@@ -37,7 +39,7 @@ export async function POST(request) {
     // 2. Check for .env file in the same directory
     const composeDir = composeFilePath.substring(0, composeFilePath.lastIndexOf('/')) || '/tmp';
     let envContent = '';
-    const envResult = await execCommand(sourceSshConfig, `cat '${composeDir}/.env' 2>/dev/null || true`);
+    const envResult = await execCommand(sourceSshConfig, `cat ${shellQuote(`${composeDir}/.env`)} 2>/dev/null || true`);
     if (envResult.code === 0 && envResult.stdout.trim()) {
       envContent = envResult.stdout;
     }
@@ -47,7 +49,9 @@ export async function POST(request) {
     let containerPorts = {};
     
     try {
-      const psResult = await execCommand(sourceSshConfig, `cd '${composeDir}' && docker compose -f '${composeFileName}' ps -q 2>/dev/null || docker-compose -f '${composeFileName}' ps -q 2>/dev/null || echo ""`);
+      const qComposeDir = shellQuote(composeDir);
+      const qComposeFile = shellQuote(composeFileName);
+      const psResult = await execCommand(sourceSshConfig, `cd ${qComposeDir} && docker compose -f ${qComposeFile} ps -q 2>/dev/null || docker-compose -f ${qComposeFile} ps -q 2>/dev/null || echo ""`);
       
       if (psResult.code === 0 && psResult.stdout.trim()) {
         const containerIds = psResult.stdout.trim().split('\n').filter(l => l.trim());
@@ -55,7 +59,7 @@ export async function POST(request) {
         for (const containerId of containerIds) {
           try {
             // Get container name and ports
-            const inspectResult = await execCommand(sourceSshConfig, `docker inspect --format '{{.Name}}|{{json .HostConfig.PortBindings}}|{{json .Config.Image}}' ${containerId.trim()} 2>/dev/null || echo ""`);
+            const inspectResult = await execCommand(sourceSshConfig, `docker inspect --format '{{.Name}}|{{json .HostConfig.PortBindings}}|{{json .Config.Image}}' ${shellQuote(containerId.trim())} 2>/dev/null || echo ""`);
             if (inspectResult.code === 0 && inspectResult.stdout.trim()) {
               const parts = inspectResult.stdout.trim().split('|');
               const name = parts[0]?.replace(/^\//, '');
@@ -286,6 +290,7 @@ export async function POST(request) {
 
     // 6. Deploy on target server
     const targetPath = `/tmp/docker_deploy_${deployId}`;
+    const qTargetPath = shellQuote(targetPath);
 
     // Build the deploy script
     let deployScript = `#!/bin/bash
@@ -303,11 +308,11 @@ LOG=""
 log() { echo "[deploy] $1"; LOG="$LOG\\n$1"; }
 
 # Create temp directory
-mkdir -p ${targetPath}
-cd ${targetPath}
+mkdir -p ${qTargetPath}
+cd ${qTargetPath}
 
 log "Compose file transferred to target server"
-log "File: ${targetPath}/${composeFileName}"
+log "File: ${qTargetPath}/${qComposeFile}"
 
 `;
 
@@ -321,11 +326,11 @@ log "Checking/creating networks..."
         const netDef = networks.find(n => n.name === netName);
         const driver = netDef?.driver || 'bridge';
         deployScript += `
-if ! $DOCKER network inspect ${netName} >/dev/null 2>&1; then
-  log "  Creating network: ${netName} (driver: ${driver})"
-  $DOCKER network create --driver ${driver} ${netName} 2>&1 | while read line; do log "    $line"; done
+if ! $DOCKER network inspect ${shellQuote(netName)} >/dev/null 2>&1; then
+  log "  Creating network: ${shellQuote(netName)} (driver: ${shellQuote(driver)})"
+  $DOCKER network create --driver ${shellQuote(driver)} ${shellQuote(netName)} 2>&1 | while read line; do log "    $line"; done
 else
-  log "  Network ${netName} already exists"
+  log "  Network ${shellQuote(netName)} already exists"
 fi
 `;
       }
@@ -352,7 +357,7 @@ $COMPOSE ps 2>&1 | while read line; do log "  $line"; done
 
 # Cleanup
 log "Cleaning up temporary files..."
-rm -rf ${targetPath}
+rm -rf ${qTargetPath}
 
 log "Compose deployment complete!"
 echo "---RESULT---"
@@ -360,28 +365,37 @@ echo "$LOG"
 echo "---END---"
 `;
 
-    // Write compose file to target
-    const writeComposeCmd = `mkdir -p ${targetPath} && cat > ${targetPath}/${composeFileName} <<'COMPOSE_EOF'\n${composeContent}\nCOMPOSE_EOF`;
+    // Write files over the wire as base64.
+    //
+    // A quoted heredoc (`<<'EOF'`) stops $-expansion, but it does NOT protect
+    // against the content containing a line equal to the delimiter — that ends
+    // the heredoc early and everything after it runs as shell. Since the
+    // compose content comes from a file on the source server, an attacker who
+    // controls that file (or can point the UI at it) could smuggle a
+    // `COMPOSE_EOF` line and get arbitrary commands executed on the target.
+    // base64 removes the problem entirely: the shell only ever sees [A-Za-z0-9+/=].
+    const writeComposeCmd = `mkdir -p ${qTargetPath} && printf '%s' ${shellQuote(Buffer.from(composeContent, 'utf8').toString('base64'))} | base64 -d > ${qTargetPath}/${qComposeFile}`;
     await execCommand(targetSshConfig, writeComposeCmd);
 
     // Write .env file if exists
     if (envContent) {
-      const writeEnvCmd = `cat > ${targetPath}/.env <<'ENV_EOF'\n${envContent}\nENV_EOF`;
+      const writeEnvCmd = `printf '%s' ${shellQuote(Buffer.from(envContent, 'utf8').toString('base64'))} | base64 -d > ${qTargetPath}/.env`;
       await execCommand(targetSshConfig, writeEnvCmd);
     }
 
     // Write and execute the deploy script
     const scriptPath = `/tmp/docker_deploy_${deployId}.sh`;
-    const writeScriptCmd = `cat > ${scriptPath} <<'DEPLOY_EOF'\n${deployScript}\nDEPLOY_EOF\nchmod +x ${scriptPath}`;
+    const qScriptPath = shellQuote(scriptPath);
+    const writeScriptCmd = `printf '%s' ${shellQuote(Buffer.from(deployScript, 'utf8').toString('base64'))} | base64 -d > ${qScriptPath} && chmod +x ${qScriptPath}`;
     await execCommand(targetSshConfig, writeScriptCmd);
 
-    const result = await execCommand(targetSshConfig, `bash ${scriptPath} 2>&1; echo "EXIT_CODE=$?"`);
+    const result = await execCommand(targetSshConfig, `bash ${qScriptPath} 2>&1; echo "EXIT_CODE=$?"`);
 
     const exitCode = result.stdout.match(/EXIT_CODE=(\d+)/)?.[1];
     const resultLog = result.stdout.match(/---RESULT---\n([\s\S]*?)---END---/)?.[1]?.trim();
 
     // Cleanup script
-    await execCommand(targetSshConfig, `rm -f ${scriptPath} 2>/dev/null; rm -rf ${targetPath} 2>/dev/null`);
+    await execCommand(targetSshConfig, `rm -f ${qScriptPath} 2>/dev/null; rm -rf ${qTargetPath} 2>/dev/null`);
 
     return NextResponse.json({
       success: exitCode === '0',
