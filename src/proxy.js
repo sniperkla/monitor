@@ -85,14 +85,14 @@ function buildCsp(nonce) {
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://fonts.gstatic.com",
     "img-src 'self' data: blob: https://lh3.googleusercontent.com https://images.unsplash.com https://ui-avatars.com https://avatars.githubusercontent.com",
     "font-src 'self' data: https://fonts.gstatic.com",
-    // Local relay: the discovery endpoint is on 127.0.0.1:48923. The relay's
-    // WebSocket port is user-configurable, so it must be opted in explicitly
-    // via CSP_LOCAL_RELAY (e.g. "http://127.0.0.1:51234 ws://127.0.0.1:51234").
-    // Previously the policy allowed http://127.0.0.1:* and http://localhost:*
-    // with wildcard ports — if an XSS is ever found, that lets it exfiltrate
-    // data to any service running on the victim's machine. Now only the fixed
-    // discovery port is allowed by default; everything else requires opt-in.
-    `connect-src 'self' blob: data: https://api.ipify.org http://127.0.0.1:48923 http://localhost:48923 ws://127.0.0.1:48923 ws://localhost:48923${process.env.CSP_LOCAL_RELAY ? ` ${process.env.CSP_LOCAL_RELAY}` : ''}`,
+    // The browser only connects to the local relay's discovery endpoint
+    // (fetch http://127.0.0.1:48923). The relay's WebSocket runs in the
+    // Node relay process — not the browser — so ws://localhost:* was never
+    // needed in the browser CSP. Wildcard localhost ports (http://127.0.0.1:*)
+    // were removed because, if an XSS is ever found, they let it exfiltrate
+    // to any service on the victim's machine. A non-default relay port must
+    // be opted in via CSP_LOCAL_RELAY (e.g. "http://127.0.0.1:51234").
+    `connect-src 'self' blob: data: https://api.ipify.org http://127.0.0.1:48923${process.env.CSP_LOCAL_RELAY ? ` ${process.env.CSP_LOCAL_RELAY}` : ''}`,
     // File preview renders documents in a data:/blob: iframe.
     "frame-src blob: data:",
     "object-src 'none'",

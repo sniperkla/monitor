@@ -6,6 +6,66 @@ import User from "../models/User.js";
 import { logger } from '@/lib/logger';
 import { checkLoginAllowed, recordLoginFailure, recordLoginSuccess } from '@/lib/loginRateLimit';
 
+/**
+ * Allowed callback-URL origins.
+ *
+ * The redirect callback uses this as a defence-in-depth allowlist: even if
+ * the same-origin check is somehow bypassed (e.g. by a misconfigured
+ * NEXTAUTH_URL / baseUrl), only origins explicitly listed here are honoured.
+ *
+ * `NEXTAUTH_URL` is always allowed (that is the app itself). Additional
+ * origins can be added via the CALLBACK_URL_ALLOWLIST env var (space/comma
+ * separated), useful when the app is served from multiple domains.
+ */
+function getCallbackAllowlist() {
+  const set = new Set();
+  // The app's own origin — NEXTAUTH_URL is the canonical config.
+  if (process.env.NEXTAUTH_URL) {
+    try { set.add(new URL(process.env.NEXTAUTH_URL).origin); } catch { /* ignore malformed */ }
+  }
+  // AUTH_URL is NextAuth v5's equivalent name.
+  if (process.env.AUTH_URL) {
+    try { set.add(new URL(process.env.AUTH_URL).origin); } catch { /* ignore malformed */ }
+  }
+  // Explicit additions for multi-domain deployments.
+  const extra = process.env.CALLBACK_URL_ALLOWLIST;
+  if (extra) {
+    for (const part of extra.split(/[\s,]+/)) {
+      const trimmed = part.trim();
+      if (!trimmed) continue;
+      try { set.add(new URL(trimmed).origin); } catch { /* ignore malformed */ }
+    }
+  }
+  return set;
+}
+
+/**
+ * Check whether a callback URL is safe (same-origin or on the allowlist).
+ *
+ * Used by the [...nextauth] route handler to sanitise the `callbackUrl` query
+ * parameter BEFORE NextAuth renders the signin form — preventing an attacker-
+ * supplied external URL from being embedded in the form's hidden input.
+ *
+ * @param {string} callbackUrl  the raw callbackUrl value from the query string
+ * @param {string} currentOrigin  the origin of the current request (req.url origin)
+ * @returns {boolean} true if the URL is same-origin or on the allowlist
+ */
+export function sanitizeCallbackUrl(callbackUrl, currentOrigin) {
+  if (!callbackUrl) return true;
+  // Relative paths starting with a single slash are safe.
+  if (callbackUrl.startsWith('/') && !callbackUrl.startsWith('//') && !callbackUrl.startsWith('\\')) {
+    return true;
+  }
+  try {
+    const cbOrigin = new URL(callbackUrl).origin;
+    if (cbOrigin === currentOrigin) return true;
+    if (getCallbackAllowlist().has(cbOrigin)) return true;
+  } catch {
+    // Malformed URL — not safe.
+  }
+  return false;
+}
+
 export const authOptions = {
   providers: [
     GoogleProvider({
@@ -191,7 +251,9 @@ export const authOptions = {
      *
      * Threat: an attacker crafts `/api/auth/signin/google?callbackUrl=https://evil.com`
      * and tricks a victim into clicking it. After OAuth completes, the victim's
-     * browser is sent to evil.com, enabling phishing and token theft.
+     * browser is sent to evil.com, enabling phishing and token theft. The
+     * callbackUrl is also embedded as a hidden input in NextAuth's built-in
+     * signin form, so validation must happen BEFORE it reaches the form.
      *
      * Defence-in-depth: every branch that does NOT match the allowlist returns
      * `baseUrl` — never the attacker-supplied URL. All parsing is wrapped so a
@@ -199,12 +261,20 @@ export const authOptions = {
      * (which would honour the original callbackUrl).
      */
     async redirect({ url, baseUrl }) {
+      const allowlist = getCallbackAllowlist();
       try {
-        // 1. Same-origin absolute URL (includes the callbackUrl after OAuth).
-        //    `baseUrl` is `req.env.NEXTAUTH_URL` or the request origin.
-        try {
-          if (new URL(url).origin === new URL(baseUrl).origin) return url;
-        } catch { /* not an absolute URL — fall through to relative checks */ }
+        const baseOrigin = new URL(baseUrl).origin;
+
+        // 1. Same-origin absolute URL. Check against baseUrl AND the explicit
+        //    allowlist so a misconfigured NEXTAUTH_URL cannot widen the net.
+        let urlOrigin = null;
+        try { urlOrigin = new URL(url).origin; } catch { /* relative — handled below */ }
+        if (urlOrigin) {
+          if (urlOrigin === baseOrigin) return url;
+          if (allowlist.has(urlOrigin)) return url;
+          // External origin not on the allowlist — reject.
+          return baseUrl;
+        }
 
         // 2. Relative path on our own origin. Only allow paths starting with
         //    a single slash — protocol-relative URLs (//evil.com) and
