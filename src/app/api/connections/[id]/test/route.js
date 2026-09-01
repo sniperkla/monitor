@@ -9,43 +9,80 @@ import { getPooledConnection } from '@/lib/dbPool';
 import { checkRateLimit } from '@/lib/serverGuard';
 import { attachRequestUserId, isRelayConnectionError } from '@/lib/requestUser';
 import { logger } from '@/lib/logger';
+import { auditLog } from '@/lib/auditLog';
 
 // POST test connection
 export async function POST(request, { params }) {
+  // Populated once the target is known so every exit path can be audited.
+  // Declared out here because `const`s inside the try block are not in scope
+  // from the catch block.
+  let auditContext = null;
+  let userId = null;
+  let userEmail = null;
+
   try {
     const session = await getServerSession(authOptions);
     if (!session?.user?.email) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    // Rate limiting
     const clientIP = request.headers.get('x-forwarded-for') || 'unknown';
+    userId = session?.user?.id || session?.user?.sub || session.user?.email;
+    userEmail = session.user?.email;
+
+    // Rate limiting — per IP (shared-NAT abuse) AND per user (SSRF probing).
     const rateCheck = checkRateLimit(`test:${clientIP}`, 20); // Max 20 tests per minute
     if (!rateCheck.allowed) {
-      return NextResponse.json({ 
-        success: false, error: `Too many connection tests. Please wait ${Math.ceil(rateCheck.resetIn / 1000)}s.` 
+      return NextResponse.json({
+        success: false, error: `Too many connection tests. Please wait ${Math.ceil(rateCheck.resetIn / 1000)}s.`
+      }, { status: 429 });
+    }
+
+    const userRateCheck = checkRateLimit(`test:user:${userId}`, 20); // Max 20 tests per minute per user
+    if (!userRateCheck.allowed) {
+      return NextResponse.json({
+        success: false, error: `Too many connection tests. Please wait ${Math.ceil(userRateCheck.resetIn / 1000)}s.`
       }, { status: 429 });
     }
 
     const { id } = await params;
     let connection;
-    
+
     // 1. Determine if it's a DB connection or a direct payload (for local/manual)
     const db = await connectDB();
     const repo = new ConnectionRepository(db, session?.user?.id || session?.user?.sub || null);
 
-    if (id && !id.startsWith('local-')) {
+    const isSaved = !!(id && !id.startsWith('local-'));
+
+    if (isSaved) {
       connection = await repo.findById(id);
       if (!connection) {
         return NextResponse.json({ success: false, error: 'Connection not found in DB' }, { status: 404 });
       }
     } else {
-      const body = await request.json();
+      const body = await request.json().catch(() => ({}));
       connection = body.connection;
       if (!connection) {
         return NextResponse.json({ success: false, error: 'Connection data required for local test' }, { status: 400 });
       }
     }
+
+    // 2. SSRF visibility. This endpoint makes the server open outbound SSH /
+    //    DB connections to a host the user supplies, so every attempt is
+    //    recorded: who asked, what they pointed us at, and whether it worked.
+    //    Credentials are never logged. Ad-hoc ("local-test") targets are the
+    //    highest-risk path because the host is fully attacker-controlled.
+    auditContext = {
+      connectionId: isSaved ? id : null,
+      mode: isSaved ? 'saved' : 'ad-hoc',
+      host: connection?.host ?? null,
+      port: connection?.port ?? null,
+      type: connection?.type || 'ssh',
+      dbProvider: connection?.dbProvider || null,
+      authType: connection?.authType || null,
+      username: connection?.username ?? null,
+      relayName: connection?.relayName || null,
+    };
 
     let result;
     if (connection.type === 'database') {
@@ -84,9 +121,38 @@ export async function POST(request, { params }) {
       await repo.update(id, update);
     }
 
+    if (auditContext) {
+      await auditLog({
+        req: request,
+        action: 'connection.test',
+        userId,
+        userEmail,
+        detail: {
+          ...auditContext,
+          success: !!result?.success,
+          error: result?.success ? null : (result?.error || null),
+        },
+      });
+    }
+
     return NextResponse.json(result);
   } catch (error) {
     logger.error('Test connection error:', error);
+
+    if (auditContext) {
+      await auditLog({
+        req: request,
+        action: 'connection.test',
+        userId,
+        userEmail,
+        detail: {
+          ...auditContext,
+          success: false,
+          error: error?.message || 'Internal error',
+        },
+      });
+    }
+
     return NextResponse.json(
       { success: false, error: error.message },
       { status: 500 }

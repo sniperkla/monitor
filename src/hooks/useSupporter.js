@@ -20,13 +20,18 @@ const notifyAll = (data) => {
 /**
  * Supporter status for the current user.
  * - Guests / signed-out → not a supporter
- * - Initial value comes from the session hint (sign-in time); the API is the
- *   source of truth and is fetched on mount + window focus + manual refresh()
+ * - /api/user/supporter is the source of truth; it is fetched on mount, on
+ *   window focus, and on manual refresh().
+ *
+ * Previously the initial value was seeded from `session.user.isSupporter`, but
+ * that flag was removed from the session payload (it made /api/auth/session a
+ * reconnaissance endpoint). The API call is cheap and cached for 60s, so the
+ * brief "unknown" window before it resolves is preferable to leaking the flag.
  */
 export function useSupporter(options = {}) {
-  const { data: session, status: sessionStatus } = useSession();
+  const { status: sessionStatus } = useSession();
   const [state, setState] = useState(
-    globalCache.data || { isSupporter: !!session?.user?.isSupporter, isAdmin: false, expiresAt: null }
+    globalCache.data || { isSupporter: false, isAdmin: false, expiresAt: null }
   );
   const [loading, setLoading] = useState(false);
   const mountedRef = useRef(true);

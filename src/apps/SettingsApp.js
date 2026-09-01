@@ -205,7 +205,27 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
   const { t, i18n } = useTranslation();
   const { isSupporter } = useSupporter({ refreshOnFocus: true });
   const [supporterModalOpen, setSupporterModalOpen] = useState(false);
-  const isAdminUser = session?.user?.role === 'admin';
+  // `role` is no longer exposed on /api/auth/session. This component is the
+  // only place that needs it, so it is fetched explicitly from /api/user/me.
+  const [isAdminUser, setIsAdminUser] = useState(false);
+  useEffect(() => {
+    if (!session?.user?.email) {
+      setIsAdminUser(false);
+      return;
+    }
+    let cancelled = false;
+    fetch('/api/user/me', { credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (!cancelled) setIsAdminUser(!!data?.isAdmin);
+      })
+      .catch(() => {
+        if (!cancelled) setIsAdminUser(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.user?.email]);
   const { state: osState, updateWindowProps, setWallpaper, setGlassmorphism, setGlassIntensity, setIconSize, setBrightness, setNotifications, setTheme, setTaskbarPosition, setWindowLayout, addCustomWallpaper, removeCustomWallpaper, saveSettings, addNotification, showConfirm, setKeyboardShortcuts, setTerminalSettings } = useOS();
 
   const setActiveTab = (tab) => {

@@ -14,21 +14,10 @@ const nextConfig = {
           { key: 'X-Frame-Options', value: 'DENY' },
           { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
           { key: 'X-Robots-Tag', value: 'noai, noimageai' },
-          {
-            key: 'Content-Security-Policy',
-            value: [
-              "default-src 'self'",
-              "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
-              "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https:",
-              "img-src 'self' data: blob: https:",
-              "font-src 'self' data: https://fonts.gstatic.com https:",
-              "connect-src 'self' ws: wss: https: http://127.0.0.1:* http://localhost:*",
-              "frame-ancestors 'none'",
-              "object-src 'none'",
-              "base-uri 'self'",
-              "form-action 'self' http://localhost:3000 https://accounts.google.com",
-            ].join('; '),
-          },
+          // NOTE: Content-Security-Policy is deliberately absent here.
+          // src/proxy.js (middleware) sets it with a per-request nonce and a
+          // nonce-less script-src. Emitting a second CSP here would be enforced
+          // as an intersection and undo the nonce hardening.
           {
             key: 'Permissions-Policy',
             value: 'camera=(), microphone=(), geolocation=()'

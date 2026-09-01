@@ -170,11 +170,18 @@ export const authOptions = {
      * Reads from the JWT — NO database queries here.
      */
     async session({ session, token }) {
-      session.user.id             = token.dbId || token.sub;
-      session.user.role           = token.role || 'user';
-      session.user.vaultConfigured = token.vaultConfigured || false;
-      // Sign-in-time hint only — server-side guards always re-check the DB.
-      session.user.isSupporter    = token.isSupporter || false;
+      // Only stable identity is exposed here.
+      //
+      // `role`, `vaultConfigured` and `isSupporter` were removed deliberately.
+      // /api/auth/session is fetched automatically on every page load, which
+      // made it a universal reconnaissance endpoint: any XSS could read the
+      // victim's role and identify admin accounts to target. Those values now
+      // come from /api/user/me, which is only fetched when a feature actually
+      // needs them.
+      //
+      // Server-side authorization is unaffected — every API route re-checks the
+      // database directly and has never trusted these session fields.
+      session.user.id = token.dbId || token.sub;
       // Do not spread settings here either
       return session;
     },

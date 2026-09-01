@@ -6,8 +6,17 @@ import { OSProvider } from "@/context/OSContext";
 import { VaultProvider } from "@/context/VaultContext";
 import { useEffect } from "react";
 import '@/lib/i18n';
+// Side-effect import: installs the CSRF header shim over window.fetch as early
+// as possible, before any component issues a state-changing request.
+import '@/utils/csrfClient';
+import { ensureCsrfTokenOnMount } from '@/utils/csrfClient';
 
 export function Providers({ children }) {
+  // Prime the CSRF cookie so the first POST does not need an extra roundtrip.
+  useEffect(() => {
+    ensureCsrfTokenOnMount();
+  }, []);
+
   useEffect(() => {
     if (!('serviceWorker' in navigator)) return;
     const clearMonitorCaches = async () => {

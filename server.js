@@ -521,22 +521,11 @@ app.prepare().then(async () => {
       const isNextInternal = req.url.startsWith('/_next/') || req.url.includes('/favicon.ico');
       
       if (!isNextInternal) {
-        const cspHeader = `
-          default-src 'self';
-          script-src 'self' 'unsafe-inline' 'unsafe-eval';
-          style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https:;
-          img-src 'self' blob: data: https://ui-avatars.com https://images.unsplash.com https://lh3.googleusercontent.com https:;
-          font-src 'self' data: https://fonts.gstatic.com https:;
-          connect-src 'self' ws: wss: https://ui-avatars.com https: http://127.0.0.1:* http://localhost:*;
-          frame-src 'none';
-          object-src 'none';
-          base-uri 'self';
-          form-action 'self' http://localhost:3000 https://accounts.google.com;
-          frame-ancestors 'none';
-          block-all-mixed-content;
-        `.replace(/\s{2,}/g, ' ').trim();
-
-        res.setHeader('Content-Security-Policy', cspHeader);
+        // NOTE: Content-Security-Policy is intentionally NOT set here.
+        // src/proxy.js (middleware) owns CSP so it can inject a fresh per-request
+        // nonce. Two CSP headers are enforced as an intersection, which would
+        // silently break nonce-based script loading and the blob:/data: iframe
+        // used by the file preview.
         res.setHeader('X-Frame-Options', 'DENY');
         res.setHeader('X-Content-Type-Options', 'nosniff');
         res.setHeader('X-XSS-Protection', '1; mode=block');
