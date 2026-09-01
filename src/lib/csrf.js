@@ -47,7 +47,17 @@ export const UNSAFE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
  * These either verify their own signature or use a non-cookie credential.
  */
 export const CSRF_EXEMPT_PATTERNS = [
-  /^\/api\/auth(\/|$)/, // NextAuth enforces its own CSRF on these routes
+  // NextAuth's own routes enforce their own built-in CSRF token. We exempt
+  // only the framework-owned paths — NOT custom routes like /api/auth/register
+  // or /api/auth/forgot-password, which are app code and must be protected by
+  // our double-submit token. Previously a single /^\/api\/auth(\/|$)/ pattern
+  // exempted register too, allowing account creation without a CSRF token.
+  /^\/api\/auth\/signin(\/|$)/,
+  /^\/api\/auth\/callback(\/|$)/,
+  /^\/api\/auth\/session(\/|$)/,
+  /^\/api\/auth\/signout(\/|$)/,
+  /^\/api\/auth\/providers(\/|$)/,
+  /^\/api\/auth\/csrf(\/|$)/,
   /^\/api\/csrf(\/|$)/, // token bootstrap — must be reachable to get a token
   /^\/api\/health(\/|$)/,
   /^\/api\/deploy\/webhook(\/|$)/, // GitHub / Bitbucket (HMAC signature verified in-route)

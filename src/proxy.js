@@ -85,9 +85,14 @@ function buildCsp(nonce) {
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://fonts.gstatic.com",
     "img-src 'self' data: blob: https://lh3.googleusercontent.com https://images.unsplash.com https://ui-avatars.com https://avatars.githubusercontent.com",
     "font-src 'self' data: https://fonts.gstatic.com",
-    // Local relay discovery (127.0.0.1:48923) + its websocket. No wildcard
-    // schemes, so injected JS cannot phone home to an arbitrary host.
-    "connect-src 'self' blob: data: https://api.ipify.org http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:* wss://127.0.0.1:* wss://localhost:*",
+    // Local relay: the discovery endpoint is on 127.0.0.1:48923. The relay's
+    // WebSocket port is user-configurable, so it must be opted in explicitly
+    // via CSP_LOCAL_RELAY (e.g. "http://127.0.0.1:51234 ws://127.0.0.1:51234").
+    // Previously the policy allowed http://127.0.0.1:* and http://localhost:*
+    // with wildcard ports — if an XSS is ever found, that lets it exfiltrate
+    // data to any service running on the victim's machine. Now only the fixed
+    // discovery port is allowed by default; everything else requires opt-in.
+    `connect-src 'self' blob: data: https://api.ipify.org http://127.0.0.1:48923 http://localhost:48923 ws://127.0.0.1:48923 ws://localhost:48923${process.env.CSP_LOCAL_RELAY ? ` ${process.env.CSP_LOCAL_RELAY}` : ''}`,
     // File preview renders documents in a data:/blob: iframe.
     "frame-src blob: data:",
     "object-src 'none'",
@@ -234,8 +239,14 @@ export const config = {
     // excluded `/` from the middleware entirely (to keep the app shell public),
     // which also meant `/` received no security headers. `/` is now matched and
     // exempted from the auth gate via PUBLIC_PATHS instead.
-    // api/csrf is excluded so the client can bootstrap a token before the
-    // session finishes loading.
-    "/((?!api/auth|api/csrf|api/health|api/settings/database|api/deploy/webhook|api/deploy/trigger|_next/static|_next/image|favicon.ico|manifest\\.json|icon\\.svg|sw\\.js|monitor-agent\\.min\\.js|monitor-agent\\.js|local-relay\\.min\\.js|local-relay\\.js|agents/.*).*)"
+    //
+    // The auth gate exclusion is narrowed from `api/auth` to the specific
+    // NextAuth framework paths (signin, callback, session, signout, csrf,
+    // providers). Custom app routes under /api/auth/ — register,
+    // forgot-password, reset-password, verify-email — are NOT excluded, so
+    // they now receive both the CSRF check and CSP headers. Previously the
+    // broad `api/auth` exclusion let POST /api/auth/register bypass CSRF
+    // enforcement entirely.
+    "/((?!api/auth/signin|api/auth/callback|api/auth/session|api/auth/signout|api/auth/csrf|api/auth/providers|api/csrf|api/health|api/settings/database|api/deploy/webhook|api/deploy/trigger|_next/static|_next/image|favicon.ico|manifest\\.json|icon\\.svg|sw\\.js|monitor-agent\\.min\\.js|monitor-agent\\.js|local-relay\\.min\\.js|local-relay\\.js|agents/.*).*)"
   ],
 };

@@ -187,15 +187,39 @@ export const authOptions = {
     },
 
     /**
-     * redirect — validate callbackUrl to prevent open redirects
+     * redirect — validate callbackUrl to prevent open redirects.
+     *
+     * Threat: an attacker crafts `/api/auth/signin/google?callbackUrl=https://evil.com`
+     * and tricks a victim into clicking it. After OAuth completes, the victim's
+     * browser is sent to evil.com, enabling phishing and token theft.
+     *
+     * Defence-in-depth: every branch that does NOT match the allowlist returns
+     * `baseUrl` — never the attacker-supplied URL. All parsing is wrapped so a
+     * malformed URL cannot throw and fall through to NextAuth's default
+     * (which would honour the original callbackUrl).
      */
     async redirect({ url, baseUrl }) {
-      // Allows relative callback URLs
-      if (url.startsWith('/')) return `${baseUrl}${url}`;
-      // Allows callback URLs on the same origin
-      if (new URL(url).origin === baseUrl) return url;
-      // Reject all other URLs (prevents open redirect to external sites)
-      return baseUrl;
+      try {
+        // 1. Same-origin absolute URL (includes the callbackUrl after OAuth).
+        //    `baseUrl` is `req.env.NEXTAUTH_URL` or the request origin.
+        try {
+          if (new URL(url).origin === new URL(baseUrl).origin) return url;
+        } catch { /* not an absolute URL — fall through to relative checks */ }
+
+        // 2. Relative path on our own origin. Only allow paths starting with
+        //    a single slash — protocol-relative URLs (//evil.com) and
+        //    backslash tricks (\\evil.com) are rejected.
+        if (url.startsWith('/') && !url.startsWith('//') && !url.startsWith('\\')) {
+          return `${baseUrl}${url}`;
+        }
+
+        // 3. Everything else (external origins, protocol-relative, malformed)
+        //    is rejected. Never return the attacker-supplied URL.
+        return baseUrl;
+      } catch {
+        // If anything unexpected happens, send the user to the safe home page.
+        return baseUrl;
+      }
     },
   },
   session: {
