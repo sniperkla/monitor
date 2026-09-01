@@ -4,6 +4,7 @@ import connectDB from '@/lib/mongodb';
 import User from '@/models/User';
 import { sendPasswordResetEmail } from '@/lib/resend';
 import { logger } from '@/lib/logger';
+import { checkRateLimit, getClientIp } from '@/lib/authRateLimit';
 
 /**
  * POST /api/auth/forgot-password
@@ -11,6 +12,18 @@ import { logger } from '@/lib/logger';
  */
 export async function POST(request) {
   try {
+    // IP-based rate limit: prevent email spraying (sending reset emails to
+    // many different addresses from one source). The per-user 2-min limit
+    // below only stops repeated requests for the SAME email.
+    const ip = getClientIp(request);
+    const gate = checkRateLimit('forgotPassword', ip);
+    if (!gate.allowed) {
+      return NextResponse.json({
+        success: false,
+        error: `Too many requests. Please try again in ${Math.ceil(gate.retryAfterSec / 60)} minutes.`,
+      }, { status: 429, headers: { 'Retry-After': String(gate.retryAfterSec) } });
+    }
+
     const body = await request.json();
     const { email } = body || {};
 

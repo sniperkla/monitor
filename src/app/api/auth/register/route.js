@@ -5,9 +5,20 @@ import connectDB from '@/lib/mongodb';
 import User from '@/models/User';
 import { sendVerificationEmail } from '@/lib/resend';
 import { logger } from '@/lib/logger';
+import { checkRateLimit, getClientIp } from '@/lib/authRateLimit';
 
 export async function POST(request) {
   try {
+    // IP-based rate limit: prevent mass account creation from one source.
+    const ip = getClientIp(request);
+    const gate = checkRateLimit('register', ip);
+    if (!gate.allowed) {
+      return NextResponse.json(
+        { success: false, error: `Too many registration attempts. Please try again in ${Math.ceil(gate.retryAfterSec / 60)} minutes.` },
+        { status: 429, headers: { 'Retry-After': String(gate.retryAfterSec) } }
+      );
+    }
+
     const body = await request.json();
     const { name, email, password } = body || {};
 

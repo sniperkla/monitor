@@ -4,6 +4,7 @@ import connectDB from '@/lib/mongodb';
 import User from '@/models/User';
 import { sendVerificationEmail } from '@/lib/resend';
 import { logger } from '@/lib/logger';
+import { checkRateLimit, getClientIp } from '@/lib/authRateLimit';
 
 /**
  * POST /api/auth/verify-email
@@ -20,6 +21,20 @@ export async function POST(request) {
     }
 
     const cleanEmail = String(email).trim().toLowerCase();
+
+    // IP-based rate limit: prevent email flooding (request) and code
+    // brute-force (confirm). The 6-digit code has 900k possibilities, so
+    // 10 guesses per 15 min per IP makes brute-force infeasible.
+    const ip = getClientIp(request);
+    const actionKey = action === 'confirm' ? 'verifyCode' : 'verifyRequest';
+    const gate = checkRateLimit(actionKey, ip);
+    if (!gate.allowed) {
+      return NextResponse.json({
+        success: false,
+        error: `Too many attempts. Please try again in ${Math.ceil(gate.retryAfterSec / 60)} minutes.`,
+      }, { status: 429, headers: { 'Retry-After': String(gate.retryAfterSec) } });
+    }
+
     await connectDB(process.env.MONGODB_URI, true);
     const user = await User.findOne({ email: cleanEmail });
 

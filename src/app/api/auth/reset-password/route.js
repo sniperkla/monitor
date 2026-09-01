@@ -4,6 +4,7 @@ import bcrypt from 'bcryptjs';
 import connectDB from '@/lib/mongodb';
 import User from '@/models/User';
 import { logger } from '@/lib/logger';
+import { checkRateLimit, getClientIp } from '@/lib/authRateLimit';
 
 /**
  * POST /api/auth/reset-password
@@ -11,6 +12,18 @@ import { logger } from '@/lib/logger';
  */
 export async function POST(request) {
   try {
+    // IP-based rate limit: prevent brute-forcing the 6-digit reset code.
+    // 10 attempts per 15 min per IP — the code has 900k possibilities, so
+    // this makes exhaustive guessing infeasible.
+    const ip = getClientIp(request);
+    const gate = checkRateLimit('resetPassword', ip);
+    if (!gate.allowed) {
+      return NextResponse.json({
+        success: false,
+        error: `Too many attempts. Please try again in ${Math.ceil(gate.retryAfterSec / 60)} minutes.`,
+      }, { status: 429, headers: { 'Retry-After': String(gate.retryAfterSec) } });
+    }
+
     const body = await request.json();
     const { email, code, newPassword } = body || {};
 
