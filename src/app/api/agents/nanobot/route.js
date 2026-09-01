@@ -64,6 +64,91 @@ function maskEnvText(text) {
   }).join('\n');
 }
 
+/**
+ * Layered liveness probe for the nanobot gateway.
+ *
+ * Why layered: the dashboard used to trust a single signal, and every one of
+ * them can be wrong on its own — which is what produced the permanent
+ * "Gateway is DOWN — your bot is not responding" banner on hosts where the bot
+ * had been running for days.
+ *
+ *   1. daemon.pid is written by the nohup launcher as `$!` — the PID of the
+ *      `setsid` wrapper. When setsid forks (it does whenever the caller is
+ *      already a process-group leader) that PID exits within milliseconds and
+ *      the pidfile is left pointing at a dead or, worse, a RECYCLED process.
+ *      Verified live: pidfile said 645572 while the real gateway was 622218.
+ *   2. `pgrep -f "nanobot gateway --config <home>/config.json"` only matches
+ *      gateways launched WITH an explicit --config flag. The default install is
+ *      launched as plain `nanobot gateway` (GW_FLAGS is empty when there is no
+ *      instance tag), so that pattern can never match it.
+ *   3. systemd was only consulted for tagged instances, so a default instance
+ *      supervised by a unit (or by the upstream install.sh) was invisible.
+ *
+ * The probe therefore checks, in order: a *validated* pidfile, systemd
+ * (default unit + instance template, user and system bus), then a /proc scan
+ * scoped to this instance's home, and finally — for the default instance only
+ * — a broad scan that explicitly excludes instance processes.
+ *
+ * Emits: PROC_ACTIVE|NO_PROC  and  GWPID=<pid> (empty when unknown).
+ */
+const gwProbe = (HH, PIDF, inst) => {
+  const units = inst
+    ? [`nanobot-gatew""ay@${inst}`, 'nanobot-gatew""ay', 'nanobot']
+    : ['nanobot-gatew""ay', 'nanobot'];
+  return `
+GW_PID=""
+# 1) pidfile — only trusted when the PID is alive AND really is a nanobot process
+if [ -f "${PIDF}" ]; then
+  P=$(tr -cd '0-9' < "${PIDF}" 2>/dev/null)
+  if [ -n "$P" ] && kill -0 "$P" 2>/dev/null; then
+    CMDL=$(tr '\\0' ' ' < "/proc/$P/cmdline" 2>/dev/null)
+    [ -z "$CMDL" ] && CMDL=$(ps -p "$P" -o args= 2>/dev/null)
+    case "$CMDL" in *nanobot*) GW_PID="$P";; esac
+  fi
+fi
+# 2) systemd — per-instance template unit, then the plain default unit
+if [ -z "$GW_PID" ]; then
+  [ -n "$XDG_RUNTIME_DIR" ] || export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+  for u in ${units.join(' ')}; do
+    if { systemctl --user is-active "$u" 2>/dev/null || systemctl is-active "$u" 2>/dev/null; } | grep -qx active; then
+      GW_PID="systemd:$u"; break
+    fi
+  done
+fi
+# 3) process scan scoped to THIS instance: a nanobot gateway whose command line
+#    points at this instance home (--config / workspace / --port).
+#    The GWPID guard drops OUR OWN remote shell, whose argv literally contains
+#    this script (and therefore the word nanobot and the unit names above).
+if [ -z "$GW_PID" ]; then
+  for p in $(pgrep -f '[n]anobot' 2>/dev/null); do
+    [ -r "/proc/$p/cmdline" ] || continue
+    C=$(tr '\\0' ' ' < "/proc/$p/cmdline" 2>/dev/null)
+    [ -n "$C" ] || continue
+    case "$C" in *GWPID*) continue;; esac
+    case "$C" in *"gatew"*"ay"*) ;; *) continue;; esac
+    case "$C" in *"${HH}"*) GW_PID="$p"; break;; esac
+  done
+fi
+# 4) default install: launched as bare "nanobot gateway" with NO --config flag,
+#    so nothing in its command line names the home. Fall back to a broad scan
+#    that excludes tagged-instance homes (.nanobot-<tag>) so a running instance
+#    can never make the default instance look UP.
+if [ -z "$GW_PID" ] && [ -z "${inst}" ]; then
+  for p in $(pgrep -f '[n]anobot' 2>/dev/null); do
+    [ -r "/proc/$p/cmdline" ] || continue
+    C=$(tr '\\0' ' ' < "/proc/$p/cmdline" 2>/dev/null)
+    [ -n "$C" ] || continue
+    case "$C" in *GWPID*) continue;; esac
+    case "$C" in *"gatew"*"ay"*) ;; *) continue;; esac
+    case "$C" in *".nanobot-"*) continue;; esac
+    GW_PID="$p"; break
+  done
+fi
+if [ -n "$GW_PID" ]; then echo PROC_ACTIVE; else echo NO_PROC; fi
+echo "GWPID=$GW_PID"
+`;
+};
+
 const STATUS_SCRIPT = `
 export PATH="$HOME/.local/bin:$HOME/.nanobot/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 BIN="$(command -v nanobot 2>/dev/null || true)"
@@ -146,22 +231,35 @@ async function handleAgentAction(body, session, log = []) {
       const ENVX = `export PATH="$HOME/.local/bin:$HOME/.nanobot/venv/bin:/usr/local/bin:$PATH"`;
       // Instance-aware launch: explicit config/workspace/port so multiple
       // gateways on the same server never share a data dir or bind port.
-      const GW_FLAGS = inst
-        ? ` --config "${HH}/config.json" --workspace "${HH}/workspace"${GW_PORT ? ` --port ${GW_PORT}` : ''}`
-        : '';
-      const pidScan = `${ENVX}; res=0; if [ -f "${PIDF}" ] && kill -0 $(cat "${PIDF}") 2>/dev/null; then res=1; fi; if [ "$res" = 0 ]; then pgrep -f "nanobot gateway --config ${HH}/config.json" >/dev/null 2>&1 && res=1; fi; echo "PROC=$res"`;
+      // ALWAYS pass --config/--workspace — including for the DEFAULT install.
+      // The default used to be launched as a bare `nanobot gateway`; with no
+      // instance-identifying text anywhere in its command line, no process
+      // scan could ever find or attribute it, which is exactly what made the
+      // dashboard report "Gateway is DOWN" while the bot was running. These
+      // flags resolve to the very paths nanobot would have defaulted to, so
+      // behaviour is unchanged — only discoverability improves.
+      const GW_FLAGS = ` --config "${HH}/config.json" --workspace "${HH}/workspace"${GW_PORT ? ` --port ${GW_PORT}` : ''}`;
+      const pidScan = `${ENVX}; ${gwProbe(HH, PIDF, inst)}`;
       if (op === 'status') {
         const r = await execCommand(sshConfig, pidScan, { pool: false, timeoutMs: 30000 });
-        return { ok: true, active: /PROC=1/.test(r.stdout || '') };
+        return { ok: true, active: /PROC_ACTIVE/.test(r.stdout || '') };
       }
       if (op === 'stop') {
+        // The pidfile can be stale (it used to record the `setsid` wrapper's
+        // PID), so after the pidfile kill also sweep any gateway still running
+        // against THIS instance home. Never touches a sibling instance.
         return execCommand(sshConfig,
-          `${ENVX}; if [ -f "${PIDF}" ]; then kill $(cat "${PIDF}") 2>/dev/null; sleep 1; kill -9 $(cat "${PIDF}") 2>/dev/null; fi; rm -f "${PIDF}"; echo GW_STOPPED`,
+          `${ENVX}; NBSTOPSCAN=1; if [ -f "${PIDF}" ]; then kill $(cat "${PIDF}") 2>/dev/null; sleep 1; kill -9 $(cat "${PIDF}") 2>/dev/null; fi; rm -f "${PIDF}"; for p in $(pgrep -f '[n]anobot' 2>/dev/null); do [ -r "/proc/$p/cmdline" ] || continue; C=$(tr '\\0' ' ' < "/proc/$p/cmdline" 2>/dev/null); [ -n "$C" ] || continue; case "$C" in *NBSTOPSCAN*) continue;; esac; case "$C" in *"gatew"*"ay"*) ;; *) continue;; esac; case "$C" in *"${HH}"*) kill "$p" 2>/dev/null; sleep 1; kill -9 "$p" 2>/dev/null;; esac; done; echo GW_STOPPED`,
           { pool: false, timeoutMs: 60000 })
           .then(r => ({ ok: /GW_STOPPED/.test(r.stdout || ''), out: ((r.stdout || '') + (r.stderr || '')).slice(-400) }));
       }
       if (op === 'restart') await gwCtl('stop');
-      const startCmd = `${ENVX}; set -a; [ -f "${HH}/.env" ] && . "${HH}/.env"; set +a; mkdir -p "${HH}/logs" "${HH}/workspace"; setsid nohup ${BP} gateway${GW_FLAGS} >> "${HH}/logs/gateway.log" 2>&1 < /dev/null & echo $! > "${PIDF}"; sleep 4; if kill -0 $(cat "${PIDF}") 2>/dev/null; then echo GW_UP; else echo GW_DOWN; fi`;
+      // `setsid` forks whenever the caller is already a process-group leader,
+      // so `$!` is the wrapper's PID, not the gateway's — it exits immediately
+      // and leaves a stale pidfile. Re-resolve the real gateway PID from /proc
+      // (scoped to this instance home) and rewrite the pidfile with it.
+      // NBSTARTSCAN marks our own script text so the scan cannot match itself.
+      const startCmd = `${ENVX}; NBSTARTSCAN=1; set -a; [ -f "${HH}/.env" ] && . "${HH}/.env"; set +a; mkdir -p "${HH}/logs" "${HH}/workspace"; rm -f "${PIDF}"; setsid nohup ${BP} gateway${GW_FLAGS} >> "${HH}/logs/gateway.log" 2>&1 < /dev/null & echo $! > "${PIDF}"; sleep 4; REAL=$(for p in $(pgrep -f '[n]anobot' 2>/dev/null); do [ -r "/proc/$p/cmdline" ] || continue; C=$(tr '\\0' ' ' < "/proc/$p/cmdline" 2>/dev/null); [ -n "$C" ] || continue; case "$C" in *NBSTARTSCAN*) continue;; esac; case "$C" in *"gatew"*"ay"*) ;; *) continue;; esac; case "$C" in *"${HH}"*) echo "$p";; esac; done | head -1); [ -n "$REAL" ] && echo "$REAL" > "${PIDF}"; if kill -0 $(cat "${PIDF}") 2>/dev/null; then echo GW_UP; else echo GW_DOWN; fi`;
       return execCommand(sshConfig, startCmd, { pool: false, timeoutMs: 90000 })
         .then(r => ({ ok: /GW_UP/.test(r.stdout || ''), out: (r.stdout || '').slice(-200) }));
     };
@@ -236,15 +334,53 @@ PY`, { pool: false, timeoutMs: 30000 });
     // ── DETAILS ──
     if (action === 'details') {
       const D = `
-export PATH="$HOME/.local/bin:$HOME/.nanobot/venv/bin:/usr/local/bin:$PATH"
-BIN="$(command -v nanobot 2>/dev/null || true)"
-[ -z "$BIN" ] && for p in "$HOME/.local/bin/nanobot" "$HOME/.nanobot/venv/bin/nanobot" "/usr/local/bin/nanobot" "/usr/bin/nanobot"; do [ -x "$p" ] && BIN="$p" && break; done
+export PATH="$HOME/.local/bin:${HH}/venv/bin:$HOME/.nanobot/venv/bin:/usr/local/bin:$PATH"
+BIN="${HH}/venv/bin/nanobot"
+[ -x "$BIN" ] || BIN="$(command -v nanobot 2>/dev/null || true)"
+[ -z "$BIN" ] && for p in "${HH}/venv/bin/nanobot" "$HOME/.local/bin/nanobot" "$HOME/.nanobot/venv/bin/nanobot" "/usr/local/bin/nanobot" "/usr/bin/nanobot"; do [ -x "$p" ] && BIN="$p" && break; done
 echo "===CONFIG_B64==="
 base64 < "${HH}/config.json" 2>/dev/null || true
+# Bundled skills ship INSIDE the nanobot package
+# (<site-packages>/nanobot/skills) — cron, github, weather, memory, tmux, ...
+# They are installed and immediately usable by the bot, but they live outside
+# the instance home, so listing only the workspace showed a fraction of what
+# the bot actually has. Resolve the package dir through the venv interpreter
+# (the nanobot on PATH may be a shim outside the venv), then glob as backup.
+NBSK=""
+for py in "$(dirname "$BIN" 2>/dev/null)/python" "$HOME/.nanobot/venv/bin/python" "$(command -v python3 2>/dev/null)"; do
+  [ -n "$py" ] && [ -x "$py" ] || continue
+  NBSK=$("$py" -c 'import nanobot, os; print(os.path.join(os.path.dirname(nanobot.__file__), "skills"))' 2>/dev/null)
+  [ -n "$NBSK" ] && [ -d "$NBSK" ] && break
+  NBSK=""
+done
+if [ -z "$NBSK" ]; then
+  for d in "$HOME"/.nanobot/venv/lib/python*/site-packages/nanobot/skills; do
+    [ -d "$d" ] && NBSK="$d" && break
+  done
+fi
 echo "===SKILLS==="
-{ [ -d "${HH}/workspace/skills" ] && ls -1 "${HH}/workspace/skills" 2>/dev/null; [ -d "${HH}/skills" ] && ls -1 "${HH}/skills" 2>/dev/null; [ -d "$HOME/.nanobot/workspace/skills" ] && ls -1 "$HOME/.nanobot/workspace/skills" 2>/dev/null; [ -d "$HOME/.nanobot/skills" ] && ls -1 "$HOME/.nanobot/skills" 2>/dev/null; } | grep -v '^\.' | sort -u || true
+{
+  # 1) user / workspace skill dirs for this instance. Directories are the norm
+  #    (each holds a SKILL.md); a bare <name>.md also counts. Files like
+  #    README.md are NOT skills, hence -type d / -name '*.md' rather than ls -1.
+  for d in "${HH}/workspace/skills" "${HH}/skills"${inst ? '' : ' "$HOME/.nanobot/workspace/skills" "$HOME/.nanobot/skills"'}; do
+    [ -d "$d" ] || continue
+    find "$d" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sed 's#.*/##'
+    find "$d" -maxdepth 1 -mindepth 1 -type f -name '*.md' 2>/dev/null | sed 's#.*/##; s#\\.md$##'
+  done
+  # 2) nested skills anywhere under the instance home (a SKILL.md a level or two
+  #    down is still an installed skill, e.g. skills/cat/name/SKILL.md)
+  for base in "${HH}/workspace/skills" "${HH}/skills"; do
+    [ -d "$base" ] && find "$base" -maxdepth 3 -name 'SKILL.md' 2>/dev/null | while read -r f; do basename "$(dirname "$f")"; done
+  done
+  # 3) bundled skills shipped inside the nanobot package
+  [ -n "$NBSK" ] && [ -d "$NBSK" ] && find "$NBSK" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sed 's#.*/##'
+  [ -n "$NBSK" ] && [ -d "$NBSK" ] && find "$NBSK" -maxdepth 2 -name 'SKILL.md' 2>/dev/null | while read -r f; do basename "$(dirname "$f")"; done
+} | grep -v '^\\.' | grep -viE '^readme([.-_]|$)' | sort -u || true
 echo "===PLUGINS==="
 [ -n "$BIN" ] && "$BIN" plugins list 2>/dev/null || true
+echo "===SKILLS_BUNDLED==="
+[ -n "$NBSK" ] && [ -d "$NBSK" ] && find "$NBSK" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sed 's#.*/##' | grep -v '^\\.' | grep -viE '^readme([.-_]|$)' | sort -u || true
 echo "===PROMPT_B64==="
 { base64 < "${HH}/workspace/PROMPT.md" || base64 < "${HH}/prompt.txt" || base64 < "${HH}/workspace/custom_instructions.md"; } 2>/dev/null || true
 echo "===SOUL_B64==="
@@ -256,15 +392,7 @@ base64 < "${HH}/workspace/AGENTS.md" 2>/dev/null || true
 echo "===MEMORY_B64==="
 { base64 < "${HH}/workspace/MEMORY.md" || base64 < "${HH}/workspace/memory/MEMORY.md"; } 2>/dev/null || true
 echo "===RUNNING==="
-res=0; [ -f "${PIDF}" ] && kill -0 $(cat "${PIDF}") 2>/dev/null && res=1
-if [ "$res" = 0 ] && [ -n "${inst}" ]; then
-  export XDG_RUNTIME_DIR="/run/user/$(id -u)" 2>/dev/null
-  systemctl --user is-active nanobot-gatew""ay@${inst} 2>/dev/null | grep -qx active && res=1
-fi
-if [ "$res" = 0 ]; then
-  pgrep -f "nanobot gateway --config ${HH}/config.json" >/dev/null 2>&1 && res=1
-fi
-[ "$res" = 1 ] && echo PROC_ACTIVE || echo NO_PROC
+${gwProbe(HH, PIDF, inst)}
 echo "===VERSION==="
 [ -n "$BIN" ] && "$BIN" --version 2>/dev/null | tail -1 | cut -c1-40
 echo "===BINPATH==="
@@ -318,7 +446,14 @@ tail -n 30 "$LOG" 2>/dev/null | tail -5
         }
       } catch {}
       const skillsList = new Set(sec('SKILLS', 'PLUGINS').split('\n').map(s => s.trim()).filter(Boolean));
-      const pluginsOut = sec('PLUGINS', 'PROMPT_B64');
+      // Skills that ship inside the nanobot package itself. They are real and
+      // usable, but they are NOT removable (they live in site-packages, outside
+      // the instance home), so the UI badges them instead of offering a Remove
+      // button that would silently do nothing.
+      const bundledList = new Set(
+        sec('SKILLS_BUNDLED', 'PROMPT_B64').split('\n').map(s => s.trim()).filter(Boolean),
+      );
+      const pluginsOut = sec('PLUGINS', 'SKILLS_BUNDLED');
       for (const line of pluginsOut.split('\n')) {
         const m = line.match(/│\s*([a-zA-Z0-9_-]+)\s*│\s*[^│]+\s*│\s*yes\s*│/);
         if (m && m[1]) skillsList.add(m[1].trim());
@@ -381,6 +516,7 @@ tail -n 30 "$LOG" 2>/dev/null | tail -5
         envText: envText || '',
         envKeys: [...envKeys],
         skills: [...skillsList],
+        bundledSkills: [...bundledList],
         systemPrompt,
         promptFiles: {
           'PROMPT.md': systemPrompt,
@@ -454,10 +590,14 @@ PYEOF
       }
       const stopCmd = inst
         ? `if [ -f "${PIDF}" ]; then p=$(cat "${PIDF}"); kill "$p" 2>/dev/null; sleep 1; kill -9 "$p" 2>/dev/null; rm -f "${PIDF}"; fi; true`
-        // Selective kill: only default (no per-instance --config home). Never kill
-        // instance gateways so they survive a default stop/uninstall.
+        // Selective kill: only the DEFAULT gateway. Instance gateways carry a
+        // tagged home (.nanobot-<tag>) in their command line and are spared so
+        // they survive a default stop/uninstall.
+        // Keyed on the HOME, not on --config: the default install now also gets
+        // --config (so the dashboard can find it), which makes that flag useless
+        // as a default/instance discriminator.
         // Bracketed pgrep cannot match this script's own cmdline (self-kill guard).
-        : `for p in $(pgrep -f '[n]anobot gatew' 2>/dev/null); do grep -qa -- '--config' /proc/$p/cmdline 2>/dev/null || kill -9 $p 2>/dev/null; done; true`;
+        : `for p in $(pgrep -f '[n]anobot gatew' 2>/dev/null); do [ -r "/proc/$p/cmdline" ] || continue; C=$(tr '\\0' ' ' < "/proc/$p/cmdline" 2>/dev/null); case "$C" in *".nanobot-"*) continue;; esac; kill -9 $p 2>/dev/null; done; true`;
       await run('stop gateway', stopCmd);
       // Share the globally-installed binary/venv. Removing while any instance
       // exists breaks restart for those instances — skip when siblings remain.
@@ -632,22 +772,21 @@ PYEOF
         await run('enable telegram plugin', `PATH="$(dirname ${NBE}):$PATH" ${NBE} plugins enable telegram 2>&1 | tail -3 || true`, { timeoutMs: 120000 });
       }
 
-      // 6. Start gateway detached
+      // 6. Start gateway detached. `$!` is the setsid wrapper PID, not
+      // necessarily the gateway PID, so resolve the real process through the
+      // same instance-aware probe used by details/status/health.
       await run('start gateway', [
-        `mkdir -p "${HH}/logs" "${HH}/workspace"`,
-        // Pass GW_FLAGS so a tagged instance starts on its own config/workspace/
-        // port. Previously a bare `nanobot gateway` started the DEFAULT install
-        // even when installing an instance. Also record the PID so gwCtl can
-        // stop/restart this instance later.
-        `setsid nohup ${NBE} gateway${GW_FLAGS} >> "${HH}/logs/gateway.log" 2>&1 < /dev/null & echo $! > "${PIDF}"`,
+        `mkdir -p "${HH}/logs" "${HH}/workspace"; rm -f "${PIDF}"`,
+        // Pass GW_FLAGS so every install (including the default) carries its
+        // config/workspace marker and can be attributed without a false DOWN.
+        `NBSTARTSCAN=1; setsid nohup ${NBE} gateway${GW_FLAGS} >> "${HH}/logs/gateway.log" 2>&1 < /dev/null & echo $! > "${PIDF}"`,
         'sleep 4',
-        `if [ -f "${PIDF}" ] && kill -0 $(cat "${PIDF}") 2>/dev/null; then echo GW_UP; else echo GW_DOWN; fi`,
+        `REAL=$(NBSTARTSCAN=1; for p in $(pgrep -f '[n]anobot' 2>/dev/null); do [ -r "/proc/$p/cmdline" ] || continue; C=$(tr '\\0' ' ' < "/proc/$p/cmdline" 2>/dev/null); case "$C" in *NBSTARTSCAN*) continue;; esac; case "$C" in *"gatew"*"ay"*) ;; *) continue;; esac; case "$C" in *"${HH}"*) echo "$p"; break;; esac; done); [ -n "$REAL" ] && echo "$REAL" > "${PIDF}"; ${gwProbe(HH, PIDF, inst)}`,
       ].join('\n'), { timeoutMs: 90000 });
-      // Instance-scoped liveness: check our own pidfile rather than a global
-      // pgrep, which would report the default install (or a sibling instance)
-      // as up.
-      const up = await execCommand(sshConfig, `if [ -f "${PIDF}" ] && kill -0 $(cat "${PIDF}") 2>/dev/null; then echo GW_UP; else echo GW_DOWN; fi`, { pool: false, timeoutMs: 30000 });
-      const running = /GW_UP/.test(up.stdout || '');
+      // Instance-scoped liveness: use the shared probe rather than kill -0 on
+      // the stale setsid PID. This is the signal the dashboard consumes later.
+      const up = await execCommand(sshConfig, gwProbe(HH, PIDF, inst), { pool: false, timeoutMs: 30000 });
+      const running = /PROC_ACTIVE/.test(up.stdout || '');
 
       return NextResponse.json({
         success: running,
@@ -930,14 +1069,14 @@ if [ ${cursor} -gt 0 ] && [ ${cursor} -le $SZ ]; then tail -c +$((cursor + 1)) "
     // ── HEALTH ──
     if (action === 'health') {
       const script = `
-ALIVE=0; [ -f "${PIDF}" ] && kill -0 $(cat "${PIDF}") 2>/dev/null && ALIVE=1
-if [ "$ALIVE" = 0 ] && [ -n "${inst}" ]; then
-  export XDG_RUNTIME_DIR="/run/user/$(id -u)" 2>/dev/null
-  systemctl --user is-active nanobot-gatew""ay@${inst} 2>/dev/null | grep -qx active && ALIVE=1
-fi
+PROBE=$( ${gwProbe(HH, PIDF, inst)} )
+ALIVE=0; echo "$PROBE" | grep -qx PROC_ACTIVE && ALIVE=1
+# Uptime must come from the RESOLVED pid — the pidfile alone can be stale, which
+# used to report uptime 0 for a gateway that had been up for days.
+PID=$(echo "$PROBE" | sed -n 's/^GWPID=//p' | head -1)
 echo "ALIVE=$ALIVE"
-PID=$(cat "${PIDF}" 2>/dev/null)
-UP=0; [ -n "$PID" ] && UP=$(ps -o etimes= -p "$PID" 2>/dev/null | tr -d ' ')
+UP=0
+case "$PID" in ''|systemd:*) ;; *) UP=$(ps -o etimes= -p "$PID" 2>/dev/null | tr -d ' ');; esac
 [ -z "$UP" ] && UP=0
 echo "UPTIME_SEC=$UP"
 TG=unknown

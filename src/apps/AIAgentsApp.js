@@ -2382,6 +2382,11 @@ export default function AIAgentsApp({ apiFetch }) {
               const agentCatalog = CATALOG[agent.id] || CATALOG.hermes;
               const fullCatalog = [...agentCatalog];
               const installedList = details.skills || [];
+              // Skills shipped inside the agent package itself. They are real
+              // and loaded by the bot, but they live in site-packages — so the
+              // remove op (which deletes <home>/workspace/skills/<name>) would
+              // silently do nothing. Badge them instead of offering a dead button.
+              const bundledSet = new Set((details.bundledSkills || []).map(String));
               const q = skillInput.trim().toLowerCase();
 
               // Filtered shared skills
@@ -2811,7 +2816,7 @@ export default function AIAgentsApp({ apiFetch }) {
                       {installedList.length > 0 && (
                         <div className="flex items-center gap-2">
                           <button onClick={() => setSelSkills(new Set())} disabled={selSkills.size === 0} className={`${btn} bg-white/5 border border-[var(--border-color)] text-[var(--text-muted)] hover:text-white !py-1 !px-2`}>Clear</button>
-                          <button onClick={() => { const s = new Set(); installedList.forEach(x => selSkills.has(x) ? null : s.add(x)); setSelSkills(s); }} className={`${btn} bg-white/5 border border-[var(--border-color)] text-[var(--text-muted)] hover:text-white !py-1 !px-2`}>Select all</button>
+                          <button onClick={() => { const s = new Set(); installedList.forEach(x => selSkills.has(x) || bundledSet.has(x) ? null : s.add(x)); setSelSkills(s); }} className={`${btn} bg-white/5 border border-[var(--border-color)] text-[var(--text-muted)] hover:text-white !py-1 !px-2`}>Select all</button>
                           {selSkills.size > 0 && (
                             <button onClick={async () => { for (const s of selSkills) await call('skills', { config: { op: 'remove', name: s } }); setSelSkills(new Set()); await loadDetails(); }} disabled={!!busyMsg} className={`${btn} bg-red-500/15 text-red-300 hover:bg-red-500/25 !py-1 !px-2`}>
                               <Trash2 size={11} /> Remove ({selSkills.size})
@@ -2822,17 +2827,25 @@ export default function AIAgentsApp({ apiFetch }) {
                     </div>
 
                     <div className="rounded-xl divide-y divide-[var(--border-color)] bg-black/20 border border-[var(--border-color)] max-h-72 overflow-y-auto">
-                      {installedList.map(s => (
+                      {installedList.map(s => {
+                        const isBuiltIn = bundledSet.has(s);
+                        return (
                         <div key={s} className="flex items-center gap-2.5 px-3.5 py-2.5 hover:bg-white/[0.02] transition">
-                          <input type="checkbox" checked={selSkills.has(s)} onChange={e => { const n = new Set(selSkills); e.target.checked ? n.add(s) : n.delete(s); setSelSkills(n); }} className="accent-indigo-500" />
-                          <Puzzle size={13} className="text-indigo-400 shrink-0" />
+                          <input type="checkbox" checked={selSkills.has(s)} disabled={isBuiltIn} onChange={e => { const n = new Set(selSkills); e.target.checked ? n.add(s) : n.delete(s); setSelSkills(n); }} className="accent-indigo-500 disabled:opacity-30" />
+                          <Puzzle size={13} className={`shrink-0 ${isBuiltIn ? 'text-[var(--text-muted)]' : 'text-indigo-400'}`} />
                           <span className="text-xs font-mono font-medium text-white truncate flex-1">{s}</span>
+                          {isBuiltIn && (
+                            <span title="Ships with the agent package — always available, cannot be uninstalled" className="text-[8px] px-1.5 py-0.5 rounded bg-white/10 text-[var(--text-muted)] border border-[var(--border-color)] uppercase tracking-wide shrink-0">built-in</span>
+                          )}
                           {agent.id === 'hermes' && (
                             <button onClick={() => act(`Reset skill ${s}`, () => call('skills', { config: { op: 'reset', name: s } }))} disabled={!!busyMsg} className="text-[9px] text-[var(--text-muted)] hover:text-white cursor-pointer px-2 py-1 rounded bg-white/5 border border-[var(--border-color)]">reset</button>
                           )}
-                          <button onClick={() => removeSkill(s)} disabled={!!busyMsg} title="Uninstall skill" className="p-1 rounded text-red-400/70 hover:text-red-400 hover:bg-red-500/10 cursor-pointer transition"><Trash2 size={13} /></button>
+                          {!isBuiltIn && (
+                            <button onClick={() => removeSkill(s)} disabled={!!busyMsg} title="Uninstall skill" className="p-1 rounded text-red-400/70 hover:text-red-400 hover:bg-red-500/10 cursor-pointer transition"><Trash2 size={13} /></button>
+                          )}
                         </div>
-                      ))}
+                        );
+                      })}
                       {installedList.length === 0 && (
                         <div className="px-4 py-8 text-center text-xs text-[var(--text-muted)] space-y-1">
                           <Puzzle size={20} className="mx-auto text-[var(--text-muted)] opacity-50 mb-2" />

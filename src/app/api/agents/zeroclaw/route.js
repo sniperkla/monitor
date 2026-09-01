@@ -376,9 +376,9 @@ echo "===MODEL==="
 echo "===BINPATH==="
 [ -n "$BIN" ] && echo "$BIN"
 echo "===SKILLS==="
-[ -d "${HH}/skills" ] && ls -1 "${HH}/skills" 2>/dev/null | grep -v '^\.' || true
-[ -d "${HH}/workspace/skills" ] && ls -1 "${HH}/workspace/skills" 2>/dev/null | grep -v '^\.' || true
-[ -d "${HH}/sop" ] && ls -1 "${HH}/sop" 2>/dev/null | grep -v '^\.' | sed 's/\.md$//' || true
+[ -d "${HH}/skills" ] && ls -1 "${HH}/skills" 2>/dev/null | grep -v '^\\.' || true
+[ -d "${HH}/workspace/skills" ] && ls -1 "${HH}/workspace/skills" 2>/dev/null | grep -v '^\\.' || true
+[ -d "${HH}/sop" ] && ls -1 "${HH}/sop" 2>/dev/null | grep -v '^\\.' | sed 's/\\.md$//' || true
 echo "===ZCSKILLS==="
 # ZeroClaw manages skills per config-dir via its CLI — list what's installed
 [ -n "$BIN" ] && "$BIN" skills list ${CFG_DIR_ARG} 2>/dev/null || true

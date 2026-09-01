@@ -117,8 +117,25 @@ if [ "$PR" = 0 ]; then
   { systemctl is-active ${agentId}-gate""way 2>/dev/null || systemctl is-active ${agentId} 2>/dev/null || systemctl --user is-active ${agentId}-gate""way 2>/dev/null || systemctl --user is-active ${agentId} 2>/dev/null; } | grep -qx active && PR=1
 fi
 if [ "$PR" = 0 ]; then
-  case "${agentId}" in
-    nanobot)  pgrep -f "nanobot gateway --config $HOME/.${agentId}/config.json" >/dev/null 2>&1 && PR=1 ;;
+    case "${agentId}" in
+      nanobot)
+        # Match ANY nanobot gateway, then attribute it by the home token found
+        # in its command line. The old pattern required an explicit
+        # --config <home>/config.json flag — gateways launched before that flag
+        # became standard (bare "nanobot gateway") never matched it, so a
+        # perfectly healthy default instance reported as stopped. An empty home
+        # token also means "default": a bare launcher has no path to attribute.
+        # NBLISTSCAN marks this script's own text so the scan skips itself.
+        for p in $(pgrep -f '[n]anobot' 2>/dev/null); do
+          [ -r "/proc/$p/cmdline" ] || continue
+          C=$(tr '\\0' ' ' < "/proc/$p/cmdline" 2>/dev/null)
+          [ -n "$C" ] || continue
+          case "$C" in *NBLISTSCAN*) continue;; esac
+          case "$C" in *"gatew"*"ay"*) ;; *) continue;; esac
+          HME=$(echo "$C" | grep -o '\\.${agentId}[-a-zA-Z0-9_]*' | head -1)
+          case "$HME" in ""|".${agentId}") PR=1; break;; esac
+        done
+        ;;
     zeroclaw) pgrep -f "zeroclaw.*--config-dir $HOME/.${agentId}" >/dev/null 2>&1 && PR=1 ;;
     openclaw) pgrep -f "openclaw.*--config $HOME/.${agentId}" >/dev/null 2>&1 && PR=1 ;;
     hermes)
@@ -162,7 +179,17 @@ for d in "$HOME"/.${agentId}-*; do
     # process-cmdline fallback: catches gateways started without a pidfile
     if [ "$RUN" = 0 ]; then
       case "${agentId}" in
-        nanobot)  pgrep -f "nanobot gateway --config $d/config.json" >/dev/null 2>&1 && RUN=1 ;;
+        nanobot)
+          for p in $(pgrep -f '[n]anobot' 2>/dev/null); do
+            [ -r "/proc/$p/cmdline" ] || continue
+            C=$(tr '\\0' ' ' < "/proc/$p/cmdline" 2>/dev/null)
+            [ -n "$C" ] || continue
+            case "$C" in *NBLISTSCAN*) continue;; esac
+            case "$C" in *"gatew"*"ay"*) ;; *) continue;; esac
+            HME=$(echo "$C" | grep -o '\\.${agentId}[-a-zA-Z0-9_]*' | head -1)
+            if [ "$HME" = ".\${tname}" ]; then RUN=1; break; fi
+          done
+          ;;
         zeroclaw) pgrep -f "zeroclaw.*--config-dir $d" >/dev/null 2>&1 && RUN=1 ;;
         openclaw) pgrep -f "openclaw.*--config $d" >/dev/null 2>&1 && RUN=1 ;;
         hermes)

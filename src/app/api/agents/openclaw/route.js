@@ -310,8 +310,8 @@ echo "===MODEL==="
 echo "===BINPATH==="
 [ -n "$BIN" ] && echo "$BIN"
 echo "===SKILLS==="
-[ -d "${HH}/skills" ] && ls -1 "${HH}/skills" 2>/dev/null | grep -v '^\.' || true
-[ -d "${HH}/workspace/skills" ] && ls -1 "${HH}/workspace/skills" 2>/dev/null | grep -v '^\.' || true
+[ -d "${HH}/skills" ] && ls -1 "${HH}/skills" 2>/dev/null | grep -v '^\\.' || true
+[ -d "${HH}/workspace/skills" ] && ls -1 "${HH}/workspace/skills" 2>/dev/null | grep -v '^\\.' || true
 echo "===SKILLSCLI==="
 # OpenClaw bundles its own skill catalog (openclaw-bundled/extra) — list via CLI
 [ -n "$BIN" ] && "$BIN" skills list 2>/dev/null || true
