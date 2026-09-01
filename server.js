@@ -16,7 +16,8 @@ try {
           value = value.substring(1, value.length - 1);
         }
         if (key) {
-           process.env[key] = value;
+           // Shell environment wins over .env (standard dotenv semantics)
+           if (process.env[key] === undefined) process.env[key] = value;
         }
       }
     });
