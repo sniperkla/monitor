@@ -193,6 +193,31 @@ function isSelfAuthenticating(pathname) {
 }
 
 /**
+ * Account-lifecycle endpoints that must work BEFORE a session exists.
+ *
+ * Registration, password reset and email verification are the front door: the
+ * caller cannot have a session yet, by definition. They used to skip the
+ * middleware entirely while the matcher excluded all of /api/auth; narrowing
+ * that exclusion to the NextAuth framework routes left them behind the session
+ * gate, which answered 401 for every one of them — no signups, no password
+ * resets, and every verification link in every email dead.
+ *
+ * They still receive CSP, rate limiting and CSRF (register and
+ * forgot-password sit in deliberately tight rate-limit buckets). Only the
+ * session gate is skipped; each handler validates its own input.
+ */
+const PRE_AUTH_PATHS = new Set([
+  "/api/auth/register",
+  "/api/auth/forgot-password",
+  "/api/auth/reset-password",
+  "/api/auth/verify-email",
+]);
+
+function isPreAuthPath(pathname) {
+  return PRE_AUTH_PATHS.has(pathname);
+}
+
+/**
  * Direct deployment triggers have two supported callers:
  *
  * - a signed-in user invoking the route from the UI (cookie + CSRF), and
@@ -361,7 +386,12 @@ export default async function wrappedProxy(req) {
   // `authorized` callback returned a Response object, which NextAuth treats as
   // truthy; that could let an unauthenticated request fall through to CSRF and
   // receive 403 instead of the documented 401 / sign-in redirect.
-  if (!isPublicPath(pathname) && !isSelfAuthenticating(pathname) && !authToken && !externalDeployTrigger && !apiKeyDeferred) {
+  const skipsSessionGate =
+    isPublicPath(pathname) ||
+    isSelfAuthenticating(pathname) ||
+    isPreAuthPath(pathname);
+
+  if (!skipsSessionGate && !authToken && !externalDeployTrigger && !apiKeyDeferred) {
     if (pathname.startsWith("/api/")) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401, headers: {
         "Content-Security-Policy": csp,

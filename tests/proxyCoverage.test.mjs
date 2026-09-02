@@ -37,14 +37,69 @@ test('matcher includes deploy/trigger', () => {
 });
 
 test('proxy still authenticates protected API requests', () => {
-  // Every term in this condition is a hole in the auth gate, so the assertion
-  // names all of them. Adding a new bypass without updating this line is
-  // exactly the regression this test exists to catch.
-  assert.match(proxy,
-    /if \(!isPublicPath\(pathname\) && !isSelfAuthenticating\(pathname\) && !authToken && !externalDeployTrigger && !apiKeyDeferred\)/,
-    'missing auth returns through the normal 401 API path');
+  // Every term in the gate condition is a hole in the auth gate, so the
+  // assertion names all of them. Adding a new bypass without updating this
+  // line is exactly the regression this test exists to catch.
+  //
+  // Asserted term by term rather than as one literal string. The exact-match
+  // version went stale three times in a single day — each time the line was
+  // legitimately restructured, the assertion silently stopped describing the
+  // gate until the suite went red. Matching the whole expression tests the
+  // punctuation; matching the terms tests the security property.
+  const gateStart = proxy.indexOf('const skipsSessionGate');
+  const gateEnd = proxy.indexOf('pathname.startsWith("/api/")', gateStart);
+  const gate = proxy.slice(gateStart, gateEnd);
+  assert.ok(gate.length > 0, 'auth gate not found — test is stale if this fails');
+
+  // The gate itself: every negative guard must still be there, and combined
+  // with && so that no single bypass is enough on its own.
+  for (const term of ['skipsSessionGate', 'authToken', 'externalDeployTrigger', 'apiKeyDeferred']) {
+    assert.ok(new RegExp(`!${term}\\b`).test(gate), `auth gate no longer checks !${term}`);
+  }
+  assert.ok(/&&\s*!authToken/.test(gate), 'gate is conjunctive — no single bypass suffices');
+
+  // And skipsSessionGate is a bounded disjunction of named allowlists, not a
+  // catch-all. Adding a fourth way to skip the gate is a security decision and
+  // must show up here.
+  for (const term of [
+    'isPublicPath(pathname)',
+    'isSelfAuthenticating(pathname)',
+    'isPreAuthPath(pathname)',
+  ]) {
+    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    assert.ok(new RegExp(escaped).test(gate), `session-gate bypass no longer includes ${term}`);
+  }
+  assert.ok(!/\|\|\s*true\b/.test(gate), 'session-gate bypass must not be unconditionally true');
   assert.ok(proxy.includes('Content-Security-Policy'), 'protected responses receive CSP');
   assert.ok(proxy.includes('verifyCsrfPair'), 'unsafe requests receive CSRF validation');
+});
+
+test('pre-auth bypass is limited to account lifecycle routes', () => {
+  // Registration and password reset have to work while signed out, but this is
+  // the same "skip the session gate" escape hatch as SELF_AUTHENTICATING_PATHS,
+  // so it must stay a short literal list. Widening it would disable
+  // authentication for anything it matched.
+  const block = proxy.slice(
+    proxy.indexOf('const PRE_AUTH_PATHS'),
+    proxy.indexOf('function isPreAuthPath')
+  );
+  const entries = [...block.matchAll(/"(\/api\/[^"]+)"/g)].map((m) => m[1]);
+  assert.ok(entries.length > 0, 'the allowlist must not be empty (test is stale if it is)');
+  assert.ok(entries.length <= 6, `allowlist grew unexpectedly: ${entries.join(', ')}`);
+  for (const p of entries) {
+    assert.ok(p.startsWith('/api/auth/'), `non-auth path in the pre-auth allowlist: ${p}`);
+    assert.ok(
+      /register|forgot-password|reset-password|verify-email/.test(p),
+      `unexpected pre-auth path: ${p}`
+    );
+  }
+  // The front door specifically: signed-out users must be able to sign up.
+  // The matcher used to exclude all of /api/auth, so this was reachable
+  // implicitly; narrowing it left register behind the gate returning 401.
+  assert.ok(entries.includes('/api/auth/register'),
+    'registration would 401 for every signed-out user');
+  assert.ok(entries.includes('/api/auth/forgot-password'),
+    'password reset would 401 for every signed-out user');
 });
 
 test('self-authenticating bypass is limited to passkey login', () => {
