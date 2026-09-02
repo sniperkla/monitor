@@ -18,6 +18,15 @@ const MAX_CONTENT_BYTES = 200 * 1024;
 const INSTALL_RATE_LIMIT = 10;
 
 /**
+ * The complete set of fields /api/skills/install accepts. Anything else is a
+ * 400. Deliberately excludes every path-shaped name, so a caller cannot smuggle
+ * a destination through under installPath / path / file / target / dest /
+ * directory / destination / location — and so adding one later is a visible
+ * decision here rather than an invisible change in the handler.
+ */
+const ALLOWED_BODY_FIELDS = new Set(['id', 'name', 'content', 'description']);
+
+/**
  * Phrases whose only plausible purpose is to override the agent's operating
  * rules. Procedural documentation legitimately contains shell commands, so we
  * deliberately do NOT block on those — we block on instructions aimed at the
@@ -129,7 +138,44 @@ export async function POST(req) {
       );
     }
 
-    const { id, name, content, description } = await req.json();
+    const body = await req.json();
+    const { id, name, content, description } = body || {};
+
+    // Strict allowlist on the request body.
+    //
+    // No field here influences the destination path — the file always lands in
+    // skills/users/<userId>/<sanitized-name>.md — so this is not fixing an
+    // active write primitive. It is a guard rail on the schema: a future change
+    // that starts honouring a caller-supplied path has to declare it here first,
+    // and path-shaped parameters (installPath, path, file, target, dest,
+    // directory, destination, location) no longer travel through the handler
+    // looking accepted. Rejecting them also makes probing unambiguous — an
+    // unexpected field is a 400, not a 200 that a scanner can misread as
+    // "wrote to my path".
+    //
+    // Safe to be strict: the only client is TerminalView.handleInstallSkill,
+    // which sends exactly these four keys.
+    const unknownFields = Object.keys(body || {}).filter((k) => !ALLOWED_BODY_FIELDS.has(k));
+    if (unknownFields.length) {
+      await auditLog({
+        req,
+        action: 'skill.install',
+        userId,
+        userEmail: session.user?.email,
+        detail: {
+          reason: 'unexpected_fields',
+          // Field names only. Values are attacker-controlled and could be large
+          // or hostile; the names are enough to spot probing.
+          fields: unknownFields.slice(0, 10).map((f) => String(f).slice(0, 40)),
+        },
+        status: 'failure',
+      });
+      return NextResponse.json(
+        { success: false, error: `Unexpected field(s): ${unknownFields.slice(0, 10).join(', ')}` },
+        { status: 400 }
+      );
+    }
+
     if (!id || !name || !content) {
       return NextResponse.json({ success: false, error: 'Missing id, name or content' }, { status: 400 });
     }
