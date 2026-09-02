@@ -9,6 +9,7 @@ import { getActiveRelayInfo } from '@/lib/mongodb';
 import { rewriteUriForTunnel, normalizeRelayDatabaseUri } from '@/lib/sshTunnel';
 import { assertSafeUri } from '@/lib/ssrfGuard';
 import { logger } from '@/lib/logger';
+import { safeConnectionError } from '@/lib/connectionError';
 
 /**
  * POST - Test a raw database URI connection
@@ -114,10 +115,10 @@ export async function POST(request) {
     }, { status: 400 });
 
   } catch (error) {
-    logger.error('Test URI Error:', error);
-    return NextResponse.json({ 
-      success: false, 
-      error: error.message || 'Connection test failed' 
+    logger.error('Test URI Error:', error?.message || error);
+    return NextResponse.json({
+      success: false,
+      error: safeConnectionError(error),
     }, { status: 500 });
   }
 }
@@ -155,15 +156,12 @@ async function testMongoConnection(uri, usedRelay = false) {
       try { await conn.close(); } catch (e) {}
     }
     
-    // Provide helpful error messages
-    let errorMessage = error.message;
-    if (error.message.includes('ECONNREFUSED')) {
-      errorMessage = 'ไม่สามารถเชื่อมต่อกับฐานข้อมูลได้ โปรดตรวจสอบ URI และตรวจสอบว่า MongoDB กำลังทำงานอยู่';
-    } else if (error.message.includes('authentication failed')) {
-      errorMessage = 'การยืนยันตัวตนล้มเหลว ตรวจสอบชื่อผู้ใช้และรหัสผ่าน';
-    } else if (error.message.includes('ETIMEDOUT')) {
-      errorMessage = 'การเชื่อมต่อหมดเวลา ตรวจสอบที่อยู่โฮสต์และพอร์ต';
-    }
+    // Map to a client-safe message. Unrecognised driver errors are logged
+    // server-side rather than returned, because their text can carry internal
+    // hostnames and relay port numbers.
+    const errorMessage = safeConnectionError(error, {
+      onWithheld: (raw) => logger.error('[test-uri] mongo error detail withheld from client:', raw),
+    });
 
     return NextResponse.json({ 
       success: false, 
@@ -190,12 +188,9 @@ async function testMySQLConnection(uri) {
       try { await connection.end(); } catch (e) {}
     }
 
-    let errorMessage = error.message;
-    if (error.code === 'ECONNREFUSED') {
-      errorMessage = 'ไม่สามารถเชื่อมต่อกับฐานข้อมูลได้ โปรดตรวจสอบ URI และตรวจสอบว่า MySQL กำลังทำงานอยู่';
-    } else if (error.code === 'ER_ACCESS_DENIED_ERROR') {
-      errorMessage = 'การยืนยันตัวตนล้มเหลว ตรวจสอบชื่อผู้ใช้และรหัสผ่าน';
-    }
+    const errorMessage = safeConnectionError(error, {
+      onWithheld: (raw) => logger.error('[test-uri] mysql error detail withheld from client:', raw),
+    });
 
     return NextResponse.json({ 
       success: false, 
@@ -221,16 +216,9 @@ async function testPostgresConnection(uri) {
   } catch (error) {
     try { await client.end(); } catch (e) {}
 
-    let errorMessage = error.message;
-    if (error.code === 'ECONNREFUSED') {
-      errorMessage = 'ไม่สามารถเชื่อมต่อกับฐานข้อมูลได้ โปรดตรวจสอบ URI และตรวจสอบว่า PostgreSQL กำลังทำงานอยู่';
-    } else if (error.code === '28P01' || error.code === '28000') {
-      errorMessage = 'การยืนยันตัวตนล้มเหลว ตรวจสอบชื่อผู้ใช้และรหัสผ่าน';
-    } else if (error.code === 'ETIMEDOUT') {
-      errorMessage = 'การเชื่อมต่อหมดเวลา ตรวจสอบที่อยู่โฮสต์และพอร์ต';
-    } else if (error.code === '3D000') {
-      errorMessage = 'ไม่พบฐานข้อมูลที่ระบุ โปรดตรวจสอบชื่อฐานข้อมูล';
-    }
+    const errorMessage = safeConnectionError(error, {
+      onWithheld: (raw) => logger.error('[test-uri] postgres error detail withheld from client:', raw),
+    });
 
     return NextResponse.json({
       success: false,
