@@ -1,14 +1,23 @@
 import mongoose from 'mongoose';
 
 /**
- * Audit logging for sensitive actions — the single implementation.
+ * Audit logging for sensitive actions — the security trail.
  *
- * This module previously coexisted with src/models/AuditLog.js, which wrote to
- * the same concept through a different model with a different schema. Two
- * writers meant two shapes, and a reviewer querying `audit_logs` got half the
- * picture depending on which one the code path happened to use. Everything now
- * goes through here; AuditLog.js remains only for the server-monitor's own
- * operational trail.
+ * COLLECTION NAMING TRAP — read this before querying the database.
+ * There are three write-only trails and their names differ by an underscore.
+ * Mongoose pluralizes without snake-casing, so the models land in collections
+ * that are NOT the one this module writes to:
+ *
+ *   audit_logs    <- this module             security incident trail (query this)
+ *   auditlogs     <- models/AuditLog.js      per-server operational history
+ *   activitylogs  <- models/ActivityLog.js   user-facing UI timeline
+ *
+ * `audit_logs` and `auditlogs` are different collections. Everything a security
+ * review needs is mirrored into `audit_logs`, including privileged
+ * server-monitor actions — which is why src/app/api/server-monitor/app-action
+ * calls this in addition to its own typed model. The AuditLog write is kept for
+ * its indexed connectionId/appName/version, which supports "what changed on
+ * this host" queries that this flatter shape does not.
  *
  * What gets recorded
  * ------------------
@@ -21,6 +30,9 @@ import mongoose from 'mongoose';
  * prevent; they do not tell you what happened at 03:00. When a user reports an
  * unexpected connection deletion, the answer is `db.audit_logs.find({
  * userId, action: /^connection\./ })` — not a log grep across three files.
+ *
+ * Remember `server.service.*` is here too: if you only grep the route handlers
+ * for `auditLog` you will miss that server-monitor writes through a helper.
  *
  * Guarantees
  * ----------

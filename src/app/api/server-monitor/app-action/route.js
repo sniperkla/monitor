@@ -7,17 +7,53 @@ import { checkRateLimit } from '@/lib/serverGuard';
 import connectDB from '@/lib/mongodb';
 import AuditLog, { getAuditLogModel } from '@/models/AuditLog';
 import { getActivityLogModel } from '@/models/ActivityLog';
+import { auditLog } from '@/lib/auditLog';
 
 // Fire-and-forget audit trail — never blocks or fails the request itself.
-// Writes to both the compliance AuditLog and the user-facing Activity timeline.
+//
+// Three destinations, and the split is deliberate:
+//
+//   audit_logs    (src/lib/auditLog.js)  the security trail. One place a
+//                 reviewer looks during an incident. Privileged actions must
+//                 land here or they are invisible to that review.
+//   auditlogs     (@/models/AuditLog)    per-server operational history, with
+//                 indexed connectionId/appName/version for "what changed on
+//                 this host" queries.
+//   activitylogs  (@/models/ActivityLog) the user-facing timeline in the UI.
+//
+// Note the collection names: mongoose pluralizes without snake-casing, so the
+// AuditLog model lands in `auditlogs` while the security trail lives in
+// `audit_logs`. They are NOT the same collection, and the near-identical names
+// are a standing trap for anyone grepping the database.
 const ACTION_VERBS = {
   start: 'Started', stop: 'Stopped', restart: 'Restarted',
   enable: 'Enabled', disable: 'Disabled', update: 'Updated',
   uninstall: 'Uninstalled', 'install-version': 'Installed',
 };
 
-async function writeAudit(entry, { appName, action, version, host, success, error }) {
+async function writeAudit(entry, { appName, action, version, host, success, error, userEmail }, req) {
   try {
+    // Security trail first. Starting/stopping/uninstalling services on a user's
+    // server is the highest-severity thing this product does, so it belongs in
+    // audit_logs alongside the other privileged actions — otherwise an
+    // investigator reading the documented trail sees nothing.
+    await auditLog({
+      req,
+      action: `server.service.${action}`,
+      userId: entry.userId,
+      userEmail: userEmail || null,
+      detail: {
+        connectionId: entry.connectionId,
+        host,
+        appName,
+        version: version || null,
+        exitCode: entry.exitCode,
+        error: error ? String(error).slice(0, 200) : null,
+      },
+      target: entry.connectionId,
+      status: success ? 'success' : 'failure',
+    });
+
     const db = await connectDB();
     await getAuditLogModel(db).create(entry);
     const verb = ACTION_VERBS[action] || action;
@@ -399,7 +435,15 @@ export async function POST(request) {
         exitCode: result.code ?? null,
         error: responseBody.error ? String(responseBody.error).slice(0, 500) : null,
         ip: clientIp,
-      }, { appName, action, version, host: sshConfig.host, success, error: responseBody.error });
+      }, {
+        appName,
+        action,
+        version,
+        host: sshConfig.host,
+        success,
+        error: responseBody.error,
+        userEmail: session.user?.email || null,
+      }, request);
     }
 
     return NextResponse.json(responseBody);
