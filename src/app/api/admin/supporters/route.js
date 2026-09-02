@@ -257,8 +257,9 @@ export async function POST(request) {
       const s = targetUser.supporter || {};
       targetUser.supporter = { ...(s || {}), status: false };
       await targetUser.save();
+      // invalidateSupporter() clears both the /api/user/supporter cache and
+      // server.js's /relay-ws gate cache — see src/utils/supporter.js.
       invalidateSupporter(targetEmail);
-      if (global.__relaySupporterCache instanceof Map) global.__relaySupporterCache.clear();
       killUserRelays(targetEmail, targetUser);
       await auditAdminAction('success', { relaysKilled: true });
       return NextResponse.json({ success: true, message: `Revoked supporter access for ${targetLabel}` });

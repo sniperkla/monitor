@@ -112,8 +112,7 @@ export async function POST(request) {
       };
       await user.save();
       grantedDays = grantDays;
-      invalidateSupporter(user.email);
-      if (global.__relaySupporterCache instanceof Map) global.__relaySupporterCache.clear();
+      invalidateSupporter(user.email); // clears both caches — see src/utils/supporter.js
     }
 
     payments.push({

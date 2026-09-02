@@ -39,10 +39,24 @@ export async function getSupporterStatus(email) {
   return value;
 }
 
-/** Drop cached status (single email, or everything when omitted). */
+/**
+ * Drop cached status (single email, or everything when omitted).
+ *
+ * Clears BOTH caches:
+ *  - this module's `cache`, which backs /api/user/supporter and the UI gates.
+ *  - server.js's global.__relaySupporterCache, which independently gates every
+ *    /relay-ws connection. server.js is CommonJS and queries the users
+ *    collection directly, so it cannot use this module's cache.
+ *
+ * Clearing only the first one leaves a freshly granted supporter staring at an
+ * unlocked UI whose relay agent is still rejected with 4003 SUPPORTER_REQUIRED
+ * until the 5-minute TTL happens to expire. Callers must not have to know that
+ * two caches exist, so both are handled here.
+ */
 export function invalidateSupporter(email) {
   if (email) cache.delete(cacheKey(email));
   else cache.clear();
+  if (global.__relaySupporterCache instanceof Map) global.__relaySupporterCache.clear();
 }
 
 /** Standard 403 body for gated endpoints. */
