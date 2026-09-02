@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { getSshConfig, sftpReadStream } from '../_ssh';
-import { uploadStreamToR2, getPresignedUrl, isR2Configured } from '@/lib/r2';
+import { uploadStreamToR2, isR2Configured } from '@/lib/r2';
+import { basename } from '@/utils/pii';
 import { logger } from '@/lib/logger';
 
 export async function POST(request) {
@@ -33,12 +34,15 @@ export async function POST(request) {
 
     logger.info(`[upload-r2] Upload complete: ${key}`);
 
-    const downloadUrl = await getPresignedUrl(key, 86400); // 24h expiry
-
+    // Do not return a direct public/presigned URL. A URL is a bearer
+    // capability: anyone who sees it can download the backup until it expires,
+    // and R2_PUBLIC_DOMAIN would make the capability permanent. Downloads now
+    // go through /api/server-backup/download?fileRef=... where the session,
+    // connection ownership, and per-user history are checked first.
     return NextResponse.json({
       success: true,
-      downloadUrl,
-      key,
+      filename: basename(name) || 'backup.tar.gz',
+      cloudStored: true,
     });
   } catch (error) {
     logger.error('[upload-r2] error:', error.message);

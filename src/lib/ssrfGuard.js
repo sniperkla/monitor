@@ -1,0 +1,347 @@
+/**
+ * SSRF protection for outbound database connection testing.
+ *
+ * The test-uri endpoint accepts a raw database URI from the user and would
+ * otherwise open a TCP connection to any host the URI points at. That makes it
+ * an SSRF vector — an attacker can probe internal services (169.254.169.254,
+ * 127.0.0.1, 10.x, etc.) and use the 10s timeout as a timing oracle.
+ *
+ * This module resolves the hostname in the URI, checks every resolved IP
+ * against a blocklist of private/reserved ranges, and rejects the connection
+ * before any socket is opened.
+ *
+ * The check is also done after connecting in the case of DNS rebinding, but
+ * pre-connection resolution is the primary defence because it prevents the
+ * socket from being opened at all.
+ */
+
+import dns from 'node:dns/promises';
+import { logger } from './logger.js';
+
+/**
+ * IPv4 private/reserved CIDR ranges.
+ * Each entry is [subnet, maskBits].
+ */
+const BLOCKED_IPV4_RANGES = [
+  [0x00000000, 8],     // 0.0.0.0/8        — "this network"
+  [0x0A000000, 8],     // 10.0.0.0/8       — private (RFC 1918)
+  [0x7F000000, 8],     // 127.0.0.0/8      — loopback
+  [0xA9FE0000, 16],    // 169.254.0.0/16   — link-local
+  [0xAC100000, 12],    // 172.16.0.0/12    — private (RFC 1918)
+  [0xC0A80000, 16],    // 192.168.0.0/16   — private (RFC 1918)
+  [0xC6120000, 12],    // 198.18.0.0/15    — benchmarking (RFC 2544)
+  [0xC6330000, 16],    // 198.51.100.0/24  — documentation (RFC 5737)
+  [0xCB007100, 16],    // 203.0.113.0/24   — documentation (RFC 5737)
+  [0x64400000, 10],    // 100.64.0.0/10    — CGNAT (RFC 6598)
+  [0xE0000000, 4],     // 224.0.0.0/4      — multicast
+  [0xF0000000, 4],     // 240.0.0.0/4      — reserved
+];
+
+/**
+ * IPv6 private/reserved ranges (as prefix + bit length).
+ * We compare the first N bits of the address.
+ */
+const BLOCKED_IPV6_PREFIXES = [
+  ['::', 0],            // ::/0 is NOT blocked — we use specific prefixes below
+  // Actually, let's be precise:
+];
+
+// More precise IPv6 blocklist:
+const BLOCKED_IPV6 = [
+  // ::1/128 — loopback
+  { bytes: [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1], prefixLen: 128 },
+  // fe80::/10 — link-local
+  { bytes: [0xfe,0x80,0,0,0,0,0,0,0,0,0,0,0,0,0,0], prefixLen: 10 },
+  // fc00::/7 — unique-local
+  { bytes: [0xfc,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0], prefixLen: 7 },
+  // ff00::/8 — multicast
+  { bytes: [0xff,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0], prefixLen: 8 },
+  // ::ffff:0:0/96 — IPv4-mapped (delegate to IPv4 check)
+];
+
+/**
+ * Convert a dotted-quad IPv4 string to a 32-bit unsigned integer.
+ */
+function ipv4ToInt(ip) {
+  const parts = ip.split('.');
+  if (parts.length !== 4) return null;
+  let result = 0;
+  for (const part of parts) {
+    const n = parseInt(part, 10);
+    if (isNaN(n) || n < 0 || n > 255) return null;
+    result = (result << 8) | n;
+  }
+  // Convert to unsigned
+  return result >>> 0;
+}
+
+/**
+ * Check if an IPv4 address falls within any blocked range.
+ */
+function isBlockedIPv4(ip) {
+  const addr = ipv4ToInt(ip);
+  if (addr === null) return true; // if we can't parse it, block it
+
+  for (const [subnet, maskBits] of BLOCKED_IPV4_RANGES) {
+    const mask = maskBits === 0 ? 0 : (0xFFFFFFFF << (32 - maskBits)) >>> 0;
+    if ((addr & mask) >>> 0 === (subnet & mask) >>> 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Convert an IPv6 address string (possibly with :: shorthand) to a 16-byte array.
+ * Returns null if the address is malformed.
+ */
+function ipv6ToBytes(ip) {
+  // Handle IPv4-mapped addresses like ::ffff:1.2.3.4
+  const v4MappedMatch = ip.match(/:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+  if (v4MappedMatch) {
+    const v4 = v4MappedMatch[1];
+    if (isBlockedIPv4(v4)) return null; // will be caught by caller as blocked
+    // Expand as ::ffff:v4
+    const v4Parts = v4.split('.').map(Number);
+    const bytes = new Array(16).fill(0);
+    bytes[10] = 0xff;
+    bytes[11] = 0xff;
+    bytes[12] = v4Parts[0];
+    bytes[13] = v4Parts[1];
+    bytes[14] = v4Parts[2];
+    bytes[15] = v4Parts[3];
+    return bytes;
+  }
+
+  // Handle :: shorthand
+  let [head, tail] = ip.split('::');
+  const headParts = head ? head.split(':').filter(Boolean) : [];
+  const tailParts = tail ? tail.split(':').filter(Boolean) : [];
+
+  // Each part is a 16-bit hex value, contributing 2 bytes
+  const headBytes = [];
+  for (const part of headParts) {
+    const val = parseInt(part, 16);
+    if (isNaN(val) || val < 0 || val > 0xFFFF) return null;
+    headBytes.push((val >> 8) & 0xFF, val & 0xFF);
+  }
+
+  const tailBytes = [];
+  for (const part of tailParts) {
+    const val = parseInt(part, 16);
+    if (isNaN(val) || val < 0 || val > 0xFFFF) return null;
+    tailBytes.push((val >> 8) & 0xFF, val & 0xFF);
+  }
+
+  const totalBytes = headBytes.length + tailBytes.length;
+  if (ip.includes('::')) {
+    // Fill the gap with zeros
+    const zeros = new Array(16 - totalBytes).fill(0);
+    return [...headBytes, ...zeros, ...tailBytes];
+  } else {
+    // No :: — must be exactly 8 parts
+    if (headParts.length !== 8) return null;
+    return headBytes;
+  }
+}
+
+/**
+ * Check if an IPv6 address falls within any blocked range.
+ */
+function isBlockedIPv6(ip) {
+  const bytes = ipv6ToBytes(ip);
+  if (bytes === null) return true; // unparseable = block
+
+  for (const range of BLOCKED_IPV6) {
+    let match = true;
+    let remaining = range.prefixLen;
+    let byteIdx = 0;
+    while (remaining >= 8 && match) {
+      if (bytes[byteIdx] !== range.bytes[byteIdx]) {
+        match = false;
+      }
+      byteIdx++;
+      remaining -= 8;
+    }
+    // Check partial byte
+    if (match && remaining > 0) {
+      const mask = (0xFF << (8 - remaining)) & 0xFF;
+      if ((bytes[byteIdx] & mask) !== (range.bytes[byteIdx] & mask)) {
+        match = false;
+      }
+    }
+    if (match) return true;
+  }
+  return false;
+}
+
+/**
+ * Check if an IP address (v4 or v6) is private/reserved/blocked.
+ */
+function isBlockedIP(ip) {
+  if (ip.includes(':')) {
+    return isBlockedIPv6(ip);
+  }
+  return isBlockedIPv4(ip);
+}
+
+/**
+ * Extract the hostname from a database URI string.
+ * Handles mongodb://, mongodb+srv://, mysql://, postgres://, postgresql://
+ *
+ * IPv6 addresses are enclosed in brackets (e.g., [::1] or [fe80::1]) per
+ * RFC 2732, so we check for that pattern first to avoid splitting on the
+ * colons inside the address.
+ */
+export function extractHost(uri) {
+  try {
+    // Strip the protocol
+    const withoutProto = uri.replace(/^[a-zA-Z+]+:\/\//, '');
+    // Take everything up to the first / or ? or # (the authority component)
+    const authority = withoutProto.split(/[/?#]/)[0];
+    // Strip credentials: everything up to the LAST @ in the authority.
+    // Using the last @ handles passwords that contain @.
+    const lastAt = authority.lastIndexOf('@');
+    const hostPortPart = lastAt >= 0 ? authority.slice(lastAt + 1) : authority;
+
+    const hosts = [];
+
+    // Check for IPv6 bracket notation: [address]:port or [address]
+    // For replica sets: [addr1]:port,[addr2]:port,...
+    if (hostPortPart.includes('[')) {
+      const bracketRegex = /\[([^\]]+)\]/g;
+      let match;
+      while ((match = bracketRegex.exec(hostPortPart)) !== null) {
+        hosts.push(match[1]);
+      }
+      return hosts;
+    }
+
+    // IPv4 or hostname: comma-separated list of host:port pairs
+    const hostList = hostPortPart.split(',').map(h => h.split(':')[0].trim()).filter(Boolean);
+    return hostList;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Resolve a hostname to all its IP addresses using dns.resolve4 and
+ * dns.resolve6. Also checks dns.lookup as a fallback (which includes
+ * /etc/hosts entries).
+ *
+ * Returns an array of IP address strings.
+ */
+async function resolveHost(hostname) {
+  const ips = new Set();
+
+  // Try A records (IPv4)
+  try {
+    const v4 = await dns.resolve4(hostname);
+    if (v4) v4.forEach(ip => ips.add(ip));
+  } catch (e) {
+    // ENOTFOUND is expected for invalid hosts — not an error here
+    if (e.code !== 'ENOTFOUND' && e.code !== 'ENODATA') {
+      logger.debug(`[ssrf-guard] dns.resolve4(${hostname}) error: ${e.code}`);
+    }
+  }
+
+  // Try AAAA records (IPv6)
+  try {
+    const v6 = await dns.resolve6(hostname);
+    if (v6) v6.forEach(ip => ips.add(ip));
+  } catch (e) {
+    if (e.code !== 'ENOTFOUND' && e.code !== 'ENODATA') {
+      logger.debug(`[ssrf-guard] dns.resolve6(${hostname}) error: ${e.code}`);
+    }
+  }
+
+  // Fallback: dns.lookup (respects /etc/hosts, system resolver)
+  if (ips.size === 0) {
+    try {
+      await dns.lookup(hostname, { all: true });
+      // dns.lookup returns objects with .address
+      const lookupResult = await dns.lookup(hostname, { all: true });
+      if (lookupResult) {
+        for (const entry of lookupResult) {
+          ips.add(entry.address);
+        }
+      }
+    } catch (e) {
+      // Host not found — will be caught by the caller
+    }
+  }
+
+  return [...ips];
+}
+
+/**
+ * Check whether a database URI is safe to connect to.
+ *
+ * Resolves all hostnames in the URI and verifies that every resolved IP
+ * address is in a public range. If any IP is private/reserved/loopback,
+ * the URI is rejected.
+ *
+ * @param {string} uri — The database URI to check
+ * @returns {{ safe: boolean, reason: string }}
+ */
+export async function assertSafeUri(uri) {
+  const hosts = extractHost(uri);
+  if (hosts.length === 0) {
+    return { safe: false, reason: 'No hostname found in URI' };
+  }
+
+  for (const hostname of hosts) {
+    // Quick string check for obvious internal addresses before DNS
+    if (/^(127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2[0-9]|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(hostname)) {
+      logger.warn(`[ssrf-guard] Rejecting URI with private hostname: ${hostname}`);
+      return { safe: false, reason: `Blocked private/internal address: ${hostname}` };
+    }
+
+    if (hostname === 'localhost' || hostname === '::1' || hostname === '[::1]') {
+      logger.warn(`[ssrf-guard] Rejecting URI with localhost hostname`);
+      return { safe: false, reason: 'Blocked localhost address' };
+    }
+
+    // Quick IPv6 check for private ranges (fe80::, fc00::, ff00::)
+    if (/^(fe[89ab]|fe[89ab][0-9a-f]{2}:)/i.test(hostname) ||
+        /^(fc|fd)[0-9a-f]{2}:/i.test(hostname) ||
+        /^ff[0-9a-f]{2}:/i.test(hostname)) {
+      logger.warn(`[ssrf-guard] Rejecting URI with private IPv6 hostname: ${hostname}`);
+      return { safe: false, reason: `Blocked private/internal IPv6: ${hostname}` };
+    }
+
+    // If it's already an IP address, check directly
+    // IPv4: 1.2.3.4 or IPv6: ::1, fe80::1, etc.
+    const looksLikeIPv4 = /^\d{1,3}(\.\d{1,3}){3}$/.test(hostname);
+    const looksLikeIPv6 = hostname.includes(':') || hostname.startsWith('[');
+    if (looksLikeIPv4 || looksLikeIPv6) {
+      const cleanIP = hostname.replace(/^\[|\]$/g, '');
+      if (isBlockedIP(cleanIP)) {
+        logger.warn(`[ssrf-guard] Rejecting URI with blocked IP: ${cleanIP}`);
+        return { safe: false, reason: `Blocked private/internal IP: ${cleanIP}` };
+      }
+      continue; // IP is public, move to next host
+    }
+
+    // Resolve DNS and check every answer
+    const resolvedIPs = await resolveHost(hostname);
+    if (resolvedIPs.length === 0) {
+      // Can't resolve — let the connection attempt proceed and fail naturally.
+      // Don't block here because DNS resolution might work differently from
+      // the server's perspective (e.g., split-horizon DNS, or the host is
+      // genuinely new and not yet resolvable).
+      logger.debug(`[ssrf-guard] Could not resolve ${hostname} — allowing connection to fail naturally`);
+      continue;
+    }
+
+    for (const ip of resolvedIPs) {
+      if (isBlockedIP(ip)) {
+        logger.warn(`[ssrf-guard] Rejecting URI: ${hostname} resolves to blocked IP ${ip}`);
+        return { safe: false, reason: `Host ${hostname} resolves to private/internal IP: ${ip}` };
+      }
+    }
+  }
+
+  return { safe: true, reason: 'OK' };
+}

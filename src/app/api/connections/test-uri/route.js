@@ -7,6 +7,7 @@ import { Client } from 'pg';
 import { checkRateLimit } from '@/lib/serverGuard';
 import { getActiveRelayInfo } from '@/lib/mongodb';
 import { rewriteUriForTunnel, normalizeRelayDatabaseUri } from '@/lib/sshTunnel';
+import { assertSafeUri } from '@/lib/ssrfGuard';
 import { logger } from '@/lib/logger';
 
 /**
@@ -53,7 +54,11 @@ export async function POST(request) {
       }, { status: 400 });
     }
 
-    // Rewrite localhost URIs through Local Relay Agent if one is active
+    // Rewrite localhost URIs through Local Relay Agent if one is active.
+    // The SSRF guard runs AFTER relay rewriting so that legitimate localhost
+    // connections are routed through the relay (which connects from the
+    // user's machine, not the server). If no relay is available, localhost
+    // connections fall through to the SSRF guard which blocks them.
     const normalizedUri = normalizeRelayDatabaseUri(uri);
     let effectiveUri = normalizedUri;
     let usedRelay = false;
@@ -70,6 +75,27 @@ export async function POST(request) {
           relayRequired: true,
           error: 'Local Relay Agent is not connected. Please start local-relay.js on your machine to access localhost databases.'
         }, { status: 400 });
+      }
+    }
+
+    // SSRF protection: resolve all hostnames in the EFFECTIVE URI and verify
+    // every resolved IP is in a public range. This prevents the server from
+    // being used as a proxy to reach internal services (169.254.169.254,
+    // 127.x, 10.x, 172.16/12, 192.168/16, etc.) and eliminates the 10s
+    // timeout timing oracle that existed when internal IPs were simply left
+    // to time out.
+    //
+    // If a relay rewrote the URI, the effective host is the relay port
+    // (typically 127.0.0.1:<port> on the server) — which is safe because the
+    // relay itself only accepts connections from the server process.
+    if (!usedRelay) {
+      const ssrfCheck = await assertSafeUri(effectiveUri);
+      if (!ssrfCheck.safe) {
+        logger.warn(`[test-uri] SSRF blocked: ${ssrfCheck.reason}`);
+        return NextResponse.json({
+          success: false,
+          error: `Connection blocked: ${ssrfCheck.reason}`,
+        }, { status: 403 });
       }
     }
 
@@ -100,9 +126,9 @@ async function testMongoConnection(uri, usedRelay = false) {
   let conn = null;
   try {
     conn = await mongoose.createConnection(uri, {
-      serverSelectionTimeoutMS: 10000,
-      socketTimeoutMS: 10000,
-      connectTimeoutMS: 10000,
+      serverSelectionTimeoutMS: 5000,
+      socketTimeoutMS: 5000,
+      connectTimeoutMS: 5000,
       ...(usedRelay ? { directConnection: true } : {}),
     }).asPromise();
 
@@ -179,7 +205,7 @@ async function testMySQLConnection(uri) {
 }
 
 async function testPostgresConnection(uri) {
-  const client = new Client({ connectionString: uri, connectionTimeoutMillis: 10000 });
+  const client = new Client({ connectionString: uri, connectionTimeoutMillis: 5000 });
   try {
     await client.connect();
     const result = await client.query('SELECT version()');

@@ -53,6 +53,29 @@ function fsSafeSegment(value, maxLen = 64) {
   return String(value ?? '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, maxLen);
 }
 
+/**
+ * Validate a skill id from the request body.
+ *
+ * The id is only used as frontmatter metadata (never as a filename), but an
+ * unsanitised id can still smuggle control characters into the YAML block or
+ * carry path-like values that confuse audit logs. Enforce a strict format:
+ * alphanumerics, hyphens, and underscores only, 1–120 chars, must not start
+ * with a dot or contain path separators.
+ *
+ * Returns the cleaned id or null if invalid.
+ */
+function validateSkillId(value) {
+  if (typeof value !== 'string') return null;
+  const cleaned = value.trim();
+  if (!cleaned || cleaned.length > 120) return null;
+  if (cleaned.startsWith('.')) return null;
+  if (/[/\\]/.test(cleaned)) return null;
+  // Only allow [a-zA-Z0-9_-] — anything else is an attempt at path traversal
+  // or YAML injection.
+  if (!/^[a-zA-Z0-9_-]+$/.test(cleaned)) return null;
+  return cleaned;
+}
+
 export async function POST(req) {
   try {
     const session = await getServerSession(authOptions);
@@ -85,6 +108,17 @@ export async function POST(req) {
       return NextResponse.json({ success: false, error: 'Missing id, name or content' }, { status: 400 });
     }
 
+    // Strict validation of the skill id: alphanumeric + hyphens + underscores
+    // only. Rejects path traversal (../, /, \), dotfiles (.env), and anything
+    // that could corrupt the YAML frontmatter or confuse audit logs.
+    const safeId = validateSkillId(id);
+    if (!safeId) {
+      return NextResponse.json(
+        { success: false, error: 'Invalid skill id. Only alphanumeric characters, hyphens, and underscores are allowed.' },
+        { status: 400 }
+      );
+    }
+
     if (typeof content !== 'string' || Buffer.byteLength(content, 'utf8') > MAX_CONTENT_BYTES) {
       return NextResponse.json({ success: false, error: 'Content too large' }, { status: 413 });
     }
@@ -106,8 +140,11 @@ export async function POST(req) {
       );
     }
 
+    // Filesystem-safe skill name: alphanumerics and hyphens only, lowercase.
+    // This becomes the filename, so path separators, dots, and shell
+    // metacharacters are stripped entirely.
     const safeName = String(name).replace(/[^a-z0-9\-]/gi, '-').toLowerCase().slice(0, 80);
-    if (!safeName) {
+    if (!safeName || !/^[a-z0-9]/.test(safeName)) {
       return NextResponse.json({ success: false, error: 'Invalid skill name' }, { status: 400 });
     }
 
@@ -127,13 +164,13 @@ export async function POST(req) {
       finalContent = storedContent;
     } else {
       const desc = yamlSafeScalar(description);
-      const safeId = yamlSafeScalar(id, 120);
+      const frontmatterSafeId = yamlSafeScalar(safeId, 120);
       const safeSkillName = yamlSafeScalar(name, 80);
       const frontmatter =
         `---\nname: ${safeSkillName}` +
         (desc ? `\ndescription: "${desc}"` : '') +
         `\nkeywords: [${safeSkillName.toLowerCase().replace(/[-_]/g, ', ')}]` +
-        `\nsource: skillsmp\nremote_id: ${safeId}\nowner: ${userId}\n---\n\n`;
+        `\nsource: skillsmp\nremote_id: ${frontmatterSafeId}\nowner: ${userId}\n---\n\n`;
       finalContent = frontmatter + storedContent;
     }
 

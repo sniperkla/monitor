@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
-import { isR2Configured, uploadStreamToR2, getPresignedUrl } from '@/lib/r2';
+import { isR2Configured, uploadStreamToR2 } from '@/lib/r2';
 import { Readable } from 'stream';
 import { logger } from '@/lib/logger';
 
@@ -30,26 +30,15 @@ export async function GET(request) {
 
     await uploadStreamToR2(testKey, stream, 'text/plain');
 
-    // Generate a presigned URL for the test file
-    const url = await getPresignedUrl(testKey, 300); // 5 min expiry
-
-    // Try to fetch it to verify it's accessible
-    let accessible = false;
-    try {
-      const res = await fetch(url, { method: 'HEAD' });
-      accessible = res.ok;
-    } catch {
-      // Presigned URL might not be HEAD-accessible, that's OK
-      accessible = true; // Upload succeeded, assume accessible
-    }
-
+    // Do not return a presigned/public URL from a diagnostic endpoint. A
+    // presigned URL is a bearer download capability, and R2_PUBLIC_DOMAIN can
+    // make it permanent. Successful upload is sufficient to verify access.
     return NextResponse.json({
       success: true,
       message: 'R2 connection successful!',
       testKey,
-      downloadUrl: url,
-      accessible,
-      bucket: process.env.R2_BUCKET_NAME,
+      accessible: true,
+      bucketConfigured: !!process.env.R2_BUCKET_NAME,
     });
   } catch (error) {
     logger.error('[r2-test] error:', error.message);

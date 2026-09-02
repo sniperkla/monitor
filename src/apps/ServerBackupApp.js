@@ -351,10 +351,12 @@ export default function ServerBackupApp({ windowId = 'server-backup', activeTab:
         body: JSON.stringify({ connectionId: connId, filePath: outFile, filename })
       });
       const data = await res.json();
-      if (data.success && data.downloadUrl) {
-        setR2UploadUrl(data.downloadUrl);
+      if (data.success && data.cloudStored) {
+        // The cloud object is intentionally not represented by a bearer URL.
+        // History/download use the server-side fileRef flow instead.
+        setR2UploadUrl('stored');
         if (historyId) {
-          setBackupHistory(prev => prev.map(h => h.id === historyId ? { ...h, r2Url: data.downloadUrl } : h));
+          setBackupHistory(prev => prev.map(h => h.id === historyId ? { ...h, hasCloudCopy: true } : h));
         }
         addNotification({ title: 'Cloud Upload Complete', message: 'Backup uploaded to cloud storage', type: 'success' });
       } else {
@@ -476,11 +478,8 @@ export default function ServerBackupApp({ windowId = 'server-backup', activeTab:
 
   const handleDownload = () => {
     if (!outFilePath || !connectionId) return;
-    if (r2UploadUrl) {
-      window.open(r2UploadUrl, '_blank');
-      return;
-    }
-    // Fallback: stream through server (should rarely happen if R2 is configured)
+    // Both cloud and local downloads use the authenticated server stream. No
+    // bearer URL is kept in the browser anymore.
     const filename = outFilePath.split('/').pop() || 'backup.tar.gz';
     const url = `/api/server-backup/download?connectionId=${connectionId}&filePath=${encodeURIComponent(outFilePath)}&filename=${encodeURIComponent(filename)}`;
     window.open(url, '_blank');

@@ -7,7 +7,8 @@ const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID;
 const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID;
 const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY;
 const R2_BUCKET_NAME = process.env.R2_BUCKET_NAME;
-const R2_PUBLIC_DOMAIN = process.env.R2_PUBLIC_DOMAIN;
+// R2_PUBLIC_DOMAIN is intentionally not used for backup downloads. Keeping
+// this module free of a public fallback prevents accidental bearer URLs.
 
 let _client = null;
 
@@ -48,11 +49,9 @@ export async function uploadStreamToR2(key, readableStream, contentType = 'appli
 export async function getPresignedUrl(key, expiresIn = 3600) {
   const client = getClient();
 
-  // If a public domain is configured, use it directly (no presigning needed)
-  if (R2_PUBLIC_DOMAIN) {
-    return `https://${R2_PUBLIC_DOMAIN}/${key}`;
-  }
-
+  // Never convert an object key into a public bearer URL. Even when
+  // R2_PUBLIC_DOMAIN is configured for unrelated assets, backups must remain
+  // private and be served through an authenticated application route.
   const command = new GetObjectCommand({
     Bucket: R2_BUCKET_NAME,
     Key: key,

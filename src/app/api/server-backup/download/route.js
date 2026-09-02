@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { getSshConfig, sftpReadStream } from '../_ssh';
-import { resolveBackupPath, resolveBackupCloudUrl } from '../_history';
+import { resolveBackupPath } from '../_history';
 import { logger } from '@/lib/logger';
 
 /**
@@ -28,19 +28,9 @@ export async function GET(request) {
     const fileRef = searchParams.get('fileRef');
     const filePath = searchParams.get('filePath');
     const filename = safeFilename(searchParams.get('filename'));
-    const wantsCloud = searchParams.get('source') === 'cloud';
 
     if (!connectionId) {
       return NextResponse.json({ success: false, error: 'Missing connectionId' }, { status: 400 });
-    }
-
-    // The presigned CDN URL is stored server-side only. Handing the browser a
-    // redirect keeps it out of the /api/server-backup/history payload while
-    // still letting the user pull the object straight from the CDN.
-    if (fileRef && wantsCloud) {
-      const cloudUrl = await resolveBackupCloudUrl(session.user.id, { connectionId, fileRef });
-      if (cloudUrl) return NextResponse.redirect(cloudUrl, 302);
-      // No (or expired) cloud copy — fall through and stream from the server.
     }
 
     let resolvedPath = null;

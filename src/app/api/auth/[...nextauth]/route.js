@@ -1,5 +1,6 @@
 import NextAuth from "next-auth";
 import { authOptions, sanitizeCallbackUrl } from "@/lib/auth";
+import { checkRateLimit, getClientIp } from "@/lib/authRateLimit";
 import { NextResponse } from "next/server";
 
 const handler = NextAuth(authOptions);
@@ -64,6 +65,17 @@ function validateCallbackUrl(request) {
 
 async function rateLimitedHandler(request, context) {
   const url = new URL(request.url);
+  const isCsrfRequest = url.pathname.endsWith('/api/auth/csrf') && request.method === 'GET';
+  if (isCsrfRequest) {
+    const gate = checkRateLimit('csrf', getClientIp(request));
+    if (!gate.allowed) {
+      return NextResponse.json(
+        { error: 'Too many CSRF token requests. Please try again later.' },
+        { status: 429, headers: { 'Retry-After': String(gate.retryAfterSec), 'Cache-Control': 'no-store' } }
+      );
+    }
+  }
+
   const isSigninRequest =
     (request.method === 'POST' && url.pathname.includes('/signin')) ||
     (request.method === 'POST' && url.pathname.includes('/credentials'));
