@@ -2,6 +2,7 @@ import { getToken } from 'next-auth/jwt';
 import { randomUUID } from 'crypto';
 import { getSupporterStatus, supporterRequiredResponse } from '@/utils/supporter';
 import { checkRateLimit } from '@/lib/serverGuard';
+import { tokensToRevoke } from '@/lib/relayRevoke';
 
 /**
  * Relay tokens are long-lived by necessity: public/local-relay.js bakes the
@@ -189,18 +190,19 @@ export async function GET(request) {
  * DELETE /api/relay/token — revoke tokens and disconnect relays
  * Query params:
  *   - tokenId: revoke ONLY this token (and disconnect whatever is using it)
- *   - relayId: disconnect only this relay — but see caveat below
- *   - neither: revoke all tokens and disconnect all relays
+ *   - relayId: disconnect that relay and revoke only the token it holds
+ *   - neither: revoke all tokens and disconnect all relays (revoke-all action)
  *
- * CAVEAT on relayId (pre-existing behaviour, documented to stop it surprising
- * anyone): token revocation is deliberately unconditional. A relay is a
- * background service that reconnects on its own, so leaving its token valid
- * would let it come straight back. Passing relayId therefore disconnects that
- * one relay but still revokes every token for the user. The previous JSDoc
- * claimed "keep token for others", which the code never did.
+ * Scoping is not cosmetic. A relay token is a 365-day bearer credential baked
+ * into a background service with no renewal handshake, so revoking one
+ * silently breaks that relay until a human reinstalls it. `relayId` used to
+ * fall through to the unconditional sweep — the Settings "Disconnect this
+ * relay" action revoked every token the user owned, on every machine. Revoking
+ * the disconnected relay's own token still stops it reconnecting, which was
+ * the original rationale, without taking the user's other relays with it.
  *
- * Use `tokenId` when the intent is to retire one credential without touching
- * the others.
+ * Targeting lives in lib/relayRevoke.js. A scoped request that resolves to
+ * nothing revokes nothing rather than everything.
  */
 export async function DELETE(request) {
   try {
@@ -213,18 +215,21 @@ export async function DELETE(request) {
     const relayId = url.searchParams.get('relayId');
     const tokenId = url.searchParams.get('tokenId');
 
-    // Always revoke tokens for this user so auto-restarting background processes are rejected
     global.__relayTokens = global.__relayTokens || new Map();
-    let revoked = 0;
-    for (const [t, e] of global.__relayTokens.entries()) {
-      if (e.userId !== userId) continue;
-      // When a specific token is targeted, leave the rest alone.
-      if (tokenId && e.tokenId !== tokenId && t.slice(0, 8) !== tokenId) continue;
-      global.__relayTokens.delete(t);
-      revoked++;
-    }
-
     const userRelays = global.__activeRelays?.get(userId);
+
+    // Which tokens to revoke is decided in lib/relayRevoke.js — see the header
+    // there for why a single-relay disconnect must not sweep the inventory.
+    const doomed = tokensToRevoke({
+      tokens: global.__relayTokens,
+      userId,
+      tokenId,
+      relayId,
+      userRelays,
+    });
+    for (const t of doomed) global.__relayTokens.delete(t);
+    const revoked = doomed.length;
+
     if (userRelays instanceof Map) {
       if (tokenId && !relayId) {
         // A token-specific revocation must not disconnect unrelated relays.

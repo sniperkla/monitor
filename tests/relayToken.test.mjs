@@ -69,10 +69,25 @@ test('GET returns a masked token, never the credential itself', () => {
   assert.ok(!inventory.includes('token: t'), 'raw token value not included in inventory');
 });
 
-test('DELETE can revoke a single token without disconnecting unrelated relays', () => {
+test('DELETE revokes a scoped target, never the whole inventory', () => {
+  // The targeting decision lives in src/lib/relayRevoke.js and is covered by
+  // runtime tests in tests/relayRevoke.test.mjs. This test only asserts the
+  // route still delegates to it instead of hand-rolling a loop.
+  //
+  // The previous version of this test asserted that an inline `tokenId`-only
+  // guard existed — and it passed, while the bug was live. The guard was real
+  // but gated on a query param no client ever sends; every call from the
+  // Settings UI arrives as `?relayId=<id>`, which ignored the guard and swept
+  // every token the user owned. A source-text assertion cannot tell "guarded"
+  // from "guarded only on the branch that is never taken", which is why the
+  // behaviour is now a pure function with real tests.
+  assert.ok(routeSrc.includes("from '@/lib/relayRevoke'"), 'delegates to the revocation helper');
+  assert.ok(routeSrc.includes('tokensToRevoke('), 'uses the shared targeting logic');
+  assert.ok(
+    !/if \(tokenId && e\.tokenId !== tokenId/.test(routeSrc),
+    'no inline tokenId-only guard left behind — it silently missed the relayId path'
+  );
   assert.ok(routeSrc.includes("url.searchParams.get('tokenId')"), 'tokenId param supported');
-  assert.match(routeSrc, /if \(tokenId && e\.tokenId !== tokenId && t\.slice\(0, 8\) !== tokenId\) continue;/,
-    'non-targeted tokens are skipped');
   assert.ok(routeSrc.includes('if (tokenId && !relayId)'),
     'token-specific relay handling precedes relayId/all handling');
   assert.ok(routeSrc.includes('relay.tokenId !== tokenId'),
