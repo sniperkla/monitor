@@ -37,8 +37,12 @@ export async function GET(request) {
     }
 
     await connectDB();
+    // `email` MUST be in the projection: getSupporterStatus() below is called
+    // with dbUser.email, and it short-circuits to "not a supporter" when given
+    // an undefined email. Omitting it silently reported isSupporter:false for
+    // every user, including admins.
     const dbUser = await User.findOne({ email: session.user.email })
-      .select('role vault.isConfigured supporter')
+      .select('role vault.isConfigured supporter email')
       .lean();
 
     if (!dbUser) {
