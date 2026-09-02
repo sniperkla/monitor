@@ -392,10 +392,19 @@ export function isRateLimitExempt(pathname) {
  *
  * The route rule is part of the key so two routes sharing a user do not
  * contend for the same bucket.
+ *
+ * DEFAULT_RULE carries no `pattern` — it is the catch-all for routes absent
+ * from ROUTE_RULES, so there is nothing to derive a source string from. Those
+ * are keyed on the pathname instead. Collapsing every unmatched route into one
+ * shared bucket would make a user's ordinary traffic across several unrelated
+ * endpoints contend for a single 60/min allowance and throttle them for no
+ * reason. (Reading `rule.pattern.source` unconditionally here crashed the
+ * middleware, which broke every mutating request to a route not in the table.)
  */
 export function bucketKey({ userId, ip, rule, pathname }) {
   const identity = userId ? `u:${userId}` : `ip:${ip || 'unknown'}`;
-  return `${rule.pattern.source}:${identity}`;
+  const route = rule?.pattern?.source ?? `default:${pathname || 'unknown'}`;
+  return `${route}:${identity}`;
 }
 
 export { ROUTE_RULES, DEFAULT_RULE };
