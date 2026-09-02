@@ -13,7 +13,11 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3030
-      MONGODB_URI: mongodb://monitor:AaBb1234!@monitor-mongo:27017/monitor?authSource=admin
+      MONGODB_URI: mongodb://monitor:${MONGO_PASSWORD}@monitor-mongo:27017/monitor?authSource=admin
+      # Passed through explicitly: server.js reads it to provision the Swarm
+      # mongo service. env_file alone does not cover values supplied via the
+      # shell environment rather than the .env file.
+      MONGO_PASSWORD: ${MONGO_PASSWORD}
     networks:
       - proxy-net
 
@@ -22,17 +26,22 @@ services:
     container_name: monitor-mongo
     restart: unless-stopped
     ports:
-      - "27021:27017"
+      # Bound to loopback only. The app reaches Mongo over the internal
+      # proxy-net network (monitor-mongo:27017); the host port exists purely
+      # for local administration, so it must not be reachable from the internet.
+      # To use a GUI client, tunnel it: ssh -L 27021:127.0.0.1:27021 <host>
+      - "127.0.0.1:27021:27017"
 
     environment:
       MONGO_INITDB_ROOT_USERNAME: monitor
-      MONGO_INITDB_ROOT_PASSWORD: AaBb1234!
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD}
       MONGO_INITDB_DATABASE: monitor
     volumes:
       - mongo_data:/data/db
     networks:
       - proxy-net
-    # No ports exposed to the host machine to avoid "port already in use" crashes.
+    # Host port is bound to 127.0.0.1 (see above) to avoid exposing the
+    # database to the internet while still allowing local administration.
 
 volumes:
   mongo_data:
