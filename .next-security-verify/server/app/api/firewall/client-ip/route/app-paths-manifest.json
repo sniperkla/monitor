@@ -1,0 +1,3 @@
+{
+  "/api/firewall/client-ip/route": "app/api/firewall/client-ip/route.js"
+}

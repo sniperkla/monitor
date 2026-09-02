@@ -1,0 +1,3 @@
+{
+  "/api/mongo-sync/import/route": "app/api/mongo-sync/import/route.js"
+}

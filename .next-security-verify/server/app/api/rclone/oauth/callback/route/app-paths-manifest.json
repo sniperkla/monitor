@@ -1,0 +1,3 @@
+{
+  "/api/rclone/oauth/callback/route": "app/api/rclone/oauth/callback/route.js"
+}

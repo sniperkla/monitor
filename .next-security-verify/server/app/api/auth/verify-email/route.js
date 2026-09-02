@@ -1,0 +1,13 @@
+var R=require("../../../../chunks/[turbopack]_runtime.js")("server/app/api/auth/verify-email/route.js")
+R.c("server/chunks/src_lib_07ahkvv._.js")
+R.c("server/chunks/_1qvzte2._.js")
+R.c("server/chunks/node_modules_next_1_14bcs._.js")
+R.c("server/chunks/[root-of-the-server]__1eeg-su._.js")
+R.c("server/chunks/node_modules_1z0tebx._.js")
+R.c("server/chunks/[root-of-the-server]__02_2sm-._.js")
+R.c("server/chunks/node_modules_next_dist_0asuiw2._.js")
+R.c("server/chunks/node_modules_1-3avnw._.js")
+R.c("server/chunks/node_modules_next_1zdbrne._.js")
+R.c("server/chunks/_next-internal_server_app_api_auth_verify-email_route_actions_1lu1y8t.js")
+R.m(94524)
+module.exports=R.m(94524).exports

@@ -2,19 +2,37 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { getSshConfig, execCommand, sftpTransfer } from '../_ssh';
+import { resolveBackupPath } from '../_history';
 import crypto from 'crypto';
 import { logger } from '@/lib/logger';
 
 export async function POST(request) {
   try {
     const session = await getServerSession(authOptions);
-    if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    if (!session?.user?.id) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
     const body = await request.json();
-    const { sourceConnectionId, sourceFilePath, targetConnectionId, dryRun } = body;
+    const { sourceConnectionId, sourceFilePath, sourceFileRef, targetConnectionId, dryRun } = body;
 
-    if (!sourceConnectionId || !sourceFilePath || !targetConnectionId) {
-      return NextResponse.json({ success: false, error: 'Missing sourceConnectionId, sourceFilePath, or targetConnectionId' }, { status: 400 });
+    if (!sourceConnectionId || !targetConnectionId) {
+      return NextResponse.json({ success: false, error: 'Missing sourceConnectionId or targetConnectionId' }, { status: 400 });
+    }
+
+    // A history-backed source is addressed by opaque ref (the browser no
+    // longer holds the remote path); an explicit path is still accepted for
+    // files picked through the server browser.
+    let resolvedSourcePath = sourceFilePath || null;
+    if (!resolvedSourcePath && sourceFileRef) {
+      resolvedSourcePath = await resolveBackupPath(session.user.id, {
+        connectionId: sourceConnectionId,
+        fileRef: sourceFileRef,
+      });
+      if (!resolvedSourcePath) {
+        return NextResponse.json({ success: false, error: 'Source backup not found' }, { status: 404 });
+      }
+    }
+    if (!resolvedSourcePath) {
+      return NextResponse.json({ success: false, error: 'Missing sourceFilePath or sourceFileRef' }, { status: 400 });
     }
 
     const restoreId = crypto.randomUUID().substring(0, 8);
@@ -24,8 +42,8 @@ export async function POST(request) {
     const extractPath = `/tmp/docker_restore_${restoreId}`;
 
     // 1. High-Speed Direct Stream from source server to target server (0 temporary disk space needed)
-    logger.info(`[restore-docker] High-speed direct streaming ${sourceFilePath} from source to target...`);
-    await sftpTransfer(sourceSshConfig, sourceFilePath, targetSshConfig, remotePath);
+    logger.info(`[restore-docker] High-speed direct streaming ${resolvedSourcePath} from source to target...`);
+    await sftpTransfer(sourceSshConfig, resolvedSourcePath, targetSshConfig, remotePath);
 
     // 2. Extract and discover what's inside
     const discoverCmd = `

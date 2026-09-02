@@ -1,4 +1,6 @@
 import { NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth/next';
+import { authOptions } from '@/lib/auth';
 import mongoose from 'mongoose';
 import mysql from 'mysql2/promise';
 import { Client } from 'pg';
@@ -13,6 +15,13 @@ import { logger } from '@/lib/logger';
  */
 export async function POST(request) {
   try {
+    // Defence in depth: testing arbitrary database URIs initiates outbound
+    // network connections. Assert authentication here as well as in proxy.
+    const session = await getServerSession(authOptions);
+    if (!session) {
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
+
     // Rate limiting
     const clientIP = request.headers.get('x-forwarded-for') || 'unknown';
     const rateCheck = checkRateLimit(`test-uri:${clientIP}`, 20);

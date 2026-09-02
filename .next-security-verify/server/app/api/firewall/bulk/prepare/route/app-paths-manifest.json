@@ -1,0 +1,3 @@
+{
+  "/api/firewall/bulk/prepare/route": "app/api/firewall/bulk/prepare/route.js"
+}

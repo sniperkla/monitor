@@ -1,0 +1,3 @@
+{
+  "/api/firewall/agent-sync/route": "app/api/firewall/agent-sync/route.js"
+}

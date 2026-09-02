@@ -1,0 +1,12 @@
+var R=require("../../../../../chunks/[turbopack]_runtime.js")("server/app/api/rclone/oauth/save-token/route.js")
+R.c("server/chunks/_1tj7z8-._.js")
+R.c("server/chunks/[root-of-the-server]__1pu4go3._.js")
+R.c("server/chunks/src_0w_wmvw._.js")
+R.c("server/chunks/node_modules_next_1zdbrne._.js")
+R.c("server/chunks/node_modules_1z0tebx._.js")
+R.c("server/chunks/node_modules_next_dist_0asuiw2._.js")
+R.c("server/chunks/node_modules_next_1_14bcs._.js")
+R.c("server/chunks/[root-of-the-server]__02_2sm-._.js")
+R.c("server/chunks/_next-internal_server_app_api_rclone_oauth_save-token_route_actions_11a0buc.js")
+R.m(16689)
+module.exports=R.m(16689).exports

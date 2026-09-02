@@ -1,0 +1,3 @@
+{
+  "/api/deploy/github/callback/route": "app/api/deploy/github/callback/route.js"
+}

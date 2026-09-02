@@ -8,6 +8,9 @@ import { Resend } from 'resend';
 import fs from 'fs';
 import path from 'path';
 import { logger } from '@/lib/logger';
+import { checkRateLimit } from '@/lib/serverGuard';
+
+const RECOVERY_RATE_LIMIT = 3;
 
 /**
  * POST /api/user/vault/recovery
@@ -16,12 +19,22 @@ import { logger } from '@/lib/logger';
  * The code expires in 15 minutes.
  * Rate limited: max 1 request per 2 minutes.
  */
-export async function POST() {
+export async function POST(request) {
   try {
     const resend = new Resend(process.env.RESEND_API_KEY);
     const session = await getServerSession(authOptions);
     if (!session) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const userKey = session.user?.id || session.user?.email || 'unknown';
+    const clientIp = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
+    const rateCheck = checkRateLimit(`vault-recovery:${userKey}:${clientIp}`, RECOVERY_RATE_LIMIT);
+    if (!rateCheck.allowed) {
+      return NextResponse.json(
+        { success: false, error: `Too many recovery-code requests. Please wait ${Math.ceil(rateCheck.resetIn / 1000)}s.` },
+        { status: 429, headers: { 'Retry-After': String(Math.ceil(rateCheck.resetIn / 1000)) } }
+      );
     }
 
     await connectDB(process.env.MONGODB_URI, true);

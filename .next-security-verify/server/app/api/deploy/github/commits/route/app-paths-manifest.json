@@ -1,0 +1,3 @@
+{
+  "/api/deploy/github/commits/route": "app/api/deploy/github/commits/route.js"
+}

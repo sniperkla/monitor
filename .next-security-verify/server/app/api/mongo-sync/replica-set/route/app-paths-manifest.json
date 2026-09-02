@@ -1,0 +1,3 @@
+{
+  "/api/mongo-sync/replica-set/route": "app/api/mongo-sync/replica-set/route.js"
+}

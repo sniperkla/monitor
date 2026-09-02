@@ -1,0 +1,3 @@
+{
+  "/api/admin/ai-usage/migrate-daily-limit/route": "app/api/admin/ai-usage/migrate-daily-limit/route.js"
+}

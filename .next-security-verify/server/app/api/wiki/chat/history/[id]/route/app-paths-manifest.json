@@ -1,0 +1,3 @@
+{
+  "/api/wiki/chat/history/[id]/route": "app/api/wiki/chat/history/[id]/route.js"
+}

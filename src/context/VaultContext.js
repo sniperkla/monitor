@@ -180,12 +180,9 @@ export function VaultProvider({ children }) {
     setError('');
 
     try {
-      // First verify the password hash
-      const inputHash = await hashPassword(masterPassword, vaultData.salt);
-      if (inputHash !== vaultData.passwordHash) {
-        throw new Error('WRONG_PASSWORD');
-      }
-
+      // Verify by attempting AES-GCM decryption. The authentication tag makes
+      // an incorrect password fail without needing to ship a reusable
+      // passwordHash to the browser.
       // Decrypt the URI (or URI+tunnel JSON blob) client-side
       const decryptedBlob = await decryptWithPassword(
         vaultData.encryptedUri,
@@ -230,12 +227,8 @@ export function VaultProvider({ children }) {
 
       return uri;
     } catch (err) {
-      if (err.message === 'WRONG_PASSWORD') {
-        setError('Incorrect Master Password');
-        throw new Error('Incorrect Master Password');
-      }
-      setError('Decryption failed');
-      throw err;
+      setError('Incorrect Master Password');
+      throw new Error('Incorrect Master Password');
     }
   }, [vaultData]);
 
@@ -407,10 +400,14 @@ export function VaultProvider({ children }) {
   const getMasterPassword = useCallback(() => masterPwdRef.current, []);
 
   const verifyMasterPassword = useCallback(async (password) => {
-    if (!vaultData?.passwordHash || !vaultData?.salt) return false;
-    const hash = await hashPassword(password, vaultData.salt);
-    return hash === vaultData.passwordHash;
-  }, [vaultData?.passwordHash, vaultData?.salt]);
+    if (!vaultData?.encryptedUri || !vaultData?.salt || !vaultData?.iv) return false;
+    try {
+      await decryptWithPassword(vaultData.encryptedUri, vaultData.salt, vaultData.iv, password);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }, [vaultData?.encryptedUri, vaultData?.salt, vaultData?.iv]);
 
   const value = useMemo(() => ({
     vaultStatus,     // 'loading' | 'no_auth' | 'setup' | 'locked' | 'unlocked'

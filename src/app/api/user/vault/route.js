@@ -28,10 +28,14 @@ export async function GET() {
       success: true,
       data: {
         vault: {
+          // The client needs the encrypted payload and KDF salt/IV to decrypt
+          // locally after the user enters the master password. Never return
+          // passwordHash: it is an offline verifier and is not required by the
+          // decryption operation; exposing it turns a session compromise into
+          // a directly checkable password-cracking oracle.
           encryptedUri: user.vault?.encryptedUri || '',
           salt: user.vault?.salt || '',
           iv: user.vault?.iv || '',
-          passwordHash: user.vault?.passwordHash || '',
           isConfigured: user.vault?.isConfigured || false,
         },
         // Include legacy URI for migration detection/pre-filling

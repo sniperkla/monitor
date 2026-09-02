@@ -1,0 +1,75 @@
+module.exports=[93302,e=>e.a(async(t,a)=>{try{var s=e.i(89171),i=e.i(23667),n=e.i(80533),r=e.i(77667),l=e.i(46589),o=e.i(47185),c=e.i(54981),u=e.i(9413),d=e.i(67311),p=e.i(51631),m=t([n,l,o]);async function h(e){try{let t,a=await (0,i.getServerSession)(n.authOptions);if(!a)return s.NextResponse.json({success:!1,error:"Unauthorized"},{status:401});let m=e.headers.get("x-forwarded-for")||"unknown";if(!(0,r.checkRateLimit)(`compat:${m}:${a.user?.id}`,20).allowed)return s.NextResponse.json({success:!1,error:"Rate limit exceeded"},{status:429});let{connectionId:h}=await e.json();if(!h)return s.NextResponse.json({success:!1,error:"connectionId required"},{status:400});let f=a.user?.id||a.user?.sub||null;try{t=await (0,o.getSshConfig)(h,{sshMode:e.headers.get("x-ssh-mode"),preferredRelay:e.headers.get("x-preferred-relay"),userId:f})}catch(e){if(/belongs to another user/i.test(e.message))return s.NextResponse.json({success:!1,error:e.message},{status:403});if(/Connection not found/i.test(e.message))try{let e=await (0,l.default)(),t=new c.ConnectionRepository(e);if(await t.findById(h))return s.NextResponse.json({success:!1,error:"This server belongs to another account. Log in as the owner to run checks on it."},{status:403});return s.NextResponse.json({success:!1,error:"This server entry no longer exists — refresh your server list."},{status:404})}catch(e){p.logger.warn("[compat] diagnostic lookup failed:",e.message)}throw e}let v=await (0,o.execCommand)(t,u.COMPAT_PROBE,{pool:!1}),g=((v.stdout||"")+"\n"+(v.stderr||"")).trim(),b=(0,d.parseCompatOutput)(g);if(0===b.checks.length)return s.NextResponse.json({success:!1,error:"Probe produced no results — the server may be unreachable or the shell unusable."},{status:502});return s.NextResponse.json({success:!0,...b})}catch(e){return p.logger.warn("[compat] probe failed:",e.message),s.NextResponse.json({success:!1,error:e.message||"Compatibility check failed"},{status:500})}}[n,l,o]=m.then?(await m)():m,e.s(["POST",0,h]),a()}catch(e){a(e)}},!1),87575,e=>{"use strict";var t=e.i(8970),a=e.i(74017),s=e.i(96250),i=e.i(59756),n=e.i(61916),r=e.i(74677),l=e.i(69741),o=e.i(16795),c=e.i(87718),u=e.i(95169),d=e.i(47587),p=e.i(66012),m=e.i(70101),h=e.i(26937),f=e.i(10372),v=e.i(93695);e.i(52474);var g=e.i(5232);let b=new t.AppRouteRouteModule({definition:{kind:a.RouteKind.APP_ROUTE,page:"/api/ssh/compat/route",pathname:"/api/ssh/compat",filename:"route",bundlePath:""},distDir:".next-security-verify",relativeProjectDir:"",resolvedPagePath:"[project]/src/app/api/ssh/compat/route.js",nextConfigOutput:"",userland:()=>e.r(93302),...{}}),{workAsyncStorage:w,workUnitAsyncStorage:R,serverHooks:y}=b;async function x(e,t,s){s.requestMeta&&(0,i.setRequestMeta)(e,s.requestMeta),b.isDev&&(0,i.addRequestMeta)(e,"devRequestTimingInternalsEnd",process.hrtime.bigint());let w="/api/ssh/compat/route";w=w.replace(/\/index$/,"")||"/";let R=await b.prepare(e,t,{srcPage:w,multiZoneDraftMode:!1});if(!R)return t.statusCode=400,t.end("Bad Request"),null==s.waitUntil||s.waitUntil.call(s,Promise.resolve()),null;let{buildId:y,deploymentId:x,params:C,nextConfig:E,parsedUrl:_,isDraftMode:k,prerenderManifest:S,routerServerContext:T,isOnDemandRevalidate:P,revalidateOnlyGenerated:N,resolvedPathname:A,clientReferenceManifest:$,serverActionsManifest:O}=R,D=(0,l.normalizeAppPath)(w),M=!!(S.dynamicRoutes[D]||S.routes[A]),I=async()=>((null==T?void 0:T.render404)?await T.render404(e,t,_,!1):t.end("This page could not be found"),null);if(M&&!k){let e=!!S.routes[A],t=S.dynamicRoutes[D];if(t&&!1===t.fallback&&!e){if(E.adapterPath)return await I();throw new v.NoFallbackError}}let j=null;!M||b.isDev||k||(j="/index"===(j=A)?"/":j);let q=!0===b.isDev||!M,H=M&&!q;O&&$&&(0,r.setManifestsSingleton)({page:w,clientReferenceManifest:$,serverActionsManifest:O});let L=e.method||"GET",U=(0,n.getTracer)(),B=U.getActiveScopeSpan(),G=!!(null==T?void 0:T.isWrappedByNextServer),K=!!(0,i.getRequestMeta)(e,"minimalMode"),z=(0,i.getRequestMeta)(e,"incrementalCache")||await b.getIncrementalCache(e,E,S,K);null==z||z.resetRequestCache(),globalThis.__incrementalCache=z;let F={params:C,previewProps:S.preview,renderOpts:{experimental:{authInterrupts:!!E.experimental.authInterrupts,useCacheTimeout:E.experimental.useCacheTimeout},cacheComponents:!!E.cacheComponents,validationLevel:E.experimental.instantInsights.validationLevel,supportsDynamicResponse:q,incrementalCache:z,hmrRefreshHash:(0,i.getRequestMeta)(e,"hmrRefreshHash"),cacheLifeProfiles:E.cacheLife,staticPageGenerationTimeout:E.staticPageGenerationTimeout,waitUntil:s.waitUntil,onClose:e=>{t.on("close",e)},onAfterTaskError:void 0,onInstrumentationRequestError:(t,a,s,i)=>b.onRequestError(e,t,s,i,T)},sharedContext:{buildId:y,deploymentId:x}},V=new o.NodeNextRequest(e),Y=new o.NodeNextResponse(t),X=c.NextRequestAdapter.fromNodeNextRequest(V,(0,c.signalFromNodeResponse)(t)),J=async({previousCacheEntry:a})=>{try{if(!K&&P&&N&&!a)return t.statusCode=404,t.setHeader("x-nextjs-cache","REVALIDATED"),t.end("This page could not be found"),null;let i=await b.handle(X,F);e.fetchMetrics=F.renderOpts.fetchMetrics;let n=F.renderOpts.pendingWaitUntil;n&&s.waitUntil&&(s.waitUntil(n),n=void 0);let r=F.renderOpts.collectedTags;if(!M)return await (0,p.sendResponse)(V,Y,i,n),null;{let e=await i.blob(),t=(0,m.toNodeOutgoingHttpHeaders)(i.headers);r&&(t[f.NEXT_CACHE_TAGS_HEADER]=r),!t["content-type"]&&e.type&&(t["content-type"]=e.type);let a=void 0!==F.renderOpts.collectedRevalidate&&!(F.renderOpts.collectedRevalidate>=f.INFINITE_CACHE)&&F.renderOpts.collectedRevalidate,s=void 0===F.renderOpts.collectedExpire||F.renderOpts.collectedExpire>=f.INFINITE_CACHE?!1!==a&&a>0?E.expireTime:void 0:F.renderOpts.collectedExpire;return{value:{kind:g.CachedRouteKind.APP_ROUTE,status:i.status,body:Buffer.from(await e.arrayBuffer()),headers:t},cacheControl:{revalidate:a,expire:s}}}}catch(t){throw(null==a?void 0:a.isStale)&&await b.onRequestError(e,t,{routerKind:"App Router",routePath:w,routeType:"route",revalidateReason:(0,d.getRevalidateReason)({isStaticGeneration:H,isOnDemandRevalidate:P})},!1,T),t}},W=async(i,r)=>{try{var l,o;let i=await b.handleResponse({req:e,nextConfig:E,cacheKey:j,routeKind:a.RouteKind.APP_ROUTE,isFallback:!1,prerenderManifest:S,isRoutePPREnabled:!1,isOnDemandRevalidate:P,revalidateOnlyGenerated:N,responseGenerator:J,waitUntil:s.waitUntil,isMinimalMode:K});if(!M)return;if((null==i||null==(l=i.value)?void 0:l.kind)!==g.CachedRouteKind.APP_ROUTE)throw Object.defineProperty(Error(`Invariant: app-route received invalid cache entry ${null==i||null==(o=i.value)?void 0:o.kind}`),"__NEXT_ERROR_CODE",{value:"E701",enumerable:!1,configurable:!0});K||t.setHeader("x-nextjs-cache",P?"REVALIDATED":i.isMiss?"MISS":i.isStale?"STALE":"HIT"),k&&t.setHeader("Cache-Control","private, no-cache, no-store, max-age=0, must-revalidate");let n=(0,m.fromNodeOutgoingHttpHeaders)(i.value.headers);K&&M||n.delete(f.NEXT_CACHE_TAGS_HEADER),!i.cacheControl||t.getHeader("Cache-Control")||n.get("Cache-Control")||n.set("Cache-Control",(0,h.getCacheControlHeader)(i.cacheControl)),await (0,p.sendResponse)(V,Y,new Response(i.value.body,{headers:n,status:i.value.status||200}));return}catch(t){if(t instanceof v.NoFallbackError||await b.onRequestError(e,t,{routerKind:"App Router",routePath:D,routeType:"route",revalidateReason:(0,d.getRevalidateReason)({isStaticGeneration:H,isOnDemandRevalidate:P})},!1,T),M)throw t;await (0,p.sendResponse)(V,Y,new Response(null,{status:500}));return}finally{(()=>{if(!i)return;let e=t.statusCode;i.setAttributes({"http.status_code":e,"next.rsc":!1}),e&&e>=500&&(i.setStatus({code:n.SpanStatusCode.ERROR}),i.setAttribute("error.type",e.toString()));let a=U.getRootSpanAttributes();if(!a)return;if(a.get("next.span_type")!==u.BaseServerSpan.handleRequest)return console.warn(`Unexpected root span type '${a.get("next.span_type")}'. Please report this Next.js issue https://github.com/vercel/next.js`);let s=a.get("next.route")||D,l=`${L} ${s}`;i.setAttributes({"next.route":s,"http.route":s,"next.span_name":l}),i.updateName(l),r&&r!==i&&(r.setAttribute("http.route",s),r.updateName(l))})()}};if(G&&B)await W(B,void 0);else{let t=U.getActiveScopeSpan();await U.withPropagatedContext(e.headers,()=>U.trace(u.BaseServerSpan.handleRequest,{spanName:`${L} ${w}`,kind:n.SpanKind.SERVER,attributes:{"http.method":L,"http.target":e.url}},e=>W(e,t)),void 0,!G)}}e.s(["handler",0,x,"patchFetch",0,function(){return(0,s.patchFetch)({workAsyncStorage:w,workUnitAsyncStorage:R})},"routeModule",0,b,"serverHooks",0,y,"workAsyncStorage",0,w,"workUnitAsyncStorage",0,R])},9413,e=>{"use strict";let t=String.raw`
+emit() { echo "$1|$2|$3"; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+D="-"; . /etc/os-release 2>/dev/null && D="$PRETTY_NAME"; [ -z "$D" ] && D="$ID"
+echo "distro|info|$D"
+
+if have node; then emit node pass "$(node -v 2>/dev/null)"; else emit node fail "not installed"; fi
+if have npm; then emit npm pass "npm $(npm -v 2>/dev/null)"; else emit npm fail "not installed"; fi
+
+for c in pgrep pkill ps nohup setsid; do
+  if have "$c"; then emit "$c" pass "$(command -v "$c")"; else emit "$c" fail "missing"; fi
+done
+
+if have tmux; then emit tmux pass "$(tmux -V 2>/dev/null)"; else emit tmux warn "missing (auto-install available)"; fi
+if have crontab; then emit cron pass "available"; else emit cron warn "missing (scheduled jobs limited)"; fi
+
+SYSTEMD="absent"
+if have systemctl; then
+  S=$(systemctl is-system-running 2>/dev/null)
+  [ "$S" = "running" ] || [ "$S" = "degraded" ] && SYSTEMD="running" || SYSTEMD="stopped"
+fi
+[ "$SYSTEMD" = "running" ] && emit systemd pass "active" || emit systemd warn "$SYSTEMD (service method limited)"
+
+if [ "$(id -u)" = "0" ]; then
+  emit priv pass "root user"
+elif sudo -n true 2>/dev/null; then
+  emit priv pass "passwordless sudo"
+elif have sudo; then
+  emit priv warn "sudo requires password"
+else
+  emit priv warn "no sudo binary"
+fi
+
+have nproc && emit nproc pass "$(nproc 2>/dev/null)" || emit nproc fail "missing"
+if free -b >/dev/null 2>&1; then emit mem_free pass "ok"; else emit mem_free fail "missing"; fi
+df -Pk / >/dev/null 2>&1 && emit df_pk pass "ok" || emit df_pk fail "missing"
+[ -r /proc/uptime ] && emit proc_uptime pass "ok" || emit proc_uptime fail "unreadable"
+[ -r /proc/net/dev ] && emit net_dev pass "ok" || emit net_dev fail "unreadable"
+# The hostname binary is missing on some minimal images (e.g. Arch containers);
+# uname -n reports the same nodename and is always present on Linux.
+if hostname >/dev/null 2>&1; then emit hostname_cmd pass "ok"
+elif uname -n >/dev/null 2>&1; then emit hostname_cmd pass "ok (uname -n fallback)"
+else emit hostname_cmd fail "missing"; fi
+uname -r >/dev/null 2>&1 && emit uname pass "ok" || emit uname fail "missing"
+
+if grep -m1 "model name" /proc/cpuinfo >/dev/null 2>&1; then
+  emit cpu_model pass "ok"
+else
+  emit cpu_model warn "no model name (fallback used)"
+fi
+uptime -p >/dev/null 2>&1 && emit uptime_p pass "ok" || emit uptime_p warn "unsupported (fallback used)"
+
+if have curl && curl -fsSL --max-time 8 https://www.google.com/generate_204 -o /dev/null 2>/dev/null; then
+  emit curl_tls pass "TLS verified"
+elif have curl; then
+  emit curl_tls warn "present but HTTPS test failed (CA certificates?)"
+else
+  emit curl_tls fail "not installed"
+fi
+have wget && emit wget pass "fallback available" || emit wget warn "no fallback downloader"
+have xz && emit xz pass "tar -xJ capable" || emit xz warn "xz missing (portable path limited)"
+
+GLIBC_MODE="non-glibc (musl)"; GLIBC_VER=""
+if have ldd && ldd --version 2>&1 | grep -qiE 'glibc|gnu libc'; then
+  GLIBC_VER=$(ldd --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+$' | head -1)
+  GLIBC_MODE="glibc $GLIBC_VER"
+  OK=$(awk -v v="$GLIBC_VER" 'BEGIN{print (v>=2.28)?1:0}' 2>/dev/null)
+  [ "$OK" = "1" ] && emit libc pass "$GLIBC_MODE — portable Node 20 OK" || emit libc warn "$GLIBC_MODE <2.28 — Node 20 binaries incompatible"
+else
+  emit libc warn "$GLIBC_MODE — distro packages only"
+fi
+`;e.s(["COMPAT_PROBE",0,t])},67311,e=>{"use strict";e.i(9413);let t={distro:{label:"Distribution",cat:"system",impact:""},node:{label:"Node.js",cat:"runtime",impact:"Monitoring agent and AI deploys require Node.js — install via the agent wizard."},npm:{label:"npm",cat:"runtime",impact:"Package installs (pm2, deps) will fail without npm."},pgrep:{label:"pgrep",cat:"process",impact:"Agent status detection degrades without it."},pkill:{label:"pkill",cat:"process",impact:"Agent stop/uninstall cannot terminate stray processes safely."},ps:{label:"ps",cat:"process",impact:"Process listing unavailable."},nohup:{label:"nohup",cat:"agent",impact:"Background agent start method unavailable."},setsid:{label:"setsid",cat:"agent",impact:"Detached session start may fail."},tmux:{label:"tmux",cat:"agent",impact:"Tmux start method unavailable (installer can add it)."},cron:{label:"crontab",cat:"agent",impact:"Scheduled jobs (firewall refresh, backups) are limited."},systemd:{label:"systemd",cat:"system",impact:"System-service management limited; tmux/nohup methods still work."},priv:{label:"Privilege level",cat:"system",impact:"Password-prompt sudo pauses automated installs."},nproc:{label:"nproc (CPU count)",cat:"metrics",impact:"CPU core metric shows N/A."},mem_free:{label:"Memory (free -b)",cat:"metrics",impact:"Memory metrics unavailable."},df_pk:{label:"Disk (df -Pk)",cat:"metrics",impact:"Disk metrics unavailable."},proc_uptime:{label:"/proc/uptime",cat:"metrics",impact:"Uptime precision reduced."},net_dev:{label:"/proc/net/dev",cat:"metrics",impact:"Network throughput metrics unavailable."},hostname_cmd:{label:"hostname",cat:"metrics",impact:"Hostname falls back to connection name."},uname:{label:"uname -r",cat:"metrics",impact:"Kernel version unavailable."},cpu_model:{label:"CPU model",cat:"metrics",impact:"Generic CPU info via fallback."},uptime_p:{label:"uptime -p",cat:"metrics",impact:"Readable uptime falls back to raw seconds."},curl_tls:{label:"curl (HTTPS/TLS)",cat:"network",impact:"One-click installers need curl — install curl + ca-certificates."},wget:{label:"wget (fallback)",cat:"network",impact:"No secondary downloader if curl breaks."},xz:{label:"xz (tar -xJ)",cat:"network",impact:"Portable Node binary extraction limited."},libc:{label:"C library",cat:"system",impact:"Determines whether official Node 20 binaries can run here."}};e.s(["parseCompatOutput",0,function(e){let a=[],s=null,i=new Set;for(let n of String(e||"").split("\n")){let e=n.trim().split("|");if(e.length<3)continue;let[r,l]=e,o=e.slice(2).join("|").trim();if(!t[r]||!["pass","warn","fail","info"].includes(l)||i.has(r))continue;i.add(r);let c=t[r];if("distro"===r){s=o;continue}a.push({id:r,label:c.label,category:c.cat,status:l,detail:o,impact:"pass"===l?"":c.impact})}let n={pass:a.filter(e=>"pass"===e.status).length,warn:a.filter(e=>"warn"===e.status).length,fail:a.filter(e=>"fail"===e.status).length,total:a.length};return{distro:s,checks:a,summary:n}}])}];
+
+//# sourceMappingURL=_1rjynah._.js.map

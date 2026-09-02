@@ -1,9 +1,14 @@
 import
  { NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth/next';
+import { authOptions } from '@/lib/auth';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
 import { logger } from '@/lib/logger';
 import { auditLog } from '@/lib/auditLog';
 import { shellQuote, shellArg, shellInt } from '@/utils/shellQuote';
+import { checkRateLimit } from '@/lib/serverGuard';
+
+const RCLONE_RATE_LIMIT = 10;
 
 function quote(str) {
   return `'${String(str).replace(/'/g, `'\\''`)}'`;
@@ -11,6 +16,14 @@ function quote(str) {
 
 export async function POST(req) {
   try {
+    // Defence in depth: this route executes commands remotely. Keep the
+    // middleware gate, but assert the session here too so a matcher regression
+    // cannot turn it into an unauthenticated execution endpoint.
+    const session = await getServerSession(authOptions);
+    if (!session) {
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
+
     const {
       connectionId,
       action = 'copy', // sync | copy | move | check
@@ -23,6 +36,20 @@ export async function POST(req) {
     if (!connectionId || !source || !target) {
       return NextResponse.json({ success: false, error: 'connectionId, source, and target are required' }, { status: 400 });
     }
+
+    // Remote rclone commands are deliberately expensive: a single request can
+    // start a long-running transfer on the user's server. This route relies on
+    // proxy authentication, so key the limiter by the forwarded client IP and
+    // target connection to avoid one target starving another.
+    const clientIp = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
+    const rateCheck = checkRateLimit(`rclone-exec:${clientIp}:${connectionId}`, RCLONE_RATE_LIMIT);
+    if (!rateCheck.allowed) {
+      return NextResponse.json(
+        { success: false, error: `Too many rclone operations. Please wait ${Math.ceil(rateCheck.resetIn / 1000)}s.` },
+        { status: 429, headers: { 'Retry-After': String(Math.ceil(rateCheck.resetIn / 1000)) } }
+      );
+    }
+
     // Security: action is interpolated into a remote shell command - restrict it
     // to supported verbs so it can never be used for command injection.
     const ALLOWED_ACTIONS = ['sync', 'copy', 'move', 'check'];

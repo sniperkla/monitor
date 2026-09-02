@@ -1,0 +1,3 @@
+{
+  "/api/rclone/status/route": "app/api/rclone/status/route.js"
+}

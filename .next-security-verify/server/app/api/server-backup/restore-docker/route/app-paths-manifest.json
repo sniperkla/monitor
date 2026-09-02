@@ -1,0 +1,3 @@
+{
+  "/api/server-backup/restore-docker/route": "app/api/server-backup/restore-docker/route.js"
+}

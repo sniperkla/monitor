@@ -1,0 +1,3 @@
+{
+  "/api/mongo-sync/scan-node/route": "app/api/mongo-sync/scan-node/route.js"
+}

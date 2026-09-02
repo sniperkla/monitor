@@ -1,0 +1,3 @@
+{
+  "/api/mongo-sync/install-deps/route": "app/api/mongo-sync/install-deps/route.js"
+}

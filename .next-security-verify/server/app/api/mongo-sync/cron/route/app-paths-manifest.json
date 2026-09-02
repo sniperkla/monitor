@@ -1,0 +1,3 @@
+{
+  "/api/mongo-sync/cron/route": "app/api/mongo-sync/cron/route.js"
+}

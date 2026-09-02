@@ -9,16 +9,13 @@ const SKILLS_MP_API_BASE = 'https://skillsmp.com/api/v1';
 
 export async function POST(req) {
   try {
-    // Session check is best-effort — the SkillsMP API key is the real auth guard.
-    // getServerSession can intermittently fail in Next.js 16 App Router.
-    let session = null;
-    try {
-      session = await getServerSession(authOptions);
-    } catch (e) {
-      logger.warn('[SkillsMP Search] Session resolution failed:', e.message);
-    }
+    // This endpoint proxies a paid external API and returns untrusted skill
+    // content. Require a session here as defence in depth; the middleware also
+    // protects the route, but a proxy matcher regression must not turn it into
+    // an unauthenticated external fetch/content oracle.
+    const session = await getServerSession(authOptions);
     if (!session) {
-      logger.warn('[SkillsMP Search] No session found — proceeding with API key auth only.');
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
     const { q, type = 'smart' } = await req.json();

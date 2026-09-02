@@ -2,12 +2,13 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import { getGoogleDriveConfig, saveGoogleDriveConfig, listGoogleDriveFolders } from '@/lib/gdriveHelper';
+import { maskTail } from '@/utils/pii';
 import { logger } from '@/lib/logger';
 
 export async function GET(request) {
   try {
     const session = await getServerSession(authOptions);
-    if (!session) {
+    if (!session?.user?.id) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
     const userId = session.user?.id;
@@ -24,12 +25,25 @@ export async function GET(request) {
       }
     }
 
+    // OAuth client IDs are not secrets, but the deployment-wide
+    // GOOGLE_CLIENT_ID has no business being handed to every signed-in user:
+    // it is shared infrastructure and reveals which Google Cloud project this
+    // instance belongs to. Only a clientId the user configured themselves is
+    // echoed back (so the settings form can prefill); an env-provided one is
+    // reduced to a "something is configured" tail hint.
+    const ownClientId = config?.clientId || null;
+    const envClientId = process.env.GOOGLE_CLIENT_ID || null;
+    const clientIdSource = ownClientId ? 'user' : (envClientId ? 'env' : null);
+
     return NextResponse.json({
       success: true,
       connected: isConnected,
       email: config?.email || null,
       name: config?.name || null,
-      clientId: config?.clientId || process.env.GOOGLE_CLIENT_ID || null,
+      hasClientId: !!(ownClientId || envClientId),
+      clientIdSource,
+      clientId: ownClientId,
+      clientIdMasked: clientIdSource === 'env' ? maskTail(envClientId, 4) : null,
       hasClientSecret: !!(config?.clientSecret || process.env.GOOGLE_CLIENT_SECRET),
       folders
     });

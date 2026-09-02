@@ -44,6 +44,27 @@ function isAiBot(userAgent) {
 }
 
 // ---------------------------------------------------------------------------
+// Cross-origin isolation headers
+// ---------------------------------------------------------------------------
+//
+// next.config.mjs also emits these, but `headers()` is compiled into
+// .next/routes-manifest.json at build time AND it is not applied at all to
+// responses the middleware produces itself (the 401 and the sign-in redirect
+// below). So a middleware-generated response has to set them explicitly or it
+// ships bare — and the sign-in page is exactly where credentials get typed.
+//
+// COOP is 'same-origin-allow-popups' rather than 'same-origin' because the
+// Google Drive and rclone OAuth flows return their result through
+// window.opener.postMessage(); plain 'same-origin' severs that link.
+const CROSS_ORIGIN_HEADERS = {
+  "Cross-Origin-Opener-Policy": "same-origin-allow-popups",
+  "Cross-Origin-Embedder-Policy":
+    process.env.COEP === "unsafe-none" ? "unsafe-none" : "credentialless",
+  "Cross-Origin-Resource-Policy": "same-origin",
+  "X-Permitted-Cross-Domain-Policies": "none",
+};
+
+// ---------------------------------------------------------------------------
 // CSP
 // ---------------------------------------------------------------------------
 
@@ -63,12 +84,35 @@ function generateNonce() {
  *  - `script-src` no longer has 'unsafe-eval' (arbitrary JS execution via
  *    eval / new Function) or 'unsafe-inline'. A per-request nonce is used
  *    instead; when a nonce is present browsers ignore 'unsafe-inline'.
- *  - 'wasm-unsafe-eval' is retained deliberately: src/utils/clientCrypto.js
- *    derives keys with Argon2id via hash-wasm, and Chrome refuses to compile
- *    WebAssembly without it. It permits WASM only — not JS eval.
  *  - `connect-src` no longer allows bare `https:` / `ws:` / `wss:` (which let
  *    injected script exfiltrate to ANY host). Only same-origin, the user's own
  *    local relay, and the one external API the browser calls directly.
+ *
+ * Two directives are deliberately left open. Both are flagged by scanners, so
+ * the reasoning is spelled out rather than left implicit:
+ *
+ *  - 'wasm-unsafe-eval' (script-src): src/utils/clientCrypto.js derives the
+ *    vault key with Argon2id via hash-wasm (see deriveKeyFromPassword and
+ *    hashMasterPassword). Chrome refuses to instantiate WebAssembly without
+ *    this token, so dropping it breaks vault unlock outright. Note it permits
+ *    WASM compilation only — it does NOT re-enable eval() or new Function(),
+ *    and no application input reaches the WASM pipeline (the Argon2id inputs
+ *    are a password and a server-issued salt). Removing it requires moving
+ *    key derivation off WASM, e.g. to a native SubtleCrypto-based KDF.
+ *
+ *  - 'unsafe-inline' (style-src): the UI renders several dozen <style> blocks,
+ *    both styled-jsx (`<style jsx global>` in the onboarding flows) and plain
+ *    template-literal ones, alongside React's inline `style={{}}` props. CSP3
+ *    governs element styles via style-src-elem and attribute styles via
+ *    style-src-attr, and BOTH fall back to style-src — so removing this token
+ *    would strip the styling of essentially every screen. A nonce would not
+ *    help: browsers ignore 'unsafe-inline' once a nonce is present, and
+ *    neither styled-jsx nor React's style prop receives this nonce. A real fix
+ *    means migrating inline styles to nonced stylesheets / CSS classes.
+ *
+ *    Residual risk is limited: CSS injection can exfiltrate data through
+ *    attribute selectors (e.g. input[value^="a"] { background: url(...) }) but
+ *    cannot execute script. The script-src nonce is the control that matters.
  */
 function buildCsp(nonce) {
   const isProd = process.env.NODE_ENV === "production";
@@ -81,7 +125,7 @@ function buildCsp(nonce) {
   return [
     "default-src 'self'",
     scriptSrc,
-    // 'unsafe-inline' styles are required by Next.js styled-jsx / inline styles.
+    // 'unsafe-inline' is unavoidable here — see the style-src note above.
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://fonts.gstatic.com",
     "img-src 'self' data: blob: https://lh3.googleusercontent.com https://images.unsplash.com https://ui-avatars.com https://avatars.githubusercontent.com",
     "font-src 'self' data: https://fonts.gstatic.com",
@@ -123,6 +167,25 @@ function isPublicPath(pathname) {
   return PUBLIC_PATHS.has(pathname);
 }
 
+/**
+ * Direct deployment triggers have two supported callers:
+ *
+ * - a signed-in user invoking the route from the UI (cookie + CSRF), and
+ * - an external deploy hook carrying `token` or `webhook_token` in the URL.
+ *
+ * The latter cannot carry a browser CSRF token and intentionally has no
+ * session. The route performs its own timing-safe credential validation before
+ * starting a deployment. We still run this middleware path so the request gets
+ * CSP and the rest of the normal response handling.
+ */
+function isExternalDeployTrigger(req) {
+  if (req.nextUrl.pathname !== "/api/deploy/trigger") return false;
+  return ["token", "webhook_token"].some((key) => {
+    const value = req.nextUrl.searchParams.get(key);
+    return typeof value === "string" && value.length > 0 && value.length <= 4096;
+  });
+}
+
 export default async function wrappedProxy(req) {
   // Hard-block known AI scrapers before anything else runs.
   if (isAiBot(req.headers.get("user-agent"))) {
@@ -136,6 +199,7 @@ export default async function wrappedProxy(req) {
   const csp = buildCsp(nonce);
 
   const pathname = req.nextUrl.pathname;
+  const externalDeployTrigger = isExternalDeployTrigger(req);
   const secret =
     process.env.NEXTAUTH_SECRET ||
     process.env.AUTH_SECRET ||
@@ -159,10 +223,11 @@ export default async function wrappedProxy(req) {
   // `authorized` callback returned a Response object, which NextAuth treats as
   // truthy; that could let an unauthenticated request fall through to CSRF and
   // receive 403 instead of the documented 401 / sign-in redirect.
-  if (!isPublicPath(pathname) && !authToken) {
+  if (!isPublicPath(pathname) && !authToken && !externalDeployTrigger) {
     if (pathname.startsWith("/api/")) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401, headers: {
         "Content-Security-Policy": csp,
+        ...CROSS_ORIGIN_HEADERS,
       } });
     }
 
@@ -170,6 +235,9 @@ export default async function wrappedProxy(req) {
     signInUrl.searchParams.set("callbackUrl", `${pathname}${req.nextUrl.search}`);
     const redirect = NextResponse.redirect(signInUrl);
     redirect.headers.set("Content-Security-Policy", csp);
+    for (const [key, value] of Object.entries(CROSS_ORIGIN_HEADERS)) {
+      redirect.headers.set(key, value);
+    }
     return redirect;
   }
 
@@ -180,7 +248,8 @@ export default async function wrappedProxy(req) {
     UNSAFE_METHODS.has(req.method) &&
     pathname.startsWith("/api/") &&
     !isCsrfExemptPath(pathname) &&
-    !hasNonCookieCredential(req)
+    !hasNonCookieCredential(req) &&
+    !externalDeployTrigger
   ) {
     const headerToken = req.headers.get(CSRF_HEADER);
     const cookieToken = req.cookies.get(CSRF_COOKIE)?.value || null;
@@ -251,6 +320,11 @@ export const config = {
     // they now receive both the CSRF check and CSP headers. Previously the
     // broad `api/auth` exclusion let POST /api/auth/register bypass CSRF
     // enforcement entirely.
-    "/((?!api/auth/signin|api/auth/callback|api/auth/session|api/auth/signout|api/auth/csrf|api/auth/providers|api/csrf|api/health|api/settings/database|api/deploy/webhook|api/deploy/trigger|_next/static|_next/image|favicon.ico|manifest\\.json|icon\\.svg|sw\\.js|monitor-agent\\.min\\.js|monitor-agent\\.js|local-relay\\.min\\.js|local-relay\\.js|agents/.*).*)"
+    //
+    // settings/database and deploy/trigger are intentionally NOT excluded:
+    // both now receive the middleware auth gate, CSP, and CSRF. External deploy
+    // hooks with a signed token/webhook_token are handled by the narrow
+    // isExternalDeployTrigger() exception above, then validated in-route.
+    "/((?!api/auth/signin|api/auth/callback|api/auth/session|api/auth/signout|api/auth/csrf|api/auth/providers|api/csrf|api/health|api/deploy/webhook|_next/static|_next/image|favicon.ico|manifest\\.json|icon\\.svg|sw\\.js|monitor-agent\\.min\\.js|monitor-agent\\.js|local-relay\\.min\\.js|local-relay\\.js|agents/.*).*)"
   ],
 };

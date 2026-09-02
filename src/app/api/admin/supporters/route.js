@@ -5,6 +5,7 @@ import SystemSetting from '@/models/SystemSetting';
 import { extendExpiry, invalidateSupporter, DEFAULT_GRANT_DAYS } from '@/utils/supporter';
 import { logger } from '@/lib/logger';
 import { requireAdmin } from '@/lib/requireAdmin';
+import { maskEmail, maskName } from '@/utils/pii';
 
 export const dynamic = 'force-dynamic';
 
@@ -47,7 +48,27 @@ function killUserRelays(email, userDoc) {
 }
 
 /**
+ * Locate the target account for a grant/revoke/dismiss action.
+ *
+ * Callers address the account by internal user id, not by email. `email` is
+ * still accepted so older clients keep working, but it is treated as a
+ * lookup key only — it is never echoed back in a response.
+ */
+async function findTargetUser(userId, email) {
+  if (userId && typeof userId === 'string' && /^[a-f\d]{24}$/i.test(userId)) {
+    return User.findById(userId);
+  }
+  if (email) return User.findOne({ email: String(email).toLowerCase() });
+  return null;
+}
+
+/**
  * GET /api/admin/supporters — list supporters + pending access requests.
+ *
+ * Privacy: this response deliberately carries NO plaintext emails and NO full
+ * names. Every entry is identified by its internal user id (which is what
+ * POST actions take) plus a masked email/initials so the admin can still tell
+ * rows apart. See src/utils/pii.js.
  */
 export async function GET() {
   try {
@@ -69,25 +90,28 @@ export async function GET() {
     const requests = [];
     for (const doc of docs) {
       const s = doc.supporter || {};
+      const userId = String(doc._id);
       if (s.status || doc.role === 'admin') {
         supporters.push({
-          email: doc.email,
-          name: doc.name,
+          userId,
+          maskedEmail: maskEmail(doc.email),
+          maskedName: maskName(doc.name),
           isAdmin: doc.role === 'admin',
           status: doc.role === 'admin' ? 'admin' : (s.expiresAt && new Date(s.expiresAt).getTime() <= now ? 'expired' : 'active'),
           expiresAt: s.expiresAt || null,
           source: s.source || 'admin',
           grantedAt: s.grantedAt || null,
-          grantedBy: s.grantedBy || '',
+          grantedBy: maskEmail(s.grantedBy) || '',
           note: s.note || '',
         });
       }
       if (s.request?.status === 'pending') {
         requests.push({
-          email: doc.email,
-          name: doc.name,
-          kofiName: s.request.kofiName || '',
-          kofiEmail: s.request.kofiEmail || '',
+          userId,
+          maskedEmail: maskEmail(doc.email),
+          maskedName: maskName(doc.name),
+          kofiName: maskName(s.request.kofiName) || '',
+          kofiEmail: maskEmail(s.request.kofiEmail) || '',
           note: s.request.note || '',
           requestedAt: s.request.requestedAt || null,
         });
@@ -96,12 +120,26 @@ export async function GET() {
 
     // Recent Ko-fi webhook payments that couldn't be matched to an account —
     // surfaced in the admin panel so the admin can contact the supporter.
+    // The raw webhook payload carries the payer's name and email address, so
+    // those are masked here too; the admin only needs enough to recognise
+    // which payment to reconcile.
     const paySetting = await SystemSetting.findOne({ key: 'kofi_payments' });
     const allPayments = Array.isArray(paySetting?.value?.payments) ? paySetting.value.payments : [];
     const kofiUnmatched = allPayments
       .filter((p) => !p.matchedEmail)
       .slice(-20)
-      .reverse();
+      .reverse()
+      .map((p) => ({
+        messageId: p.messageId,
+        fromName: maskName(p.fromName),
+        fromEmail: maskEmail(p.fromEmail),
+        amount: p.amount,
+        currency: p.currency,
+        tierName: p.tierName,
+        type: p.type,
+        kofiTimestamp: p.kofiTimestamp,
+        receivedAt: p.receivedAt,
+      }));
 
     return NextResponse.json({ success: true, supporters, requests, kofiUnmatched, defaultGrantDays: DEFAULT_GRANT_DAYS });
   } catch (error) {
@@ -112,7 +150,10 @@ export async function GET() {
 
 /**
  * POST /api/admin/supporters — manage supporter status.
- * Body: { action: 'grant'|'revoke'|'dismiss', email, days?, note? }
+ * Body: { action: 'grant'|'revoke'|'dismiss', userId, days?, note? }
+ *
+ * `userId` is the preferred identifier (it is what GET returns). `email` is
+ * accepted for backwards compatibility but never echoed back in a response.
  */
 export async function POST(request) {
   try {
@@ -122,16 +163,22 @@ export async function POST(request) {
 
     const body = await request.json().catch(() => ({}));
     const action = String(body.action || '');
+    const userId = String(body.userId || '').trim();
     const email = String(body.email || '').trim().toLowerCase();
-    if (!email) {
-      return NextResponse.json({ success: false, error: 'email is required' }, { status: 400 });
+    if (!userId && !email) {
+      return NextResponse.json({ success: false, error: 'userId is required' }, { status: 400 });
     }
 
     await connectDB(process.env.MONGODB_URI, true);
-    const targetUser = await User.findOne({ email });
+    const targetUser = await findTargetUser(userId, email);
     if (!targetUser) {
       return NextResponse.json({ success: false, error: 'User not found' }, { status: 404 });
     }
+
+    // Resolve the real address once, for internal use (relay kill-list,
+    // cache invalidation). It is never returned to the client.
+    const targetEmail = String(targetUser.email || '').toLowerCase();
+    const targetLabel = maskEmail(targetEmail) || String(targetUser._id);
 
     if (action === 'grant') {
       const days = Number(body.days) > 0 ? Number(body.days) : DEFAULT_GRANT_DAYS;
@@ -148,25 +195,25 @@ export async function POST(request) {
         request: s.request?.status === 'pending' ? { ...s.request, status: 'granted' } : (s.request || { status: 'pending' }),
       };
       await targetUser.save();
-      invalidateSupporter(email);
-      return NextResponse.json({ success: true, message: `Granted ${days} day(s) to ${email}`, expiresAt: newExpiry });
+      invalidateSupporter(targetEmail);
+      return NextResponse.json({ success: true, message: `Granted ${days} day(s) to ${targetLabel}`, expiresAt: newExpiry });
     }
 
     if (action === 'revoke') {
       const s = targetUser.supporter || {};
       targetUser.supporter = { ...(s || {}), status: false };
       await targetUser.save();
-      invalidateSupporter(email);
+      invalidateSupporter(targetEmail);
       if (global.__relaySupporterCache instanceof Map) global.__relaySupporterCache.clear();
-      killUserRelays(email, targetUser);
-      return NextResponse.json({ success: true, message: `Revoked supporter access for ${email}` });
+      killUserRelays(targetEmail, targetUser);
+      return NextResponse.json({ success: true, message: `Revoked supporter access for ${targetLabel}` });
     }
 
     if (action === 'dismiss') {
       const s = targetUser.supporter || {};
       targetUser.supporter = { ...(s || {}), request: { ...(s.request || {}), status: 'dismissed' } };
       await targetUser.save();
-      return NextResponse.json({ success: true, message: `Dismissed request from ${email}` });
+      return NextResponse.json({ success: true, message: `Dismissed request from ${targetLabel}` });
     }
 
     return NextResponse.json({ success: false, error: 'Unknown action' }, { status: 400 });

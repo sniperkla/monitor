@@ -519,8 +519,15 @@ app.prepare().then(async () => {
       }
 
       // Security Headers - Apply only to main pages, not static assets or internal Next.js paths
+      //
+      // IMPORTANT: next.config.mjs `headers()` is compiled into
+      // .next/routes-manifest.json at BUILD time and is applied on top of these
+      // (res.setHeader, so it overrides rather than duplicates). Both places
+      // therefore carry the same set: this block keeps the headers correct
+      // against the currently-deployed build, and next.config.mjs keeps them
+      // correct after the next `next build`.
       const isNextInternal = req.url.startsWith('/_next/') || req.url.includes('/favicon.ico');
-      
+
       if (!isNextInternal) {
         // NOTE: Content-Security-Policy is intentionally NOT set here.
         // src/proxy.js (middleware) owns CSP so it can inject a fresh per-request
@@ -533,6 +540,24 @@ app.prepare().then(async () => {
         res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
         res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
         res.setHeader('Strict-Transport-Security', 'max-age=63072000; includeSubDomains; preload');
+
+        // ── Cross-origin isolation / resource containment ───────────────────
+        // 'same-origin-allow-popups' rather than 'same-origin': the Google Drive
+        // and rclone OAuth flows open a popup and receive the result through
+        // window.opener.postMessage(). Plain 'same-origin' severs that link and
+        // silently breaks both integrations, while 'same-origin-allow-popups'
+        // still defends the reverse direction — a hostile page that opens us
+        // gets no opener handle back.
+        res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
+        // 'credentialless' instead of 'require-corp' deliberately: require-corp
+        // blocks every cross-origin image that does not opt in via CORP (Google
+        // avatars, Unsplash, GitHub avatars), which would break the UI.
+        res.setHeader('Cross-Origin-Embedder-Policy', process.env.COEP === 'unsafe-none' ? 'unsafe-none' : 'credentialless');
+        // Stops other origins pulling our images/scripts/JSON into an
+        // <img>/<script> tag as a side channel.
+        res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+        // Tells legacy Adobe/Acrobat clients there is no cross-domain policy.
+        res.setHeader('X-Permitted-Cross-Domain-Policies', 'none');
       }
 
       await handle(req, res);
@@ -4970,6 +4995,11 @@ fi'`;
           return;
         }
 
+        // Record usage so GET /api/relay/token can surface credentials that are
+        // active when they should be idle. The token map is shared, so this
+        // mutates the live entry.
+        try { entry.lastUsed = Date.now(); } catch (_) {}
+
         // Supporter gate — Local Relay is a supporter feature. Checked on every
         // (re)connect so revoked/expired supporters' auto-restarting agents get 4003.
         isRelaySupporter(entry)
@@ -5062,6 +5092,7 @@ fi'`;
 
       function setupRelayConnection(ws, entry) {
         const { userId } = entry;
+        const tokenId = entry.tokenId || null;
         const tcpSockets = new Map(); // connId → tcp socket (MongoDB driver side)
         ws.__tcpSockets = tcpSockets;
 
@@ -5101,7 +5132,16 @@ fi'`;
           if (!global.__activeRelays.has(userId)) {
             global.__activeRelays.set(userId, new Map());
           }
-          global.__activeRelays.get(userId).set(tempRelayId, { localPort, netServer, ws, targetHost: 'localhost', targetPort: 27017, capabilities: {}, relayName: tempRelayId });
+          global.__activeRelays.get(userId).set(tempRelayId, {
+            localPort,
+            netServer,
+            ws,
+            tokenId,
+            targetHost: 'localhost',
+            targetPort: 27017,
+            capabilities: {},
+            relayName: tempRelayId,
+          });
           ws.send(JSON.stringify({ type: 'ready', localPort }));
           console.log(`🔗 [Relay] Connected: user ${userId} → :${localPort}`);
         });

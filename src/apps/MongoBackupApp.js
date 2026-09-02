@@ -407,6 +407,9 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
   const [driveName, setDriveName] = useState('');
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
+  // True when a clientId is configured server-side but was not returned to us
+  // in the clear (i.e. it comes from the shared server environment).
+  const [clientIdConfigured, setClientIdConfigured] = useState(false);
   const [driveFolders, setDriveFolders] = useState([]);
   const [driveAllFolders, setDriveAllFolders] = useState([]); // flat list with paths for autocomplete
   const [newFolderName, setNewFolderName] = useState('');
@@ -866,7 +869,10 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
         setDriveConnected(data.connected);
         setDriveEmail(data.email || '');
         setDriveName(data.name || '');
-        setClientId(data.clientId || '');
+        // A user-owned clientId prefills the field; an env-provided one is
+        // shown only as a masked tail so the shared credential stays private.
+        setClientId(data.clientId || (data.clientIdMasked ? `••••${data.clientIdMasked}` : ''));
+        setClientIdConfigured(!!data.hasClientId);
         if (data.hasClientSecret) setClientSecret('••••••••••••••••••••');
         setDriveFolders(data.folders || []);
         if (data.folders.length > 0) {
@@ -1217,12 +1223,15 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
   const handleSaveCredentials = async () => {
     setDriveLoading(true);
     try {
-      // Don't overwrite the saved secret with the masked placeholder
+      // Don't overwrite saved credentials with the masked placeholders. An
+      // env-provided clientId is only ever shown masked, so it is never sent
+      // back and never copied into the user's own config.
       const secretToSave = clientSecret.includes('•') ? undefined : clientSecret;
+      const idToSave = clientId.includes('•') ? undefined : clientId;
       const res = await apiFetch('/api/mongo-sync/gdrive/status', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ clientId, clientSecret: secretToSave })
+        body: JSON.stringify({ clientId: idToSave, clientSecret: secretToSave })
       });
       const data = await res.json();
       if (data.success) {
@@ -3033,7 +3042,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                       <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1.5">Client Secret</label>
                       <input type="password" value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} placeholder="GOCSPX-xxxxxxxxxxxxxxxxxxxx" className="w-full px-3 py-2 text-xs rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:border-emerald-500 focus:outline-none" />
                     </div>
-                    <button onClick={handleSaveCredentials} disabled={driveLoading || !clientId.trim() || !clientSecret.trim()} className="w-full px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-md transition-all">
+                    <button onClick={handleSaveCredentials} disabled={driveLoading || !(clientId.trim() || clientIdConfigured) || !clientSecret.trim()} className="w-full px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-md transition-all">
                       {driveLoading ? <LoaderCircle className="animate-spin" size={12} /> : <><ShieldCheck size={13} /> Save &amp; Continue</>}
                     </button>
                   </div>

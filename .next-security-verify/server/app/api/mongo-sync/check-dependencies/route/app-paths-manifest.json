@@ -1,0 +1,3 @@
+{
+  "/api/mongo-sync/check-dependencies/route": "app/api/mongo-sync/check-dependencies/route.js"
+}

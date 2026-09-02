@@ -1,0 +1,13 @@
+var R=require("../../../../chunks/[turbopack]_runtime.js")("server/app/api/admin/seed-keys/route.js")
+R.c("server/chunks/[root-of-the-server]__1eeg-su._.js")
+R.c("server/chunks/[root-of-the-server]__20_6ykp._.js")
+R.c("server/chunks/node_modules_next_dist_0asuiw2._.js")
+R.c("server/chunks/node_modules_bcryptjs_index_0k82xso.js")
+R.c("server/chunks/node_modules_next_1zdbrne._.js")
+R.c("server/chunks/[root-of-the-server]__1txqi6i._.js")
+R.c("server/chunks/node_modules_1z0tebx._.js")
+R.c("server/chunks/[root-of-the-server]__02_2sm-._.js")
+R.c("server/chunks/node_modules_next_1_14bcs._.js")
+R.c("server/chunks/_next-internal_server_app_api_admin_seed-keys_route_actions_01h1rb1.js")
+R.m(53091)
+module.exports=R.m(53091).exports

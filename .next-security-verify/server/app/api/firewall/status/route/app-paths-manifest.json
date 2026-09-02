@@ -1,0 +1,3 @@
+{
+  "/api/firewall/status/route": "app/api/firewall/status/route.js"
+}

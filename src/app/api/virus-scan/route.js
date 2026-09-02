@@ -5,8 +5,10 @@ import connectDB from '@/lib/mongodb';
 import { getVirusScanModel } from '@/models/VirusScan';
 import { getSshConfig } from '@/app/api/server-backup/_ssh';
 import { runSecurityScan, SCAN_CHECK_COUNT } from '@/lib/virusScanner';
+import { checkRateLimit } from '@/lib/serverGuard';
 
 const MAX_CONCURRENT_PER_USER = 1;
+const SCAN_RATE_LIMIT = 3;
 const KEEP_SCANS = 20;
 
 function summarize(findings) {
@@ -54,6 +56,14 @@ export async function POST(request) {
     const connectionId = body?.connectionId;
     if (!connectionId) {
       return NextResponse.json({ success: false, error: 'Missing field: connectionId' }, { status: 400 });
+    }
+
+    const rateCheck = checkRateLimit(`virus-scan:${userId}:${connectionId}`, SCAN_RATE_LIMIT);
+    if (!rateCheck.allowed) {
+      return NextResponse.json(
+        { success: false, error: `Too many scans requested. Please wait ${Math.ceil(rateCheck.resetIn / 1000)}s.` },
+        { status: 429, headers: { 'Retry-After': String(Math.ceil(rateCheck.resetIn / 1000)) } }
+      );
     }
 
     const db = await connectDB();

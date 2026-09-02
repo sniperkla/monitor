@@ -38,7 +38,9 @@ export default function SupportersAdminPanel() {
   const [data, setData] = useState(null); // { supporters, requests, defaultGrantDays }
   const [codeStats, setCodeStats] = useState(null); // { total, used, available }
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(''); // email being acted on
+  // Identifiers below are internal user ids, not emails — the API no longer
+  // returns plaintext addresses, so actions are addressed by userId.
+  const [busy, setBusy] = useState(''); // userId being acted on
   const [flash, setFlash] = useState(null); // { ok, text }
   const [days, setDays] = useState(30);
 
@@ -73,16 +75,16 @@ export default function SupportersAdminPanel() {
 
   useEffect(() => { load(); }, [load]);
 
-  const act = async (action, email) => {
-    if (busy) return;
-    setBusy(email);
+  const act = async (action, userId) => {
+    if (busy || !userId) return;
+    setBusy(userId);
     setFlash(null);
     try {
       const res = await fetch('/api/admin/supporters', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ action, email, days: Number(days) || 30 }),
+        body: JSON.stringify({ action, userId, days: Number(days) || 30 }),
       });
       const out = await res.json().catch(() => ({}));
       setFlash({ ok: !!out.success, text: out.success ? out.message : (out.error || 'Action failed') });
@@ -213,7 +215,7 @@ export default function SupportersAdminPanel() {
         ) : (
           requests.map((r) => (
             <motion.div
-              key={r.email}
+              key={r.userId}
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               className="p-3.5 rounded-xl bg-[var(--bg-secondary)] border border-[var(--border-color)] space-y-2.5"
@@ -221,9 +223,9 @@ export default function SupportersAdminPanel() {
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <p className="text-xs font-bold text-[var(--text-primary)] truncate">
-                    {r.name || r.email}
+                    {r.maskedName || r.maskedEmail || 'unknown'}
                   </p>
-                  <p className="text-[10px] text-[var(--text-muted)] truncate">{r.email}</p>
+                  <p className="text-[10px] text-[var(--text-muted)] truncate">{r.maskedEmail}</p>
                 </div>
                 {r.requestedAt && (
                   <span className="text-[10px] text-[var(--text-muted)] whitespace-nowrap shrink-0">
@@ -248,16 +250,16 @@ export default function SupportersAdminPanel() {
               )}
               <div className="flex gap-2 pt-0.5">
                 <button
-                  onClick={() => act('grant', r.email)}
-                  disabled={busy === r.email}
+                  onClick={() => act('grant', r.userId)}
+                  disabled={busy === r.userId}
                   className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-400 border border-emerald-500/25 rounded-lg text-[11px] font-bold transition-all disabled:opacity-50"
                 >
-                  {busy === r.email ? <LoaderCircle size={11} className="animate-spin" /> : <ShieldCheck size={11} />}
+                  {busy === r.userId ? <LoaderCircle size={11} className="animate-spin" /> : <ShieldCheck size={11} />}
                   {t('supporter.admin.grant', 'Grant')}
                 </button>
                 <button
-                  onClick={() => act('dismiss', r.email)}
-                  disabled={busy === r.email}
+                  onClick={() => act('dismiss', r.userId)}
+                  disabled={busy === r.userId}
                   className="flex items-center gap-1.5 px-3 py-1.5 bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] text-[var(--text-muted)] rounded-lg text-[11px] font-bold transition-all disabled:opacity-50"
                 >
                   <Ban size={11} /> {t('supporter.admin.dismiss', 'Dismiss')}
@@ -307,19 +309,19 @@ export default function SupportersAdminPanel() {
             const expiry = fmtDate(s.expiresAt);
             return (
               <div
-                key={s.email}
+                key={s.userId}
                 className="p-3.5 rounded-xl bg-[var(--bg-secondary)] border border-[var(--border-color)] flex items-center gap-3"
               >
                 <div className="w-8 h-8 rounded-xl bg-pink-500/10 border border-pink-500/20 flex items-center justify-center shrink-0 text-[11px] font-bold text-pink-400 uppercase">
-                  {(s.name || s.email || '?').charAt(0)}
+                  {(s.maskedName || s.maskedEmail || '?').charAt(0)}
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <p className="text-xs font-bold text-[var(--text-primary)] truncate">{s.name || s.email}</p>
+                    <p className="text-xs font-bold text-[var(--text-primary)] truncate">{s.maskedName || s.maskedEmail || 'unknown'}</p>
                     <StatusBadge status={s.status} />
                   </div>
                   <p className="text-[10px] text-[var(--text-muted)] truncate">
-                    {s.email}
+                    {s.maskedEmail}
                     {expiry
                       ? ` · ${s.status === 'expired' ? t('supporter.admin.expiredOn', 'expired on') : t('supporter.admin.expires', 'expires')} ${expiry}`
                       : s.isAdmin ? '' : ` · ${t('supporter.admin.noExpiry', 'no expiry set')}`}
@@ -329,21 +331,21 @@ export default function SupportersAdminPanel() {
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
                   <button
-                    onClick={() => act('grant', s.email)}
-                    disabled={busy === s.email || s.isAdmin}
+                    onClick={() => act('grant', s.userId)}
+                    disabled={busy === s.userId || s.isAdmin}
                     title={s.isAdmin ? t('supporter.admin.adminNoRevoke', 'Admins always have access') : t('supporter.admin.extendHint', 'Extend membership')}
                     className="px-2.5 py-1.5 bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] text-[var(--text-secondary)] rounded-lg text-[11px] font-bold transition-all disabled:opacity-40"
                   >
-                    {busy === s.email ? <LoaderCircle size={11} className="animate-spin" /> : '+30'}
+                    {busy === s.userId ? <LoaderCircle size={11} className="animate-spin" /> : '+30'}
                   </button>
                   {!s.isAdmin && (
                     <button
-                      onClick={() => act('revoke', s.email)}
-                      disabled={busy === s.email}
+                      onClick={() => act('revoke', s.userId)}
+                      disabled={busy === s.userId}
                       title={t('supporter.admin.revokeHint', 'Revoke — also disconnects active relays')}
                       className="p-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg transition-all disabled:opacity-50"
                     >
-                      {busy === s.email ? <LoaderCircle size={11} className="animate-spin" /> : <ShieldOff size={12} />}
+                      {busy === s.userId ? <LoaderCircle size={11} className="animate-spin" /> : <ShieldOff size={12} />}
                     </button>
                   )}
                 </div>

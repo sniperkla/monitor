@@ -1,0 +1,3 @@
+{
+  "/api/connections/[id]/schema/route": "app/api/connections/[id]/schema/route.js"
+}

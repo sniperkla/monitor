@@ -48,8 +48,12 @@ export async function GET(request) {
       query.$or = [{ message: rx }, { target: rx }];
     }
 
+    // `ip` is still recorded on write (it is the point of an audit trail), but
+    // it is stripped from reads: this endpoint returns a user's OWN timeline,
+    // so shipping the address back buys nothing and turns a telemetry feed
+    // into a location-history export.
     const [items, total] = await Promise.all([
-      Model.find(query).sort({ createdAt: -1 }).limit(limit).lean(),
+      Model.find(query).select('-ip').sort({ createdAt: -1 }).limit(limit).lean(),
       Model.countDocuments({ userId }),
     ]);
 

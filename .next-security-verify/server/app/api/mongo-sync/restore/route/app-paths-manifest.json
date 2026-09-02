@@ -1,0 +1,3 @@
+{
+  "/api/mongo-sync/restore/route": "app/api/mongo-sync/restore/route.js"
+}

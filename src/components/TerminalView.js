@@ -21,6 +21,7 @@ import {
   AtSign, Folder, File as FileIconAi, Container, Zap, Mouse, SquareArrowOutUpRight
 } from 'lucide-react';
 import { diff_match_patch } from 'diff-match-patch';
+import { buildSkillsBlock } from '@/utils/promptSafety';
 
 let Terminal, FitAddon, WebLinksAddon;
 
@@ -4957,19 +4958,14 @@ logstash:
         for (const s of data.skills) {
           if (!localNames.has(s.name)) allFound.push({ ...s, _source: 'skillsmp' });
         }
-        // Auto-install installable SkillsMP skills silently (no button click needed)
+        // SECURITY: external SkillsMP content is untrusted. Do not silently
+        // write it to the local skill namespace. The user must explicitly click
+        // Install after reviewing the displayed content; the install route also
+        // validates, namespaces, rate-limits, and fences the content.
+        // Previously this auto-installed the first two results without consent.
         const installable = data.skills.filter(s => s.id && s.content);
-        for (const skill of installable.slice(0, 2)) { // Max 2 auto-installs
-          try {
-            await apiFetch('/api/skills/install', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ id: skill.id, name: skill.name, description: skill.description || '', content: skill.content })
-            });
-            console.log(`[SkillsMP] Auto-installed skill: ${skill.name}`);
-          } catch (installErr) {
-            console.warn(`[SkillsMP] Auto-install failed for ${skill.name}:`, installErr);
-          }
+        if (installable.length > 0) {
+          console.info(`[SkillsMP] ${installable.length} installable result(s) require explicit user review`);
         }
       }
     } catch (e) {
@@ -5700,13 +5696,12 @@ Do NOT read the file again. ACT NOW.`
       if (skillsInjected) {
          console.log(`[AI Agent] Injecting ${_skills.length} skills into prompt:`, _skills.map(s => s.name));
       }
+      // SECURITY: skill content is user-supplied Markdown, i.e. untrusted input
+      // arriving on a trusted channel. Injecting it raw lets any installed skill
+      // act as a prompt injection against an agent that executes shell commands.
+      // buildSkillsBlock() fences it as reference data — see src/utils/promptSafety.js.
       const skillsBlock = skillsInjected
-        ? `\n[Skills] Matched: ${_skills.map(s => s.name).join(', ')}\n` +
-          _skills.map(s =>
-            s.content
-              ? `--- Skill: ${s.name} ---\n${String(s.content).slice(0, 2000)}\n`
-              : ''
-          ).filter(Boolean).join('\n')
+        ? buildSkillsBlock(_skills, { maxChars: 2000 })
         : '';
         
       // --- Version Mismatch Discovery ---

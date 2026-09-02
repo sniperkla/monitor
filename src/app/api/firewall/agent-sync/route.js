@@ -20,6 +20,9 @@ export async function POST(request) {
     if (!entry || entry.expiresAt < Date.now()) {
       return NextResponse.json({ success: false, error: 'Invalid or expired agent token' }, { status: 401 });
     }
+    // Record usage so GET /api/relay/token can surface credentials that are
+    // active when they should be idle.
+    entry.lastUsed = Date.now();
 
     const body = await request.json();
     const connectionId = String(body?.connectionId || '').trim();

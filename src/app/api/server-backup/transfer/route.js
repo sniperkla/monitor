@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { getSshConfig, sftpTransfer } from '../_ssh';
+import { resolveBackupPath } from '../_history';
+import { basename } from '@/utils/pii';
 import { logger } from '@/lib/logger';
 
 // In-memory job store: transferId → { status, transferred, totalSize, percent, error, controller }
@@ -18,10 +20,28 @@ export async function POST(request) {
     if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
     const body = await request.json();
-    const { sourceConnectionId, sourcePath, targetConnectionId, targetPath } = body;
+    const { sourceConnectionId, sourcePath, sourceFileRef, targetConnectionId, targetPath } = body;
 
-    if (!sourceConnectionId || !sourcePath || !targetConnectionId || !targetPath) {
+    if (!sourceConnectionId || !targetConnectionId || !targetPath) {
       return NextResponse.json({ success: false, error: 'Missing parameters' }, { status: 400 });
+    }
+
+    // History entries no longer ship their remote path to the browser, so the
+    // client addresses them by the opaque `sourceFileRef`. Resolve it inside
+    // the caller's own history (falls back to an explicit `sourcePath`, which
+    // the post-backup flow still has in hand).
+    let resolvedSourcePath = sourcePath || null;
+    if (!resolvedSourcePath && sourceFileRef) {
+      resolvedSourcePath = await resolveBackupPath(session.user.id, {
+        connectionId: sourceConnectionId,
+        fileRef: sourceFileRef,
+      });
+      if (!resolvedSourcePath) {
+        return NextResponse.json({ success: false, error: 'Source backup not found' }, { status: 404 });
+      }
+    }
+    if (!resolvedSourcePath) {
+      return NextResponse.json({ success: false, error: 'Missing sourcePath or sourceFileRef' }, { status: 400 });
     }
 
     const transferId = makeId();
@@ -34,7 +54,7 @@ export async function POST(request) {
       percent: 0,
       error: null,
       controller,
-      sourcePath,
+      sourcePath: resolvedSourcePath,
       targetPath,
       startedAt: Date.now(),
     });
@@ -53,7 +73,7 @@ export async function POST(request) {
 
         if (controller.signal.aborted) return;
 
-        const result = await sftpTransfer(sourceConfig, sourcePath, targetConfig, targetPath, {
+        const result = await sftpTransfer(sourceConfig, resolvedSourcePath, targetConfig, targetPath, {
           signal: controller.signal,
           onProgress: ({ transferred, totalSize, percent }) => {
             const j = transferJobs.get(transferId);
@@ -112,8 +132,9 @@ export async function GET(request) {
       totalSize: job.totalSize,
       percent: job.percent,
       error: job.error,
-      sourcePath: job.sourcePath,
-      targetPath: job.targetPath,
+      // Basenames only — the full remote paths belong on the server.
+      sourceFilename: basename(job.sourcePath),
+      targetFilename: basename(job.targetPath),
     });
   } catch (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });

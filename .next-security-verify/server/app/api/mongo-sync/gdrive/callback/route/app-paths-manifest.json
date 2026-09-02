@@ -1,0 +1,3 @@
+{
+  "/api/mongo-sync/gdrive/callback/route": "app/api/mongo-sync/gdrive/callback/route.js"
+}

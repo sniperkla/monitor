@@ -10,6 +10,21 @@ import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import { resolveUserIdQuery, normalizeUserId } from '@/lib/deployUserQuery';
 import { logger } from '@/lib/logger';
 
+const PROJECT_ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
+const SAFE_TEXT_MAX = 200000;
+
+function validateProjectId(value) {
+  const projectId = String(value ?? 'default').trim();
+  return PROJECT_ID_PATTERN.test(projectId) ? projectId : null;
+}
+
+function safeErrorMessage(error) {
+  if (error?.code === 11000 || error?.name === 'MongoServerError' && error?.code === 11000) {
+    return 'A deployment configuration with this project already exists.';
+  }
+  return 'Unable to save deployment configuration.';
+}
+
 const defaultConfig = {
   id: 'default',
   name: 'Default Project',
@@ -122,7 +137,7 @@ export async function GET(request) {
     return NextResponse.json({ success: true, projects });
   } catch (error) {
     logger.error('[deploy/config] GET error:', error.message);
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return NextResponse.json({ success: false, error: safeErrorMessage(error) }, { status: 500 });
   }
 }
 
@@ -135,10 +150,20 @@ export async function POST(request) {
     }
 
     const body = await request.json();
-    const projectId = body.id || 'default';
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return NextResponse.json({ success: false, error: 'Request body must be an object' }, { status: 400 });
+    }
+
+    const projectId = validateProjectId(body.id);
+    if (!projectId) {
+      return NextResponse.json({ success: false, error: 'Invalid project id. Use 1-64 letters, numbers, underscores, or hyphens.' }, { status: 400 });
+    }
     const dbKey = projectId === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${projectId}`;
 
     const targetType = body.targetType || 'local';
+    if (!['local', 'ssh'].includes(targetType)) {
+      return NextResponse.json({ success: false, error: 'Invalid target type' }, { status: 400 });
+    }
     const normalizedConnectionId = typeof body.connectionId === 'string'
       ? body.connectionId.trim()
       : '';
@@ -231,6 +256,16 @@ export async function POST(request) {
       };
     }
 
+    const textFields = ['name', 'branch', 'secret', 'deployCommand', 'projectPath'];
+    for (const field of textFields) {
+      if (body[field] !== undefined && typeof body[field] !== 'string') {
+        return NextResponse.json({ success: false, error: `${field} must be a string` }, { status: 400 });
+      }
+      if (typeof body[field] === 'string' && body[field].length > SAFE_TEXT_MAX) {
+        return NextResponse.json({ success: false, error: `${field} is too long` }, { status: 400 });
+      }
+    }
+
     const updatedValue = {
       id: projectId,
       name: body.name || existingValue.name || `Project ${projectId}`,
@@ -284,16 +319,25 @@ export async function POST(request) {
       sshConnectionData: finalSshConnectionData
     };
 
-    await SystemSetting.findOneAndUpdate(
-      { ...resolveUserIdQuery(userId), key: dbKey },
-      { $set: { userId, key: dbKey, value: updatedValue } },
-      { upsert: true, runValidators: false }
-    );
+    try {
+      await SystemSetting.findOneAndUpdate(
+        { ...resolveUserIdQuery(userId), key: dbKey },
+        { $set: { userId, key: dbKey, value: updatedValue } },
+        { upsert: true, runValidators: false }
+      );
+    } catch (error) {
+      logger.error('[deploy/config] POST persistence error:', error.message);
+      const duplicate = error?.code === 11000;
+      return NextResponse.json(
+        { success: false, error: safeErrorMessage(error) },
+        { status: duplicate ? 409 : 500 }
+      );
+    }
 
     return NextResponse.json({ success: true, config: updatedValue });
   } catch (error) {
     logger.error('[deploy/config] POST error:', error.message);
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return NextResponse.json({ success: false, error: safeErrorMessage(error) }, { status: 500 });
   }
 }
 
@@ -320,6 +364,6 @@ export async function DELETE(request) {
     return NextResponse.json({ success: true, message: 'Project deployment config deleted' });
   } catch (error) {
     logger.error('[deploy/config] DELETE error:', error.message);
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return NextResponse.json({ success: false, error: safeErrorMessage(error) }, { status: 500 });
   }
 }

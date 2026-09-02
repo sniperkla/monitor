@@ -1,0 +1,3 @@
+module.exports=[73574,a=>{"use strict";let b=null;function c(a=800,d=.1,e=.15){try{let c=(b||(b=new(window.AudioContext||window.webkitAudioContext)),b),f=c.createOscillator(),g=c.createGain();f.connect(g),g.connect(c.destination),f.frequency.value=a,f.type="sine",g.gain.setValueAtTime(e,c.currentTime),g.gain.exponentialRampToValueAtTime(.001,c.currentTime+d),f.start(c.currentTime),f.stop(c.currentTime+d)}catch{}}a.s(["playBell",0,function(){c(800,.08,.1)},"playError",0,function(){c(300,.15,.15),setTimeout(()=>c(200,.2,.15),180)},"playSuccess",0,function(){c(880,.08,.12),setTimeout(()=>c(1100,.12,.12),100)},"showDesktopNotification",0,function(a,b,c="info"){}])}];
+
+//# sourceMappingURL=src_utils_sound_0zg8bzv.js.map

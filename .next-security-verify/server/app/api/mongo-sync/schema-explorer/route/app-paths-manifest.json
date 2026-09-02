@@ -1,0 +1,3 @@
+{
+  "/api/mongo-sync/schema-explorer/route": "app/api/mongo-sync/schema-explorer/route.js"
+}

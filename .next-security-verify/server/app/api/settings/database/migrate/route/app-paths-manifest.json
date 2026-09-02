@@ -1,0 +1,3 @@
+{
+  "/api/settings/database/migrate/route": "app/api/settings/database/migrate/route.js"
+}

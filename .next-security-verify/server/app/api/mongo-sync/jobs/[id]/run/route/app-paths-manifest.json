@@ -1,0 +1,3 @@
+{
+  "/api/mongo-sync/jobs/[id]/run/route": "app/api/mongo-sync/jobs/[id]/run/route.js"
+}

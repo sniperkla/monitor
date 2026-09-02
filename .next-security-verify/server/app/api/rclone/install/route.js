@@ -1,0 +1,13 @@
+var R=require("../../../../chunks/[turbopack]_runtime.js")("server/app/api/rclone/install/route.js")
+R.c("server/chunks/_0uy260u._.js")
+R.c("server/chunks/[root-of-the-server]__1pu4go3._.js")
+R.c("server/chunks/_07m8krm._.js")
+R.c("server/chunks/src_0w_wmvw._.js")
+R.c("server/chunks/node_modules_1z0tebx._.js")
+R.c("server/chunks/node_modules_next_dist_0asuiw2._.js")
+R.c("server/chunks/node_modules_next_1_14bcs._.js")
+R.c("server/chunks/[root-of-the-server]__02_2sm-._.js")
+R.c("server/chunks/node_modules_next_1zdbrne._.js")
+R.c("server/chunks/_next-internal_server_app_api_rclone_install_route_actions_1-d5j3h.js")
+R.m(69251)
+module.exports=R.m(69251).exports

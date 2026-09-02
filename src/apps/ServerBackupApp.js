@@ -514,9 +514,16 @@ export default function ServerBackupApp({ windowId = 'server-backup', activeTab:
   };
 
   const handleTransfer = async () => {
-    const sourceFile = outFilePath || transferSourceEntry?.filePath;
-    const sourceConnId = outFilePath ? connectionId : transferSourceEntry?.connectionId;
-    if (!sourceFile || !sourceConnId || !transferTargetId) return addNotification({ title: 'Error', message: 'Select a source backup and target server', type: 'error' });
+    // A freshly created backup is still in client state, so its path is known
+    // locally. A backup picked from history is addressed by its opaque
+    // fileRef instead — /api/server-backup/history never returns remote paths.
+    const fromFreshBackup = Boolean(outFilePath);
+    const sourceFile = fromFreshBackup ? outFilePath : null;
+    const sourceConnId = fromFreshBackup ? connectionId : transferSourceEntry?.connectionId;
+    const sourceFilename = fromFreshBackup
+      ? outFilePath.split('/').pop()
+      : transferSourceEntry?.filename;
+    if (!sourceFilename || !sourceConnId || !transferTargetId) return addNotification({ title: 'Error', message: 'Select a source backup and target server', type: 'error' });
 
     setIsTransferring(true);
     setTransferProgress('Connecting...');
@@ -524,15 +531,14 @@ export default function ServerBackupApp({ windowId = 'server-backup', activeTab:
     setTransferId(null);
 
     try {
-      const filename = sourceFile.split('/').pop();
-      const targetPath = transferTargetPath.endsWith('/') ? `${transferTargetPath}${filename}` : `${transferTargetPath}/${filename}`;
+      const targetPath = transferTargetPath.endsWith('/') ? `${transferTargetPath}${sourceFilename}` : `${transferTargetPath}/${sourceFilename}`;
 
       const res = await apiFetch('/api/server-backup/transfer', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           sourceConnectionId: sourceConnId,
-          sourcePath: sourceFile,
+          ...(sourceFile ? { sourcePath: sourceFile } : { sourceFileRef: transferSourceEntry?.fileRef }),
           targetConnectionId: transferTargetId,
           targetPath,
         }),
@@ -637,7 +643,9 @@ export default function ServerBackupApp({ windowId = 'server-backup', activeTab:
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             sourceConnectionId: entry.connectionId,
-            sourceFilePath: entry.filePath,
+            // History entries carry an opaque ref; the server resolves it to
+            // the real remote path from the caller's own history.
+            sourceFileRef: entry.fileRef,
             targetConnectionId: migrateModal.targetId,
           }),
         });
@@ -998,7 +1006,7 @@ export default function ServerBackupApp({ windowId = 'server-backup', activeTab:
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-1.5">
-                          <span className="font-mono text-[11px] text-[var(--text-primary)] truncate">{entry.filePath.split('/').pop()}</span>
+                          <span className="font-mono text-[11px] text-[var(--text-primary)] truncate">{entry.filename}</span>
                           <span className="text-[9px] px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-400 font-bold uppercase shrink-0">{entry.type}</span>
                         </div>
                         <div className="text-[10px] text-[var(--text-muted)] mt-0.5">
@@ -1048,7 +1056,7 @@ export default function ServerBackupApp({ windowId = 'server-backup', activeTab:
                 {/* File info */}
                 <div className="flex items-center justify-between text-[11px]">
                   <span className="text-[var(--text-muted)] font-mono truncate max-w-[60%]">
-                    {(outFilePath || transferSourceEntry?.filePath || '').split('/').pop()}
+                    {transferSourceEntry?.filename || (outFilePath || '').split('/').pop() || ''}
                   </span>
                   <span className={`font-bold px-2 py-0.5 rounded-full text-[10px] ${
                     transferStats?.status === 'completed' ? 'bg-emerald-500/15 text-emerald-400' :
@@ -1118,9 +1126,9 @@ export default function ServerBackupApp({ windowId = 'server-backup', activeTab:
                     <div key={entry.id} className="flex items-center gap-3 p-3 rounded-xl bg-[var(--bg-secondary)]/50 border border-[var(--border-color)]">
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
-                          <span className="text-[11px] font-mono font-bold text-[var(--text-primary)] truncate">{entry.filePath.split('/').pop()}</span>
+                          <span className="text-[11px] font-mono font-bold text-[var(--text-primary)] truncate">{entry.filename}</span>
                           <span className="text-[9px] px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-400 font-bold uppercase">{entry.type}</span>
-                          {entry.r2Url && <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-bold">Cloud</span>}
+                          {entry.hasCloudCopy && <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-bold">Cloud</span>}
                         </div>
                         <div className="text-[10px] text-[var(--text-muted)] mt-1">
                           {new Date(entry.timestamp).toLocaleString()}
@@ -1138,13 +1146,16 @@ export default function ServerBackupApp({ windowId = 'server-backup', activeTab:
                         )}
                         <button
                           onClick={() => {
-                            if (entry.r2Url) {
-                              window.open(entry.r2Url, '_blank');
-                            } else {
-                              const filename = entry.filePath.split('/').pop() || 'backup.tar.gz';
-                              const url = `/api/server-backup/download?connectionId=${entry.connectionId}&filePath=${encodeURIComponent(entry.filePath)}&filename=${encodeURIComponent(filename)}`;
-                              window.open(url, '_blank');
-                            }
+                            if (!entry.fileRef) return;
+                            // The remote path and the presigned CDN URL both
+                            // stay server-side; fileRef is resolved there.
+                            const params = new URLSearchParams({
+                              connectionId: String(entry.connectionId),
+                              fileRef: String(entry.fileRef),
+                              filename: entry.filename || 'backup.tar.gz',
+                            });
+                            if (entry.hasCloudCopy) params.set('source', 'cloud');
+                            window.open(`/api/server-backup/download?${params.toString()}`, '_blank');
                           }}
                           className="px-3 py-1.5 rounded-lg bg-emerald-600/10 hover:bg-emerald-600/20 border border-emerald-500/20 text-emerald-400 text-[10px] font-bold transition-all flex items-center gap-1.5"
                         >
@@ -1281,7 +1292,7 @@ export default function ServerBackupApp({ windowId = 'server-backup', activeTab:
                 <>
                   <div className="p-3 rounded-xl bg-[var(--bg-primary)] border border-[var(--border-color)]">
                     <div className="text-[10px] text-[var(--text-muted)] uppercase mb-1">Source Backup</div>
-                    <div className="text-xs font-mono text-[var(--text-primary)]">{migrateModal.entry?.filePath?.split('/').pop()}</div>
+                    <div className="text-xs font-mono text-[var(--text-primary)]">{migrateModal.entry?.filename}</div>
                     <div className="text-[9px] text-[var(--text-muted)] mt-0.5">
                       {migrateModal.entry?.timestamp ? new Date(migrateModal.entry.timestamp).toLocaleString() : ''}
                     </div>

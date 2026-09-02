@@ -95,7 +95,10 @@ function scoreSkill(skill, query) {
 
 export async function POST(req) {
   try {
-    // Session check is best-effort
+    // SECURITY: this route returns file contents from the server filesystem. It
+    // previously treated the session as optional and proceeded regardless,
+    // relying entirely on the middleware auth gate. Require it here: one matcher
+    // regression would otherwise make this an unauthenticated file read.
     let session = null;
     try {
       session = await getServerSession(authOptions);
@@ -103,8 +106,13 @@ export async function POST(req) {
       logger.warn('[Skills Local] Session resolution failed:', e.message);
     }
     if (!session) {
-      logger.warn('[Skills Local] No session found — proceeding anyway.');
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
+
+    // Skills installed via /api/skills/install are namespaced per user.
+    const userId = String(session.user?.id || session.user?.email || '')
+      .replace(/[^a-zA-Z0-9_-]/g, '')
+      .slice(0, 64);
 
     const { q } = await req.json();
     if (!q) {
@@ -113,13 +121,17 @@ export async function POST(req) {
 
     const allSkills = [];
 
-    // ── Load custom skills/ folder ──
-    try {
-      const skillsDir = join(process.cwd(), 'skills');
-      const files = await readdir(skillsDir);
+    // Read every *.md in `dir` (non-recursive) into the skill list.
+    const loadFromDir = async (dir, source) => {
+      let files;
+      try {
+        files = await readdir(dir);
+      } catch (e) {
+        return; // directory does not exist — nothing to load
+      }
       for (const file of files.filter(f => f.endsWith('.md'))) {
         try {
-          const content = await readFile(join(skillsDir, file), 'utf-8');
+          const content = await readFile(join(dir, file), 'utf-8');
           const defaultName = file.replace('.md', '');
           const name = extractFrontmatter(content, 'name') || defaultName;
           const description = extractFrontmatter(content, 'description') || '';
@@ -129,10 +141,20 @@ export async function POST(req) {
           if (tags.length > 0) keywords = [...new Set([...keywords, ...tags])];
           // Fallback: use skill name as a keyword
           if (keywords.length === 0) keywords = [name.toLowerCase().replace(/-/g, ' ')];
-          allSkills.push({ name, description, content, source: 'custom', keywords });
+          allSkills.push({ name, description, content, source, keywords });
         } catch (e) { /* skip unreadable */ }
       }
-    } catch (e) { /* skills dir doesn't exist */ }
+    };
+
+    // ── Bundled skills shipped with the app (top-level .md only) ──
+    await loadFromDir(join(process.cwd(), 'skills'), 'custom');
+
+    // ── Skills this user installed (per-user namespace) ──
+    // Only the caller's own namespace is read, so one user cannot have their
+    // agent context poisoned by another user's install.
+    if (userId) {
+      await loadFromDir(join(process.cwd(), 'skills', 'users', userId), 'own');
+    }
 
     // ── Load .agents/skills/ folder (installed from SkillsMP) ──
     try {

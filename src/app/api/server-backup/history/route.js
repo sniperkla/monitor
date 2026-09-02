@@ -1,25 +1,40 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
-import connectDB from '@/lib/mongodb';
-import SystemSetting from '@/models/SystemSetting';
 import { logger } from '@/lib/logger';
+import {
+  HISTORY_KEY,
+  MAX_ENTRIES,
+  loadBackupHistory,
+  saveBackupHistory,
+  sanitizeStoredEntry,
+  toPublicEntry,
+} from '../_history';
 
-const HISTORY_KEY = 'server_backup_history';
-const MAX_ENTRIES = 100;
+export const dynamic = 'force-dynamic';
 
 // GET — load backup history
-export async function GET(request) {
+//
+// Returns metadata only. Remote server paths (`/tmp/backup_<uuid>.tar.gz`),
+// log paths and presigned CDN URLs stay on the server; each entry exposes an
+// opaque `fileRef` that /api/server-backup/download resolves server-side.
+export async function GET() {
   try {
     const session = await getServerSession(authOptions);
-    if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    if (!session?.user?.id) {
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
 
-    await connectDB();
-    const setting = await SystemSetting.findOne({ key: HISTORY_KEY });
-    return NextResponse.json({ success: true, history: setting?.value || [] });
+    const history = await loadBackupHistory(session.user.id);
+    return NextResponse.json({
+      success: true,
+      history: history.map(toPublicEntry).filter(Boolean),
+    });
   } catch (error) {
     logger.error('[server-backup/history] GET error:', error.message);
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    // Never echo the raw error: internal messages have historically included
+    // filesystem paths from the mongoose driver.
+    return NextResponse.json({ success: false, error: 'Failed to load backup history' }, { status: 500 });
   }
 }
 
@@ -27,28 +42,34 @@ export async function GET(request) {
 export async function POST(request) {
   try {
     const session = await getServerSession(authOptions);
-    if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    if (!session?.user?.id) {
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
 
-    const body = await request.json();
+    const body = await request.json().catch(() => ({}));
     const { history } = body;
 
     if (!Array.isArray(history)) {
       return NextResponse.json({ success: false, error: 'history must be an array' }, { status: 400 });
     }
 
-    // Cap at MAX_ENTRIES
-    const trimmed = history.slice(0, MAX_ENTRIES);
+    // Cap at MAX_ENTRIES and drop anything that fails the whitelist.
+    const trimmed = history
+      .slice(0, MAX_ENTRIES)
+      .map(sanitizeStoredEntry)
+      .filter(Boolean);
 
-    await connectDB();
-    await SystemSetting.findOneAndUpdate(
-      { key: HISTORY_KEY },
-      { $set: { value: trimmed } },
-      { upsert: true }
-    );
+    await saveBackupHistory(session.user.id, trimmed);
 
-    return NextResponse.json({ success: true });
+    return NextResponse.json({
+      success: true,
+      history: trimmed.map(toPublicEntry).filter(Boolean),
+    });
   } catch (error) {
     logger.error('[server-backup/history] POST error:', error.message);
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    return NextResponse.json({ success: false, error: 'Failed to save backup history' }, { status: 500 });
   }
 }
+
+// Keep the key name exported for callers/scripts that imported it previously.
+export { HISTORY_KEY };

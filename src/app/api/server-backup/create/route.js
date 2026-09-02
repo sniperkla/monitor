@@ -5,6 +5,9 @@ import { getSshConfig, execCommand } from '../_ssh';
 import crypto from 'crypto';
 import { logger } from '@/lib/logger';
 import { shellQuote, shellInt } from '@/utils/shellQuote';
+import { checkRateLimit } from '@/lib/serverGuard';
+
+const BACKUP_RATE_LIMIT = 3;
 
 function buildBackupCommand(jobId, type, config) {
   const logFile = `/tmp/backup_${jobId}.log`;
@@ -145,6 +148,15 @@ export async function POST(request) {
 
     if (!connectionId) return NextResponse.json({ success: false, error: 'Missing connectionId' }, { status: 400 });
     if (!backupType) return NextResponse.json({ success: false, error: 'Missing backupType' }, { status: 400 });
+
+    const userId = session.user?.id || session.user?.sub || session.user?.email || 'unknown';
+    const rateCheck = checkRateLimit(`server-backup-create:${userId}:${connectionId}`, BACKUP_RATE_LIMIT);
+    if (!rateCheck.allowed) {
+      return NextResponse.json(
+        { success: false, error: `Too many backup jobs. Please wait ${Math.ceil(rateCheck.resetIn / 1000)}s.` },
+        { status: 429, headers: { 'Retry-After': String(Math.ceil(rateCheck.resetIn / 1000)) } }
+      );
+    }
 
     const jobId = crypto.randomUUID();
     const sshConfig = await getSshConfig(connectionId);
