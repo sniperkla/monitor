@@ -3,11 +3,14 @@ import connectDB from '@/lib/mongodb';
 import AiUsage from '@/models/AiUsage';
 import { logger } from '@/lib/logger';
 import { requireAdmin } from '@/lib/requireAdmin';
+import { auditLog } from '@/lib/auditLog';
 
 export async function POST(req) {
+  let adminUser = null;
   try {
-    const { error } = await requireAdmin();
-    if (error) return error;
+    const auth = await requireAdmin(req);
+    if (auth.error) return auth.error;
+    adminUser = auth.user;
 
     await connectDB(process.env.MONGODB_URI, true);
 
@@ -28,13 +31,34 @@ export async function POST(req) {
       }
     );
 
+    const matched = res.matchedCount ?? res.n;
+    const modified = res.modifiedCount ?? res.nModified;
+
+    // Tenant-wide mutation: record the blast radius, not just that it happened.
+    await auditLog({
+      req,
+      action: 'admin.ai_usage.reset',
+      userId: String(adminUser?._id || ''),
+      userEmail: adminUser?.email,
+      detail: { dayKey, matched, modified },
+      status: 'success',
+    });
+
     return NextResponse.json({
       success: true,
       dayKey,
-      matched: res.matchedCount ?? res.n,
-      modified: res.modifiedCount ?? res.nModified,
+      matched,
+      modified,
     });
   } catch (error) {
+    await auditLog({
+      req,
+      action: 'admin.ai_usage.reset',
+      userId: String(adminUser?._id || ''),
+      userEmail: adminUser?.email,
+      detail: { reason: 'error', error: String(error?.message || '').slice(0, 200) },
+      status: 'failure',
+    });
     logger.error('Reset AI usage error:', error);
     return NextResponse.json({ success: false, error: 'Internal Server Error' }, { status: 500 });
   }

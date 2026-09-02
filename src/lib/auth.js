@@ -5,6 +5,22 @@ import connectDB from "./mongodb.js";
 import User from "../models/User.js";
 import { logger } from '@/lib/logger';
 import { checkLoginAllowed, recordLoginFailure, recordLoginSuccess } from '@/lib/loginRateLimit';
+import { evaluateMfa } from '@/lib/mfa';
+import { auditLog } from '@/lib/auditLog';
+import { consumeLoginTicket } from '@/lib/webauthn';
+
+/**
+ * Honour the progressive delay returned by the login throttle.
+ *
+ * Accepts the throttle's promise directly so call sites stay one-liners. The
+ * delay is already capped inside loginRateLimit (2s), which is what keeps a
+ * flood of parallel attempts from pinning every socket open for a minute.
+ */
+async function sleepAfterFailure(msOrPromise) {
+  const ms = await msOrPromise;
+  if (!ms || ms <= 0) return;
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 /**
  * Allowed callback-URL origins.
@@ -79,7 +95,11 @@ export const authOptions = {
       name: "Credentials",
       credentials: {
         email: { label: "Email", type: "email" },
-        password: { label: "Password", type: "password" }
+        password: { label: "Password", type: "password" },
+        // Optional: only consulted for accounts that have MFA enrolled.
+        // Declared here because NextAuth only forwards credential keys that
+        // the provider declares up front.
+        totpCode: { label: "Two-factor code", type: "text" },
       },
       async authorize(credentials, req) {
         if (!credentials?.email || !credentials?.password) {
@@ -95,26 +115,125 @@ export const authOptions = {
           _hdr(req?.headers, 'x-forwarded-for')?.split(',')[0]?.trim() ||
           _hdr(req?.headers, 'x-real-ip') ||
           'unknown';
-        const gate = checkLoginAllowed({ email: cleanEmail, ip });
+        const userAgent = _hdr(req?.headers, 'user-agent') || null;
+
+        // Minimal Request-shaped shim so auditLog() can read IP/UA. NextAuth
+        // hands authorize() a request whose headers may be a Headers instance
+        // or a plain object depending on entry point — this normalises both.
+        const reqShim = { headers: { get: (k) => _hdr(req?.headers, k) } };
+        const loginAudit = (action, detail) =>
+          auditLog({ req: reqShim, action, userId: null, userEmail: cleanEmail, detail: { ...detail, ua: userAgent } });
+        const gate = await checkLoginAllowed({ email: cleanEmail, ip });
         if (!gate.allowed) {
-          throw new Error(
-            `Too many failed login attempts. Try again in ${Math.ceil(gate.retryAfterSec / 60)} minutes.`
-          );
+          // The ladder produces delays as short as 1s early on, so quoting
+          // minutes would tell the user to wait 60x longer than they must.
+          const wait = gate.retryAfterSec >= 60
+            ? `${Math.ceil(gate.retryAfterSec / 60)} minute(s)`
+            : `${gate.retryAfterSec} second(s)`;
+          loginAudit('auth.login.blocked', { reason: gate.reason, retryAfterSec: gate.retryAfterSec, ip });
+          throw new Error(`Too many failed login attempts. Try again in ${wait}.`);
         }
         await connectDB(process.env.MONGODB_URI, true);
 
         const dbUser = await User.findOne({ email: cleanEmail }).select('+password').lean();
         if (!dbUser || !dbUser.password) {
-          recordLoginFailure({ email: cleanEmail, ip });
+          await sleepAfterFailure(recordLoginFailure({ email: cleanEmail, ip }));
+          // Deliberately does NOT reveal that the account does not exist.
+          loginAudit('auth.login.failure', { reason: 'unknown_account', ip });
           throw new Error("Invalid email or password");
         }
 
         const isValid = await bcrypt.compare(credentials.password, dbUser.password);
         if (!isValid) {
-          recordLoginFailure({ email: cleanEmail, ip });
+          await sleepAfterFailure(recordLoginFailure({ email: cleanEmail, ip }));
+          loginAudit('auth.login.failure', { reason: 'bad_password', userId: dbUser._id.toString(), ip });
           throw new Error("Invalid email or password");
         }
+
+        // ---- Second factor (admin / supporter accounts only) ----
+        // Password is already verified at this point, so the gate is a real
+        // second factor rather than a hint that the password was correct.
+        const mfaGate = await evaluateMfa({ dbUser, code: credentials.totpCode });
+        if (!mfaGate.ok) {
+          // A wrong TOTP is an authentication failure like any other — it must
+          // advance the same ladder or the throttle is trivially bypassed.
+          await sleepAfterFailure(recordLoginFailure({ email: cleanEmail, ip }));
+          loginAudit('auth.login.failure', { reason: 'bad_mfa', userId: dbUser._id.toString(), ip });
+          throw new Error(mfaGate.error);
+        }
+
         recordLoginSuccess({ email: cleanEmail });
+
+        // A recovery code is single-use. The gate cannot persist it (it only
+        // ever sees a lean object), so retire it here — after the password and
+        // the code itself have both been accepted.
+        if (mfaGate.method === 'backup_code' && mfaGate.consumedCodeHash) {
+          await User.updateOne(
+            { _id: dbUser._id },
+            {
+              $pull: { 'mfa.backupCodes': mfaGate.consumedCodeHash },
+              $set: { 'mfa.lastUsedAt': new Date() },
+            }
+          );
+        } else if (mfaGate.method === 'totp') {
+          await User.updateOne({ _id: dbUser._id }, { $set: { 'mfa.lastUsedAt': new Date() } });
+        }
+
+        // Denormalised telemetry: lets the account screen show "last login"
+        // without scanning the audit collection.
+        await User.updateOne(
+          { _id: dbUser._id },
+          { $set: { lastLoginAt: new Date(), lastLoginIp: ip } }
+        );
+
+        loginAudit('auth.login.success', {
+          userId: dbUser._id.toString(),
+          ip,
+          mfa: mfaGate.method || 'none',
+        });
+
+        const supporterActive = dbUser.role === 'admin' ||
+          !!(dbUser.supporter?.status &&
+            (!dbUser.supporter?.expiresAt || new Date(dbUser.supporter.expiresAt).getTime() > Date.now()));
+
+        return {
+          id: dbUser._id.toString(),
+          name: dbUser.name,
+          email: dbUser.email,
+          image: dbUser.image || null,
+          role: dbUser.role || 'user',
+          vaultConfigured: !!dbUser.vault?.isConfigured,
+          isSupporter: supporterActive,
+        };
+      }
+    }),
+
+    /**
+     * Passkey login.
+     *
+     * NextAuth v4 can only mint a session from inside a provider's
+     * authorize(), but WebAuthn verification happens in
+     * /api/auth/webauthn/authenticate/verify. So that route issues a
+     * single-use, 60-second ticket after a verified assertion, and this
+     * provider redeems it. The ticket is deleted on consumption, so capturing
+     * one is useless after the window or after a single use.
+     */
+    CredentialsProvider({
+      id: 'webauthn',
+      name: 'Passkey',
+      credentials: {
+        ticket: { label: 'Ticket', type: 'text' },
+      },
+      async authorize(credentials, req) {
+        const ticket = String(credentials?.ticket || '');
+        if (!ticket) throw new Error('Missing passkey ticket');
+
+        await connectDB(process.env.MONGODB_URI, true);
+        const userId = await consumeLoginTicket(ticket);
+        if (!userId) throw new Error('Passkey sign-in failed');
+
+        const dbUser = await User.findById(userId).lean();
+        if (!dbUser) throw new Error('Account not found');
 
         const supporterActive = dbUser.role === 'admin' ||
           !!(dbUser.supporter?.status &&
@@ -137,7 +256,7 @@ export const authOptions = {
      * signIn — runs once when the user authenticates with Google or Credentials.
      */
     async signIn({ user, account, profile }) {
-      if (account?.provider === "credentials") {
+      if (account?.provider === "credentials" || account?.provider === "webauthn") {
         user.dbId = user.id;
         return true;
       }

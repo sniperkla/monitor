@@ -12,6 +12,14 @@ import {
   CSRF_HEADER,
   CSRF_ERROR,
 } from "@/lib/csrf";
+import {
+  rateLimit,
+  ruleForPath,
+  bucketKey,
+  getClientIp,
+  isRateLimitExempt,
+  RATE_LIMIT_DISABLED,
+} from "@/lib/ratelimit";
 
 // AI training / scraping bots — blocked hard at the edge (403).
 // These bots often ignore robots.txt, so we enforce it in code as well.
@@ -163,8 +171,25 @@ function buildCsp(nonce) {
  */
 const PUBLIC_PATHS = new Set(["/"]);
 
+/**
+ * API routes that deliberately manage their own authentication and must stay
+ * reachable while signed out. Passkey login is the obvious case: the whole
+ * point of the flow is to authenticate a user who has no session yet.
+ *
+ * They still receive CSP, rate limiting and CSRF — only the session gate is
+ * skipped. Each handler performs its own verification.
+ */
+const SELF_AUTHENTICATING_PATHS = new Set([
+  "/api/auth/webauthn/authenticate/options",
+  "/api/auth/webauthn/authenticate/verify",
+]);
+
 function isPublicPath(pathname) {
   return PUBLIC_PATHS.has(pathname);
+}
+
+function isSelfAuthenticating(pathname) {
+  return SELF_AUTHENTICATING_PATHS.has(pathname);
 }
 
 /**
@@ -178,6 +203,47 @@ function isPublicPath(pathname) {
  * starting a deployment. We still run this middleware path so the request gets
  * CSP and the rest of the normal response handling.
  */
+/**
+ * Routes permitted to authenticate with a scoped API key instead of a session
+ * cookie.
+ *
+ * This is an allowlist, and a deliberately short one, because the direction of
+ * failure here is the opposite of rate limiting. Rate limiting is enforced
+ * centrally, so a new route is protected by default. Authentication cannot be:
+ * verifying a key needs the database, which the middleware does not have, so
+ * all it can do is *defer* verification to the route. Deferring for a route
+ * that then forgets to verify would be an authentication bypass.
+ *
+ * Therefore: every pattern added here must correspond to a handler that calls
+ * requireApiAuth() from @/lib/apiAuth as its first statement.
+ */
+const API_KEY_ROUTES = [
+  /^\/api\/connections(\/|$)/,
+];
+
+function hasApiKeyCredential(req) {
+  if (req.headers.get("x-api-key")) return true;
+  const auth = req.headers.get("authorization");
+  return !!auth && /^Bearer\s+/i.test(auth);
+}
+
+function isApiKeyRoute(pathname) {
+  return API_KEY_ROUTES.some((re) => re.test(pathname));
+}
+
+/** Short, non-reversible bucket id for a key-authenticated caller. */
+async function credentialBucketId(raw) {
+  try {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(raw));
+    const bytes = new Uint8Array(digest);
+    let hex = "";
+    for (let i = 0; i < 8; i++) hex += bytes[i].toString(16).padStart(2, "0");
+    return `key:${hex}`;
+  } catch {
+    return "key:unknown";
+  }
+}
+
 function isExternalDeployTrigger(req) {
   if (req.nextUrl.pathname !== "/api/deploy/trigger") return false;
   return ["token", "webhook_token"].some((key) => {
@@ -218,12 +284,84 @@ export default async function wrappedProxy(req) {
     }
   }
 
+  // A scoped API key is a credential too, but the middleware cannot validate it
+  // (no database). Two things happen here and the real check happens later:
+  //   1. The auth gate is deferred for allowlisted routes only — the route MUST
+  //      call requireApiAuth(), which does the actual verification.
+  //   2. The rate-limit bucket is keyed on a hash of the credential rather than
+  //      the IP, so a key holder rotating source addresses does not get a fresh
+  //      bucket each time.
+  const apiKeyDeferred =
+    !authToken && hasApiKeyCredential(req) && isApiKeyRoute(pathname);
+
+  if (apiKeyDeferred) {
+    const raw =
+      req.headers.get("x-api-key") ||
+      req.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ||
+      "";
+    userId = await credentialBucketId(raw);
+  }
+
+  // -----------------------------------------------------------------------
+  // Rate limiting — state-changing API requests
+  // -----------------------------------------------------------------------
+  //
+  // Enforced here rather than inside each handler for two reasons:
+  //   1. Coverage. ~104 of ~150 routes mutate state. Central enforcement means
+  //      a newly added route is limited by default instead of shipping bare.
+  //   2. Cost. Rejecting before the auth gate and before route code means a
+  //      flood never reaches mongoose or the SSH layer.
+  //
+  // Only unsafe methods are limited. Read endpoints are deliberately left
+  // alone: this app polls (log streaming, server monitor, connection status)
+  // and an IP-wide read cap would lock out every user behind one NAT.
+  let rateLimitInfo = null;
+  if (
+    UNSAFE_METHODS.has(req.method) &&
+    pathname.startsWith("/api/") &&
+    !isRateLimitExempt(pathname) &&
+    !RATE_LIMIT_DISABLED
+  ) {
+    const rule = ruleForPath(pathname);
+    const result = await rateLimit(
+      bucketKey({ userId, ip: getClientIp(req), rule, pathname }),
+      rule
+    );
+    rateLimitInfo = result;
+
+    if (!result.success) {
+      const retryAfter = Math.max(1, Math.ceil(result.reset / 1000));
+      if (process.env.NODE_ENV !== "production") {
+        console.warn(
+          `[ratelimit] rejected ${req.method} ${pathname} (${result.source}, key user:${userId || "anon"})`
+        );
+      }
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Too many requests. Please slow down and try again shortly.",
+        },
+        {
+          status: 429,
+          headers: {
+            "Content-Security-Policy": csp,
+            ...CROSS_ORIGIN_HEADERS,
+            "Retry-After": String(retryAfter),
+            "X-RateLimit-Limit": String(result.limit),
+            "X-RateLimit-Remaining": String(result.remaining),
+            "X-RateLimit-Reset": String(retryAfter),
+          },
+        }
+      );
+    }
+  }
+
   // Public pages skip the auth gate but still receive every security header.
   // For protected requests, enforce auth explicitly. The previous
   // `authorized` callback returned a Response object, which NextAuth treats as
   // truthy; that could let an unauthenticated request fall through to CSRF and
   // receive 403 instead of the documented 401 / sign-in redirect.
-  if (!isPublicPath(pathname) && !authToken && !externalDeployTrigger) {
+  if (!isPublicPath(pathname) && !isSelfAuthenticating(pathname) && !authToken && !externalDeployTrigger && !apiKeyDeferred) {
     if (pathname.startsWith("/api/")) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401, headers: {
         "Content-Security-Policy": csp,
@@ -283,6 +421,16 @@ export default async function wrappedProxy(req) {
 
   const response = NextResponse.next({ request: { headers: requestHeaders } });
   response.headers.set("Content-Security-Policy", csp);
+
+  // Surface the bucket state so clients can back off before being rejected.
+  if (rateLimitInfo) {
+    response.headers.set("X-RateLimit-Limit", String(rateLimitInfo.limit));
+    response.headers.set("X-RateLimit-Remaining", String(rateLimitInfo.remaining));
+    response.headers.set(
+      "X-RateLimit-Reset",
+      String(Math.max(0, Math.ceil(rateLimitInfo.reset / 1000)))
+    );
+  }
 
   // Mint the CSRF cookie lazily: on first visit, and whenever the existing
   // token no longer matches the current user (login / logout / user switch).

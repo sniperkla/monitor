@@ -5,6 +5,7 @@ import SystemSetting from '@/models/SystemSetting';
 import { DEFAULT_GRANT_DAYS } from '@/utils/supporter';
 import { logger } from '@/lib/logger';
 import { requireAdmin } from '@/lib/requireAdmin';
+import { auditLog } from '@/lib/auditLog';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,9 +24,11 @@ function generateCode() {
  * Body: { count?, planDays? }
  */
 export async function POST(request) {
+  let adminUser = null;
   try {
-    const { error } = await requireAdmin();
-    if (error) return error;
+    const auth = await requireAdmin(request);
+    if (auth.error) return auth.error;
+    adminUser = auth.user;
 
     const body = await request.json().catch(() => ({}));
     const count = Math.min(Math.max(Number(body.count) || 1, 1), 100);
@@ -65,12 +68,31 @@ export async function POST(request) {
       { upsert: true, new: true }
     );
 
+    // Count and plan only — the codes themselves are bearer-equivalent
+    // credentials and must never enter the audit trail.
+    await auditLog({
+      req: request,
+      action: 'admin.supporters.codes.generate',
+      userId: String(adminUser?._id || ''),
+      userEmail: adminUser?.email,
+      detail: { count: fresh.length, planDays, totalAfter: trimmed.length },
+      status: 'success',
+    });
+
     return NextResponse.json({
       success: true,
       planDays,
       codes: fresh.map((f) => f.code),
     });
   } catch (error) {
+    await auditLog({
+      req: request,
+      action: 'admin.supporters.codes.generate',
+      userId: String(adminUser?._id || ''),
+      userEmail: adminUser?.email,
+      detail: { reason: 'error', error: String(error?.message || '').slice(0, 200) },
+      status: 'failure',
+    });
     logger.error('Admin codes API error:', error);
     return NextResponse.json({ success: false, error: 'Internal Server Error' }, { status: 500 });
   }
@@ -79,10 +101,12 @@ export async function POST(request) {
 /**
  * GET /api/admin/supporters/codes — code stats (never the codes themselves).
  */
-export async function GET() {
+export async function GET(request) {
+  let adminUser = null;
   try {
-    const { error } = await requireAdmin();
-    if (error) return error;
+    const auth = await requireAdmin(request);
+    if (auth.error) return auth.error;
+    adminUser = auth.user;
 
     await connectDB(process.env.MONGODB_URI, true);
     const setting = await SystemSetting.findOne({ key: CODES_KEY });

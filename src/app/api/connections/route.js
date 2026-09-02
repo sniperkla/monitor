@@ -6,12 +6,16 @@ import connectDB from '@/lib/mongodb';
 import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import { encrypt } from '@/utils/encryption';
 import { logger } from '@/lib/logger';
+import { requireApiAuth } from '@/lib/apiAuth';
+import { auditLog } from '@/lib/auditLog';
 
 // GET all connections
 export async function GET(request) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    // Accepts either a browser session or a scoped API key. A key must carry
+    // `connections:read`; a session is unrestricted, as it always has been.
+    const auth = await requireApiAuth(request, { scopes: ['connections:read'] });
+    if (!auth.ok) return auth.response;
 
     const clientIP = request.headers.get('x-forwarded-for') || 'unknown';
     const rateCheck = checkRateLimit(`connections_get:${clientIP}`, 200);
@@ -33,12 +37,12 @@ export async function GET(request) {
       throw dbErr;
     }
 
-    const repo = new ConnectionRepository(db, session?.user?.id || session?.user?.sub || null);
+    const repo = new ConnectionRepository(db, auth.userId);
     await repo.init();
     let connections = await repo.findAll();
 
     // Filter localhost connections: only show if matching relay is active
-    const userId = session.user?.id || session.user?.sub;
+    const userId = auth.userId;
     const userRelays = global.__activeRelays?.get(userId);
     const activeRelayNames = new Set();
     if (userRelays instanceof Map) {
@@ -95,8 +99,10 @@ export async function GET(request) {
 
 // POST create new connection
 export async function POST(request) {
+  // Outside the try so the catch can still attribute a failure to an actor.
+  let session = null;
   try {
-    const session = await getServerSession(authOptions);
+    session = await getServerSession(authOptions);
     if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
     const clientIP = request.headers.get('x-forwarded-for') || 'unknown';
@@ -136,11 +142,41 @@ export async function POST(request) {
       relayName: body.relayName || null,
     });
 
+    // Log the identifying metadata only. Credentials were encrypted above and
+    // must never reach the audit trail — `hasPassword`-style booleans tell a
+    // reviewer what kind of secret was attached without storing it.
+    await auditLog({
+      req: request,
+      action: 'connection.create',
+      userId: String(session?.user?.id || session?.user?.sub || ''),
+      userEmail: session?.user?.email,
+      detail: {
+        name: connection.name,
+        type: connection.type || 'ssh',
+        dbProvider: connection.dbProvider || 'mongodb',
+        host: connection.host,
+        port: connection.port,
+        authType: body.authType,
+        hasPassword: !!connection.password,
+        hasPrivateKey: !!connection.privateKey,
+      },
+      target: String(connection._id),
+      status: 'success',
+    });
+
     return NextResponse.json(
       { success: true, data: { _id: connection._id, name: connection.name } },
       { status: 201 }
     );
   } catch (error) {
+    await auditLog({
+      req: request,
+      action: 'connection.create',
+      userId: String(session?.user?.id || session?.user?.sub || ''),
+      userEmail: session?.user?.email,
+      detail: { reason: 'error', error: String(error?.message || '').slice(0, 200) },
+      status: 'failure',
+    });
     return NextResponse.json(
       { success: false, error: error.message },
       { status: 500 }

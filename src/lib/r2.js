@@ -28,7 +28,7 @@ function getClient() {
   return _client;
 }
 
-export async function uploadStreamToR2(key, readableStream, contentType = 'application/gzip') {
+export async function uploadStreamToR2(key, readableStream, contentType = 'application/gzip', metadata = null) {
   const client = getClient();
   const upload = new Upload({
     client,
@@ -37,6 +37,10 @@ export async function uploadStreamToR2(key, readableStream, contentType = 'appli
       Key: key,
       Body: readableStream,
       ContentType: contentType,
+      // Custom metadata rides with the object. Used to make envelope-encrypted
+      // backups self-describing (wrapped key + algorithm), so a download does
+      // not need a database lookup to know how to decrypt.
+      ...(metadata ? { Metadata: metadata } : {}),
     },
     queueSize: 4,
     partSize: 10 * 1024 * 1024, // 10MB parts
@@ -44,6 +48,25 @@ export async function uploadStreamToR2(key, readableStream, contentType = 'appli
 
   await upload.done();
   return { key, bucket: R2_BUCKET_NAME };
+}
+
+/**
+ * Stream an object out of R2 together with its metadata.
+ *
+ * @returns {Promise<{stream: import('stream').Readable, metadata: object, contentLength: number}>}
+ */
+export async function downloadStreamFromR2(key) {
+  const client = getClient();
+  const res = await client.send(new GetObjectCommand({
+    Bucket: R2_BUCKET_NAME,
+    Key: key,
+  }));
+  if (!res.Body) throw new Error('Empty object body');
+  return {
+    stream: res.Body,
+    metadata: res.Metadata || {},
+    contentLength: res.ContentLength ?? 0,
+  };
 }
 
 export async function getPresignedUrl(key, expiresIn = 3600) {

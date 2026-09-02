@@ -7,6 +7,7 @@ import { createHash } from 'crypto';
 import { logger } from '@/lib/logger';
 import { checkRateLimit } from '@/lib/serverGuard';
 import { neutralizeSkillFences } from '@/utils/promptSafety';
+import { auditLog } from '@/lib/auditLog';
 
 export const dynamic = 'force-dynamic';
 
@@ -77,10 +78,20 @@ function validateSkillId(value) {
 }
 
 export async function POST(req) {
+  // Declared outside the try so the catch block can still attribute the failure
+  // to an actor when the throw happens after authentication.
+  let session = null;
   try {
-    const session = await getServerSession(authOptions);
+    session = await getServerSession(authOptions);
 
     if (!session) {
+      await auditLog({
+        req,
+        action: 'skill.install',
+        userId: null,
+        detail: { reason: 'unauthenticated' },
+        status: 'failure',
+      });
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -89,11 +100,26 @@ export async function POST(req) {
     const rawUserId = session.user?.id || session.user?.email;
     const userId = fsSafeSegment(rawUserId);
     if (!userId) {
+      await auditLog({
+        req,
+        action: 'skill.install',
+        userId: null,
+        detail: { reason: 'unresolved_owner' },
+        status: 'failure',
+      });
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
     const rateCheck = checkRateLimit(`skills-install:${userId}`, INSTALL_RATE_LIMIT);
     if (!rateCheck.allowed) {
+      await auditLog({
+        req,
+        action: 'skill.install',
+        userId,
+        userEmail: session.user?.email,
+        detail: { reason: 'rate_limited', resetIn: rateCheck.resetIn },
+        status: 'failure',
+      });
       return NextResponse.json(
         {
           success: false,
@@ -113,6 +139,14 @@ export async function POST(req) {
     // that could corrupt the YAML frontmatter or confuse audit logs.
     const safeId = validateSkillId(id);
     if (!safeId) {
+      await auditLog({
+        req,
+        action: 'skill.install',
+        userId,
+        userEmail: session.user?.email,
+        detail: { reason: 'invalid_id', rawId: String(id).slice(0, 120) },
+        status: 'failure',
+      });
       return NextResponse.json(
         { success: false, error: 'Invalid skill id. Only alphanumeric characters, hyphens, and underscores are allowed.' },
         { status: 400 }
@@ -120,16 +154,44 @@ export async function POST(req) {
     }
 
     if (typeof content !== 'string' || Buffer.byteLength(content, 'utf8') > MAX_CONTENT_BYTES) {
+      await auditLog({
+        req,
+        action: 'skill.install',
+        userId,
+        userEmail: session.user?.email,
+        detail: { reason: 'content_too_large', id: safeId },
+        status: 'failure',
+      });
       return NextResponse.json({ success: false, error: 'Content too large' }, { status: 413 });
     }
 
     // Reject content whose only plausible purpose is to override agent rules.
     const injectionHit = INJECTION_PATTERNS.find((re) => re.test(content));
     if (injectionHit) {
+      const patternIndex = INJECTION_PATTERNS.indexOf(injectionHit);
+      // Hash rather than store: the rejected payload is attacker-controlled, and
+      // re-writing it into the audit collection would preserve it long after the
+      // request is gone. The hash is enough to correlate repeat attempts by the
+      // same actor.
+      const rejectedHash = createHash('sha256').update(String(content), 'utf8').digest('hex').slice(0, 16);
       logger.warn('[Skills Install] Rejected content matching injection pattern', {
         userId,
         pattern: String(injectionHit),
         name: String(name).slice(0, 80),
+      });
+      await auditLog({
+        req,
+        action: 'skill.install.injection_rejected',
+        userId,
+        userEmail: session.user?.email,
+        detail: {
+          patternIndex,
+          id: safeId,
+          name: String(name).slice(0, 80),
+          sha256_16: rejectedHash,
+          bytes: Buffer.byteLength(String(content), 'utf8'),
+        },
+        status: 'failure',
       });
       return NextResponse.json(
         {
@@ -186,6 +248,21 @@ export async function POST(req) {
       sha256_16: contentHash,
     });
 
+    await auditLog({
+      req,
+      action: 'skill.install',
+      userId,
+      userEmail: session.user?.email,
+      detail: {
+        id: safeId,
+        name: safeName,
+        bytes: Buffer.byteLength(finalContent, 'utf8'),
+        sha256_16: contentHash,
+      },
+      target: safeName,
+      status: 'success',
+    });
+
     // NOTE: the absolute filesystem path is deliberately no longer returned.
     return NextResponse.json({
       success: true,
@@ -194,6 +271,14 @@ export async function POST(req) {
     });
   } catch (error) {
     logger.error('[SkillsMP Install] Error:', error);
+    const actorId = session?.user?.id ? fsSafeSegment(session.user.id) : null;
+    await auditLog({
+      req,
+      action: 'skill.install',
+      userId: actorId,
+      detail: { reason: 'error', error: String(error?.message || '').slice(0, 200) },
+      status: 'failure',
+    });
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

@@ -1,8 +1,35 @@
 const crypto = require('crypto');
 
+/**
+ * Resolve the app-wide encryption key.
+ *
+ * The previous code ended with a hardcoded literal fallback. That is not a
+ * "development convenience" — it is a published key. It lives in the git
+ * history and in every clone, so any deployment that ever ran without
+ * ENCRYPTION_KEY set produced ciphertext that anyone can decrypt with the
+ * string in this file. Storing a secret under a key that is public knowledge
+ * is equivalent, security-wise, to storing it in plain text.
+ *
+ * Production now fails closed: if no key is configured, encryption throws
+ * rather than silently using a known value. Failing loudly at the point of
+ * misconfiguration is far better than quietly shipping breakable ciphertext.
+ * Local development keeps the literal so `npm run dev` works out of the box.
+ */
+function getSecret() {
+  const secret = process.env.ENCRYPTION_KEY || process.env.NEXTAUTH_SECRET;
+  if (secret) return String(secret);
+
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(
+      'ENCRYPTION_KEY is not configured. Refusing to encrypt with a ' +
+      'hardcoded fallback key in production.'
+    );
+  }
+  return 'development_fallback_secret_key_32_chars';
+}
+
 function getKey() {
-  const secret = process.env.ENCRYPTION_KEY || process.env.NEXTAUTH_SECRET || 'development_fallback_secret_key_32_chars';
-  return crypto.createHash('sha256').update(String(secret)).digest();
+  return crypto.createHash('sha256').update(getSecret()).digest();
 }
 
 function getOldKey() {
@@ -21,8 +48,13 @@ function encrypt(text) {
     encrypted = Buffer.concat([encrypted, cipher.final()]);
     return iv.toString('hex') + ':' + encrypted.toString('hex');
   } catch (error) {
-    console.error('Encryption error:', error);
-    return text; 
+    // The previous implementation returned the input unchanged on failure.
+    // That silently downgraded "encrypt this secret" to "store this secret in
+    // plain text" — the caller had no way to tell the two apart, and a missing
+    // ENCRYPTION_KEY would have written every connection password as
+    // cleartext. Storage code must never degrade to plaintext; it must fail.
+    console.error('Encryption error:', error?.message);
+    throw new Error('Encryption failed');
   }
 }
 
@@ -54,8 +86,9 @@ function encryptWithPassword(text, password) {
     
     return salt.toString('hex') + ':' + iv.toString('hex') + ':' + encrypted.toString('hex');
   } catch (error) {
-    console.error('Password encryption error:', error);
-    return text;
+    // Same reasoning as encrypt(): never fall back to the plaintext input.
+    console.error('Password encryption error:', error?.message);
+    throw new Error('Encryption failed');
   }
 }
 

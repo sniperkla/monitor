@@ -9,6 +9,7 @@ import fs from 'fs';
 import path from 'path';
 import { logger } from '@/lib/logger';
 import { checkRateLimit } from '@/lib/serverGuard';
+import { auditLog } from '@/lib/auditLog';
 
 const RECOVERY_RATE_LIMIT = 3;
 
@@ -20,10 +21,19 @@ const RECOVERY_RATE_LIMIT = 3;
  * Rate limited: max 1 request per 2 minutes.
  */
 export async function POST(request) {
+  // Outside the try so the catch can still attribute the failure.
+  let session = null;
   try {
     const resend = new Resend(process.env.RESEND_API_KEY);
-    const session = await getServerSession(authOptions);
+    session = await getServerSession(authOptions);
     if (!session) {
+      await auditLog({
+        req: request,
+        action: 'vault.recovery.request',
+        userId: null,
+        detail: { reason: 'unauthenticated' },
+        status: 'failure',
+      });
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -31,6 +41,14 @@ export async function POST(request) {
     const clientIp = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
     const rateCheck = checkRateLimit(`vault-recovery:${userKey}:${clientIp}`, RECOVERY_RATE_LIMIT);
     if (!rateCheck.allowed) {
+      await auditLog({
+        req: request,
+        action: 'vault.recovery.rate_limited',
+        userId: String(session.user?.id || ''),
+        userEmail: session.user?.email,
+        detail: { resetIn: rateCheck.resetIn },
+        status: 'failure',
+      });
       return NextResponse.json(
         { success: false, error: `Too many recovery-code requests. Please wait ${Math.ceil(rateCheck.resetIn / 1000)}s.` },
         { status: 429, headers: { 'Retry-After': String(Math.ceil(rateCheck.resetIn / 1000)) } }
@@ -41,6 +59,14 @@ export async function POST(request) {
     const user = await User.findOne({ email: session.user.email });
 
     if (!user) {
+      await auditLog({
+        req: request,
+        action: 'vault.recovery.request',
+        userId: String(session.user?.id || ''),
+        userEmail: session.user?.email,
+        detail: { reason: 'user_not_found' },
+        status: 'failure',
+      });
       return NextResponse.json({ success: false, error: 'User not found' }, { status: 404 });
     }
 
@@ -49,12 +75,25 @@ export async function POST(request) {
       const elapsed = Date.now() - new Date(user.recovery.lastRequestAt).getTime();
       if (elapsed < 2 * 60 * 1000) {
         const remaining = Math.ceil((2 * 60 * 1000 - elapsed) / 1000);
+        await auditLog({
+          req: request,
+          action: 'vault.recovery.cooldown',
+          userId: String(user._id),
+          userEmail: session.user?.email,
+          detail: { remainingSeconds: remaining },
+          status: 'failure',
+        });
         return NextResponse.json({ 
           success: false, 
           error: `Please wait ${remaining} seconds before requesting a new code` 
         }, { status: 429 });
       }
     }
+
+    // Set if the development escape hatch below actually fires. Recorded in the
+    // audit entry because "a plaintext recovery code was written to disk" is
+    // exactly the kind of thing that should be visible after the fact.
+    let debugCodeWritten = false;
 
     // Generate 6-digit recovery code
     const recoveryCode = crypto.randomInt(100000, 999999).toString();
@@ -101,19 +140,33 @@ export async function POST(request) {
       </div>
     `;
 
-    // ALWAYS log/write for debugging until we confirm emails are working
-    const debugInfo = `
+    logger.info(`[Vault Recovery] Code generated for user`);
+
+    // Writing the plaintext code to RECOVERY_CODE.txt in the working directory
+    // turned a secrets-in-email control into a secrets-on-disk hole: the file
+    // is world-readable to anything running as the app user, is served from
+    // process.cwd() (one misconfigured static route away from being public),
+    // and lands in container images and backups. It also outlives the 15-minute
+    // expiry that the code itself is subject to.
+    //
+    // The escape hatch is retained for local development only, and requires an
+    // explicit opt-in on top of NODE_ENV — matching the CSRF_ENFORCE
+    // kill-switch convention used elsewhere in this codebase.
+    if (process.env.NODE_ENV !== 'production' && process.env.DEBUG_EXPOSE_RECOVERY_CODE === '1') {
+      const debugInfo = `
 ============================================
 🔐 RECOVERY CODE for ${session.user.email}
 Code: ${recoveryCode}
 Time: ${new Date().toLocaleString()}
 ============================================
 `;
-    logger.info(`[Vault Recovery] Code generated for user`);
-    try {
-      fs.writeFileSync(path.join(process.cwd(), 'RECOVERY_CODE.txt'), debugInfo);
-    } catch (fsErr) {
-      logger.error('Failed to write RECOVERY_CODE.txt');
+      try {
+        fs.writeFileSync(path.join(process.cwd(), 'RECOVERY_CODE.txt'), debugInfo);
+        logger.warn('[Vault Recovery] DEBUG: plaintext code written to RECOVERY_CODE.txt');
+        debugCodeWritten = true;
+      } catch (fsErr) {
+        logger.error('Failed to write RECOVERY_CODE.txt');
+      }
     }
 
     try {
@@ -131,12 +184,33 @@ Time: ${new Date().toLocaleString()}
     const parts = session.user.email.split('@');
     const masked = parts[0].substring(0, 2) + '***@' + parts[1];
 
+    await auditLog({
+      req: request,
+      action: 'vault.recovery.request',
+      userId: String(user._id),
+      userEmail: session.user?.email,
+      detail: {
+        debugCodeWritten,
+        expiresInMinutes: 15,
+      },
+      target: String(user._id),
+      status: 'success',
+    });
+
     return NextResponse.json({ 
       success: true, 
       message: `Recovery code sent to ${masked}`,
       maskedEmail: masked,
     });
   } catch (error) {
+    await auditLog({
+      req: request,
+      action: 'vault.recovery.request',
+      userId: String(session?.user?.id || ''),
+      userEmail: session?.user?.email,
+      detail: { reason: 'error', error: String(error?.message || '').slice(0, 200) },
+      status: 'failure',
+    });
     logger.error('Recovery email error:', error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }

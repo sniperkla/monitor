@@ -70,10 +70,12 @@ async function findTargetUser(userId, email) {
  * POST actions take) plus a masked email/initials so the admin can still tell
  * rows apart. See src/utils/pii.js.
  */
-export async function GET() {
+export async function GET(request) {
+  let adminUser = null;
   try {
-    const { error } = await requireAdmin();
-    if (error) return error;
+    const auth = await requireAdmin(request);
+    if (auth.error) return auth.error;
+    adminUser = auth.user;
 
     await connectDB(process.env.MONGODB_URI, true);
 
@@ -141,8 +143,25 @@ export async function GET() {
         receivedAt: p.receivedAt,
       }));
 
+    await auditLog({
+      req: request,
+      action: 'admin.supporters.list',
+      userId: String(adminUser?._id || ''),
+      userEmail: adminUser?.email,
+      detail: { supporters: supporters.length, requests: requests.length },
+      status: 'success',
+    });
+
     return NextResponse.json({ success: true, supporters, requests, kofiUnmatched, defaultGrantDays: DEFAULT_GRANT_DAYS });
   } catch (error) {
+    await auditLog({
+      req: request,
+      action: 'admin.supporters.list',
+      userId: String(adminUser?._id || ''),
+      userEmail: adminUser?.email,
+      detail: { reason: 'error', error: String(error?.message || '').slice(0, 200) },
+      status: 'failure',
+    });
     logger.error('Admin supporters API error:', error);
     return NextResponse.json({ success: false, error: 'Internal Server Error' }, { status: 500 });
   }
@@ -156,9 +175,11 @@ export async function GET() {
  * accepted for backwards compatibility but never echoed back in a response.
  */
 export async function POST(request) {
+  let adminUser = null;
   try {
-    const { user: adminUser, error } = await requireAdmin();
-    if (error) return error;
+    const auth = await requireAdmin(request);
+    if (auth.error) return auth.error;
+    adminUser = auth.user;
     const adminEmail = adminUser?.email || '';
 
     const body = await request.json().catch(() => ({}));
@@ -172,6 +193,14 @@ export async function POST(request) {
     await connectDB(process.env.MONGODB_URI, true);
     const targetUser = await findTargetUser(userId, email);
     if (!targetUser) {
+      await auditLog({
+        req: request,
+        action: 'admin.supporters.action',
+        userId: String(adminUser?._id || ''),
+        userEmail: adminEmail,
+        detail: { action, reason: 'user_not_found', suppliedUserId: userId.slice(0, 24) },
+        status: 'failure',
+      });
       return NextResponse.json({ success: false, error: 'User not found' }, { status: 404 });
     }
 
@@ -179,6 +208,30 @@ export async function POST(request) {
     // cache invalidation). It is never returned to the client.
     const targetEmail = String(targetUser.email || '').toLowerCase();
     const targetLabel = maskEmail(targetEmail) || String(targetUser._id);
+
+    // Shared audit shape. `targetLabel` is already masked, so the trail records
+    // which account was acted on without re-creating the plaintext PII that
+    // this endpoint was specifically hardened to stop exposing.
+    // The action name is whitelisted rather than interpolated: `action` comes
+    // from the request body, and letting it flow into the audit collection
+    // would let an admin (or anyone who reaches this route) invent action
+    // names and pollute the trail that other people rely on for triage.
+    const KNOWN_ACTIONS = ['grant', 'revoke', 'dismiss'];
+    const auditAdminAction = (status, detail) =>
+      auditLog({
+        req: request,
+        action: `admin.supporters.${KNOWN_ACTIONS.includes(action) ? action : 'unknown'}`,
+        userId: String(adminUser?._id || ''),
+        userEmail: adminEmail,
+        detail: {
+          targetUserId: String(targetUser._id),
+          targetLabel,
+          requestedAction: String(action).slice(0, 40),
+          ...detail,
+        },
+        target: String(targetUser._id),
+        status,
+      });
 
     if (action === 'grant') {
       const days = Number(body.days) > 0 ? Number(body.days) : DEFAULT_GRANT_DAYS;
@@ -196,6 +249,7 @@ export async function POST(request) {
       };
       await targetUser.save();
       invalidateSupporter(targetEmail);
+      await auditAdminAction('success', { days, expiresAt: newExpiry?.toISOString?.() || null });
       return NextResponse.json({ success: true, message: `Granted ${days} day(s) to ${targetLabel}`, expiresAt: newExpiry });
     }
 
@@ -206,6 +260,7 @@ export async function POST(request) {
       invalidateSupporter(targetEmail);
       if (global.__relaySupporterCache instanceof Map) global.__relaySupporterCache.clear();
       killUserRelays(targetEmail, targetUser);
+      await auditAdminAction('success', { relaysKilled: true });
       return NextResponse.json({ success: true, message: `Revoked supporter access for ${targetLabel}` });
     }
 
@@ -213,11 +268,21 @@ export async function POST(request) {
       const s = targetUser.supporter || {};
       targetUser.supporter = { ...(s || {}), request: { ...(s.request || {}), status: 'dismissed' } };
       await targetUser.save();
+      await auditAdminAction('success', {});
       return NextResponse.json({ success: true, message: `Dismissed request from ${targetLabel}` });
     }
 
+    await auditAdminAction('failure', { reason: 'unknown_action' });
     return NextResponse.json({ success: false, error: 'Unknown action' }, { status: 400 });
   } catch (error) {
+    await auditLog({
+      req: request,
+      action: 'admin.supporters.action',
+      userId: String(adminUser?._id || ''),
+      userEmail: adminUser?.email,
+      detail: { reason: 'error', error: String(error?.message || '').slice(0, 200) },
+      status: 'failure',
+    });
     logger.error('Admin supporters POST error:', error);
     return NextResponse.json({ success: false, error: 'Internal Server Error' }, { status: 500 });
   }

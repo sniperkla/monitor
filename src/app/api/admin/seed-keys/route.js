@@ -5,11 +5,14 @@ import connectDB from '@/lib/mongodb';
 import SystemSetting from '@/models/SystemSetting';
 import { logger } from '@/lib/logger';
 import { requireAdmin } from '@/lib/requireAdmin';
+import { auditLog } from '@/lib/auditLog';
 
 export async function GET(req) {
+  let adminUser = null;
   try {
-    const { error } = await requireAdmin();
-    if (error) return error;
+    const auth = await requireAdmin(req);
+    if (auth.error) return auth.error;
+    adminUser = auth.user;
 
     // Ensure DB connection
     await connectDB();
@@ -52,12 +55,32 @@ export async function GET(req) {
 
     await setting.save();
 
+    // Count only. These are live third-party API credentials — even the
+    // 8-character prefix returned to the client is more than the audit trail
+    // needs to answer "who reseeded the key pool, and when".
+    await auditLog({
+      req,
+      action: 'admin.ai_api_keys.seed',
+      userId: String(adminUser?._id || ''),
+      userEmail: adminUser?.email,
+      detail: { count: existingKeys.length },
+      status: 'success',
+    });
+
     return NextResponse.json({ 
       success: true, 
       message: `Seeded ${existingKeys.length} keys`, 
       keys: existingKeys.map(k => k.substring(0, 8) + '...') 
     });
   } catch (err) {
+    await auditLog({
+      req,
+      action: 'admin.ai_api_keys.seed',
+      userId: String(adminUser?._id || ''),
+      userEmail: adminUser?.email,
+      detail: { reason: 'error', error: String(err?.message || '').slice(0, 200) },
+      status: 'failure',
+    });
     logger.error('Error seeding keys:', err);
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });
   }

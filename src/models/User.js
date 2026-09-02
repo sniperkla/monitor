@@ -65,6 +65,29 @@ const UserSchema = new mongoose.Schema({
     lastRequestAt: { type: Date, default: null },
   },
 
+  // === MFA (TOTP second factor) ===
+  // Enforced at login time for admin and supporter accounts (see src/lib/mfa.js).
+  mfa: {
+    enabled: { type: Boolean, default: false },
+    // TOTP secret, AES-encrypted at rest with the app ENCRYPTION_KEY. A raw
+    // database dump must not yield a working second factor.
+    secret: { type: String, default: '' },
+    // Staged during enrolment; promoted to `secret` only after the user proves
+    // they can produce a valid code from it. Prevents an interrupted setup
+    // from leaving the account with an unverified (and unusable) factor.
+    pendingSecret: { type: String, default: '' },
+    enrolledAt: { type: Date, default: null },
+    lastUsedAt: { type: Date, default: null },
+    // SHA-256 hashes of single-use recovery codes (plaintext shown once).
+    backupCodes: [{ type: String }],
+  },
+
+  // === SECURITY TELEMETRY ===
+  // Denormalised "last successful login" so the account screen can show it
+  // without scanning audit_logs.
+  lastLoginAt: { type: Date, default: null },
+  lastLoginIp: { type: String, default: null },
+
   // === LEGACY (kept for backward compatibility during migration) ===
   privateDbUri: {
     type: String,

@@ -11,8 +11,13 @@
  *
  * Usage:
  *   import { requireAdmin } from '@/lib/requireAdmin';
- *   const { session, user, error } = await requireAdmin();
+ *   const { session, user, error } = await requireAdmin(req);
  *   if (error) return error;
+ *
+ * Pass the request so denials can be audited with an IP and user-agent. Every
+ * admin route funnels through here, which makes it the only place that can see
+ * all of them — a rejected admin call is exactly the signal you want stored,
+ * and it cannot be wired per-route without duplicating this five times.
  */
 
 import { NextResponse } from 'next/server';
@@ -20,6 +25,7 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import connectDB from '@/lib/mongodb';
 import User from '@/models/User';
+import { auditLog } from '@/lib/auditLog';
 
 /**
  * Verify that the current request is from an authenticated admin.
@@ -32,13 +38,21 @@ import User from '@/models/User';
  * it is not an authorization bypass. A matching email without the persisted
  * admin role must never grant access to admin routes.
  *
+ * @param {Request} [req] Optional Next.js request, used for the audit trail.
  * @returns {{ session, user, error?: NextResponse }}
  *   On success: { session, user } where user is the Mongoose document.
  *   On failure: { error } — a NextResponse to return immediately.
  */
-export async function requireAdmin() {
+export async function requireAdmin(req) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
+    await auditLog({
+      req,
+      action: 'admin.access_denied',
+      userId: null,
+      detail: { reason: 'unauthenticated' },
+      status: 'failure',
+    });
     return {
       error: NextResponse.json(
         { success: false, error: 'Unauthorized' },
@@ -54,6 +68,16 @@ export async function requireAdmin() {
   const isAdminByRole = user?.role === 'admin';
 
   if (!isAdminByRole) {
+    // An authenticated non-admin reaching for an admin route is either a bug or
+    // a privilege-escalation attempt. Either way it belongs in the trail.
+    await auditLog({
+      req,
+      action: 'admin.access_denied',
+      userId: String(session.user.id),
+      userEmail: session.user?.email,
+      detail: { reason: 'not_admin', role: user?.role || null },
+      status: 'failure',
+    });
     return {
       error: NextResponse.json(
         { success: false, error: 'Forbidden: Admin access required' },

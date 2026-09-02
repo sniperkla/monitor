@@ -18,6 +18,7 @@ const readSrc = (rel) => fs.readFileSync(path.join(here, '..', rel), 'utf8');
 const proxy = readSrc('src/proxy.js');
 const trigger = readSrc('src/app/api/deploy/trigger/route.js');
 const database = readSrc('src/app/api/settings/database/route.js');
+const connections = readSrc('src/app/api/connections/route.js');
 
 test('matcher includes settings/database', () => {
   const matcher = proxy.slice(proxy.indexOf('export const config'));
@@ -36,10 +37,53 @@ test('matcher includes deploy/trigger', () => {
 });
 
 test('proxy still authenticates protected API requests', () => {
-  assert.match(proxy, /if \(!isPublicPath\(pathname\) && !authToken && !externalDeployTrigger\)/,
+  // Every term in this condition is a hole in the auth gate, so the assertion
+  // names all of them. Adding a new bypass without updating this line is
+  // exactly the regression this test exists to catch.
+  assert.match(proxy,
+    /if \(!isPublicPath\(pathname\) && !isSelfAuthenticating\(pathname\) && !authToken && !externalDeployTrigger && !apiKeyDeferred\)/,
     'missing auth returns through the normal 401 API path');
   assert.ok(proxy.includes('Content-Security-Policy'), 'protected responses receive CSP');
   assert.ok(proxy.includes('verifyCsrfPair'), 'unsafe requests receive CSRF validation');
+});
+
+test('self-authenticating bypass is limited to passkey login', () => {
+  // Passkey auth must reach its own handler while signed out — but "signed out
+  // route that skips the gate" is a dangerous thing to leave unbounded. The
+  // list must stay a short literal of WebAuthn paths.
+  const block = proxy.slice(
+    proxy.indexOf('const SELF_AUTHENTICATING_PATHS'),
+    proxy.indexOf('function isPublicPath')
+  );
+  const entries = [...block.matchAll(/"(\/api\/[^"]+)"/g)].map((m) => m[1]);
+  assert.ok(entries.length > 0, 'the allowlist must not be empty (test is stale if it is)');
+  assert.ok(entries.length <= 4, `allowlist grew unexpectedly: ${entries.join(', ')}`);
+  for (const p of entries) {
+    assert.ok(p.startsWith('/api/auth/webauthn/authenticate'),
+      `non-passkey path in the self-authenticating allowlist: ${p}`);
+  }
+});
+
+test('API-key deferral is allowlisted and closed by the route', () => {
+  // The middleware cannot validate an API key (no database), so it defers the
+  // auth gate to the handler. That is only safe if (a) the deferral is scoped
+  // to a short route allowlist, (b) it requires an actual credential header,
+  // and (c) every allowlisted handler really calls requireApiAuth().
+  const block = proxy.slice(
+    proxy.indexOf('const API_KEY_ROUTES'),
+    proxy.indexOf('function hasApiKeyCredential')
+  );
+  const patterns = [...block.matchAll(/\/\^([^/]+)\/\s*,?/g)].map((m) => m[1]);
+  assert.ok(patterns.length > 0, 'the route allowlist must not be empty');
+  assert.ok(patterns.length <= 3, `API-key route allowlist grew unexpectedly: ${patterns.join(', ')}`);
+
+  // (b) deferral requires a credential, not merely a matching path
+  assert.match(proxy, /!authToken && hasApiKeyCredential\(req\) && isApiKeyRoute\(pathname\)/,
+    'API-key deferral must require a credential header on the request');
+
+  // (c) the allowlisted handler closes the loop
+  assert.ok(connections.includes('requireApiAuth'),
+    'connections route must call requireApiAuth() to verify the deferred credential');
 });
 
 test('external deploy exception is narrow and explicit', () => {

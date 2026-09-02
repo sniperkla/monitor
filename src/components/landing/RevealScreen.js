@@ -2,10 +2,11 @@
 
 import { signIn } from 'next-auth/react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Terminal, Shield, ChevronRight, Server, Database, Mail, Lock, User as UserIcon, X, LoaderCircle, AlertCircle, CircleCheck } from 'lucide-react';
+import { Terminal, Shield, ChevronRight, Server, Database, Mail, Lock, User as UserIcon, X, LoaderCircle, AlertCircle, CircleCheck, Fingerprint } from 'lucide-react';
 import { useState, useEffect, useRef } from 'react';
 import { GalaxyBackground, ShootingStars, Nebula, MatrixRain } from './BackgroundEffects';
 import { CinematicAuthModal } from './CinematicAuthModal';
+import { signInWithPasskey, passkeysSupported } from '@/utils/passkey';
 
 /* ── Render Phase Hook — drives sequential reveal ── */
 function useRenderSequence(totalPhases, phaseGap = 400) {
@@ -496,6 +497,26 @@ export function RevealScreen({ onDismiss }) {
   const [authError, setAuthError] = useState(null);
   const [authSuccess, setAuthSuccess] = useState(null);
 
+  // Passkey state — only offered when the browser can actually do WebAuthn.
+  const [passkeySupported, setPasskeySupported] = useState(false);
+  const [passkeyLoading, setPasskeyLoading] = useState(false);
+  const [passkeyError, setPasskeyError] = useState(null);
+
+  useEffect(() => {
+    setPasskeySupported(passkeysSupported());
+  }, []);
+
+  const handlePasskeySignIn = async () => {
+    setPasskeyError(null);
+    setPasskeyLoading(true);
+    try {
+      await signInWithPasskey({ callbackUrl: '/' });
+    } catch (err) {
+      setPasskeyError(err.message || 'Passkey sign-in failed.');
+      setPasskeyLoading(false);
+    }
+  };
+
   const handleAuthSubmit = async (e) => {
     e.preventDefault();
     setAuthError(null);
@@ -809,6 +830,28 @@ export function RevealScreen({ onDismiss }) {
                       </span>
                       <span className="relative font-bold text-white">Sign in with Google</span>
                     </motion.button>
+
+                    {passkeySupported && (
+                      <>
+                        <motion.button
+                          whileHover={{ scale: 1.02 }}
+                          whileTap={{ scale: 0.98 }}
+                          onClick={handlePasskeySignIn}
+                          disabled={passkeyLoading}
+                          className="w-full flex items-center justify-center gap-2 px-5 py-3 rounded-xl text-xs font-semibold cursor-pointer text-slate-200 transition-all bg-slate-800/80 hover:bg-slate-700/90 border border-emerald-700/50 shadow-md disabled:opacity-60"
+                        >
+                          {passkeyLoading ? (
+                            <LoaderCircle size={15} className="text-emerald-400 animate-spin" />
+                          ) : (
+                            <Fingerprint size={15} className="text-emerald-400" />
+                          )}
+                          <span>{passkeyLoading ? 'Waiting for passkey…' : 'Sign in with Passkey'}</span>
+                        </motion.button>
+                        {passkeyError && (
+                          <p className="text-[10px] text-red-400/90 text-center -mt-1">{passkeyError}</p>
+                        )}
+                      </>
+                    )}
 
                     <motion.button
                       whileHover={{ scale: 1.02 }}

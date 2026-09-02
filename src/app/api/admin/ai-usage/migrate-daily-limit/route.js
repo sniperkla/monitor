@@ -3,11 +3,14 @@ import connectDB from '@/lib/mongodb';
 import SystemSetting from '@/models/SystemSetting';
 import { logger } from '@/lib/logger';
 import { requireAdmin } from '@/lib/requireAdmin';
+import { auditLog } from '@/lib/auditLog';
 
 export async function POST(req) {
+  let adminUser = null;
   try {
-    const { error } = await requireAdmin();
-    if (error) return error;
+    const auth = await requireAdmin(req);
+    if (auth.error) return auth.error;
+    adminUser = auth.user;
 
     await connectDB(process.env.MONGODB_URI, true);
 
@@ -35,14 +38,33 @@ export async function POST(req) {
       { upsert: true, new: true }
     );
 
+    const dailyLimit = result?.value?.dailyLimit || 10000;
+
+    await auditLog({
+      req,
+      action: 'admin.ai_limits.migrate',
+      userId: String(adminUser?._id || ''),
+      userEmail: adminUser?.email,
+      detail: { dailyLimit, requestedLimit, updated: !!targetLimit },
+      status: 'success',
+    });
+
     return NextResponse.json({
       success: true,
-      dailyLimit: result?.value?.dailyLimit || 10000,
+      dailyLimit,
       message: targetLimit
         ? 'AI daily limit has been updated. Usage is tracked per-user in the AiUsage collection.'
         : 'AI daily limit already exists. Usage is tracked per-user in the AiUsage collection.',
     });
   } catch (error) {
+    await auditLog({
+      req,
+      action: 'admin.ai_limits.migrate',
+      userId: String(adminUser?._id || ''),
+      userEmail: adminUser?.email,
+      detail: { reason: 'error', error: String(error?.message || '').slice(0, 200) },
+      status: 'failure',
+    });
     logger.error('Migrate AI dailyLimit error:', error);
     return NextResponse.json({ success: false, error: 'Internal Server Error' }, { status: 500 });
   }
