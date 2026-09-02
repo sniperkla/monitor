@@ -2,7 +2,7 @@
 
 const mongoose = require('mongoose');
 
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://monitor:AaBb1234!@43.210.134.78:27021/monitor?authSource=admin';
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/monitor';
 
 const SystemSettingSchema = new mongoose.Schema({
   userId: { type: String, required: true, index: true },

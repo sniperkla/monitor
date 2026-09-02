@@ -17,7 +17,7 @@
 
 const mongoose = require('mongoose');
 
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://monitor:AaBb1234!@localhost:27017/monitor';
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/monitor';
 
 // Settings that should be user-specific
 const USER_SPECIFIC_KEYS = [

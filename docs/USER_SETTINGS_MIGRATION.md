@@ -64,7 +64,7 @@ MONGODB_URI='mongodb://...' node scripts/migrate-all-settings.js <userId>
 
 **Example:**
 ```bash
-MONGODB_URI='mongodb://monitor:AaBb1234!@43.210.134.78:27021/monitor?authSource=admin' \
+MONGODB_URI='mongodb://monitor:<MONGO_PASSWORD>@43.210.134.78:27021/monitor?authSource=admin' \
   node scripts/migrate-all-settings.js 6a5933a8b96fc45faa69184a
 ```
 

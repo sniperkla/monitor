@@ -11,7 +11,7 @@
 
 const mongoose = require('mongoose');
 
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://monitor:AaBb1234!@localhost:27017/monitor';
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/monitor';
 
 async function migrateToObjectId(targetUserId) {
   if (!targetUserId) {

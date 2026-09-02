@@ -78,7 +78,7 @@ MongoDB credentials used by the app:
 
 - Database: `monitor`
 - Username: `monitor`
-- Password: `AaBb1234!`
+- Password: `<MONGO_PASSWORD>`
 
 ### Updating on Server
 

@@ -1,6 +1,8 @@
+This file previously contained a live account recovery code and an email
+address. The value was redacted because this repository is public.
 
-============================================
-🔐 RECOVERY CODE for sniperkla@gmail.com
-Code: 635504
-Time: 2/18/2026, 4:08:14 AM
-============================================
+Recovery codes are single-use and expire; if you need a new one, trigger
+password recovery from the app UI.
+
+Note: `DEBUG_EXPOSE_RECOVERY_CODE=1` writes these codes to disk, but it is
+ignored when NODE_ENV=production.

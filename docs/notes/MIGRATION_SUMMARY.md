@@ -160,7 +160,7 @@ These remain shared across all users:
 ### Verification Passed ✅
 
 ```bash
-MONGODB_URI='mongodb://monitor:AaBb1234!@43.210.134.78:27021/monitor?authSource=admin' \
+MONGODB_URI='mongodb://monitor:<MONGO_PASSWORD>@43.210.134.78:27021/monitor?authSource=admin' \
   node scripts/verify-settings-migration.js
 ```
 

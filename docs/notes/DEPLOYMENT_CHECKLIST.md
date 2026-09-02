@@ -35,7 +35,7 @@ System settings migrated from **global scope** to **user-specific scope**, enabl
 
 - [ ] **CRITICAL**: Backup production database before deployment
   ```bash
-  mongodump --uri="mongodb://monitor:AaBb1234!@43.210.134.78:27021/monitor?authSource=admin" --out=backup-$(date +%Y%m%d-%H%M%S)
+  mongodump --uri="mongodb://monitor:<MONGO_PASSWORD>@43.210.134.78:27021/monitor?authSource=admin" --out=backup-$(date +%Y%m%d-%H%M%S)
   ```
 
 ---
@@ -46,7 +46,7 @@ System settings migrated from **global scope** to **user-specific scope**, enabl
 
 ```bash
 # On server or local machine
-mongodump --uri="mongodb://monitor:AaBb1234!@43.210.134.78:27021/monitor?authSource=admin" \
+mongodump --uri="mongodb://monitor:<MONGO_PASSWORD>@43.210.134.78:27021/monitor?authSource=admin" \
   --out=/backup/monitor-backup-$(date +%Y%m%d-%H%M%S)
 ```
 
@@ -118,18 +118,18 @@ require('./src/lib/mongodb.js').default().then(async () => {
 
 ```bash
 # Replace USER_ID_HERE with actual ObjectId
-docker compose exec monitor sh -c "MONGODB_URI='mongodb://monitor:AaBb1234!@monitor-mongo:27017/monitor?authSource=admin' node scripts/migrate-all-settings.js USER_ID_HERE"
+docker compose exec monitor sh -c "MONGODB_URI='mongodb://monitor:<MONGO_PASSWORD>@monitor-mongo:27017/monitor?authSource=admin' node scripts/migrate-all-settings.js USER_ID_HERE"
 ```
 
 **Example:**
 ```bash
-docker compose exec monitor sh -c "MONGODB_URI='mongodb://monitor:AaBb1234!@monitor-mongo:27017/monitor?authSource=admin' node scripts/migrate-all-settings.js 6a5933a8b96fc45faa69184a"
+docker compose exec monitor sh -c "MONGODB_URI='mongodb://monitor:<MONGO_PASSWORD>@monitor-mongo:27017/monitor?authSource=admin' node scripts/migrate-all-settings.js 6a5933a8b96fc45faa69184a"
 ```
 
 ### Step 5: Verify Migration
 
 ```bash
-docker compose exec monitor sh -c "MONGODB_URI='mongodb://monitor:AaBb1234!@monitor-mongo:27017/monitor?authSource=admin' node scripts/verify-settings-migration.js"
+docker compose exec monitor sh -c "MONGODB_URI='mongodb://monitor:<MONGO_PASSWORD>@monitor-mongo:27017/monitor?authSource=admin' node scripts/verify-settings-migration.js"
 ```
 
 **Expected output:**
@@ -163,7 +163,7 @@ pkill -f mongoSyncScheduler
 
 # Start new scheduler
 cd /path/to/monitor
-MONGODB_URI='mongodb://monitor:AaBb1234!@monitor-mongo:27017/monitor?authSource=admin' node scripts/mongoSyncScheduler.js &
+MONGODB_URI='mongodb://monitor:<MONGO_PASSWORD>@monitor-mongo:27017/monitor?authSource=admin' node scripts/mongoSyncScheduler.js &
 
 # Or if using PM2
 pm2 restart mongoSyncScheduler
@@ -220,7 +220,7 @@ pm2 logs mongoSyncScheduler --lines 50
 
 ```javascript
 // Connect to mongo shell
-mongosh "mongodb://monitor:AaBb1234!@43.210.134.78:27021/monitor?authSource=admin"
+mongosh "mongodb://monitor:<MONGO_PASSWORD>@43.210.134.78:27021/monitor?authSource=admin"
 
 // Check all settings
 db.system_settings.find({}).pretty()
@@ -333,7 +333,7 @@ If issues occur and you need to rollback:
 docker compose down
 
 # Restore from backup
-mongorestore --drop --uri="mongodb://monitor:AaBb1234!@43.210.134.78:27021/monitor?authSource=admin" \
+mongorestore --drop --uri="mongodb://monitor:<MONGO_PASSWORD>@43.210.134.78:27021/monitor?authSource=admin" \
   /backup/monitor-backup-TIMESTAMP/monitor/
 ```
 

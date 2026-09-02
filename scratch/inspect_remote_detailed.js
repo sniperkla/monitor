@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
-const remoteMongoUri = 'mongodb://uoteru:AaBb1234%21@3.1.41.227:27020/jeawweaw?authSource=admin';
+const remoteMongoUri = process.env.MONGODB_URI;
+if (!remoteMongoUri) throw new Error('Set MONGODB_URI before running this script.');
 
 mongoose.connect(remoteMongoUri).then(async () => {
   const s = await mongoose.connection.db.collection('systemsettings').findOne({
