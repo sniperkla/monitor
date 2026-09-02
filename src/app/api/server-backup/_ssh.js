@@ -4,24 +4,20 @@ import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import { decrypt } from '@/utils/encryption';
 import { logger } from '@/lib/logger';
 import { shellQuote } from '@/utils/shellQuote';
+import { findActiveRelay } from '@/lib/sshTunnel';
 
 const isLocalhost = (host) => /^(localhost|127\.0\.0\.1)$/.test(host);
 
-function findActiveRelay() {
-  const activeRelays = global.__activeRelays;
-  if (!activeRelays || activeRelays.size === 0) return null;
-  const userRelays = activeRelays.values().next().value;
-  if (userRelays instanceof Map && userRelays.size > 0) {
-    return userRelays.values().next().value;
-  }
-  return userRelays && !(userRelays instanceof Map) ? userRelays : null;
-}
+// NOTE: this file previously had its own findActiveRelay() that took the FIRST
+// relay on the box regardless of owner, so one tenant's backup job could be
+// tunneled to another tenant's machine. Deleted in favour of the shared,
+// user-scoped findActiveRelay in sshTunnel.js.
 
 export async function resolveSshConfig(baseConfig, options = {}) {
   const sshConfig = { ...baseConfig };
 
   if (isLocalhost(sshConfig.host) || options.sshMode === 'local') {
-    const relay = findActiveRelay();
+    const relay = findActiveRelay(options.userId || null, options.preferredRelay || null)?.relay;
     if (!relay || !relay.ws) {
       throw new Error('Local Relay Agent is not connected. Please start local-relay.js on your target machine.');
     }

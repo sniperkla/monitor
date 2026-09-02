@@ -144,7 +144,19 @@ export function isLocalHost(host) {
 
 /**
  * Find an active Local Relay for the given user.
- * Falls back to the only active relay when userId is unknown (single-user setups).
+ *
+ * Falls back to the only active relay when userId is UNKNOWN (single-user
+ * setups, and internal callers that have no request context to scope by).
+ *
+ * The fallback is gated on `!userId` deliberately. A relay terminates on a
+ * real person's machine, so handing one to the wrong caller is cross-tenant
+ * access, not a convenience. When userId IS known but owns no relay, the
+ * correct answer is null — the caller must be told to start their own relay.
+ *
+ * Confirmed exploitable before this gate was added: with exactly one relay
+ * connected server-wide, a freshly registered account with no relay of its own
+ * issued `mongodb://localhost:27017` and reached the relay owner's MongoDB,
+ * because the request fell through to the single-relay branch.
  */
 export function findActiveRelay(userId, relayId) {
   if (!global.__activeRelays?.size) return null;
@@ -160,12 +172,16 @@ export function findActiveRelay(userId, relayId) {
         const [rid, relay] = userRelays.entries().next().value;
         return { relay, userId, relayId: rid };
       }
+      // The user is known and has an entry, but no connected relay.
+      return null;
     } else {
       return { relay: userRelays, userId };
     }
   }
 
-  if (global.__activeRelays.size === 1) {
+  // Unknown identity only — see the note above. A known user with no relay
+  // must never reach another tenant's relay.
+  if (!userId && global.__activeRelays.size === 1) {
     const [uid, userRelays] = global.__activeRelays.entries().next().value;
     if (userRelays instanceof Map) {
       if (userRelays.size > 0) {

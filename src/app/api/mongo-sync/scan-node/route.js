@@ -7,6 +7,7 @@ import { Client as SshClient } from 'ssh2';
 import { decryptWithMetadata } from '@/utils/encryption';
 import { logger } from '@/lib/logger';
 import { shellQuote, shellInt } from '@/utils/shellQuote';
+import { findActiveRelay } from '@/lib/sshTunnel';
 
 // Helper: quick SSH exec → returns stdout+stderr
 function sshExec(sshConfig, command, timeoutMs = 10000) {
@@ -39,18 +40,13 @@ function sshExec(sshConfig, command, timeoutMs = 10000) {
 
 const isLocalhost = (host) => /^(localhost|127\.0\.0\.1)$/.test(host);
 
-function findActiveRelay() {
-  const activeRelays = global.__activeRelays;
-  if (!activeRelays || activeRelays.size === 0) return null;
-  const userRelays = activeRelays.values().next().value;
-  if (userRelays instanceof Map && userRelays.size > 0) {
-    return userRelays.values().next().value;
-  }
-  return userRelays && !(userRelays instanceof Map) ? userRelays : null;
-}
+// NOTE: this file previously had its own findActiveRelay() that took the FIRST
+// relay on the box regardless of who owned it, so a request from user B could
+// be tunneled to user A's machine. Deleted in favour of the shared,
+// user-scoped findActiveRelay in sshTunnel.js.
 
 // Helper: build sshConfig from connection record with Local Relay support
-function buildSshConfig(conn) {
+function buildSshConfig(conn, userId) {
   const config = {
     host: conn.host,
     port: Number(conn.port) || 22,
@@ -75,7 +71,7 @@ function buildSshConfig(conn) {
 
   // ── Local Relay Mode Check ──
   if (isLocalhost(config.host) || conn.useRelay) {
-    const relay = findActiveRelay();
+    const relay = findActiveRelay(userId)?.relay;
     if (relay && relay.ws) {
       relay.targetHost = (config.host && !isLocalhost(config.host)) ? config.host : 'localhost';
       relay.targetPort = parseInt(config.port, 10) || 22;
@@ -221,7 +217,7 @@ export async function POST(request) {
       conn.useRelay = useRelay;
     }
 
-    const sshConfig = buildSshConfig(conn);
+    const sshConfig = buildSshConfig(conn, session.user?.id || session.user?.email);
     const serverHost = conn.host;
 
     // ── ACTION: verify ── Verify a specific port via SSH (not direct connection)
