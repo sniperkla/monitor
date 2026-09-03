@@ -83,7 +83,7 @@ export async function POST(request) {
         effectiveUri = rewriteUriForTunnel(normalizedUri, relayInfo.port);
         usedRelay = true;
         logger.info(`🔗 [test-uri] Relay active: ${normalizedUri} → ${effectiveUri}`);
-      } else if (process.env.NODE_ENV !== 'development') {
+      } else if (process.env.NODE_ENV === 'production') {
         return NextResponse.json({
           success: false,
           relayRequired: true,

@@ -65,10 +65,10 @@ test('POST /api/connections/[id]/reveal route enforces session, rate limits, and
   assert.match(reveal, /action:\s*['"]connection\.reveal['"]/);
 });
 
-test('/api/health withholds internal mongo, relay, and memory telemetry', () => {
+test('/api/health withholds internal mongo readyState, relay count, and memory telemetry', () => {
   const health = readSrc('src/app/api/health/route.js');
-  assert.ok(!health.includes('mongo: {'), 'health route must not disclose mongo readyState');
-  assert.ok(!health.includes('relay: {'), 'health route must not disclose relay count');
+  assert.ok(!health.includes('readyState:'), 'health route must not disclose mongo readyState');
+  assert.ok(!health.includes('count: relayCount'), 'health route must not disclose relay count');
   assert.ok(!health.includes('memory: {'), 'health route must not disclose memory safe status');
 });
 

@@ -219,7 +219,7 @@ async function getDynamicConnection(uri, tunnelConfig = null, relayName = null) 
       // Localhost URI but no relay active.
       // In development the server itself is on localhost, so direct access is fine.
       // In production, reject to avoid silently hitting the server's own loopback.
-      const isDev = process.env.NODE_ENV === 'development';
+      const isDev = process.env.NODE_ENV !== 'production';
       if (!isDev) {
         throw new Error(
           'Local Relay Agent is not connected. ' +

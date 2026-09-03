@@ -585,10 +585,8 @@ export function AppProvider({ children }) {
           // issue unrelated to SSH relay mode. Switching would disconnect all active terminals.
         } else {
           // MongoDB is back up
-          if (consecutiveFailures > 0) {
-            consecutiveFailures = 0;
-            dispatch({ type: 'SET_HEALTH_STATUS', payload: { mongoDown: false } });
-          }
+          consecutiveFailures = 0;
+          dispatch({ type: 'SET_HEALTH_STATUS', payload: { mongoDown: false } });
         }
 
         if (!relayUp) {
