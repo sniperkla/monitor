@@ -1,6 +1,7 @@
 import { Client } from 'ssh2';
 import connectDB from '@/lib/mongodb';
 import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
+import User from '@/models/User';
 import { decrypt } from '@/utils/encryption';
 import { logger } from '@/lib/logger';
 import { shellQuote } from '@/utils/shellQuote';
@@ -17,7 +18,17 @@ export async function resolveSshConfig(baseConfig, options = {}) {
   const sshConfig = { ...baseConfig };
 
   if (isLocalhost(sshConfig.host) || options.sshMode === 'local') {
-    const relay = findActiveRelay(options.userId || null, options.preferredRelay || null)?.relay;
+    // Relay WebSocket registrations are keyed by the JWT `sub` (the
+    // identity embedded in the relay token). Connection ownership is keyed by
+    // session.user.id, which is the database id. Keep both identities so a
+    // database-id lookup does not falsely report an otherwise connected relay
+    // as offline.
+    const relayLookup = options.relayUserId || options.userId || null;
+    const foundRelay = findActiveRelay(relayLookup, options.preferredRelay || null)
+      || (options.userId && relayLookup !== options.userId
+        ? findActiveRelay(options.userId, options.preferredRelay || null)
+        : null);
+    const relay = foundRelay?.relay;
     if (!relay || !relay.ws) {
       throw new Error('Local Relay Agent is not connected. Please start local-relay.js on your target machine.');
     }
@@ -55,14 +66,13 @@ export async function resolveSshConfig(baseConfig, options = {}) {
 }
 
 export async function getSshConfig(connectionId, options = {}) {
-  const db = await connectDB();
-  const repo = new ConnectionRepository(db, options.userId || null);
-
-  // 🔐 Resolve the acting user for ownership enforcement.
-  // Explicit options.userId wins (internal jobs); otherwise derive from the
-  // browser session so every getSshConfig caller is automatically scoped.
+  // 🔐 Resolve the acting user before opening the repository. The session's
+  // stable database id is the ownership key used by ConnectionRepository.
+  // Keep this resolution in one place so every app route (Rclone, Firewall,
+  // agents, backups) looks up the same connection identity.
   let actingUserId = options.userId || null;
   let actingUserRole = null;
+  let relayUserId = options.relayUserId || null;
   if (!actingUserId && !options.skipSessionResolve) {
     try {
       const { getServerSession } = await import('next-auth/next');
@@ -72,6 +82,23 @@ export async function getSshConfig(connectionId, options = {}) {
       actingUserRole = session?.user?.role || null;
     } catch (_) {}
   }
+
+  // Google/OAuth JWTs use the provider subject as `token.sub`, while the
+  // session exposes the Mongo `_id` as `session.user.id`. Relay registrations
+  // are keyed by that provider subject, so translate the stable DB identity
+  // back to the relay identity before resolving localhost routes.
+  if (!relayUserId && actingUserId) {
+    try {
+      await connectDB(null, true);
+      const dbUser = await User.findById(actingUserId).select('googleId').lean();
+      relayUserId = dbUser?.googleId || actingUserId;
+    } catch (_) {
+      relayUserId = actingUserId;
+    }
+  }
+
+  const db = await connectDB();
+  const repo = new ConnectionRepository(db, actingUserId || null);
   await repo.init();
   const conn = await repo.findById(connectionId);
   if (!conn) throw new Error('Connection not found');
@@ -114,6 +141,7 @@ export async function getSshConfig(connectionId, options = {}) {
     sshMode: conn.sshMode || options.sshMode,
     preferredRelay: conn.preferredRelay || options.preferredRelay,
     userId: actingUserId,
+    relayUserId,
     ...options,
   });
 }

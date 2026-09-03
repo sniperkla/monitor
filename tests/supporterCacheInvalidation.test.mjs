@@ -45,6 +45,14 @@ test('invalidateSupporter still clears its own per-email cache', () => {
   assert.match(supporterSrc, /cache\.clear\(\)/);
 });
 
+test('admin supporters route imports its audit logger before error handling', () => {
+  const src = read('../src/app/api/admin/supporters/route.js');
+  assert.match(src, /import \{ auditLog \} from ['"]@\/lib\/auditLog['"]/,
+    'admin supporters route must import auditLog before calling it in GET error handling');
+  assert.match(src, /await auditLog\(\{[\s\S]*action: ['"]admin\.supporters\.list['"]/,
+    'admin supporters GET must retain its audit event');
+});
+
 test('every supporter-mutating route calls invalidateSupporter', () => {
   for (const rel of MUTATORS) {
     const src = read(rel);

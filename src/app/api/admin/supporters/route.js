@@ -6,6 +6,7 @@ import { extendExpiry, invalidateSupporter, DEFAULT_GRANT_DAYS } from '@/utils/s
 import { logger } from '@/lib/logger';
 import { requireAdmin } from '@/lib/requireAdmin';
 import { maskEmail, maskName } from '@/utils/pii';
+import { auditLog } from '@/lib/auditLog';
 
 export const dynamic = 'force-dynamic';
 

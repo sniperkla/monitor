@@ -3,6 +3,8 @@ import { randomUUID } from 'crypto';
 import { getSupporterStatus, supporterRequiredResponse } from '@/utils/supporter';
 import { checkRateLimit } from '@/lib/serverGuard';
 import { tokensToRevoke } from '@/lib/relayRevoke';
+import connectDB from '@/lib/mongodb';
+import User from '@/models/User';
 
 /**
  * Relay tokens are long-lived by necessity: public/local-relay.js bakes the
@@ -129,7 +131,22 @@ export async function GET(request) {
     }
 
     const userId = token.sub;
-    const userRelays = global.__activeRelays?.get(userId);
+    // Relay tokens are keyed by token.sub. Credentials sessions often use the
+    // same DB id, but OAuth-linked sessions expose the provider subject in the
+    // JWT and the database id in session.user.id. Include both keys so the
+    // dashboard status matches the relay lookup used by SSH routes.
+    let relayUserIds = [userId];
+    try {
+      await connectDB(null, true);
+      let dbUser = await User.findOne({ googleId: userId }).select('_id googleId').lean();
+      if (!dbUser && /^[a-f\d]{24}$/i.test(String(userId))) {
+        dbUser = await User.findById(userId).select('_id googleId').lean();
+      }
+      if (dbUser?._id) relayUserIds.push(String(dbUser._id));
+      if (dbUser?.googleId) relayUserIds.push(String(dbUser.googleId));
+    } catch (_) {}
+    relayUserIds = [...new Set(relayUserIds.filter(Boolean))];
+    const userRelays = relayUserIds.map((id) => global.__activeRelays?.get(id)).find(Boolean) || null;
 
     // Piggyback supporter status on this poll so the UI never needs extra requests
     let supporter = { isSupporter: false, expiresAt: null };
@@ -145,7 +162,7 @@ export async function GET(request) {
     const now = Date.now();
     const tokens = [];
     for (const [t, e] of global.__relayTokens || new Map()) {
-      if (e.userId !== userId) continue;
+      if (!relayUserIds.includes(String(e.userId))) continue;
       if (e.expiresAt < now) continue;
       tokens.push({
         tokenId: e.tokenId || t.slice(0, 8),

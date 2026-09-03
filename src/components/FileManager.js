@@ -61,11 +61,26 @@ if (typeof window !== 'undefined' && !window.__fmSocketPoolUnloadBound) {
   window.addEventListener('beforeunload', disconnectPool);
 }
 
-const SFTP_REUSE_EVENTS = [
-  'heartbeat:pong', 'ssh:pong', 'sftp:list', 'sftp:file_content', 'sftp:file_base64', 'sftp:action_success',
+// Every socket event this component subscribes to.
+// Used to fully detach handlers when the component unmounts (the socket keeps living in the
+// pool for POOL_TTL ms) and when a pooled socket is reused. Without detaching, the dead mount
+// keeps receiving events — notably `ssh:closed`, which fires when the pool TTL expires and
+// emits `ssh:disconnect` → server closes SSH → server echoes `ssh:closed`. That produced the
+// phantom "SSH session closed. Reconnecting now." toast plus `❌ SFTP Error: {}` on every
+// open → close cycle.
+// NOTE: 'connect' is intentionally excluded — it's a Socket.IO reserved event.
+const FM_SOCKET_EVENTS = [
+  'ssh:connected', 'ssh:closed', 'ssh:error', 'ssh:idle_timeout', 'ssh:pong',
+  'heartbeat:pong',
+  'disconnect', 'connect_error',
+  'sftp:list', 'sftp:file_content', 'sftp:file_base64', 'sftp:action_success',
   'sftp:progress', 'sftp:download_start', 'sftp:download_chunk', 'sftp:download_done',
-  'sftp:error', 'ssh:error', 'ssh:idle_timeout',
+  'sftp:sizeResult', 'sftp:searchResult', 'sftp:error', 'sftp:can_upload',
+  'relay:rtc:ready',
 ];
+// NOTE: `sftp:upload_ack:<filename>` is per-file and cannot live in a static list — it is
+// detached separately in the effect cleanup via activeAckCleanupRef.
+// Covered by tests/fileManagerSocketHygiene.test.mjs — keep the two in sync.
 export default function FileManager({ 
   connectionId, 
   connection, 
@@ -115,6 +130,11 @@ export default function FileManager({
   const MAX_RECONNECT_ATTEMPTS = 10;
   const [reconnectAlert, setReconnectAlert] = useState(null);
   const socketRef = useRef(null);
+  // Flipped to `true` in the socket effect cleanup. The socket itself outlives the component
+  // (it stays in the pool for POOL_TTL ms so a Split-pane remount can reuse it), so late
+  // events — ssh:closed, sftp:error, disconnect — reach handlers that belong to a dead mount.
+  // Every reconnect-triggering handler must bail out when this is true.
+  const disposedRef = useRef(false);
   const rtcPeerRef = useRef(null);      // WebRTC RelayPeer — set when local relay + P2P ICE succeeds
   const relayConnIdRef = useRef(null);  // relayConnId from relay:rtc:ready signal
   const [rtcActive, setRtcActive] = useState(false); // true when WebRTC P2P DataChannels are open
@@ -317,6 +337,10 @@ export default function FileManager({
 
   const requestReconnect = useCallback((message = 'Connection lost. Reconnecting...', options = {}) => {
     const { preserveTransfer = false, notificationMessage } = options;
+    // Dead mount (component closed / unmounted while the pooled socket was still alive).
+    // Reconnecting — and especially notifying the user — makes no sense here: it was the
+    // source of the "SSH session closed. Reconnecting now." toast after closing the window.
+    if (disposedRef.current) return;
     if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
     setStatus('error');
     setError(message);
@@ -552,6 +576,9 @@ export default function FileManager({
       return;
     }
 
+    // Fresh mount (or reconnect cycle) — re-arm the handlers we're about to register.
+    disposedRef.current = false;
+
     const poolEntry = _fmSocketPool.get(connectionId);
     const isReused = !!(
       poolEntry?.socket?.connected &&
@@ -561,6 +588,7 @@ export default function FileManager({
     let newSocket;
     let timeout = null;
     let reuseInitTimeout = null;
+    let pooledPingTimeout = null;
     let pendingRefreshPath = null;
     let reusedSocket = false;
 
@@ -584,7 +612,7 @@ export default function FileManager({
       setLoading(true);
 
       // Remove stale handlers from previous mount before re-registering
-      SFTP_REUSE_EVENTS.forEach(ev => newSocket.removeAllListeners(ev));
+      FM_SOCKET_EVENTS.forEach(ev => newSocket.removeAllListeners(ev));
       pendingRefreshPath = savedPath;
 
       console.log('♻️ FileManager: reusing socket for', connectionId, '— no reconnect');
@@ -617,6 +645,8 @@ export default function FileManager({
       }, 15000);
 
       newSocket.on('connect', () => {
+        // Dead mount (pooled socket reconnected on its own) — don't open a new SSH session.
+        if (disposedRef.current) return;
         console.log('🔌 Socket connected, sending ssh:connect');
         setStatus('ssh_connecting');
         lastHealthOkRef.current = false;
@@ -633,6 +663,7 @@ export default function FileManager({
       });
 
       newSocket.on('ssh:connected', () => {
+        if (disposedRef.current) return;
         console.log('✅ SSH connected, listing files at:', currentPathRef.current);
         reconnectAttemptsRef.current = 0;
         setReconnectAlert(null);
@@ -662,7 +693,8 @@ export default function FileManager({
     }
 
     if (reusedSocket) {
-      const pooledPingTimeout = setTimeout(() => {
+      pooledPingTimeout = setTimeout(() => {
+        if (disposedRef.current) return;
         if (statusRef.current === 'ready' && (filesRef.current.length > 0 || transferRef.current)) return;
         console.warn('⚠️ Pooled socket SSH health check timed out. Reconnecting fresh session.');
         try {
@@ -679,6 +711,7 @@ export default function FileManager({
 
       newSocket.once('ssh:pong', (data) => {
         clearTimeout(pooledPingTimeout);
+        if (disposedRef.current) return;
         if (data?.ok) {
           lastHealthOkRef.current = true;
           lastHealthCheckAtRef.current = Date.now();
@@ -710,6 +743,12 @@ export default function FileManager({
         try { rtcPeerRef.current.close(); } catch (_) {}
         rtcPeerRef.current = null;
         setRtcActive(false);
+      }
+      // We closed the window ourselves — the pool TTL just tore the session down. Nothing to
+      // reconnect and nothing to tell the user about.
+      if (disposedRef.current) {
+        console.log('[ssh:closed] Ignored — file manager already closed.');
+        return;
       }
       // If the user intentionally cancelled an upload, the SFTP write stream
       // destruction can trigger ssh:closed — do NOT reconnect in that case.
@@ -744,6 +783,7 @@ export default function FileManager({
         rtcPeerRef.current = null;
         setRtcActive(false);
       }
+      if (disposedRef.current) return; // socket outlived its mount (pooled / TTL cleanup)
       // If the user intentionally cancelled an upload, the resulting socket noise
       // should not be treated as an unexpected disconnect requiring reconnect.
       if (userCancelledUploadRef.current) {
@@ -772,6 +812,7 @@ export default function FileManager({
     });
 
     newSocket.on('connect_error', (err) => {
+      if (disposedRef.current) return;
       const msg = err?.message || 'Unable to reconnect';
       setStatus('error');
       setError(msg);
@@ -788,6 +829,7 @@ export default function FileManager({
     });
 
     newSocket.on('sftp:list', (data) => {
+      if (disposedRef.current) return;
       // Normalize paths before comparing to avoid '.' vs './' mismatches
       const normReceived = (data.path || '.').replace(/\/$/, '') || '.';
       const normCurrent  = (currentPathRef.current || '.').replace(/\/$/, '') || '.';
@@ -1057,10 +1099,26 @@ export default function FileManager({
      });
 
     newSocket.on('sftp:error', (err) => {
-      const msg = err?.message || (typeof err === 'string' ? err : (err && Object.keys(err).length > 0 ? JSON.stringify(err) : ''));
-      
-      // Skip empty/no-op errors — nothing useful to show or retry
+      // Dead mount — the in-flight request belonged to a window the user already closed.
+      if (disposedRef.current) return;
+
+      const errObj = err && typeof err === 'object' ? err : null;
+      // Control keys carry meaning even without a message (guard/resetIn drive retry logic).
+      const controlKeys = errObj
+        ? ['guard', 'resetIn', 'recoverable'].some((k) => errObj[k] !== undefined)
+        : false;
+      const rawMsg = errObj?.message ?? (typeof err === 'string' ? err : '');
+      const msg = (typeof rawMsg === 'string' ? rawMsg : '') || (controlKeys ? 'SFTP error' : '');
+
+      // Skip empty/no-op errors — nothing useful to show or retry.
+      // Servers legitimately emit `{ message: undefined }`, which Socket.IO serializes to
+      // `{}` on the wire (also matches '{}' / 'undefined' / 'null' stringified payloads).
       if (!msg || msg === '{}' || msg === 'undefined' || msg === 'null') {
+        if (errObj && Object.keys(errObj).length === 0) {
+          console.debug('[FileManager] Ignored empty sftp:error payload ({}).');
+        } else {
+          console.warn('[FileManager] Ignored sftp:error without a message:', err);
+        }
         return;
       }
 
@@ -1122,7 +1180,7 @@ export default function FileManager({
       }
 
       setTransfer(null);
-      console.error('❌ SFTP Error:', err);
+      console.error('❌ SFTP Error:', msg, err);
 
       // Stop reconnect loop on channel failures — these won't resolve by retrying
       if (/channel open failure|open failed/i.test(msg)) {
@@ -1179,6 +1237,7 @@ export default function FileManager({
     });
 
     newSocket.on('ssh:error', (err) => {
+      if (disposedRef.current) return;
       const errMsg = err?.message || (typeof err === 'string' ? err : null) || 'SSH connection failed';
       console.error('❌ SSH Error:', errMsg, err);
       clearTimeout(timeout);
@@ -1206,6 +1265,7 @@ export default function FileManager({
     });
 
     newSocket.on('ssh:idle_timeout', () => {
+      if (disposedRef.current) return;
       setStatus('error');
       setError('Session idle timeout. Reconnecting...');
       setLoading(false);
@@ -1257,6 +1317,18 @@ export default function FileManager({
     return () => {
       clearTimeout(timeout);
       clearTimeout(reuseInitTimeout);
+      clearTimeout(pooledPingTimeout);
+
+      // Mark this mount dead FIRST — the socket below may stay alive in the pool, and any
+      // late event (ssh:closed from the pool's own ssh:disconnect, sftp:error from an
+      // in-flight list) must not trigger a reconnect or a toast.
+      disposedRef.current = true;
+
+      if (refreshTimeoutRef.current) {
+        clearTimeout(refreshTimeoutRef.current);
+        refreshTimeoutRef.current = null;
+      }
+      deleteBatchRef.current = { count: 0, total: 0, toastId: null };
 
       // Always close WebRTC peer on unmount / reconnect
       if (rtcPeerRef.current) {
@@ -1266,6 +1338,23 @@ export default function FileManager({
       relayConnIdRef.current = null;
 
       if (!newSocket) return;
+
+      // Detach the upload pipeline first: it owns the per-file `sftp:upload_ack:<name>`
+      // listener, which no static list can cover. Left attached, a same-named file uploaded
+      // after a fast reopen (< POOL_TTL) would wake the previous mount's handler too.
+      if (activeAckCleanupRef.current) {
+        try {
+          activeAckCleanupRef.current();
+        } catch (_) {}
+        activeAckCleanupRef.current = null;
+      }
+
+      // Detach every handler we registered. Sockets handed to the pool stay connected for
+      // POOL_TTL ms, so leftover listeners are the root cause of the phantom reconnect
+      // prompts after closing the file manager.
+      try {
+        FM_SOCKET_EVENTS.forEach(ev => newSocket.removeAllListeners(ev));
+      } catch (_) {}
 
       if (statusRef.current !== 'ready') {
         console.log('🔌 Cleaning up unready socket for', connectionId);
@@ -1283,7 +1372,12 @@ export default function FileManager({
         status: statusRef.current,
         currentPath: currentPathRef.current,
         files: filesRef.current,
-        isTransferActive: () => !!transferRef.current || (uploadQueueRef.current && uploadQueueRef.current.length > 0),
+        // A dead mount can never finish its transfer — without this guard a leftover
+        // transferRef would keep extending the pool TTL forever and hold the SSH session
+        // open after the window was closed.
+        isTransferActive: () => !disposedRef.current && (
+          !!transferRef.current || (uploadQueueRef.current && uploadQueueRef.current.length > 0)
+        ),
       };
 
       const schedulePoolCleanup = () => {
