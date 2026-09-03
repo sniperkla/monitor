@@ -73,7 +73,11 @@ export async function POST(request) {
     // "mongodb://169.254.169.254/x?db=localhost" be treated as a relay target
     // and thereby skip the SSRF guard below.
     const isLocalhost = isLocalhostUri(normalizedUri);
-    if (isLocalhost) {
+    const allowRelay = body?.allowRelay === true || request.headers.get('x-allow-relay') === '1';
+
+    // Only route through local relay if explicitly opted-in (e.g. from Vault / Settings UI).
+    // All other probes without allowRelay pass directly to the SSRF guard to be blocked.
+    if (isLocalhost && allowRelay) {
       const relayInfo = await getActiveRelayInfo(normalizedUri);
       if (relayInfo) {
         effectiveUri = rewriteUriForTunnel(normalizedUri, relayInfo.port);

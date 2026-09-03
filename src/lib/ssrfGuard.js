@@ -513,7 +513,7 @@ async function validateHost(hostname) {
   if (!host) return 'Empty hostname in URI';
 
   // Quick string check for obvious internal addresses before DNS
-  if (/^(127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2[0-9]|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(host)) {
+  if (/^(0\.|127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2[0-9]|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(host)) {
     logger.warn(`[ssrf-guard] Rejecting URI with private hostname: ${host}`);
     return `Blocked private/internal address: ${host}`;
   }

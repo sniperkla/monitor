@@ -1529,7 +1529,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
       const testRes = await fetch('/api/connections/test-uri', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ uri: dbUri.trim() })
+        body: JSON.stringify({ uri: dbUri.trim(), allowRelay: true })
       });
       const testData = await testRes.json();
       

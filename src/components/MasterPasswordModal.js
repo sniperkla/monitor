@@ -229,7 +229,7 @@ export default function MasterPasswordModal({ isBooted = true }) {
         const testRes = await fetch('/api/connections/test-uri', { 
           method: 'POST',
           headers: testHeaders,
-          body: JSON.stringify({ uri })
+          body: JSON.stringify({ uri, allowRelay: true })
         });
         const testData = await testRes.json();
         if (!testData.success) {

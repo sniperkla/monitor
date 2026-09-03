@@ -219,7 +219,6 @@ const LOCAL_HOSTNAMES = new Set([
   'localhost',
   'localhost.localdomain',
   '127.0.0.1',
-  '0.0.0.0',
   '::1',
   '[::1]',
 ]);

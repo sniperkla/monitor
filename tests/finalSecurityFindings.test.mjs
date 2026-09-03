@@ -72,3 +72,13 @@ test('/api/health withholds internal mongo, relay, and memory telemetry', () => 
   assert.ok(!health.includes('memory: {'), 'health route must not disclose memory safe status');
 });
 
+test('test-uri requires explicit allowRelay before relay routing, preventing loopback SSRF bypass', () => {
+  const testUriCode = readSrc('src/app/api/connections/test-uri/route.js');
+  assert.match(testUriCode, /allowRelay/);
+  assert.match(testUriCode, /isLocalhost\s*&&\s*allowRelay/);
+
+  const sshTunnelCode = readSrc('src/lib/sshTunnel.js');
+  assert.ok(!sshTunnelCode.includes("'0.0.0.0'"), '0.0.0.0 must not be listed in LOCAL_HOSTNAMES');
+});
+
+
