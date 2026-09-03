@@ -288,6 +288,27 @@ export function canonicalizeNumericHost(hostname) {
 }
 
 /**
+ * Safely URL-decode a hostname string to eliminate %2e, %30, and other
+ * percent-encoded bypasses before canonicalization and IP blocklist validation.
+ *
+ * Runs iteratively up to 3 times to neutralize multi-layer encoding (e.g. %252e).
+ */
+export function safeDecodeHost(host) {
+  let decoded = String(host ?? '').trim();
+  for (let i = 0; i < 3; i++) {
+    if (!decoded.includes('%')) break;
+    try {
+      const next = decodeURIComponent(decoded);
+      if (next === decoded) break;
+      decoded = next;
+    } catch (_) {
+      break;
+    }
+  }
+  return decoded;
+}
+
+/**
  * Resolve the SRV targets behind a `mongodb+srv://` host.
  *
  * `mongodb+srv://cluster.example.com` contains no address at all — the driver
@@ -336,13 +357,13 @@ export function extractHost(uri) {
       const bracketRegex = /\[([^\]]+)\]/g;
       let match;
       while ((match = bracketRegex.exec(hostPortPart)) !== null) {
-        hosts.push(match[1]);
+        hosts.push(safeDecodeHost(match[1]));
       }
       return hosts;
     }
 
     // IPv4 or hostname: comma-separated list of host:port pairs
-    const hostList = hostPortPart.split(',').map(h => h.split(':')[0].trim()).filter(Boolean);
+    const hostList = hostPortPart.split(',').map(h => safeDecodeHost(h.split(':')[0].trim())).filter(Boolean);
     return hostList;
   } catch {
     return [];
@@ -479,9 +500,9 @@ export async function assertSafeHttpUrl(url) {
 async function validateHost(hostname) {
   // Canonicalise FIRST, before any pattern matching, and on every path into
   // this function — including SRV targets and comma-separated replica-set
-  // members. `0177.0.0.1` and `2130706433` match no dotted-quad pattern, yet
-  // the resolver dials 127.0.0.1 for both.
-  const raw = String(hostname ?? '').trim();
+  // members. URL-decode any percent-encoded characters (%2e, %30, etc.)
+  // before checking so encoded bypasses cannot circumvent the blocklist.
+  const raw = safeDecodeHost(hostname);
   const canonical = canonicalizeNumericHost(raw);
 
   // Reject any numeric address that is not already in canonical dotted-quad

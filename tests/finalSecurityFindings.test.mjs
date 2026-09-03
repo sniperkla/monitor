@@ -81,4 +81,25 @@ test('test-uri requires explicit allowRelay before relay routing, preventing loo
   assert.ok(!sshTunnelCode.includes("'0.0.0.0'"), '0.0.0.0 must not be listed in LOCAL_HOSTNAMES');
 });
 
+test('ssrfGuard blocks URL-encoded IP addresses (%2e bypass)', async () => {
+  const { assertSafeUri } = await import('../src/lib/ssrfGuard.js');
+
+  const encodedPatterns = [
+    'mongodb://192%2e168%2e1%2e1:27017/test',
+    'mongodb://10%2e0%2e0%2e1:27017/test',
+    'mongodb://169%2e254%2e169%2e254:80/test',
+    'mongodb://100%2e64%2e0%2e1:27017/test',
+    'mongodb://127%2e0%2e0%2e1:27017/test',
+    'mongodb://127%252e0%252e0%252e1:27017/test',
+    'mongodb://%31%32%37%2e%30%2e%30%2e%31:27017/test',
+  ];
+
+  for (const uri of encodedPatterns) {
+    const res = await assertSafeUri(uri);
+    assert.strictEqual(res.safe, false, `Expected ${uri} to be blocked by SSRF guard`);
+    assert.match(res.reason, /Blocked (private|internal|localhost)/i);
+  }
+});
+
+
 

@@ -239,6 +239,12 @@ export function isLocalhostUri(uri) {
   let host = '';
   try {
     host = new URL(uri).hostname || '';
+    for (let i = 0; i < 3; i++) {
+      if (!host.includes('%')) break;
+      const next = decodeURIComponent(host);
+      if (next === host) break;
+      host = next;
+    }
   } catch {
     return false; // unparseable -> not local; let the SSRF guard deal with it
   }
