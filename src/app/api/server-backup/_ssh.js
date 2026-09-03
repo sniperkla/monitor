@@ -87,18 +87,24 @@ export async function getSshConfig(connectionId, options = {}) {
   // session exposes the Mongo `_id` as `session.user.id`. Relay registrations
   // are keyed by that provider subject, so translate the stable DB identity
   // back to the relay identity before resolving localhost routes.
-  if (!relayUserId && actingUserId) {
+  if (actingUserId) {
     try {
       await connectDB(null, true);
-      const dbUser = await User.findById(actingUserId).select('googleId').lean();
-      relayUserId = dbUser?.googleId || actingUserId;
+      const dbUser = await User.findById(actingUserId).select('role googleId').lean();
+      if (!actingUserRole && dbUser?.role) {
+        actingUserRole = dbUser.role;
+      }
+      if (!relayUserId) {
+        relayUserId = dbUser?.googleId || actingUserId;
+      }
     } catch (_) {
-      relayUserId = actingUserId;
+      if (!relayUserId) relayUserId = actingUserId;
     }
   }
 
   const db = await connectDB();
   const repo = new ConnectionRepository(db, actingUserId || null);
+  if (actingUserRole) repo.role = actingUserRole;
   await repo.init();
   const conn = await repo.findById(connectionId);
   if (!conn) throw new Error('Connection not found');

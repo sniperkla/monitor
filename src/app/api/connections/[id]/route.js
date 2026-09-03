@@ -8,6 +8,7 @@ import { encrypt } from '@/utils/encryption';
 import { auditLog } from '@/lib/auditLog';
 import mongoose from 'mongoose';
 import { getClientIp } from '@/lib/clientIp';
+import User from '@/models/User';
 
 const isValidMongoId = (id) => mongoose.Types.ObjectId.isValid(id);
 
@@ -23,7 +24,13 @@ export async function GET(request, { params }) {
 
     const { id } = await params;
     const db = await connectDB();
-    const repo = new ConnectionRepository(db, session?.user?.id || session?.user?.sub || null);
+    const userId = session?.user?.id || session?.user?.sub || null;
+    let userRole = null;
+    if (userId) {
+      const dbUser = await User.findById(userId).select('role').lean();
+      userRole = dbUser?.role || null;
+    }
+    const repo = new ConnectionRepository(db, userId, userRole);
 
     if (db.type !== 'mysql' && db.type !== 'postgres' && !isValidMongoId(id)) {
       return NextResponse.json({ success: false, error: 'Invalid ID' }, { status: 400 });
@@ -94,7 +101,13 @@ export async function PUT(request, { params }) {
 
     ({ id } = await params);
     const db = await connectDB();
-    const repo = new ConnectionRepository(db, session?.user?.id || session?.user?.sub || null);
+    const userId = session?.user?.id || session?.user?.sub || null;
+    let userRole = null;
+    if (userId) {
+      const dbUser = await User.findById(userId).select('role').lean();
+      userRole = dbUser?.role || null;
+    }
+    const repo = new ConnectionRepository(db, userId, userRole);
 
     if (db.type !== 'mysql' && db.type !== 'postgres' && !isValidMongoId(id)) {
       return NextResponse.json({ success: false, error: 'Invalid ID' }, { status: 400 });
@@ -174,7 +187,13 @@ export async function DELETE(request, { params }) {
 
     ({ id } = await params);
     const db = await connectDB();
-    const repo = new ConnectionRepository(db, session?.user?.id || session?.user?.sub || null);
+    const userId = session?.user?.id || session?.user?.sub || null;
+    let userRole = null;
+    if (userId) {
+      const dbUser = await User.findById(userId).select('role').lean();
+      userRole = dbUser?.role || null;
+    }
+    const repo = new ConnectionRepository(db, userId, userRole);
 
     if (db.type !== 'mysql' && db.type !== 'postgres' && !isValidMongoId(id)) {
       return NextResponse.json({ success: false, error: 'Invalid ID' }, { status: 400 });

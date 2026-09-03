@@ -7,6 +7,7 @@ import { decrypt } from '@/utils/encryption';
 import { auditLog } from '@/lib/auditLog';
 import { rateLimit } from '@/lib/ratelimit';
 import mongoose from 'mongoose';
+import User from '@/models/User';
 
 const isValidMongoId = (id) => mongoose.Types.ObjectId.isValid(id);
 
@@ -38,7 +39,12 @@ export async function POST(request, { params }) {
 
     const { id } = await params;
     const db = await connectDB();
-    const repo = new ConnectionRepository(db, session.user.id);
+    let userRole = null;
+    if (session.user.id) {
+      const dbUser = await User.findById(session.user.id).select('role').lean();
+      userRole = dbUser?.role || null;
+    }
+    const repo = new ConnectionRepository(db, session.user.id, userRole);
 
     if (db.type !== 'mysql' && db.type !== 'postgres' && !isValidMongoId(id)) {
       return NextResponse.json({ success: false, error: 'Invalid ID' }, { status: 400 });

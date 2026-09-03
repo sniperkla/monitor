@@ -9,6 +9,7 @@ import { logger } from '@/lib/logger';
 import { requireApiAuth } from '@/lib/apiAuth';
 import { auditLog } from '@/lib/auditLog';
 import { getClientIp } from '@/lib/clientIp';
+import User from '@/models/User';
 
 // GET all connections
 export async function GET(request) {
@@ -38,7 +39,12 @@ export async function GET(request) {
       throw dbErr;
     }
 
-    const repo = new ConnectionRepository(db, auth.userId);
+    let userRole = null;
+    if (auth.userId) {
+      const dbUser = await User.findById(auth.userId).select('role').lean();
+      userRole = dbUser?.role || null;
+    }
+    const repo = new ConnectionRepository(db, auth.userId, userRole);
     await repo.init();
     let connections = await repo.findAll();
 
@@ -113,7 +119,13 @@ export async function POST(request) {
     if (!rateCheck.allowed) return NextResponse.json({ success: false, error: 'Rate limit exceeded' }, { status: 429 });
 
     const db = await connectDB();
-    const repo = new ConnectionRepository(db, session?.user?.id || session?.user?.sub || null);
+    const userId = session?.user?.id || session?.user?.sub || null;
+    let userRole = null;
+    if (userId) {
+      const dbUser = await User.findById(userId).select('role').lean();
+      userRole = dbUser?.role || null;
+    }
+    const repo = new ConnectionRepository(db, userId, userRole);
     await repo.init();
     const body = await request.json();
 

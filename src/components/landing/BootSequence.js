@@ -302,15 +302,14 @@ export function BootSequence({ onComplete, onSkip }) {
     if (relayInfo.checkDone) setRelayStatus('ok');
   }, [relayInfo.checkDone]);
 
-  // Health check: first thing we do after static animation finishes.
-  // Retries with backoff — a single check used to HALT the boot permanently
-  // whenever it raced a server restart or a cold-start Mongo connection
-  // (readyState 0/2 → 503), which looked like a fatal DB failure.
+  // Health check: start IMMEDIATELY on mount in parallel with typewriter animation.
+  // Retries with backoff if the server is still warming up.
+  const [checkKey, setCheckKey] = useState(0);
+
   useEffect(() => {
-    if (!staticComplete) return;
     let cancelled = false;
-    const MAX_ATTEMPTS = 8;
-    const RETRY_DELAY_MS = 3000;
+    const MAX_ATTEMPTS = 6;
+    const RETRY_DELAY_MS = 2000;
     const doCheck = async (attempt = 1) => {
       try {
         const res = await fetch('/api/health', { cache: 'no-store' });
@@ -328,6 +327,7 @@ export function BootSequence({ onComplete, onSkip }) {
             : `[ FATAL ] Server returned HTTP ${res.status}. Please check server logs.`);
           setServerStatus('error');
         } else {
+          setServerError(null);
           setServerStatus('ok');
         }
       } catch {
@@ -343,7 +343,7 @@ export function BootSequence({ onComplete, onSkip }) {
     };
     doCheck();
     return () => { cancelled = true; };
-  }, [staticComplete]);
+  }, [checkKey]);
 
   // After static animation completes, start dynamic phase (health check gating is separate)
   useEffect(() => {
@@ -377,11 +377,20 @@ export function BootSequence({ onComplete, onSkip }) {
     }
   }, [dynamicStep, onComplete]);
 
-  // Hard timeout: 15s max — but show error if server never responded
+  // Hard timeout: 30s max — do a final verification probe before treating as fatal
   useEffect(() => {
-    const t = setTimeout(() => {
+    const t = setTimeout(async () => {
       if (!completedRef.current) {
         if (serverStatus === 'pending') {
+          try {
+            const probe = await fetch('/api/health', { cache: 'no-store' });
+            if (probe.ok) {
+              setServerStatus('ok');
+              completedRef.current = true;
+              onComplete();
+              return;
+            }
+          } catch (_) {}
           // Server never replied — treat as fatal
           setServerError('[ FATAL ] Server health check timed out. The central database may be down. Please restore the database and restart the server.');
           setServerStatus('error');
@@ -390,7 +399,7 @@ export function BootSequence({ onComplete, onSkip }) {
           onComplete();
         }
       }
-    }, 15000);
+    }, 30000);
     return () => clearTimeout(t);
   }, [onComplete, serverStatus]);
 
@@ -653,6 +662,29 @@ export function BootSequence({ onComplete, onSkip }) {
                 <div className="text-red-300/80 leading-relaxed whitespace-pre-wrap">{serverError}</div>
                 <div className="text-slate-400/60 pt-1 border-t border-red-500/20">
                   Waiting for database to recover... The server will restart automatically once the connection is restored.
+                </div>
+                <div className="flex items-center gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setServerError(null);
+                      setServerStatus('pending');
+                      setCheckKey(k => k + 1);
+                    }}
+                    className="px-3 py-1.5 rounded text-[11px] font-mono font-medium bg-red-500/20 hover:bg-red-500/30 text-red-300 border border-red-500/40 transition-colors flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <span>↻</span> Retry Health Check
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      completedRef.current = true;
+                      onComplete();
+                    }}
+                    className="px-3 py-1.5 rounded text-[11px] font-mono text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                  >
+                    Bypass to Desktop ▸
+                  </button>
                 </div>
                 <motion.div
                   className="flex items-center gap-2 pt-1"

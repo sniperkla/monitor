@@ -1,12 +1,12 @@
 import { getConnectionModel } from '../../models/Connection.js';
 
 export class ConnectionRepository {
-  constructor(db, userId = null) {
+  constructor(db, userId = null, role = null) {
     this.db = db;
-    // 🔐 Multi-tenant scoping: when a userId is provided, EVERY query is scoped
-    // to that owner and writes are tagged. Callers without a userId keep legacy
-    // unscoped behavior (internal/server-side use only — never expose via API).
+    // 🔐 Multi-tenant scoping: when a userId is provided, queries are scoped
+    // to that owner (plus legacy unowned rows). Admins bypass scoping.
     this.userId = userId || null;
+    this.role = role || null;
     this.isMysql = db.type === 'mysql';
     this.isPostgres = db.type === 'postgres';
     this.isSql = this.isMysql || this.isPostgres;
@@ -18,12 +18,13 @@ export class ConnectionRepository {
     return v == null ? null : String(v);
   }
 
-  // Ownership gate for scoped repositories. Legacy rows with NO owner are only
-  // visible unscoped (pre-migration); once scoped, an orphan or foreign row is
-  // treated as not-found so IDs from other tenants are unfetchable.
+  // Ownership gate for scoped repositories.
   _owns(r) {
     if (!this.userId) return true;
+    if (this.role === 'admin') return true;
     const ownerId = this._rowOwnerId(r);
+    // Legacy / global unowned connections are accessible to authenticated users
+    if (!ownerId) return true;
     return ownerId === String(this.userId);
   }
 
@@ -168,17 +169,24 @@ export class ConnectionRepository {
 
   async findAll() {
     if (this.isSql) {
-      const where = this.userId ? ' WHERE userId = ?' : '';
-      const params = this.userId ? [this.userId] : [];
+      const where = (this.userId && this.role !== 'admin') ? ' WHERE (userId = ? OR userId IS NULL)' : '';
+      const params = (this.userId && this.role !== 'admin') ? [this.userId] : [];
       const res = await this.db.query(`SELECT * FROM connections${where} ORDER BY updatedAt DESC`, params);
       const rows = this.isPostgres ? res.rows : res[0];
       return rows.filter(r => this._owns(r)).map(r => this._mapSqlRow(r));
     } else {
       const model = getConnectionModel(this.db);
-      const query = this.userId
-        ? model.find({ userId: this.userId }).sort({ updatedAt: -1 })
-        : model.find({}).sort({ updatedAt: -1 });
-      return await query;
+      let filter = {};
+      if (this.userId && this.role !== 'admin') {
+        filter = {
+          $or: [
+            { userId: this.userId },
+            { userId: null },
+            { userId: { $exists: false } },
+          ],
+        };
+      }
+      return await model.find(filter).sort({ updatedAt: -1 });
     }
   }
 
@@ -198,9 +206,17 @@ export class ConnectionRepository {
     } else {
       const model = getConnectionModel(this.db);
       try {
-        // NOTE: findById() ignores extra filter fields, so ownership scoping
-        // requires an explicit findOne() compound filter.
-        const filter = this.userId ? { _id: normalizedId, userId: this.userId } : { _id: normalizedId };
+        let filter = { _id: normalizedId };
+        if (this.userId && this.role !== 'admin') {
+          filter = {
+            _id: normalizedId,
+            $or: [
+              { userId: this.userId },
+              { userId: null },
+              { userId: { $exists: false } },
+            ],
+          };
+        }
         return await model.findOne(filter);
       } catch (err) {
         if (err.name === 'CastError') return null;
