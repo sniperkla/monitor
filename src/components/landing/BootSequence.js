@@ -119,7 +119,9 @@ function TypewriterLine({ text, delay, type, onDone }) {
   const [started, setStarted] = useState(false);
   const [done, setDone] = useState(false);
   const onDoneRef = useRef(onDone);
-  onDoneRef.current = onDone;
+  useEffect(() => {
+    onDoneRef.current = onDone;
+  }, [onDone]);
   const doneRef = useRef(false);
 
   useEffect(() => {
@@ -368,12 +370,12 @@ export function BootSequence({ onComplete, onSkip }) {
     if (dynamicStep === 3 && relayStatus === 'ok') setDynamicStep(4);
   }, [dynamicStep, relayStatus]);
 
-  // All dynamic steps done → launch zoom transition, then hand off
+  // All dynamic steps done → launch zoom transition, then hand off smoothly
   useEffect(() => {
     if (dynamicStep >= 4 && !completedRef.current) {
       completedRef.current = true;
       setLaunching(true);
-      setTimeout(onComplete, 500);
+      setTimeout(onComplete, 220);
     }
   }, [dynamicStep, onComplete]);
 
@@ -412,7 +414,7 @@ export function BootSequence({ onComplete, onSkip }) {
     }
   }, []);
 
-  const done = staticDoneRef.current;
+  const done = staticProgress;
   const total = STATIC_BOOT_LINES.length + 4; // +4 dynamic steps
   const dynamicDone = dynamicStep;
   const progress = Math.min(((done + dynamicDone) / total) * 100, 100);
@@ -432,16 +434,10 @@ export function BootSequence({ onComplete, onSkip }) {
   return (
     <motion.div
       initial={{ opacity: 0 }}
-      animate={launching ? { opacity: [1, 0.96, 0.85] } : { opacity: 1 }}
+      animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      transition={launching ? { duration: 0.5, times: [0, 0.5, 1], ease: 'easeInOut' } : { duration: 0.3 }}
+      transition={{ duration: 0.25, ease: 'easeOut' }}
       className="relative w-full h-screen flex flex-col overflow-hidden bg-black"
-      style={{
-        animation: launching ? 'launch-glitch 0.12s steps(2) infinite' : 'none',
-        filter: launching ? 'blur(1.5px) brightness(1.25) contrast(1.15)' : 'none',
-        transition: launching ? 'filter 1.1s ease-in' : 'none',
-        willChange: launching ? 'transform, opacity' : 'auto',
-      }}
     >
       <style>{GLITCH_CSS}</style>
       <GalaxyBackground />

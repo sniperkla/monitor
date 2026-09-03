@@ -478,9 +478,9 @@ export function RevealScreen({ onDismiss }) {
   const [hovered, setHovered] = useState(false);
   const [cursorBlink, setCursorBlink] = useState(true);
 
-  // 0=logo, 1=title, 2=subtitle, 3=badges, 4=features, 5=buttons, 6=footer, 7=done
-  const phase = useRenderSequence(8, 500);
-  const showCursor = phase < 7;
+  // 0=logo, 1=title, 2=subtitle, 3=buttons, 4=features, 5=footer, 6=done
+  const phase = useRenderSequence(7, 450);
+  const showCursor = phase < 6;
 
   // Email & Password Auth State
   const [showAuthModal, setShowAuthModal] = useState(false);
@@ -498,13 +498,11 @@ export function RevealScreen({ onDismiss }) {
   const [authSuccess, setAuthSuccess] = useState(null);
 
   // Passkey state — only offered when the browser can actually do WebAuthn.
-  const [passkeySupported, setPasskeySupported] = useState(false);
+  const [passkeySupported] = useState(() => {
+    return typeof window !== 'undefined' ? passkeysSupported() : false;
+  });
   const [passkeyLoading, setPasskeyLoading] = useState(false);
   const [passkeyError, setPasskeyError] = useState(null);
-
-  useEffect(() => {
-    setPasskeySupported(passkeysSupported());
-  }, []);
 
   const handlePasskeySignIn = async () => {
     setPasskeyError(null);
@@ -779,37 +777,19 @@ export function RevealScreen({ onDismiss }) {
                 )}
               </div>
 
-              {/* Phase 3: Badges + cursor */}
-              <div className="flex items-center gap-2 mb-6 font-mono text-[10px] tracking-wider text-slate-400 shrink-0 min-h-[24px]">
-                <RenderItem phase={phase} targetPhase={3} direction="up">
-                  <div className="flex items-center gap-2">
-                    <div className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                      <span>ONLINE</span>
-                    </div>
-                    <div className="px-2.5 py-0.5 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-300">
-                      <span>v1.0.0</span>
-                    </div>
-                    <div className="px-2.5 py-0.5 rounded-full bg-cyan-500/10 border border-cyan-500/20 text-cyan-300">
-                      <span>SECURE</span>
-                    </div>
-                    <BlockCursor visible={phase === 3} />
-                  </div>
-                </RenderItem>
-              </div>
-
-              {/* Phase 4: Buttons — moved up for better balance */}
-              <div className="w-full max-w-xs space-y-3 shrink-0 mb-6">
-                <RenderItem phase={phase} targetPhase={4}>
-                  <div className="space-y-3">
+              {/* Phase 3: Modernized Action Buttons */}
+              <div className="w-full max-w-sm space-y-2.5 shrink-0 mb-6">
+                <RenderItem phase={phase} targetPhase={3}>
+                  <div className="space-y-2.5">
+                    {/* Primary Google Auth */}
                     <motion.button
-                      whileHover={{ scale: 1.02 }}
-                      whileTap={{ scale: 0.98 }}
+                      whileHover={{ scale: 1.015 }}
+                      whileTap={{ scale: 0.985 }}
                       onClick={() => signIn('google', { callbackUrl: '/' })}
                       className="relative w-full flex items-center justify-center gap-3 px-5 py-3 rounded-xl text-xs font-semibold cursor-pointer overflow-hidden group transition-all"
                       style={{
-                        background: 'linear-gradient(135deg, #6366f1, #06b6d4)',
-                        boxShadow: '0 4px 20px rgba(99, 102, 241, 0.25), inset 0 1px 0 rgba(255,255,255,0.2)',
+                        background: 'linear-gradient(135deg, #4f46e5 0%, #06b6d4 100%)',
+                        boxShadow: '0 4px 20px rgba(79, 70, 229, 0.3), inset 0 1px 0 rgba(255,255,255,0.25)',
                         color: '#ffffff',
                       }}
                     >
@@ -817,35 +797,36 @@ export function RevealScreen({ onDismiss }) {
                         className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent pointer-events-none"
                         initial={{ x: '-100%' }}
                         animate={{ x: '100%' }}
-                        transition={{ repeat: Infinity, duration: 2, ease: 'linear', repeatDelay: 1 }}
+                        transition={{ repeat: Infinity, duration: 2.2, ease: 'linear', repeatDelay: 1.5 }}
                         style={{ transform: 'skewX(-20deg)' }}
                       />
-                      <span className="relative flex items-center justify-center w-5 h-5 rounded-full bg-white shrink-0">
-                        <svg width="16" height="16" viewBox="0 0 24 24">
+                      <span className="relative flex items-center justify-center w-5 h-5 rounded-full bg-white shadow-sm shrink-0">
+                        <svg width="14" height="14" viewBox="0 0 24 24">
                           <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#4285F4" />
                           <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853" />
                           <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05" />
                           <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335" />
                         </svg>
                       </span>
-                      <span className="relative font-bold text-white">Sign in with Google</span>
+                      <span className="relative font-bold text-white tracking-wide">Continue with Google</span>
                     </motion.button>
 
+                    {/* WebAuthn Passkey */}
                     {passkeySupported && (
                       <>
                         <motion.button
-                          whileHover={{ scale: 1.02 }}
-                          whileTap={{ scale: 0.98 }}
+                          whileHover={{ scale: 1.015 }}
+                          whileTap={{ scale: 0.985 }}
                           onClick={handlePasskeySignIn}
                           disabled={passkeyLoading}
-                          className="w-full flex items-center justify-center gap-2 px-5 py-3 rounded-xl text-xs font-semibold cursor-pointer text-slate-200 transition-all bg-slate-800/80 hover:bg-slate-700/90 border border-emerald-700/50 shadow-md disabled:opacity-60"
+                          className="w-full flex items-center justify-center gap-2.5 px-5 py-2.5 rounded-xl text-xs font-semibold cursor-pointer text-emerald-300 transition-all bg-emerald-950/30 hover:bg-emerald-900/40 border border-emerald-500/30 shadow-sm disabled:opacity-60"
                         >
                           {passkeyLoading ? (
                             <LoaderCircle size={15} className="text-emerald-400 animate-spin" />
                           ) : (
                             <Fingerprint size={15} className="text-emerald-400" />
                           )}
-                          <span>{passkeyLoading ? 'Waiting for passkey…' : 'Sign in with Passkey'}</span>
+                          <span>{passkeyLoading ? 'Verifying Passkey…' : 'Sign in with Passkey'}</span>
                         </motion.button>
                         {passkeyError && (
                           <p className="text-[10px] text-red-400/90 text-center -mt-1">{passkeyError}</p>
@@ -853,34 +834,36 @@ export function RevealScreen({ onDismiss }) {
                       </>
                     )}
 
+                    {/* Email & Passphrase Sign In */}
                     <motion.button
-                      whileHover={{ scale: 1.02 }}
-                      whileTap={{ scale: 0.98 }}
+                      whileHover={{ scale: 1.015 }}
+                      whileTap={{ scale: 0.985 }}
                       onClick={() => setShowAuthModal(true)}
-                      className="w-full flex items-center justify-center gap-2 px-5 py-3 rounded-xl text-xs font-semibold cursor-pointer text-slate-200 transition-all bg-slate-800/80 hover:bg-slate-700/90 border border-slate-700/60 shadow-md"
+                      className="w-full flex items-center justify-center gap-2.5 px-5 py-2.5 rounded-xl text-xs font-semibold cursor-pointer text-slate-200 transition-all bg-slate-900/60 hover:bg-slate-800/70 border border-slate-700/50 hover:border-cyan-500/40 shadow-sm"
                     >
-                      <Mail size={15} className="text-cyan-400" />
-                      <span>Email & Password Sign In</span>
+                      <Mail size={14} className="text-cyan-400" />
+                      <span>Email &amp; Password Login</span>
                     </motion.button>
 
+                    {/* Guest bypass */}
                     <motion.button
                       whileHover={{ scale: 1.01 }}
                       whileTap={{ scale: 0.99 }}
                       onClick={onDismiss}
-                      className="w-full flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl text-xs font-semibold cursor-pointer text-slate-400 hover:text-slate-200 transition-colors bg-white/5 hover:bg-white/10 border border-white/5 hover:border-white/10"
+                      className="w-full flex items-center justify-center gap-1.5 px-5 py-2 rounded-xl text-[11px] font-medium cursor-pointer text-slate-400 hover:text-slate-200 transition-colors bg-white/[0.03] hover:bg-white/[0.07] border border-white/5"
                     >
-                      <ChevronRight size={14} />
-                      <span>Continue without login</span>
+                      <span>Continue to Demo Mode</span>
+                      <ChevronRight size={13} className="opacity-60" />
                     </motion.button>
                   </div>
                 </RenderItem>
               </div>
 
-              {/* Phase 5: Feature cards — compact grid below buttons */}
+              {/* Phase 4: Feature cards — compact grid below buttons */}
               <div className="grid grid-cols-2 gap-2.5 w-full max-w-xs shrink-0 mb-5">
                 {features.map((f, i) => (
                   <AnimatePresence key={f.label}>
-                    {phase >= 5 && (
+                    {phase >= 4 && (
                       <motion.div
                         initial={{ opacity: 0, y: 12, scale: 0.95 }}
                         animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -910,14 +893,14 @@ export function RevealScreen({ onDismiss }) {
                 ))}
               </div>
 
-              {/* Phase 6: Footer + cursor */}
+              {/* Phase 5: Footer + cursor */}
               <div className="min-h-[14px] flex items-center justify-center">
-                <RenderItem phase={phase} targetPhase={6}>
+                <RenderItem phase={phase} targetPhase={5}>
                   <div className="flex items-center">
                     <p className="text-[9px] md:text-[10px] text-center text-slate-500 max-w-xs leading-relaxed">
                       Login to sync settings, connections, and vault across devices.
                     </p>
-                    <BlockCursor visible={phase === 6} />
+                    <BlockCursor visible={phase === 5} />
                   </div>
                 </RenderItem>
               </div>

@@ -114,12 +114,12 @@ export default function Home() {
         </motion.div>
       )}
 
-      <AnimatePresence>
+      <AnimatePresence mode="wait">
         {bootPhase === 'boot' && (
           <motion.div
             key="boot"
             exit={{ opacity: 0 }}
-            transition={{ duration: 0.7, ease: 'easeIn' }}
+            transition={{ duration: 0.2, ease: 'easeOut' }}
             className="fixed inset-0 z-[9999] overflow-hidden bg-black"
           >
             <BootSequence
@@ -133,7 +133,7 @@ export default function Home() {
           <motion.div
             key="warp"
             exit={{ opacity: 0 }}
-            transition={{ duration: 1.0, ease: 'easeOut' }}
+            transition={{ duration: 0.3, ease: 'easeOut' }}
             className="fixed inset-0 z-[9998] overflow-hidden"
           >
             <HyperspaceTransition onComplete={handleWarpComplete} />

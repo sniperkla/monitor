@@ -707,70 +707,76 @@ export function CinematicAuthModal({
 
                         {/* Display Name */}
                         {authMode === 'register' && (
-                          <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="flex items-center px-4 py-3 gap-3">
-                            <label className="w-36 shrink-0 text-[11px] font-medium text-white/40 font-mono uppercase tracking-wide">Display Name</label>
+                          <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="flex flex-col sm:flex-row sm:items-center px-4 py-3 gap-1.5 sm:gap-3">
+                            <label className="sm:w-32 shrink-0 text-[11px] font-medium text-slate-300 font-mono uppercase tracking-wider">Display Name</label>
                             <div className="relative flex-1">
-                              <UserIcon size={13} className={`absolute left-2.5 top-2.5 transition-colors ${activeFocus === 'name' ? 'text-cyan-400' : 'text-white/18'}`} />
+                              <UserIcon size={13} className={`absolute left-3 top-3 transition-colors ${activeFocus === 'name' ? 'text-cyan-400' : 'text-slate-500'}`} />
                               <input type="text" placeholder="Agent Codename" value={name}
                                 onFocus={() => setActiveFocus('name')} onBlur={() => setActiveFocus(null)} onChange={(e) => setName(e.target.value)}
-                                className="w-full py-2 pl-8 pr-3 text-xs bg-white/5 border border-white/10 focus:border-cyan-400/60 focus:ring-1 focus:ring-cyan-500/25 rounded-lg text-slate-100 placeholder-white/18 transition-all outline-none" />
+                                className="w-full py-2 pl-9 pr-3 text-xs bg-slate-900/60 border border-slate-700/60 focus:border-cyan-400/80 focus:ring-2 focus:ring-cyan-500/20 rounded-lg text-slate-100 placeholder-slate-500 transition-all outline-none" />
                             </div>
                           </motion.div>
                         )}
 
                         {/* Email */}
                         {authMode !== 'verify' && (
-                          <div className="flex items-center px-4 py-3 gap-3">
-                            <label className="w-36 shrink-0 text-[11px] font-medium text-white/40 font-mono uppercase tracking-wide">Email</label>
+                          <div className="flex flex-col sm:flex-row sm:items-center px-4 py-3 gap-1.5 sm:gap-3">
+                            <label className="sm:w-32 shrink-0 text-[11px] font-medium text-slate-300 font-mono uppercase tracking-wider">Email Address</label>
                             <div className="relative flex-1">
-                              <Mail size={13} className={`absolute left-2.5 top-2.5 transition-colors ${activeFocus === 'email' ? 'text-cyan-400' : 'text-white/18'}`} />
+                              <Mail size={13} className={`absolute left-3 top-3 transition-colors ${activeFocus === 'email' ? 'text-cyan-400' : 'text-slate-500'}`} />
                               <input type="email" required placeholder="agent@monitor.io" value={email}
                                 onFocus={() => setActiveFocus('email')} onBlur={() => setActiveFocus(null)} onChange={(e) => setEmail(e.target.value)}
-                                className="w-full py-2 pl-8 pr-3 text-xs bg-white/5 border border-white/10 focus:border-cyan-400/60 focus:ring-1 focus:ring-cyan-500/25 rounded-lg text-slate-100 placeholder-white/18 transition-all outline-none" />
+                                className="w-full py-2 pl-9 pr-3 text-xs bg-slate-900/60 border border-slate-700/60 focus:border-cyan-400/80 focus:ring-2 focus:ring-cyan-500/20 rounded-lg text-slate-100 placeholder-slate-500 transition-all outline-none" />
                             </div>
                           </div>
                         )}
 
                         {/* Password */}
                         {(authMode === 'signin' || authMode === 'register') && (
-                          <div className="flex items-center px-4 py-3 gap-3">
-                            <label className="w-36 shrink-0 text-[11px] font-medium text-white/40 font-mono uppercase tracking-wide">Passphrase</label>
+                          <div className="flex flex-col sm:flex-row sm:items-center px-4 py-3 gap-1.5 sm:gap-3">
+                            <div className="sm:w-32 shrink-0 flex items-center justify-between">
+                              <label className="text-[11px] font-medium text-slate-300 font-mono uppercase tracking-wider">Passphrase</label>
+                              {authMode === 'signin' && (
+                                <button type="button" onClick={() => { setAuthMode('forgot'); setAuthError(null); setAuthSuccess(null); }}
+                                  className="sm:hidden text-[10px] text-cyan-400 hover:text-cyan-300 transition-colors font-mono cursor-pointer">Forgot?</button>
+                              )}
+                            </div>
                             <div className="relative flex-1">
-                              <Lock size={13} className={`absolute left-2.5 top-2.5 transition-colors ${activeFocus === 'password' ? 'text-cyan-400' : 'text-white/18'}`} />
+                              <Lock size={13} className={`absolute left-3 top-3 transition-colors ${activeFocus === 'password' ? 'text-cyan-400' : 'text-slate-500'}`} />
                               <input type={showPassword ? 'text' : 'password'} required minLength={MIN_PASSWORD_LENGTH} placeholder="••••••••••••" value={password}
                                 onFocus={() => setActiveFocus('password')} onBlur={() => setActiveFocus(null)} onChange={(e) => setPassword(e.target.value)}
-                                className="w-full py-2 pl-8 pr-9 text-xs bg-white/5 border border-white/10 focus:border-cyan-400/60 focus:ring-1 focus:ring-cyan-500/25 rounded-lg text-slate-100 placeholder-white/18 transition-all outline-none" />
+                                className="w-full py-2 pl-9 pr-9 text-xs bg-slate-900/60 border border-slate-700/60 focus:border-cyan-400/80 focus:ring-2 focus:ring-cyan-500/20 rounded-lg text-slate-100 placeholder-slate-500 transition-all outline-none" />
                               <button type="button" onClick={() => setShowPassword(!showPassword)}
-                                className="absolute right-2.5 top-2.5 text-white/22 hover:text-white/60 transition-colors cursor-pointer">
+                                className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-200 transition-colors cursor-pointer">
                                 {showPassword ? <EyeOff size={13} /> : <Eye size={13} />}
                               </button>
                             </div>
                             {authMode === 'signin' && (
                               <button type="button" onClick={() => { setAuthMode('forgot'); setAuthError(null); setAuthSuccess(null); }}
-                                className="text-[10px] text-cyan-400 hover:text-cyan-300 transition-colors font-mono cursor-pointer shrink-0">Forgot?</button>
+                                className="hidden sm:inline-block text-[10px] text-cyan-400 hover:text-cyan-300 transition-colors font-mono cursor-pointer shrink-0">Forgot?</button>
                             )}
                           </div>
                         )}
 
                         {/* Confirm Password */}
                         {authMode === 'register' && (
-                          <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="flex items-center px-4 py-3 gap-3">
-                            <label className="w-36 shrink-0 text-[11px] font-medium text-white/40 font-mono uppercase tracking-wide">Confirm Pass</label>
+                          <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="flex flex-col sm:flex-row sm:items-center px-4 py-3 gap-1.5 sm:gap-3">
+                            <label className="sm:w-32 shrink-0 text-[11px] font-medium text-slate-300 font-mono uppercase tracking-wider">Confirm Pass</label>
                             <div className="relative flex-1">
-                              <Lock size={13} className={`absolute left-2.5 top-2.5 transition-colors ${activeFocus === 'confirmPassword' ? 'text-cyan-400' : 'text-white/18'}`} />
+                              <Lock size={13} className={`absolute left-3 top-3 transition-colors ${activeFocus === 'confirmPassword' ? 'text-cyan-400' : 'text-slate-500'}`} />
                               <input type={showPassword ? 'text' : 'password'} required minLength={MIN_PASSWORD_LENGTH} placeholder="Re-enter passphrase" value={confirmPassword}
                                 onFocus={() => setActiveFocus('confirmPassword')} onBlur={() => setActiveFocus(null)} onChange={(e) => setConfirmPassword(e.target.value)}
-                                className={`w-full py-2 pl-8 pr-3 text-xs bg-white/5 border rounded-lg text-slate-100 placeholder-white/18 transition-all outline-none ${
-                                  confirmPassword ? (confirmPassword === password ? 'border-emerald-500/50 focus:border-emerald-400' : 'border-rose-500/50 focus:border-rose-400') : 'border-white/10 focus:border-cyan-400/60'
+                                className={`w-full py-2 pl-9 pr-3 text-xs bg-slate-900/60 border rounded-lg text-slate-100 placeholder-slate-500 transition-all outline-none ${
+                                  confirmPassword ? (confirmPassword === password ? 'border-emerald-500/70 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-500/20' : 'border-rose-500/70 focus:border-rose-400 focus:ring-2 focus:ring-rose-500/20') : 'border-slate-700/60 focus:border-cyan-400/80 focus:ring-2 focus:ring-cyan-500/20'
                                 }`} />
                             </div>
                             <AnimatePresence>
                               {confirmPassword && (
                                 <motion.span initial={{ scale: 0, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0 }}
-                                  className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded shrink-0 ${
-                                    confirmPassword === password ? 'text-emerald-400 bg-emerald-500/10 border border-emerald-500/20' : 'text-rose-400 bg-rose-500/10 border border-rose-500/20'
+                                  className={`text-[9px] font-mono font-bold px-2 py-0.5 rounded shrink-0 ${
+                                    confirmPassword === password ? 'text-emerald-300 bg-emerald-500/15 border border-emerald-500/30' : 'text-rose-300 bg-rose-500/15 border border-rose-500/30'
                                   }`}>
-                                  {confirmPassword === password ? '✓ OK' : '✕ NO'}
+                                  {confirmPassword === password ? '✓ MATCH' : '✕ NO MATCH'}
                                 </motion.span>
                               )}
                             </AnimatePresence>
