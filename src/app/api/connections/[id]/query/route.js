@@ -8,6 +8,7 @@ import { decrypt } from '@/utils/encryption';
 import { checkRateLimit, checkMemory, getConcurrencyLimiter, LIMITS } from '@/lib/serverGuard';
 import { attachRequestUserId, isRelayConnectionError } from '@/lib/requestUser';
 import { logger } from '@/lib/logger';
+import { getClientIp } from '@/lib/clientIp';
 
 // Validates identifier (table/column name) to prevent SQL injection.
 // Only allows alphanumeric characters, underscores, and dots (for schema.table).
@@ -25,7 +26,7 @@ export async function POST(request, { params }) {
     }
 
     // Rate limiting
-    const clientIP = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';
+    const clientIP = getClientIp(request);
     const rateCheck = checkRateLimit(clientIP);
     if (!rateCheck.allowed) {
       return NextResponse.json({ 

@@ -7,6 +7,7 @@ import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import { encrypt } from '@/utils/encryption';
 import { auditLog } from '@/lib/auditLog';
 import mongoose from 'mongoose';
+import { getClientIp } from '@/lib/clientIp';
 
 const isValidMongoId = (id) => mongoose.Types.ObjectId.isValid(id);
 
@@ -16,7 +17,7 @@ export async function GET(request, { params }) {
     const session = await getServerSession(authOptions);
     if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
-    const clientIP = request.headers.get('x-forwarded-for') || 'unknown';
+    const clientIP = getClientIp(request);
     const rateCheck = checkRateLimit(`connection_opt:${clientIP}`, 120);
     if (!rateCheck.allowed) return NextResponse.json({ success: false, error: 'Rate limit exceeded' }, { status: 429 });
 
@@ -49,7 +50,7 @@ export async function PUT(request, { params }) {
     session = await getServerSession(authOptions);
     if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
-    const clientIP = request.headers.get('x-forwarded-for') || 'unknown';
+    const clientIP = getClientIp(request);
     const rateCheck = checkRateLimit(`connection_opt:${clientIP}`, 120);
     if (!rateCheck.allowed) return NextResponse.json({ success: false, error: 'Rate limit exceeded' }, { status: 429 });
 
@@ -129,7 +130,7 @@ export async function DELETE(request, { params }) {
     session = await getServerSession(authOptions);
     if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
-    const clientIP = request.headers.get('x-forwarded-for') || 'unknown';
+    const clientIP = getClientIp(request);
     const rateCheck = checkRateLimit(`connection_opt:${clientIP}`, 120);
     if (!rateCheck.allowed) return NextResponse.json({ success: false, error: 'Rate limit exceeded' }, { status: 429 });
 

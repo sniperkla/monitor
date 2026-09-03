@@ -8,6 +8,7 @@ import connectDB from '@/lib/mongodb';
 import AuditLog, { getAuditLogModel } from '@/models/AuditLog';
 import { getActivityLogModel } from '@/models/ActivityLog';
 import { auditLog } from '@/lib/auditLog';
+import { getClientIp } from '@/lib/clientIp';
 
 // Fire-and-forget audit trail — never blocks or fails the request itself.
 //
@@ -364,7 +365,7 @@ export async function POST(request) {
     // The native timeout kills the remote process (SIGKILL via channel signal) and tears
     // down the SSH channel — nothing keeps running after the caller gives up.
     const timeoutMs = ['update', 'install-version', 'uninstall'].includes(action) ? 300_000 : 60_000;
-    const clientIp = (request.headers.get('x-forwarded-for') || '').split(',')[0].trim() || null;
+    const clientIp = getClientIp(request);
     const result = await execCommand(sshConfig, command, { timeoutMs });
 
     logger.info(`[server-monitor/app-action] Result:`, {

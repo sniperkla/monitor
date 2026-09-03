@@ -6,6 +6,7 @@ import User from '@/models/User';
 import { getSupporterStatus } from '@/utils/supporter';
 import { checkRateLimit } from '@/lib/serverGuard';
 import { logger } from '@/lib/logger';
+import { getClientIp } from '@/lib/clientIp';
 
 export const dynamic = 'force-dynamic';
 
@@ -30,7 +31,7 @@ export async function GET(request) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    const clientIP = request.headers.get('x-forwarded-for') || 'unknown';
+    const clientIP = getClientIp(request);
     const rateCheck = checkRateLimit(`user_me:${clientIP}`, 60);
     if (!rateCheck.allowed) {
       return NextResponse.json({ success: false, error: 'Rate limit exceeded' }, { status: 429 });

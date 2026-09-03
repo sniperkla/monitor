@@ -8,6 +8,7 @@ import { encrypt } from '@/utils/encryption';
 import { logger } from '@/lib/logger';
 import { requireApiAuth } from '@/lib/apiAuth';
 import { auditLog } from '@/lib/auditLog';
+import { getClientIp } from '@/lib/clientIp';
 
 // GET all connections
 export async function GET(request) {
@@ -17,7 +18,7 @@ export async function GET(request) {
     const auth = await requireApiAuth(request, { scopes: ['connections:read'] });
     if (!auth.ok) return auth.response;
 
-    const clientIP = request.headers.get('x-forwarded-for') || 'unknown';
+    const clientIP = getClientIp(request);
     const rateCheck = checkRateLimit(`connections_get:${clientIP}`, 200);
     if (!rateCheck.allowed) return NextResponse.json({ success: false, error: 'Rate limit exceeded' }, { status: 429 });
 
@@ -52,9 +53,11 @@ export async function GET(request) {
       }
     }
 
-    const isLocalhost = (host) => /localhost|127\.0\.0\.1/.test(host);
     // Show all connections — localhost connections will fallback to server resources if no relay is active
-    // No filtering needed
+    // No filtering needed.
+    // (A previous `isLocalhost` helper lived here but was unused and relied on
+    // an unanchored substring match against the host string; removed so it
+    // cannot be copied forward.)
     
     // Sanitize - don't send sensitive data
     const sanitized = connections.map(conn => ({
@@ -105,7 +108,7 @@ export async function POST(request) {
     session = await getServerSession(authOptions);
     if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
-    const clientIP = request.headers.get('x-forwarded-for') || 'unknown';
+    const clientIP = getClientIp(request);
     const rateCheck = checkRateLimit(`connections_post:${clientIP}`, 50);
     if (!rateCheck.allowed) return NextResponse.json({ success: false, error: 'Rate limit exceeded' }, { status: 429 });
 

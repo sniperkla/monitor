@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { getClientIp } from './clientIp.js';
 
 /**
  * Audit logging for sensitive actions — the security trail.
@@ -69,17 +70,19 @@ async function getCollection() {
 }
 
 /**
- * Best-effort client IP. Kept local (rather than importing
- * src/lib/ratelimit.js) so this module stays usable from any runtime.
+ * Best-effort client IP.
+ *
+ * Resolved by src/lib/clientIp.js, which is dependency-free so this module
+ * stays usable from any runtime.
+ *
+ * This used to read the LEFTMOST x-forwarded-for entry, which the client sets
+ * themselves — so anyone could write any address they liked into their own
+ * audit trail. That is forensically worse than recording nothing, because the
+ * entry looks authoritative. The shared resolver prefers the headers
+ * Cloudflare overwrites and never trusts the client-controlled position.
  */
 function clientIp(req) {
-  const get = (k) => (typeof req?.headers?.get === 'function' ? req.headers.get(k) : req?.headers?.[k]);
-  return (
-    get('x-forwarded-for')?.split(',')[0]?.trim() ||
-    get('x-real-ip') ||
-    get('cf-connecting-ip') ||
-    'unknown'
-  );
+  return getClientIp(req);
 }
 
 function userAgent(req) {

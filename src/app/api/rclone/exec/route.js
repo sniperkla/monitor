@@ -7,6 +7,7 @@ import { logger } from '@/lib/logger';
 import { auditLog } from '@/lib/auditLog';
 import { shellQuote, shellArg, shellInt } from '@/utils/shellQuote';
 import { checkRateLimit } from '@/lib/serverGuard';
+import { getClientIp } from '@/lib/clientIp';
 
 const RCLONE_RATE_LIMIT = 10;
 
@@ -41,7 +42,7 @@ export async function POST(req) {
     // start a long-running transfer on the user's server. This route relies on
     // proxy authentication, so key the limiter by the forwarded client IP and
     // target connection to avoid one target starving another.
-    const clientIp = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
+    const clientIp = getClientIp(req);
     const rateCheck = checkRateLimit(`rclone-exec:${clientIp}:${connectionId}`, RCLONE_RATE_LIMIT);
     if (!rateCheck.allowed) {
       return NextResponse.json(

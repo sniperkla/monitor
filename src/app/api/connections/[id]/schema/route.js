@@ -6,6 +6,7 @@ import { decrypt } from '@/utils/encryption';
 import { checkRateLimit } from '@/lib/serverGuard';
 import { attachRequestUserId, isRelayConnectionError, friendlyRelayErrorMessage } from '@/lib/requestUser';
 import { logger } from '@/lib/logger';
+import { getClientIp } from '@/lib/clientIp';
 
 export async function POST(request, { params }) {
   try {
@@ -15,7 +16,7 @@ export async function POST(request, { params }) {
     }
 
     // Rate limiting
-    const clientIP = request.headers.get('x-forwarded-for') || 'unknown';
+    const clientIP = getClientIp(request);
     const rateCheck = checkRateLimit(`schema:${clientIP}`);
     if (!rateCheck.allowed) {
       return NextResponse.json({ 

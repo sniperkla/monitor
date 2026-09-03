@@ -9,6 +9,7 @@ import { checkAndTrackAiUsage } from '@/utils/aiLimiter';
 import { checkRateLimit } from '@/lib/serverGuard';
 import { canUseServerAi, aiSupporterRequiredResponse } from '@/utils/supporter';
 import { logger } from '@/lib/logger';
+import { getClientIp } from '@/lib/clientIp';
 
 
 export async function POST(req) {
@@ -30,7 +31,7 @@ export async function POST(req) {
     }
 
     // Rate limiting (per-IP)
-    const clientIP = req.headers.get('x-forwarded-for') || 'unknown';
+    const clientIP = getClientIp(req);
     const limitsSetting = await SystemSetting.findOne({ key: 'ai_limits' });
     const limitsValue = limitsSetting?.value && typeof limitsSetting.value === 'object' ? limitsSetting.value : {};
     const rateValue = limitsValue?.rate && typeof limitsValue.rate === 'object' ? limitsValue.rate : {};

@@ -8,6 +8,7 @@ import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import { encrypt, decryptWithPassword, decryptWithMetadata, encryptWithPassword } from '@/utils/encryption';
 import crypto from 'crypto';
 import { logger } from '@/lib/logger';
+import { getClientIp } from '@/lib/clientIp';
 
 /**
  * Decrypt an encrypted blob using an arbitrary hex key.
@@ -105,7 +106,7 @@ export async function POST(request) {
     const session = await getServerSession(authOptions);
     if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
-    const clientIP = request.headers.get('x-forwarded-for') || 'unknown';
+    const clientIP = getClientIp(request);
     const rateCheck = checkRateLimit(`connections_import:${clientIP}`, 50);
     if (!rateCheck.allowed) return NextResponse.json({ success: false, error: 'Rate limit exceeded' }, { status: 429 });
 

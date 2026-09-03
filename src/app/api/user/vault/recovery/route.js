@@ -10,6 +10,7 @@ import path from 'path';
 import { logger } from '@/lib/logger';
 import { checkRateLimit } from '@/lib/serverGuard';
 import { auditLog } from '@/lib/auditLog';
+import { getClientIp } from '@/lib/clientIp';
 
 const RECOVERY_RATE_LIMIT = 3;
 
@@ -38,7 +39,7 @@ export async function POST(request) {
     }
 
     const userKey = session.user?.id || session.user?.email || 'unknown';
-    const clientIp = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
+    const clientIp = getClientIp(request);
     const rateCheck = checkRateLimit(`vault-recovery:${userKey}:${clientIp}`, RECOVERY_RATE_LIMIT);
     if (!rateCheck.allowed) {
       await auditLog({

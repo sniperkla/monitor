@@ -7,6 +7,7 @@ import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import { decrypt } from '@/utils/encryption';
 import { checkRateLimit } from '@/lib/serverGuard';
 import { logger } from '@/lib/logger';
+import { getClientIp } from '@/lib/clientIp';
 
 // Lightweight SSH ping - only measures connection time, no commands
 export async function POST(request, { params }) {
@@ -16,7 +17,7 @@ export async function POST(request, { params }) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    const clientIP = request.headers.get('x-forwarded-for') || 'unknown';
+    const clientIP = getClientIp(request);
     const rateCheck = checkRateLimit(`ping:${clientIP}`, 120);
     if (!rateCheck.allowed) {
       return NextResponse.json({ success: false, error: 'Rate limit exceeded' }, { status: 429 });

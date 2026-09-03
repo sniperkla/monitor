@@ -11,8 +11,12 @@ const MAX_ATTEMPTS = 10;
 const WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 
 function checkSigninRateLimit(request) {
-  const forwarded = request.headers.get('x-forwarded-for');
-  const ip = forwarded?.split(',')[0]?.trim() || request.headers.get('x-real-ip') || 'unknown';
+  // getClientIp() (re-exported from @/lib/clientIp) reads the header
+  // Cloudflare overwrites and ignores the client-controlled leftmost XFF
+  // entry. The previous inline version keyed on that leftmost entry, so
+  // `curl -H 'x-forwarded-for: <random>'` gave every signin attempt a fresh
+  // bucket and this 10-attempt limit never applied.
+  const ip = getClientIp(request);
   const now = Date.now();
   const entry = signinAttempts.get(ip) || { count: 0, windowStart: now };
 

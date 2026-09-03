@@ -8,6 +8,7 @@ import { checkRateLimit } from '@/lib/serverGuard';
 import { checkAndTrackAiUsage } from '@/utils/aiLimiter';
 import { canUseServerAi, aiSupporterRequiredResponse } from '@/utils/supporter';
 import { logger } from '@/lib/logger';
+import { getClientIp } from '@/lib/clientIp';
 
 
 const stripAiQueryEnvelope = (text = '') => {
@@ -206,7 +207,7 @@ export async function POST(request, { params }) {
     const dbPerMinute = Number.isFinite(Number(rateValue.dbPerMinute)) ? Math.max(1, Number(rateValue.dbPerMinute)) : 15;
 
     // Rate limiting for AI queries (expensive)
-    const clientIP = request.headers.get('x-forwarded-for') || 'unknown';
+    const clientIP = getClientIp(request);
     const rateCheck = checkRateLimit(`ai:${clientIP}`, dbPerMinute);
     if (!rateCheck.allowed) {
       return NextResponse.json({ 

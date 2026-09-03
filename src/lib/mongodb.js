@@ -9,6 +9,7 @@ import {
   findActiveRelay,
   applyRelayTarget,
   normalizeRelayDatabaseUri,
+  isLocalhostUri,
 } from './sshTunnel.js';
 import { Pool as PgPool } from 'pg';
 import { logger } from './logger.js';
@@ -86,7 +87,12 @@ export async function getTunnelFromRequest() {
  */
 export async function getActiveRelayInfo(uri, relayName) {
   if (!global.__activeRelays?.size) return null;
-  if (!/localhost|127\.0\.0\.1/.test(uri)) return null;
+  // Use a parsed-hostname check, not a substring test. A substring test matches
+  // any URI that merely *contains* the word "localhost" anywhere (path, query,
+  // database name, username), which lets a public address such as
+  // "mongodb://169.254.169.254/latest/localhost" be misclassified as a relay
+  // target and skip the SSRF guard entirely.
+  if (!isLocalhostUri(uri)) return null;
 
   try {
     uri = normalizeRelayDatabaseUri(uri);
@@ -197,7 +203,12 @@ async function getDynamicConnection(uri, tunnelConfig = null, relayName = null) 
 
   // 1. Try Local Relay Agent (free, no SSH/Tailscale needed)
   if (!tunnelConfig?.enabled) {
-    const isLocalhost = /localhost|127\.0\.0\.1/.test(uri);
+    // Parsed-hostname check. The old substring test both over-matched
+    // ("mongodb://u:localhost@db.example.com" was wrongly treated as a relay
+    // target) and under-matched ("mongodb://127.0.0.2:27017" contains neither
+    // literal, so the relay path was skipped and production would connect
+    // directly to its own loopback).
+    const isLocalhost = isLocalhostUri(uri);
     const relayInfo = isLocalhost ? await getActiveRelayInfo(uri, relayName) : null;
 
     if (relayInfo) {

@@ -7,12 +7,15 @@ import { authOptions } from '@/lib/auth';
 // "disappear" (it was being read from an empty vault DB).
 import connectDB, { getCenterUri } from '@/lib/mongodb';
 import ActivityLog, { getActivityLogModel } from '@/models/ActivityLog';
+import { getClientIp } from '@/lib/clientIp';
 
 const VALID_CATEGORIES = ['app', 'file', 'server', 'deploy', 'backup', 'sync', 'auth'];
 const VALID_STATUSES = ['success', 'error', 'info'];
 
-function getClientIp(request) {
-  return (request.headers.get('x-forwarded-for') || '').split(',')[0].trim() || null;
+/** Client IP for the activity trail, or null when it cannot be resolved. */
+function activityClientIp(request) {
+  const ip = getClientIp(request);
+  return ip === 'unknown' ? null : ip;
 }
 
 /**
@@ -127,7 +130,7 @@ export async function POST(request) {
       target: target ? String(target).slice(0, 200) : null,
       status,
       meta: meta && JSON.stringify(meta).length <= MAX_META_BYTES ? meta : null,
-      ip: getClientIp(request),
+      ip: activityClientIp(request),
     });
 
     return NextResponse.json({ success: true });

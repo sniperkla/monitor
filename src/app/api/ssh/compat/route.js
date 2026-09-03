@@ -7,6 +7,7 @@ import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
 import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import { COMPAT_PROBE, parseCompatOutput } from '@/lib/serverCompat';
 import { logger } from '@/lib/logger';
+import { getClientIp } from '@/lib/clientIp';
 
 /**
  * POST /api/ssh/compat — run the cross-distro capability probe on a server.
@@ -19,7 +20,7 @@ export async function POST(request) {
     const session = await getServerSession(authOptions);
     if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
-    const clientIP = request.headers.get('x-forwarded-for') || 'unknown';
+    const clientIP = getClientIp(request);
     if (!checkRateLimit(`compat:${clientIP}:${session.user?.id}`, 20).allowed) {
       return NextResponse.json({ success: false, error: 'Rate limit exceeded' }, { status: 429 });
     }

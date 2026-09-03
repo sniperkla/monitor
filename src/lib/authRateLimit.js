@@ -64,15 +64,17 @@ function ensureCleanup() {
 }
 
 /**
- * Extract the client IP from a Next.js Request, matching the pattern used
- * elsewhere in the codebase (x-forwarded-for → x-real-ip → 'unknown').
+ * Extract the client IP from a Next.js Request.
+ *
+ * Delegates to src/lib/clientIp.js. It used to take the leftmost
+ * x-forwarded-for entry, which is client-controlled: an attacker could set
+ * their own XFF and thereby choose their own rate-limit bucket, defeating
+ * every limit below by rotating the header on each request. Verified live.
+ *
+ * Re-exported here so existing `import { getClientIp } from '@/lib/authRateLimit'`
+ * callers keep working.
  */
-export function getClientIp(request) {
-  const forwarded = request.headers.get('x-forwarded-for');
-  return forwarded?.split(',')[0]?.trim() ||
-    request.headers.get('x-real-ip') ||
-    'unknown';
-}
+export { getClientIp } from './clientIp.js';
 
 /**
  * Check whether an action is allowed for a given IP.

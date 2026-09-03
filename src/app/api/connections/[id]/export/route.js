@@ -11,6 +11,7 @@ import {
   LIMITS 
 } from '@/lib/serverGuard';
 import { logger } from '@/lib/logger';
+import { getClientIp } from '@/lib/clientIp';
 
 function validateIdentifier(name) {
   if (typeof name !== 'string' || name.length === 0 || name.length > 128) return false;
@@ -64,7 +65,7 @@ export async function POST(request, { params }) {
     } catch (_) {}
 
     // Rate limit check
-    const clientIP = request.headers.get('x-forwarded-for') || 'unknown';
+    const clientIP = getClientIp(request);
     const rateCheck = checkRateLimit(`export:${clientIP}`, 200); // Increased to 200 to support batch exports of many tables
     if (!rateCheck.allowed) {
       return NextResponse.json({ 

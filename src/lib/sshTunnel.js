@@ -213,10 +213,48 @@ export function applyRelayTarget(relay, host, port) {
 }
 
 /**
+ * Hostnames that refer to the machine itself, in every spelling we accept.
+ */
+const LOCAL_HOSTNAMES = new Set([
+  'localhost',
+  'localhost.localdomain',
+  '127.0.0.1',
+  '0.0.0.0',
+  '::1',
+  '[::1]',
+]);
+
+/**
+ * True when the URI's host is this machine.
+ *
+ * This MUST parse the URI and compare `url.hostname`. The previous
+ * implementation substring-matched the raw URI
+ * (`/localhost|127\.0\.0\.1/.test(uri)`), which fired on the password, the
+ * database name, or any path segment — so `mongodb://169.254.169.254/x/localhost`
+ * was treated as a local URI. That routed the request through the relay branch,
+ * which skips the SSRF guard, turning any internal address into a reachable one
+ * by appending one path segment.
+ */
+export function isLocalhostUri(uri) {
+  if (!uri) return false;
+  let host = '';
+  try {
+    host = new URL(uri).hostname || '';
+  } catch {
+    return false; // unparseable -> not local; let the SSRF guard deal with it
+  }
+  host = host.toLowerCase().replace(/^\[|\]$/g, '');
+  if (LOCAL_HOSTNAMES.has(host)) return true;
+  // A bracketed IPv6 literal arrives with the brackets stripped above. Also
+  // treat any 127.x address as local.
+  return /^127(\.\d{1,3}){3}$/.test(host);
+}
+
+/**
  * If a URI was saved with a relay proxy port (e.g. :54309), restore the real DB port.
  */
 export function normalizeRelayDatabaseUri(uri) {
-  if (!uri || !/localhost|127\.0\.0\.1/.test(uri)) return uri;
+  if (!uri || !isLocalhostUri(uri)) return uri;
   if (!global.__activeRelays?.size) return uri;
 
   try {

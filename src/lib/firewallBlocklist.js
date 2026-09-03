@@ -1,4 +1,5 @@
 import { isIP } from 'node:net';
+import { getClientIp } from '@/lib/clientIp';
 
 export const MAX_BLOCKLIST_ENTRIES = 2000000;
 export const MAX_BLOCKLIST_BYTES = 128 * 1024 * 1024;
@@ -113,13 +114,27 @@ export function getConflictingEntries(entries, protectedIps) {
 }
 
 export function remoteClientIps(headers) {
-  // Cloudflare supplies the original visitor address; otherwise the bundled
-  // Nginx proxy overwrites X-Real-IP with its immediate client address. Both
-  // are safer than X-Forwarded-For, which clients can append to.
-  const directClient = headers.get('cf-connecting-ip') || headers.get('x-real-ip') || '';
-  const forwarded = directClient || headers.get('x-forwarded-for') || '';
-  return forwarded.split(',').map(value => normalizeEntry(value)?.split('/')[0]).filter(Boolean)
-    .filter(ip => ip !== '127.0.0.1' && ip !== '::1');
+  // These addresses become the "protected" set when a blocklist is applied —
+  // entries the firewall is told never to drop. A client-controlled value here
+  // would let a caller add any address they liked to that set, permanently
+  // shielding it from the blocklist they are supposedly applying.
+  //
+  // So this resolves through the shared helper (CF-Connecting-IP first, then
+  // the trusted XFF position, then the nginx-overwritten X-Real-IP) instead of
+  // trusting the client-supplied leftmost XFF entry.
+  //
+  // Returns [] when the address cannot be resolved, i.e. no automatic
+  // self-protection. That is the conservative direction, but it does mean an
+  // admin could lock themselves out — confirm the proxy headers reach the app
+  // in staging before applying a blocklist to a host you cannot reach.
+  const ip = getClientIp({ headers });
+  if (ip === 'unknown') {
+    console.warn('[firewallBlocklist] client IP unresolved — no automatic protection will be applied');
+    return [];
+  }
+  return [normalizeEntry(ip)?.split('/')[0]]
+    .filter(Boolean)
+    .filter((entry) => entry !== '127.0.0.1' && entry !== '::1');
 }
 
 // ── Composite block set (manual quick blocks survive re-applies) ────────────

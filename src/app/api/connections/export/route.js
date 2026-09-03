@@ -6,6 +6,7 @@ import connectDB from '@/lib/mongodb';
 import { ConnectionRepository } from '@/lib/repositories/ConnectionRepository';
 import { decryptWithMetadata, encryptWithPassword } from '@/utils/encryption';
 import { logger } from '@/lib/logger';
+import { getClientIp } from '@/lib/clientIp';
 
 /**
  * GET /api/connections/export?mode=encrypted|plain&password=...
@@ -19,7 +20,7 @@ export async function GET(request) {
     const session = await getServerSession(authOptions);
     if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
-    const clientIP = request.headers.get('x-forwarded-for') || 'unknown';
+    const clientIP = getClientIp(request);
     const rateCheck = checkRateLimit(`connections_export:${clientIP}`, 50);
     if (!rateCheck.allowed) return NextResponse.json({ success: false, error: 'Rate limit exceeded' }, { status: 429 });
 

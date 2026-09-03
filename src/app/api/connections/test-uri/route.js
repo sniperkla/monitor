@@ -6,10 +6,11 @@ import mysql from 'mysql2/promise';
 import { Client } from 'pg';
 import { checkRateLimit } from '@/lib/serverGuard';
 import { getActiveRelayInfo } from '@/lib/mongodb';
-import { rewriteUriForTunnel, normalizeRelayDatabaseUri } from '@/lib/sshTunnel';
+import { rewriteUriForTunnel, normalizeRelayDatabaseUri, isLocalhostUri } from '@/lib/sshTunnel';
 import { assertSafeUri } from '@/lib/ssrfGuard';
 import { logger } from '@/lib/logger';
 import { safeConnectionError } from '@/lib/connectionError';
+import { getClientIp } from '@/lib/clientIp';
 
 /**
  * POST - Test a raw database URI connection
@@ -25,7 +26,7 @@ export async function POST(request) {
     }
 
     // Rate limiting
-    const clientIP = request.headers.get('x-forwarded-for') || 'unknown';
+    const clientIP = getClientIp(request);
     const rateCheck = checkRateLimit(`test-uri:${clientIP}`, 20);
     if (!rateCheck.allowed) {
       return NextResponse.json({ 
@@ -63,7 +64,11 @@ export async function POST(request) {
     const normalizedUri = normalizeRelayDatabaseUri(uri);
     let effectiveUri = normalizedUri;
     let usedRelay = false;
-    const isLocalhost = /localhost|127\.0\.0\.1/.test(normalizedUri);
+    // Parsed-hostname check, not a substring test: see the comment on
+    // isLocalhostUri in src/lib/sshTunnel.js. A substring match lets
+    // "mongodb://169.254.169.254/x?db=localhost" be treated as a relay target
+    // and thereby skip the SSRF guard below.
+    const isLocalhost = isLocalhostUri(normalizedUri);
     if (isLocalhost) {
       const relayInfo = await getActiveRelayInfo(normalizedUri);
       if (relayInfo) {

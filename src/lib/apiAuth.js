@@ -4,6 +4,7 @@ import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import connectDB from '@/lib/mongodb';
 import ApiKey from '@/models/ApiKey';
+import { getClientIp } from '@/lib/clientIp';
 
 /**
  * API key issuance, verification, and scope enforcement.
@@ -171,15 +172,18 @@ export async function requireApiAuth(request, { scopes = [] } = {}) {
   }
 
   // Stamp last-used. Fire-and-forget: telemetry must not slow or fail a request.
+  const lastUsedIpFrom = (r) => {
+    const ip = getClientIp(r);
+    return ip === 'unknown' ? null : ip;
+  };
   ApiKey.updateOne(
     { _id: identity.keyId },
     {
       $set: {
         lastUsedAt: new Date(),
-        lastUsedIp:
-          request?.headers?.get?.('x-forwarded-for')?.split(',')[0]?.trim() ||
-          request?.headers?.get?.('x-real-ip') ||
-          null,
+        // Resolved through the shared helper. A client-set XFF would let an
+        // API-key caller falsify the "last used from" record.
+        lastUsedIp: lastUsedIpFrom(request),
       },
     }
   ).catch(() => {});

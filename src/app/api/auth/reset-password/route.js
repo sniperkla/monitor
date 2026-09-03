@@ -5,6 +5,7 @@ import connectDB from '@/lib/mongodb';
 import User from '@/models/User';
 import { logger } from '@/lib/logger';
 import { checkRateLimit, getClientIp } from '@/lib/authRateLimit';
+import { validatePassword } from '@/lib/passwordPolicy';
 
 /**
  * POST /api/auth/reset-password
@@ -34,14 +35,16 @@ export async function POST(request) {
       );
     }
 
-    if (newPassword.length < 6) {
+    const cleanEmailForPolicy = String(email).trim().toLowerCase();
+    const policy = validatePassword(newPassword, { email: cleanEmailForPolicy });
+    if (!policy.ok) {
       return NextResponse.json(
-        { success: false, error: 'New password must be at least 6 characters long' },
+        { success: false, error: policy.error },
         { status: 400 }
       );
     }
 
-    const cleanEmail = String(email).trim().toLowerCase();
+    const cleanEmail = cleanEmailForPolicy;
     await connectDB(process.env.MONGODB_URI, true);
 
     const user = await User.findOne({ email: cleanEmail });

@@ -8,6 +8,8 @@ import { checkLoginAllowed, recordLoginFailure, recordLoginSuccess } from '@/lib
 import { evaluateMfa } from '@/lib/mfa';
 import { auditLog } from '@/lib/auditLog';
 import { consumeLoginTicket } from '@/lib/webauthn';
+import { getClientIp } from '@/lib/clientIp';
+import { evaluateEmailVerification } from '@/lib/emailVerificationGate';
 
 /**
  * Honour the progressive delay returned by the login throttle.
@@ -111,10 +113,9 @@ export const authOptions = {
         // depending on which NextAuth entry point invoked authorize().
         const _hdr = (h, k) =>
           typeof h?.get === 'function' ? h.get(k) : h?.[k] ?? h?.[String(k).toLowerCase()];
-        const ip =
-          _hdr(req?.headers, 'x-forwarded-for')?.split(',')[0]?.trim() ||
-          _hdr(req?.headers, 'x-real-ip') ||
-          'unknown';
+        // Shared resolver. The leftmost XFF entry is attacker-controlled, so
+        // login audit records and the login throttle must not key on it.
+        const ip = getClientIp(req);
         const userAgent = _hdr(req?.headers, 'user-agent') || null;
 
         // Minimal Request-shaped shim so auditLog() can read IP/UA. NextAuth
@@ -150,6 +151,25 @@ export const authOptions = {
           throw new Error("Invalid email or password");
         }
 
+        // ---- Email verification ----
+        // Checked AFTER the password so the error cannot be used to discover
+        // which addresses are registered but unconfirmed. Accounts that were
+        // issued a code and never confirmed it are refused; accounts that
+        // predate the verification feature are grandfathered rather than
+        // locked out. See src/lib/emailVerificationGate.js.
+        const emailGate = evaluateEmailVerification(dbUser);
+        if (!emailGate.allowed) {
+          // Not a failed credential — do not advance the lockout ladder, or a
+          // legitimate user mid-verification could be throttled by an attacker
+          // who knows their password is not yet set up.
+          loginAudit('auth.login.blocked', {
+            reason: 'email_unverified',
+            userId: dbUser._id.toString(),
+            ip,
+          });
+          throw new Error(emailGate.error);
+        }
+
         // ---- Second factor (admin / supporter accounts only) ----
         // Password is already verified at this point, so the gate is a real
         // second factor rather than a hint that the password was correct.
@@ -163,6 +183,18 @@ export const authOptions = {
         }
 
         recordLoginSuccess({ email: cleanEmail });
+
+        // F-09: privileged account with no second factor. The enforcement
+        // switch (MFA_REQUIRE_ADMINS) is deliberately left off — turning it on
+        // before every admin has enrolled would lock the operators out — so
+        // without this warning the gap is completely invisible until somebody
+        // reads the audit collection. Make it loud on the way in.
+        if (mfaGate.requiresEnrollment) {
+          logger.warn(
+            `[auth] privileged account ${cleanEmail} (role=${dbUser.role}) signed in with no MFA enrolled. ` +
+            'Enrol via /api/user/mfa, then set MFA_REQUIRE_ADMINS=true to enforce.'
+          );
+        }
 
         // A recovery code is single-use. The gate cannot persist it (it only
         // ever sees a lean object), so retire it here — after the password and
@@ -190,6 +222,11 @@ export const authOptions = {
           userId: dbUser._id.toString(),
           ip,
           mfa: mfaGate.method || 'none',
+          // Surfaced so a deployment can count how many accounts are still
+          // grandfathered past the email gate, and how many are privileged
+          // without a second factor. Both are debts to be paid down.
+          emailVerification: emailGate.reason,
+          mfaRequiredButUnenrolled: mfaGate.requiresEnrollment === true,
         });
 
         const supporterActive = dbUser.role === 'admin' ||
@@ -262,6 +299,19 @@ export const authOptions = {
       }
 
       if (account?.provider === "google") {
+        // Google asserts whether it has verified the address. Trust that
+        // assertion rather than re-verifying: they own the mailbox.
+        //
+        // Without this, the upsert below relied on `setDefaultsOnInsert`, which
+        // leaves `emailVerified: false` forever. Every Google account would
+        // then be permanently stuck behind the verification gate.
+        if (profile?.email_verified !== true) {
+          logger.warn(
+            `[auth] refusing Google sign-in for ${user?.email}: IdP reports email_verified=${profile?.email_verified}`
+          );
+          return false;
+        }
+
         try {
           await connectDB(process.env.MONGODB_URI, true);
           const profileImage = profile?.picture || user.image;
@@ -271,6 +321,9 @@ export const authOptions = {
               name: user.name,
               image: profileImage,
               googleId: profile?.sub,
+              // Confirming via Google also settles a pending credentials
+              // verification: the address is proven, whatever path got here.
+              emailVerified: true,
               ...(isAdminEmail ? { role: 'admin' } : {}),
             },
             $setOnInsert: {

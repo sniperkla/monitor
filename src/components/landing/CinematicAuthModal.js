@@ -8,6 +8,9 @@ import {
   Sparkles, ArrowRight, LoaderCircle, Cpu, Wifi, Battery,
   Search, ChevronLeft, ChevronRight, Activity, Zap,
 } from 'lucide-react';
+// Shared with the server so the form's minimum can never drift from the policy
+// enforced by /api/auth/register and /api/auth/reset-password.
+import { MIN_PASSWORD_LENGTH } from '@/lib/passwordPolicy';
 
 /* ═══════════════════════════════════════════════════════
    CANVAS — vibrant particle network with color cycling
@@ -734,7 +737,7 @@ export function CinematicAuthModal({
                             <label className="w-36 shrink-0 text-[11px] font-medium text-white/40 font-mono uppercase tracking-wide">Passphrase</label>
                             <div className="relative flex-1">
                               <Lock size={13} className={`absolute left-2.5 top-2.5 transition-colors ${activeFocus === 'password' ? 'text-cyan-400' : 'text-white/18'}`} />
-                              <input type={showPassword ? 'text' : 'password'} required minLength={6} placeholder="••••••••••••" value={password}
+                              <input type={showPassword ? 'text' : 'password'} required minLength={MIN_PASSWORD_LENGTH} placeholder="••••••••••••" value={password}
                                 onFocus={() => setActiveFocus('password')} onBlur={() => setActiveFocus(null)} onChange={(e) => setPassword(e.target.value)}
                                 className="w-full py-2 pl-8 pr-9 text-xs bg-white/5 border border-white/10 focus:border-cyan-400/60 focus:ring-1 focus:ring-cyan-500/25 rounded-lg text-slate-100 placeholder-white/18 transition-all outline-none" />
                               <button type="button" onClick={() => setShowPassword(!showPassword)}
@@ -755,7 +758,7 @@ export function CinematicAuthModal({
                             <label className="w-36 shrink-0 text-[11px] font-medium text-white/40 font-mono uppercase tracking-wide">Confirm Pass</label>
                             <div className="relative flex-1">
                               <Lock size={13} className={`absolute left-2.5 top-2.5 transition-colors ${activeFocus === 'confirmPassword' ? 'text-cyan-400' : 'text-white/18'}`} />
-                              <input type={showPassword ? 'text' : 'password'} required minLength={6} placeholder="Re-enter passphrase" value={confirmPassword}
+                              <input type={showPassword ? 'text' : 'password'} required minLength={MIN_PASSWORD_LENGTH} placeholder="Re-enter passphrase" value={confirmPassword}
                                 onFocus={() => setActiveFocus('confirmPassword')} onBlur={() => setActiveFocus(null)} onChange={(e) => setConfirmPassword(e.target.value)}
                                 className={`w-full py-2 pl-8 pr-3 text-xs bg-white/5 border rounded-lg text-slate-100 placeholder-white/18 transition-all outline-none ${
                                   confirmPassword ? (confirmPassword === password ? 'border-emerald-500/50 focus:border-emerald-400' : 'border-rose-500/50 focus:border-rose-400') : 'border-white/10 focus:border-cyan-400/60'
@@ -804,7 +807,7 @@ export function CinematicAuthModal({
                             {resetCode && (
                               <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="flex items-center px-4 py-3 gap-3">
                                 <label className="w-36 shrink-0 text-[11px] font-medium text-white/40 font-mono uppercase tracking-wide">New Passphrase</label>
-                                <input type="password" required minLength={6} placeholder="Min 6 characters" value={newPassword}
+                                <input type="password" required minLength={MIN_PASSWORD_LENGTH} placeholder={`Min ${MIN_PASSWORD_LENGTH} characters`} value={newPassword}
                                   onChange={(e) => setNewPassword(e.target.value)}
                                   className="flex-1 py-2 px-3 text-xs bg-white/5 border border-white/10 focus:border-cyan-400/60 rounded-lg text-slate-100 placeholder-white/18 transition-all outline-none" />
                               </motion.div>

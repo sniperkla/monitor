@@ -30,6 +30,7 @@
 
 import { Ratelimit } from '@upstash/ratelimit';
 import { Redis } from '@upstash/redis';
+import { getClientIp as resolveClientIp } from './clientIp.js';
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -38,23 +39,21 @@ import { Redis } from '@upstash/redis';
 export const RATE_LIMIT_DISABLED = process.env.RATE_LIMIT_DISABLE === '1';
 
 /**
- * How many reverse-proxy hops to trust when reading x-forwarded-for.
+ * Client IP resolution now lives in src/lib/clientIp.js.
  *
- * XFF is client-controlled unless you know exactly how many proxies sit in
- * front of you. The chain is written left-to-right as each proxy appends:
+ * The previous implementation here had two problems:
  *
- *     x-forwarded-for: <spoofed>, <spoofed>, <real client>, <proxy1>, <proxy2>
+ *  1. It defaulted TRUSTED_PROXY_HOPS to 0, meaning the leftmost
+ *     x-forwarded-for entry — which the client controls outright.
+ *  2. Even with hops configured, the index was `parts.length - N - 1`, which
+ *     is off by one and selects an attacker-supplied entry. For a Cloudflare +
+ *     nginx chain ("<spoofed>, <real>, <cf-egress>") with N=2 it returned the
+ *     spoofed address.
  *
- * With N trusted proxies, the last entry we should trust is at
- * `parts[parts.length - N - 1]` — the rightmost non-trusted hop.
- *
- * Default 0 preserves the historical behaviour (leftmost entry) so enabling
- * this module cannot silently re-bucket an existing deployment's traffic.
- * Set TRUSTED_PROXY_HOPS=1 for a single nginx/Caddy, =2 for nginx behind
- * Cloudflare, etc. Leaving it at 0 means an attacker who sends their own
- * XFF header picks their own rate-limit bucket.
+ * Both are fixed in the shared module, along with preferring the headers
+ * Cloudflare actually overwrites. See that file for the topology and the
+ * resolution order.
  */
-const TRUSTED_PROXY_HOPS = Number.parseInt(process.env.TRUSTED_PROXY_HOPS || '0', 10) || 0;
 
 /**
  * Per-route buckets. First matching rule wins.
@@ -122,23 +121,7 @@ const EXEMPT_PATTERNS = [
  * @returns {string}
  */
 export function getClientIp(request) {
-  const xff = request?.headers?.get?.('x-forwarded-for');
-  if (xff) {
-    const parts = xff.split(',').map((p) => p.trim()).filter(Boolean);
-    if (parts.length) {
-      if (TRUSTED_PROXY_HOPS > 0) {
-        const idx = parts.length - TRUSTED_PROXY_HOPS - 1;
-        if (idx >= 0 && parts[idx]) return parts[idx];
-      }
-      // Legacy behaviour: leftmost.
-      return parts[0];
-    }
-  }
-  return (
-    request?.headers?.get?.('x-real-ip') ||
-    request?.headers?.get?.('cf-connecting-ip') ||
-    'unknown'
-  );
+  return resolveClientIp(request);
 }
 
 // ---------------------------------------------------------------------------

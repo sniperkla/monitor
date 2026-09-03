@@ -159,7 +159,58 @@ test('trigger validates external credentials in-route', () => {
   assert.ok(trigger.includes('Invalid or missing secret token'), 'invalid secret is rejected');
 });
 
-test('database route retains defence-in-depth session checks', () => {
-  assert.ok(database.includes('getServerSession'), 'route checks session itself');
-  assert.match(database, /if \(!session\)[\s\S]{0,180}status: 401/, 'GET/POST reject unauthenticated access');
+test('database route retains defence-in-depth auth checks', () => {
+  // The point of this guard is that the route must NOT rely on middleware for
+  // authorization — middleware only proves "some session exists", not that the
+  // caller is allowed to repoint the server's database.
+  //
+  // The route now delegates to requireAdmin(), which is strictly stronger than
+  // a bare getServerSession(): it re-reads the role from the database instead
+  // of trusting the session object (which deliberately omits `role`), and
+  // writes an audit entry on every denial. So the assertion is that the route
+  // goes through requireAdmin AND that requireAdmin really authenticates.
+  const requireAdminSrc = readSrc('src/lib/requireAdmin.js');
+  const migrate = readSrc('src/app/api/settings/database/migrate/route.js');
+
+  for (const [name, src] of [['database', database], ['migrate', migrate]]) {
+    assert.ok(src.includes('requireAdmin'), `${name} route must call requireAdmin()`);
+    assert.ok(!src.includes('getServerSession('),
+      `${name} route must not hand-roll a session check; use requireAdmin() so the role is re-checked against the DB`);
+    // Both handlers must bail out on the helper's error response.
+    const gates = [...src.matchAll(/const \{[^}]*\} = await requireAdmin\(request\);\s*\n\s*if \(error\) return error;/g)];
+    assert.ok(gates.length >= 1, `${name} route must return requireAdmin's error response immediately`);
+  }
+
+  // Delegation is only as good as the helper.
+  assert.ok(requireAdminSrc.includes('getServerSession(authOptions)'),
+    'requireAdmin must establish a session with the app authOptions');
+  assert.match(requireAdminSrc, /if \(!session\?\.user\?\.id\)[\s\S]{0,300}status: 401/,
+    'requireAdmin must 401 when there is no session');
+  assert.match(requireAdminSrc, /if \(!isAdminByRole\)[\s\S]{0,600}status: 403/,
+    'requireAdmin must 403 when the authenticated user is not an admin');
+  assert.ok(requireAdminSrc.includes("await User.findById(session.user.id)"),
+    'requireAdmin must re-read the role from the database, not from the session');
+});
+
+test('database route does not echo credentials and gates SSRF', () => {
+  // Regression guards for F-07 (production DB URI disclosed to any session)
+  // and F-10 (repoint the app DB at an attacker-chosen host with no SSRF check).
+  // Scope this to the GET handler's response body: `uri` legitimately appears
+  // elsewhere in the file (as a POST parameter, and inside describeUri(uri)).
+  const getFn = database.slice(database.indexOf('export async function GET'));
+  const getBody = getFn.slice(0, getFn.indexOf('\nexport async function POST'));
+  const returnedKeys = [...getBody.matchAll(/^\s*(\w+)[,:]/gm)].map((m) => m[1]);
+  assert.ok(!returnedKeys.includes('uri') && !returnedKeys.includes('currentUri'),
+    'GET must not return the raw URI or currentUri (they embed production credentials)');
+  assert.ok(getBody.includes('describeUri'), 'GET should return a redacted descriptor instead');
+  // The descriptor itself must not leak the userinfo section.
+  const describeFn = database.slice(database.indexOf('function describeUri'));
+  assert.ok(!/\burl\.(username|password)\b/.test(describeFn.slice(0, describeFn.indexOf('\n}'))),
+    'describeUri must not expose credentials');
+
+  assert.ok(database.includes('assertSafeUri'), 'POST must run the supplied URI through the SSRF guard');
+  assert.ok(database.includes('auditLog'), 'repointing the server database must be audited');
+  // Migration moves stored credentials to another database: opt-in only.
+  assert.ok(database.includes('body.migrate === true'),
+    'auto-migration must be opt-in, not the default');
 });

@@ -10,6 +10,7 @@ import { checkRateLimit } from '@/lib/serverGuard';
 import { attachRequestUserId, isRelayConnectionError } from '@/lib/requestUser';
 import { logger } from '@/lib/logger';
 import { auditLog } from '@/lib/auditLog';
+import { getClientIp } from '@/lib/clientIp';
 
 // POST test connection
 export async function POST(request, { params }) {
@@ -26,7 +27,7 @@ export async function POST(request, { params }) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    const clientIP = request.headers.get('x-forwarded-for') || 'unknown';
+    const clientIP = getClientIp(request);
     userId = session?.user?.id || session?.user?.sub || session.user?.email;
     userEmail = session.user?.email;
 

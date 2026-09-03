@@ -11,6 +11,7 @@ import { canUseServerAi, aiSupporterRequiredResponse } from '@/utils/supporter';
 import { readdir, readFile } from 'fs/promises';
 import { join } from 'path';
 import { logger } from '@/lib/logger';
+import { getClientIp } from '@/lib/clientIp';
 
 // ── Local-relay AI proxy ─────────────────────────────────────────────────────
 // When the user has an active Local Relay agent announcing the 'ai' capability,
@@ -424,7 +425,7 @@ export async function POST(req) {
     const rateValue = limitsValue?.rate && typeof limitsValue.rate === 'object' ? limitsValue.rate : {};
     const sshPerMinute = Number.isFinite(Number(rateValue.sshPerMinute)) ? Math.max(1, Number(rateValue.sshPerMinute)) : 30;
 
-    const clientIP = req.headers.get('x-forwarded-for') || 'unknown';
+    const clientIP = getClientIp(req);
     const rateCheck = checkRateLimit(`ai:ssh:${clientIP}`, sshPerMinute);
     if (!rateCheck.allowed) {
       return NextResponse.json(

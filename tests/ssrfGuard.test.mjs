@@ -214,18 +214,39 @@ test('assertSafeUri: blocks case-varied localhost (LOCALHOST)', async (t) => {
   assert.strictEqual(result.safe, false, 'case variation must not bypass the localhost rule');
 });
 
-test("assertSafeUri: does not over-block 0177.0.0.1 (genuinely public 177.0.0.1)", async (t) => {
-  // Counter-case: the leading zero here is NOT an octal prefix to the socket
-  // layer in dotted form — this host really is 177.0.0.1, which is public.
-  // Guards against a future "fix" that rejects anything starting with 0.
-  if (await skipUnlessResolvable(t, '0177.0.0.1')) return;
-  const local = (await dns.lookup('0177.0.0.1', { all: true })).map((e) => e.address);
-  if (local.includes('127.0.0.1')) {
-    t.skip('platform parses 0177.0.0.1 as loopback — block is correct here');
-    return;
+test('assertSafeUri: rejects non-canonical numeric hosts on every platform', async () => {
+  // How a leading zero is interpreted is libc-dependent, and the two
+  // platforms this project runs on disagree:
+  //
+  //   host            macOS (dev)     Debian/glibc (prod, node:22-bookworm)
+  //   0177.0.0.1      177.0.0.1       127.0.0.1
+  //   012.0.0.1       12.0.0.1        10.0.0.1
+  //
+  // macOS even disagrees with itself (it reads 0300.0250.0.1 as octal but
+  // 0177.0.0.1 as decimal). There is therefore no canonicalisation that is
+  // correct everywhere, and in production — the environment that matters —
+  // these ARE loopback / RFC1918. The guard refuses the ambiguity rather
+  // than betting on a resolver.
+  //
+  // This replaces an earlier counter-test that asserted 0177.0.0.1 must stay
+  // reachable because it is "genuinely public 177.0.0.1". That premise holds
+  // on macOS only and is unsound for the deployed image.
+  for (const host of ['0177.0.0.1', '012.0.0.1', '2130706433', '0x7f000001', '0x7f.1', '0177.1']) {
+    const result = await assertSafeUri(`mongodb://${host}:27017`);
+    assert.strictEqual(result.safe, false, `${host} is a non-canonical numeric address and must be rejected`);
   }
-  const result = await assertSafeUri('mongodb://0177.0.0.1:27017');
-  assert.strictEqual(result.safe, true, 'public 177.0.0.1 must stay reachable');
+});
+
+test('assertSafeUri: does not over-block canonical public addresses', async () => {
+  // Guards against a future "fix" that rejects anything containing a 0 or
+  // that pattern-matches too eagerly on numeric-looking hosts.
+  for (const host of ['8.8.8.8', '1.1.1.1', '177.0.0.1', '12.0.0.1']) {
+    const result = await assertSafeUri(`mongodb://${host}:27017`);
+    assert.strictEqual(result.safe, true, `canonical public address ${host} must stay reachable`);
+  }
+  // Ordinary hostnames must never be read as numeric addresses either.
+  const named = await assertSafeUri('mongodb://db.example.com:27017');
+  assert.strictEqual(named.safe, true, 'ordinary hostnames must not be canonicalised');
 });
 
 test('ssrfGuard keeps the dns.lookup fallback in resolveHost', () => {

@@ -6,6 +6,7 @@ import User from '@/models/User';
 import { sendVerificationEmail } from '@/lib/resend';
 import { logger } from '@/lib/logger';
 import { checkRateLimit, getClientIp } from '@/lib/authRateLimit';
+import { validatePassword } from '@/lib/passwordPolicy';
 
 export async function POST(request) {
   try {
@@ -32,9 +33,10 @@ export async function POST(request) {
     const cleanEmail = String(email).trim().toLowerCase();
     const cleanName = String(name || '').trim() || cleanEmail.split('@')[0];
 
-    if (password.length < 6) {
+    const policy = validatePassword(password, { email: cleanEmail });
+    if (!policy.ok) {
       return NextResponse.json(
-        { success: false, error: 'Password must be at least 6 characters long' },
+        { success: false, error: policy.error },
         { status: 400 }
       );
     }
