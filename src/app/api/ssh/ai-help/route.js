@@ -12,6 +12,7 @@ import { readdir, readFile } from 'fs/promises';
 import { join } from 'path';
 import { logger } from '@/lib/logger';
 import { getClientIp } from '@/lib/clientIp';
+import { assertSafeHttpUrl } from '@/lib/ssrfGuard';
 
 // ── Local-relay AI proxy ─────────────────────────────────────────────────────
 // When the user has an active Local Relay agent announcing the 'ai' capability,
@@ -858,6 +859,12 @@ Now output the <diff> needed to complete the request.`;
       }
 
       const apiUrl = isManual ? (prefs?.aiEndpoint || 'https://api.openai.com/v1/chat/completions') : 'https://api.groq.com/openai/v1/chat/completions';
+      if (isManual) {
+        const ssrfCheck = await assertSafeHttpUrl(apiUrl);
+        if (!ssrfCheck.safe) {
+          return NextResponse.json({ success: false, error: `Invalid or blocked AI endpoint URL: ${ssrfCheck.reason}` }, { status: 400 });
+        }
+      }
       const actualModelToRequest = isManual ? (prefs?.aiCustomModel || 'gpt-3.5-turbo') : mainModel;
 
       try {
@@ -1023,6 +1030,12 @@ Now output the <diff> needed to complete the request.`;
 
             if (!manualApiKey) {
                 lastError = new Error('Manual AI service: Missing API Key in settings');
+                break;
+            }
+
+            const ssrfCheck = await assertSafeHttpUrl(manualEndpoint);
+            if (!ssrfCheck.safe) {
+                lastError = new Error(`Invalid or blocked AI endpoint URL: ${ssrfCheck.reason}`);
                 break;
             }
 

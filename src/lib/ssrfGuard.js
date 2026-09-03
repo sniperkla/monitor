@@ -442,6 +442,30 @@ export async function assertSafeUri(uri) {
 }
 
 /**
+ * Validates an HTTP/HTTPS endpoint URL against SSRF (private/internal/reserved addresses).
+ * Rejects non-HTTP protocols, malformed URLs, and internal/loopback/cloud metadata destinations.
+ *
+ * @param {string} url - The HTTP/HTTPS URL to check
+ * @returns {Promise<{ safe: boolean, reason: string }>}
+ */
+export async function assertSafeHttpUrl(url) {
+  if (!url || typeof url !== 'string') {
+    return { safe: false, reason: 'URL must be a non-empty string' };
+  }
+  const trimmed = url.trim();
+  let parsed;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return { safe: false, reason: 'Invalid URL format' };
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return { safe: false, reason: `Unsupported protocol ${parsed.protocol} — only http: and https: are allowed` };
+  }
+  return await assertSafeUri(trimmed);
+}
+
+/**
  * Validate a single hostname or IP literal.
  *
  * @returns {string|null} a human-readable reason if blocked, or null if OK.

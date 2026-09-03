@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import dns from 'node:dns/promises';
 import { readFileSync } from 'node:fs';
-import { extractHost, assertSafeUri } from '../src/lib/ssrfGuard.js';
+import { extractHost, assertSafeUri, assertSafeHttpUrl } from '../src/lib/ssrfGuard.js';
 
 test('extractHost: parses mongodb URI with single host', () => {
   const hosts = extractHost('mongodb://user:pass@cluster.example.com:27017/db');
@@ -260,3 +260,37 @@ test('ssrfGuard keeps the dns.lookup fallback in resolveHost', () => {
     'ssrfGuard.js must retain a dns.lookup() fallback — encoded IP notations depend on it'
   );
 });
+
+test('assertSafeHttpUrl: blocks loopback and private metadata URLs', async () => {
+  const metadata = await assertSafeHttpUrl('http://169.254.169.254/latest/meta-data');
+  assert.strictEqual(metadata.safe, false);
+
+  const localhost = await assertSafeHttpUrl('http://127.0.0.1:8080/v1');
+  assert.strictEqual(localhost.safe, false);
+
+  const privateIp = await assertSafeHttpUrl('http://10.0.0.5:3000');
+  assert.strictEqual(privateIp.safe, false);
+});
+
+test('assertSafeHttpUrl: rejects non-http protocols and malformed strings', async () => {
+  const fileUrl = await assertSafeHttpUrl('file:///etc/passwd');
+  assert.strictEqual(fileUrl.safe, false);
+
+  const gopherUrl = await assertSafeHttpUrl('gopher://127.0.0.1:6379');
+  assert.strictEqual(gopherUrl.safe, false);
+
+  const empty = await assertSafeHttpUrl('');
+  assert.strictEqual(empty.safe, false);
+
+  const notAUrl = await assertSafeHttpUrl('not a valid url');
+  assert.strictEqual(notAUrl.safe, false);
+});
+
+test('assertSafeHttpUrl: allows legitimate public HTTP/HTTPS endpoints', async () => {
+  const openai = await assertSafeHttpUrl('https://api.openai.com/v1/chat/completions');
+  assert.strictEqual(openai.safe, true);
+
+  const groq = await assertSafeHttpUrl('https://api.groq.com/openai/v1');
+  assert.strictEqual(groq.safe, true);
+});
+

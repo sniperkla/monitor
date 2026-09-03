@@ -11,6 +11,7 @@ import OpenAI from 'openai';
 import { resolveUserIdQuery, normalizeUserId } from '@/lib/deployUserQuery';
 import { canUseServerAi, aiSupporterRequiredResponse } from '@/utils/supporter';
 import { logger } from '@/lib/logger';
+import { assertSafeHttpUrl } from '@/lib/ssrfGuard';
 
 
 // Supported model options
@@ -205,6 +206,11 @@ export async function POST(request) {
       modelName = effectiveAiCustomModel || 'gpt-3.5-turbo';
       apiKey = effectiveAiApiKey || apiKey;
       isCustomEndpoint = !baseURL.includes('api.groq.com') && !baseURL.includes('api.openai.com');
+
+      const ssrfCheck = await assertSafeHttpUrl(baseURL);
+      if (!ssrfCheck.safe) {
+        return NextResponse.json({ success: false, error: `Invalid or blocked AI endpoint URL: ${ssrfCheck.reason}` }, { status: 400 });
+      }
 
       if (!apiKey) {
         return NextResponse.json({ success: false, error: 'Custom AI API Key is required. Enter your API key in the Auto Deploy → AI Settings section.' }, { status: 400 });

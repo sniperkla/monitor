@@ -9,6 +9,7 @@ import { checkAndTrackAiUsage } from '@/utils/aiLimiter';
 import { canUseServerAi, aiSupporterRequiredResponse } from '@/utils/supporter';
 import { logger } from '@/lib/logger';
 import { getClientIp } from '@/lib/clientIp';
+import { assertSafeHttpUrl } from '@/lib/ssrfGuard';
 
 
 const stripAiQueryEnvelope = (text = '') => {
@@ -101,6 +102,11 @@ const requestChatCompletion = async ({ modelName, messages, aiConfig, apiKey, pr
     const manualApiKey = prefs?.aiApiKey;
     const customModel = prefs?.aiCustomModel || 'gpt-3.5-turbo';
     if (!manualApiKey) throw new Error('Manual AI service: Missing API Key in settings');
+
+    const ssrfCheck = await assertSafeHttpUrl(manualEndpoint);
+    if (!ssrfCheck.safe) {
+      throw new Error(`Invalid or blocked AI endpoint URL: ${ssrfCheck.reason}`);
+    }
 
     const response = await fetch(manualEndpoint, {
       method: 'POST',

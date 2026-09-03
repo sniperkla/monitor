@@ -416,6 +416,32 @@ export default async function wrappedProxy(req) {
     UNSAFE_METHODS.has(req.method) &&
     pathname.startsWith("/api/") &&
     !isCsrfExemptPath(pathname) &&
+    !externalDeployTrigger
+  ) {
+    // Defense-in-depth: If the browser provides an Origin header on mutating requests,
+    // ensure it matches this origin or configured allowlist.
+    const origin = req.headers.get("origin");
+    if (origin) {
+      const allowedOrigins = new Set([req.nextUrl.origin]);
+      if (process.env.NEXTAUTH_URL) {
+        try { allowedOrigins.add(new URL(process.env.NEXTAUTH_URL).origin); } catch {}
+      }
+      if (process.env.AUTH_URL) {
+        try { allowedOrigins.add(new URL(process.env.AUTH_URL).origin); } catch {}
+      }
+      if (!allowedOrigins.has(origin)) {
+        return NextResponse.json(
+          { success: false, error: "Cross-origin request forbidden" },
+          { status: 403, headers: { "Content-Security-Policy": csp, ...CROSS_ORIGIN_HEADERS } }
+        );
+      }
+    }
+  }
+
+  if (
+    UNSAFE_METHODS.has(req.method) &&
+    pathname.startsWith("/api/") &&
+    !isCsrfExemptPath(pathname) &&
     !hasNonCookieCredential(req) &&
     !externalDeployTrigger
   ) {

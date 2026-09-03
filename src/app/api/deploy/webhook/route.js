@@ -13,6 +13,7 @@ import { setRunning, clearRunning, killRunning, getRunning, tryAcquireStartLock,
 import OpenAI from 'openai';
 import { resolveUserIdQuery, normalizeUserId } from '@/lib/deployUserQuery';
 import { logger } from '@/lib/logger';
+import { assertSafeHttpUrl } from '@/lib/ssrfGuard';
 
 // Simple per-project rate limiter for deployment triggers
 const triggerRateLimit = new Map();
@@ -229,6 +230,12 @@ async function extractErrorForTelegram(config, logText) {
       baseURL = userEndpoint;
       modelName = effectiveAiCustomModel || 'gpt-3.5-turbo';
       apiKey = effectiveAiApiKey || apiKey;
+
+      const ssrfCheck = await assertSafeHttpUrl(baseURL);
+      if (!ssrfCheck.safe) {
+        logger.warn(`[deploy/webhook] Blocked unsafe AI endpoint URL: ${ssrfCheck.reason}`);
+        apiKey = null; // Suppress outbound call
+      }
     } else if (effectiveAiModel && effectiveAiModel !== 'auto') {
       modelName = effectiveAiModel;
     }

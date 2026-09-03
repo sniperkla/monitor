@@ -10,6 +10,7 @@ import { checkRateLimit } from '@/lib/serverGuard';
 import { canUseServerAi, aiSupporterRequiredResponse } from '@/utils/supporter';
 import { logger } from '@/lib/logger';
 import { getClientIp } from '@/lib/clientIp';
+import { assertSafeHttpUrl } from '@/lib/ssrfGuard';
 
 
 export async function POST(req) {
@@ -149,6 +150,12 @@ ${guideContext?.commands?.map(c => `- ${c.code} (${c.label})`).join('\n') || 'No
 
             if (!manualApiKey) {
                 lastError = new Error('Manual AI service: Missing API Key in settings');
+                break;
+            }
+
+            const ssrfCheck = await assertSafeHttpUrl(manualEndpoint);
+            if (!ssrfCheck.safe) {
+                lastError = new Error(`Invalid or blocked AI endpoint URL: ${ssrfCheck.reason}`);
                 break;
             }
 
