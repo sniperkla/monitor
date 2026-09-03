@@ -48,3 +48,27 @@ test('deploy config sanitizes duplicate-key errors', () => {
   // Raw driver text must not be returned from either catch path.
   assert.ok(!deploy.includes('error: error.message'), 'raw error message must not reach clients');
 });
+
+test('GET /api/connections/[id] withholds secret fields and returns sanitized indicators', () => {
+  const connDetail = readSrc('src/app/api/connections/[id]/route.js');
+  assert.match(connDetail, /hasPassword:\s*!!connection\.password/);
+  assert.match(connDetail, /hasPrivateKey:\s*!!connection\.privateKey/);
+  assert.match(connDetail, /hasPassphrase:\s*!!connection\.passphrase/);
+  assert.ok(!connDetail.includes('data: connection'), 'raw connection object must not be returned directly in GET');
+});
+
+test('POST /api/connections/[id]/reveal route enforces session, rate limits, and audits disclosure', () => {
+  const reveal = readSrc('src/app/api/connections/[id]/reveal/route.js');
+  assert.match(reveal, /const session = await getServerSession\(authOptions\)/);
+  assert.match(reveal, /if \(!session\?\.user\?\.id\)/);
+  assert.match(reveal, /rateLimit\(`reveal:u:\${session\.user\.id}`/);
+  assert.match(reveal, /action:\s*['"]connection\.reveal['"]/);
+});
+
+test('/api/health withholds internal mongo, relay, and memory telemetry', () => {
+  const health = readSrc('src/app/api/health/route.js');
+  assert.ok(!health.includes('mongo: {'), 'health route must not disclose mongo readyState');
+  assert.ok(!health.includes('relay: {'), 'health route must not disclose relay count');
+  assert.ok(!health.includes('memory: {'), 'health route must not disclose memory safe status');
+});
+

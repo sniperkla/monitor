@@ -294,3 +294,12 @@ test('assertSafeHttpUrl: allows legitimate public HTTP/HTTPS endpoints', async (
   assert.strictEqual(groq.safe, true);
 });
 
+test('assertSafeUri: blocks IPv6 unspecified address and documentation ranges', async () => {
+  const unspecified = await assertSafeUri('mongodb://[::]:27017/db');
+  assert.strictEqual(unspecified.safe, false);
+
+  const docRange = await assertSafeUri('mongodb://[2001:db8::1]:27017/db');
+  assert.strictEqual(docRange.safe, false);
+});
+
+

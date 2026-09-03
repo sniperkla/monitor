@@ -94,9 +94,9 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
         let fullConn = conn;
         if (conn.storage === 'db' && conn._id) {
           try {
-            const res = await apiFetch(`/api/connections/${conn._id}`);
+            const res = await apiFetch(`/api/connections/${conn._id}/reveal`, { method: 'POST' });
             const data = await res.json();
-            if (data.success && data.data) fullConn = data.data;
+            if (data.success && data.data) fullConn = { ...conn, ...data.data };
           } catch (_) { /* use sanitized data as fallback */ }
         }
 
@@ -151,9 +151,9 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
       let fullConn = conn;
       if (conn.storage === 'db' && conn._id) {
         try {
-          const res = await apiFetch(`/api/connections/${conn._id}`);
+          const res = await apiFetch(`/api/connections/${conn._id}/reveal`, { method: 'POST' });
           const data = await res.json();
-          if (data.success && data.data) fullConn = data.data;
+          if (data.success && data.data) fullConn = { ...conn, ...data.data };
         } catch (_) { /* use sanitized data as fallback */ }
       }
 
@@ -345,9 +345,9 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
         let fullConn = conn;
         if (conn.storage === 'db' && conn._id) {
           try {
-            const res = await apiFetch(`/api/connections/${conn._id}`);
+            const res = await apiFetch(`/api/connections/${conn._id}/reveal`, { method: 'POST' });
             const data = await res.json();
-            if (data.success && data.data) fullConn = data.data;
+            if (data.success && data.data) fullConn = { ...conn, ...data.data };
           } catch (_) { /* use sanitized fallback */ }
         }
 

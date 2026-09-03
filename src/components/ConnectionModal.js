@@ -327,19 +327,20 @@ export default function ConnectionModal({ onClose, editConnection = null }) {
           passphrase: editConnection.passphrase
         };
 
-        // If it's a DB connection, the encrypted data isn't in the state (sanitized).
-        // Fetch the full connection object from the server.
+        // If it's a DB connection, call the dedicated reveal endpoint
         if (editConnection.storage === 'db') {
-          const fetchRes = await apiFetch(`/api/connections/${editConnection._id}`);
+          const fetchRes = await apiFetch(`/api/connections/${editConnection._id}/reveal`, {
+            method: 'POST',
+          });
           const fetchData = await fetchRes.json();
           if (fetchData.success) {
-            encryptedData = {
-              password: fetchData.data.password,
-              privateKey: fetchData.data.privateKey,
-              passphrase: fetchData.data.passphrase
-            };
+            setRevealedSecrets(fetchData.data);
+            setShowMasterPasswordPrompt(false);
+            setVerifyPassword('');
+            if (revealTarget === 'password') setShowPassword(true);
+            return;
           } else {
-            throw new Error(fetchData.error || 'Failed to fetch full connection details');
+            throw new Error(fetchData.error || 'Failed to fetch connection details');
           }
         }
 

@@ -35,7 +35,45 @@ export async function GET(request, { params }) {
       return NextResponse.json({ success: false, error: 'Connection not found' }, { status: 404 });
     }
 
-    return NextResponse.json({ success: true, data: connection });
+    // Sanitize - never send raw secrets (passwords, private keys, passphrases) in GET responses.
+    const sanitized = {
+      _id: connection._id,
+      name: connection.name,
+      type: connection.type || 'ssh',
+      dbProvider: connection.dbProvider || 'mongodb',
+      host: connection.host,
+      port: connection.port,
+      username: connection.username,
+      database: connection.database,
+      authType: connection.authType,
+      keyFileName: connection.keyFileName,
+      tags: connection.tags,
+      color: connection.color,
+      lastConnected: connection.lastConnected,
+      status: connection.status,
+      isFavorite: connection.isFavorite,
+      authSource: connection.authSource || null,
+      notes: connection.notes,
+      createdAt: connection.createdAt,
+      updatedAt: connection.updatedAt,
+      // Indicator flags only (true/false) — no ciphertext or plaintext
+      hasPassword: !!connection.password,
+      hasPrivateKey: !!connection.privateKey,
+      hasPassphrase: !!connection.passphrase,
+      // SSH Tunnel metadata (no secrets)
+      sshTunnel: !!connection.sshTunnel,
+      sshTunnelHost: connection.sshTunnelHost || null,
+      sshTunnelPort: connection.sshTunnelPort || 22,
+      sshTunnelUser: connection.sshTunnelUser || null,
+      sshTunnelAuth: connection.sshTunnelAuth || 'password',
+      hasSshTunnelPassword: !!connection.sshTunnelPassword,
+      hasSshTunnelPrivateKey: !!connection.sshTunnelPrivateKey,
+      hasSshTunnelPassphrase: !!connection.sshTunnelPassphrase,
+      relayName: connection.relayName || null,
+      systemInfo: connection.systemInfo || null,
+    };
+
+    return NextResponse.json({ success: true, data: sanitized });
   } catch (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }

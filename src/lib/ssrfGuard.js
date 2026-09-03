@@ -65,6 +65,8 @@ const BLOCKED_IPV6_PREFIXES = [
 
 // More precise IPv6 blocklist:
 const BLOCKED_IPV6 = [
+  // ::/128 — unspecified address (connects to loopback on unix)
+  { bytes: [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0], prefixLen: 128 },
   // ::1/128 — loopback
   { bytes: [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1], prefixLen: 128 },
   // fe80::/10 — link-local
@@ -73,6 +75,10 @@ const BLOCKED_IPV6 = [
   { bytes: [0xfc,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0], prefixLen: 7 },
   // ff00::/8 — multicast
   { bytes: [0xff,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0], prefixLen: 8 },
+  // 2001:db8::/32 — documentation (RFC 3849)
+  { bytes: [0x20,0x01,0x0d,0xb8,0,0,0,0,0,0,0,0,0,0,0,0], prefixLen: 32 },
+  // 100::/64 — discard-only prefix (RFC 6666)
+  { bytes: [0x01,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0], prefixLen: 64 },
   // ::ffff:0:0/96 — IPv4-mapped (delegate to IPv4 check)
 ];
 
@@ -513,7 +519,7 @@ async function validateHost(hostname) {
   }
 
   if (host.toLowerCase() === 'localhost' || host.toLowerCase() === 'localhost.localdomain'
-      || host === '::1' || host === '[::1]') {
+      || host === '::1' || host === '[::1]' || host === '::' || host === '[::]') {
     logger.warn(`[ssrf-guard] Rejecting URI with localhost hostname`);
     return 'Blocked localhost address';
   }

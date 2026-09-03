@@ -45,9 +45,13 @@ export async function POST(request) {
       }, { status: 400 });
     }
 
-    // Validate protocol
+    const trimmedUri = uri.trim();
+
+    // Validate protocol strictly — only database protocols allowed.
+    // Non-database schemes (file:, gopher:, http:, ftp:, etc.) are rejected immediately.
     const allowed = ['mongodb://', 'mongodb+srv://', 'mysql://', 'postgres://', 'postgresql://'];
-    const isValid = allowed.some(p => uri.startsWith(p));
+    const lower = trimmedUri.toLowerCase();
+    const isValid = allowed.some(p => lower.startsWith(p));
     
     if (!isValid) {
       return NextResponse.json({ 
@@ -61,7 +65,7 @@ export async function POST(request) {
     // connections are routed through the relay (which connects from the
     // user's machine, not the server). If no relay is available, localhost
     // connections fall through to the SSRF guard which blocks them.
-    const normalizedUri = normalizeRelayDatabaseUri(uri);
+    const normalizedUri = normalizeRelayDatabaseUri(trimmedUri);
     let effectiveUri = normalizedUri;
     let usedRelay = false;
     // Parsed-hostname check, not a substring test: see the comment on
