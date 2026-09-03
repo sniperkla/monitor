@@ -1599,7 +1599,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
   const tabColors = { sky: 'bg-sky-500', purple: 'bg-purple-500', emerald: 'bg-emerald-500', violet: 'bg-violet-500', amber: 'bg-amber-500' };
 
   return (
-    <div className="@container flex flex-col h-full bg-transparent text-[var(--text-primary)]">
+    <div className="@container flex flex-col h-full min-h-0 bg-transparent text-[var(--text-primary)] overflow-hidden">
         {/* ── Toolbar ── */}
         <div className="flex items-center justify-between bg-[var(--bg-secondary)] border-b border-[var(--border-color)] px-2 @xl:px-4 h-12 shrink-0 gap-2">
             <div className="flex items-center gap-2 @xl:gap-4 min-w-0 flex-1 overflow-hidden">

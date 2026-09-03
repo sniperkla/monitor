@@ -2361,7 +2361,7 @@ export default function ServerMonitorApp() {
   // MAIN APP VIEW
   // ─────────────────────────────────────────────────────────────────────────────
   return (
-    <div className="@container flex flex-col h-full bg-[var(--bg-primary)] text-[var(--text-primary)]">
+    <div className="@container flex flex-col h-full min-h-0 bg-[var(--bg-primary)] text-[var(--text-primary)] overflow-hidden">
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 border-b border-[var(--border-color)] bg-[var(--bg-secondary)]">
         <div className="flex items-center gap-3">

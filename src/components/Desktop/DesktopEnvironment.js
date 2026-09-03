@@ -737,7 +737,7 @@ export default function DesktopEnvironment({ bootPhase }) {
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
-      className={`h-screen w-screen relative overflow-hidden bg-cover bg-center select-none desktop-env ${!osState.glassmorphism ? 'no-glass' : ''} ${isShaking ? 'fallout-screen-shake' : ''}`}
+      className={`h-[100dvh] min-h-screen w-screen relative overflow-hidden bg-cover bg-center select-none desktop-env ${!osState.glassmorphism ? 'no-glass' : ''} ${isShaking ? 'fallout-screen-shake' : ''}`}
       style={{
         '--glass-blur': `${osState.glassIntensity ?? 20}px`,
         backgroundImage: `url("${osState.wallpaper}")`,

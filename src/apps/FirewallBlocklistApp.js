@@ -1031,7 +1031,7 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
   const canApply = Boolean(connectionId && entryCount && !conflicts.length && matchesConfirmation(confirmation) && status?.tools?.ipset && status?.tools?.iptables && status?.access !== 'limited');
 
   return (
-    <div className="@container h-full overflow-y-auto bg-[var(--fw-app-bg,#0a0d14)] text-slate-100 font-sans selection:bg-indigo-500/30 selection:text-indigo-200">
+    <div className="@container h-full min-h-0 overflow-y-auto bg-[var(--fw-app-bg,#0a0d14)] text-slate-100 font-sans selection:bg-indigo-500/30 selection:text-indigo-200">
       <div className="max-w-6xl mx-auto p-4 @xl:p-6 @4xl:p-8 space-y-6">
         
         {/* ==================================================================== */}

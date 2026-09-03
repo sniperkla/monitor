@@ -1452,7 +1452,7 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
   }
 
   return (
-    <div className="@container flex flex-col h-full bg-[var(--bg-primary)] text-[var(--text-primary)] font-sans overflow-hidden">
+    <div className="@container flex flex-col h-full min-h-0 bg-[var(--bg-primary)] text-[var(--text-primary)] font-sans overflow-hidden">
 
       {/* ── Top Bar ── */}
       <div className="shrink-0 px-4 py-2.5 border-b border-[var(--border-color)] bg-[var(--bg-secondary)] flex items-center gap-3">

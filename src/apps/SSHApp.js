@@ -142,7 +142,7 @@ export default function SSHApp({ windowId, activeTab: propActiveTab }) {
   }, [sidebarWidth]);
 
   return (
-    <div className="@container flex h-full w-full bg-transparent text-[var(--text-primary)] font-sans overflow-hidden relative">
+    <div className="@container flex h-full min-h-0 w-full bg-transparent text-[var(--text-primary)] font-sans overflow-hidden relative">
       {/* Mobile Overlay */}
       {isMobile && (
         <div
@@ -224,7 +224,7 @@ export default function SSHApp({ windowId, activeTab: propActiveTab }) {
       )}
 
       {/* Main content area */}
-      <div className="flex-1 flex flex-col min-w-0 bg-transparent relative">
+      <div className="flex-1 flex flex-col min-w-0 min-h-0 bg-transparent relative">
         {/* Top Navigation */}
         <div className="h-14 border-b border-[var(--border-color)] flex items-center px-4 @3xl:px-6 bg-[var(--bg-primary)]/20 [backdrop-filter:blur(var(--glass-blur,12px))] sticky top-0 z-10">
            <div className="flex items-center gap-2 @3xl:gap-4 flex-1">
@@ -302,7 +302,7 @@ export default function SSHApp({ windowId, activeTab: propActiveTab }) {
         </div>
 
         {/* All other views: use the original padded scrollable main */}
-        <main className={state.view !== 'terminal' ? 'flex-1 overflow-y-auto relative custom-scrollbar p-6' : 'hidden h-full'}>
+        <main className={state.view !== 'terminal' ? 'flex-1 min-h-0 overflow-y-auto relative custom-scrollbar p-6' : 'hidden h-full'}>
           <div className={state.view === 'dashboard' ? 'block h-full' : 'hidden h-full'}>
             <Dashboard
               onNewConnection={handleNewConnection}

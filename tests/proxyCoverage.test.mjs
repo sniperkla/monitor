@@ -19,6 +19,7 @@ const proxy = readSrc('src/proxy.js');
 const trigger = readSrc('src/app/api/deploy/trigger/route.js');
 const database = readSrc('src/app/api/settings/database/route.js');
 const connections = readSrc('src/app/api/connections/route.js');
+const appContext = readSrc('src/context/AppContext.js');
 
 test('matcher includes settings/database', () => {
   const matcher = proxy.slice(proxy.indexOf('export const config'));
@@ -190,6 +191,19 @@ test('database route retains defence-in-depth auth checks', () => {
     'requireAdmin must 403 when the authenticated user is not an admin');
   assert.ok(requireAdminSrc.includes("await User.findById(session.user.id)"),
     'requireAdmin must re-read the role from the database, not from the session');
+});
+
+test('shared connection inventory waits for session resolution', () => {
+  // Connection-aware apps consume `connectionsReady` on their first render.
+  // The provider must never publish an empty inventory that was fetched before
+  // NextAuth finished resolving the signed-in session; navigating to SSH
+  // Manager must not be required to force a retry.
+  assert.match(appContext, /sessionStatus === 'loading'\) return;/,
+    'AppContext must defer the initial connection fetch while the session loads');
+  assert.match(appContext, /Fetching connections after session ready/,
+    'AppContext must bootstrap the shared inventory after authentication resolves');
+  assert.match(appContext, /SET_CONNECTIONS_READY', payload: false/,
+    'a refresh must mark the inventory pending so apps do not consume stale data');
 });
 
 test('database route does not echo credentials and gates SSRF', () => {

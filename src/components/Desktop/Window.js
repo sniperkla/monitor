@@ -629,7 +629,7 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
           </div>
 
           {/* Window Content */}
-          <div className="flex-1 overflow-x-auto overflow-y-auto relative scrollbar-hide select-text" style={{ WebkitOverflowScrolling: 'touch' }}>
+          <div className="flex-1 min-h-0 min-w-0 overflow-x-auto overflow-y-auto relative scrollbar-hide select-text" style={{ WebkitOverflowScrolling: 'touch' }}>
             {component}
           </div>
         </motion.div>

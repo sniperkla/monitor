@@ -160,7 +160,7 @@ export default function FilesApp({ onEditConnection, initialConnection, initialC
   }, [persistPath]);
 
   return (
-    <div className="@container flex flex-col h-full bg-transparent text-[var(--text-primary)] overflow-hidden">
+    <div className="@container flex flex-col h-full min-h-0 bg-transparent text-[var(--text-primary)] overflow-hidden">
       <div className="flex-1 min-h-0 relative">
         {isSelecting ? (
           <div className="absolute inset-0 bg-[var(--bg-primary)]/40 overflow-y-auto z-10">

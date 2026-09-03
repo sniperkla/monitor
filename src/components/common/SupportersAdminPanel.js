@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { motion } from 'framer-motion';
-import { Heart, RefreshCw, LoaderCircle, Crown, Ticket, Copy, Check, Ban, Inbox, ShieldCheck, ShieldOff, Clock, AlertCircle } from 'lucide-react';
+import { Heart, RefreshCw, LoaderCircle, Crown, Ticket, Copy, Check, Ban, Inbox, ShieldCheck, ShieldOff, Clock, AlertCircle, Users, KeyRound, Activity, Gift } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 function StatusBadge({ status }) {
@@ -147,27 +147,45 @@ export default function SupportersAdminPanel() {
 
   return (
     <div className="space-y-5 pb-8">
-      {/* Header */}
-      <div className="flex items-center gap-3">
-        <div className="w-10 h-10 rounded-2xl bg-pink-500/15 border border-pink-500/25 flex items-center justify-center shrink-0">
-          <Heart size={18} className="text-pink-400" />
+      {/* Admin header — intentionally distinct from the public Supporter card. */}
+      <div className="relative overflow-hidden rounded-2xl border border-amber-500/20 bg-gradient-to-br from-amber-500/[0.12] via-[var(--bg-card)] to-pink-500/[0.08] p-5">
+        <div className="absolute -right-10 -top-12 h-32 w-32 rounded-full bg-amber-400/10 blur-3xl" />
+        <div className="relative flex items-start gap-3">
+          <div className="w-11 h-11 rounded-2xl bg-amber-500/15 border border-amber-500/25 flex items-center justify-center shrink-0">
+            <ShieldCheck size={19} className="text-amber-300" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2">
+              <h2 className="text-base font-bold text-[var(--text-primary)]">
+                {t('supporter.admin.heading', 'Membership Administration')}
+              </h2>
+              <span className="px-1.5 py-0.5 rounded-md bg-amber-500/15 border border-amber-500/25 text-[8px] font-extrabold uppercase tracking-widest text-amber-300">Admin</span>
+            </div>
+            <p className="mt-1 text-[11px] text-[var(--text-muted)]">
+              {t('supporter.admin.subtitle', { defaultValue: '{{active}} active memberships · {{pending}} requests awaiting review', active: activeCount, pending: requests.length })}
+            </p>
+          </div>
+          <button
+            onClick={load}
+            disabled={loading}
+            title={t('supporter.admin.refresh', 'Refresh')}
+            className="p-2 rounded-xl bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] disabled:opacity-50 transition-colors"
+          >
+            <RefreshCw size={14} className={`text-[var(--text-secondary)] ${loading ? 'animate-spin' : ''}`} />
+          </button>
         </div>
-        <div className="flex-1 min-w-0">
-          <h2 className="text-base font-bold text-[var(--text-primary)]">
-            {t('supporter.admin.heading', 'Ko-fi Supporters')}
-          </h2>
-          <p className="text-[11px] text-[var(--text-muted)]">
-            {t('supporter.admin.subtitle', { defaultValue: '{{active}} active supporters · {{pending}} pending requests', active: activeCount, pending: requests.length })}
-          </p>
+        <div className="relative mt-4 grid grid-cols-3 gap-2">
+          {[
+            { label: t('supporter.admin.metricMembers', 'Active members'), value: activeCount, icon: Users, color: 'text-emerald-400' },
+            { label: t('supporter.admin.metricPending', 'Pending review'), value: requests.length, icon: Inbox, color: 'text-amber-300' },
+            { label: t('supporter.admin.metricCodes', 'Codes available'), value: codeStats?.available ?? '—', icon: KeyRound, color: 'text-pink-300' },
+          ].map(({ label, value, icon: Icon, color }) => (
+            <div key={label} className="rounded-xl border border-[var(--border-color)] bg-black/10 px-3 py-2.5">
+              <div className="flex items-center justify-between gap-2"><Icon size={13} className={color} /><span className={`text-lg font-bold ${color}`}>{value}</span></div>
+              <p className="mt-1 text-[9px] text-[var(--text-muted)] truncate">{label}</p>
+            </div>
+          ))}
         </div>
-        <button
-          onClick={load}
-          disabled={loading}
-          title={t('supporter.admin.refresh', 'Refresh')}
-          className="p-2 rounded-xl bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] disabled:opacity-50 transition-colors"
-        >
-          <RefreshCw size={14} className={`text-[var(--text-secondary)] ${loading ? 'animate-spin' : ''}`} />
-        </button>
       </div>
 
       {flash && (
@@ -184,8 +202,16 @@ export default function SupportersAdminPanel() {
         </motion.div>
       )}
 
-      {/* Grant duration (shared by requests + supporters) */}
-      <div className="flex items-center gap-3 px-3 py-2.5 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)]">
+      {/* Admin policy controls */}
+      <section className="rounded-2xl border border-[var(--border-color)] bg-[var(--bg-card)] p-4 space-y-3">
+        <div className="flex items-center gap-2">
+          <Activity size={14} className="text-indigo-400" />
+          <div>
+            <h3 className="text-[11px] font-bold uppercase tracking-wider text-[var(--text-secondary)]">{t('supporter.admin.policyTitle', 'Membership policy')}</h3>
+            <p className="text-[10px] text-[var(--text-muted)]">{t('supporter.admin.policyHint', 'Set the default duration used when approving or extending access.')}</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-3 px-3 py-2.5 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)]">
         <Clock size={13} className="text-[var(--text-muted)] shrink-0" />
         <span className="text-[11px] font-semibold text-[var(--text-secondary)] whitespace-nowrap">
           {t('supporter.admin.daysLabel', 'Grant duration')}
@@ -202,6 +228,7 @@ export default function SupportersAdminPanel() {
           {t('supporter.admin.daysUnit', 'days — stacks on remaining time')}
         </span>
       </div>
+      </section>
 
       {/* Pending requests */}
       <section className="space-y-2.5">

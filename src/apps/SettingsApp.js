@@ -19,7 +19,7 @@ import {
   LoaderCircle, Trash2, Lock, Unlock, Key, Mail, Code, Volume2, Sun, Moon, Cpu,
   Search, Terminal, Network, Download, Copy, X, CheckCheck, Sparkles,
   GitBranch, GitCommit, ChevronDown, Settings, Send, Music, ChevronRight, LogOut, Check,
-  RotateCcw, Menu, Coffee, CircleHelp
+  RotateCcw, Menu, Coffee, CircleHelp, ShieldCheck
 } from 'lucide-react';
 import { useOS } from '@/context/OSContext';
 import { useApp } from '@/context/AppContext';
@@ -1593,12 +1593,12 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
   };
 
   return (
-    <div className="@container flex h-full w-full bg-[var(--bg-primary)] text-[var(--text-primary)] border-[var(--border-color)] overflow-hidden relative">
+    <div className="@container flex h-full min-h-0 w-full bg-[var(--bg-primary)] text-[var(--text-primary)] border-[var(--border-color)] overflow-hidden relative">
       {/* Sidebar - responsive behavior */}
       {!deploymentOnly && (
         <div className={`
           ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full @3xl:translate-x-0'}
-          fixed @3xl:relative z-20 @3xl:z-0 w-64 border-r border-[var(--border-color)] flex flex-col shrink-0 h-full overflow-y-auto custom-scrollbar transition-transform duration-300 bg-[var(--bg-secondary)] [backdrop-filter:blur(var(--glass-blur,24px))]
+          absolute inset-y-0 left-0 @3xl:relative @3xl:inset-auto z-20 @3xl:z-0 w-64 border-r border-[var(--border-color)] flex flex-col shrink-0 h-full min-h-0 overflow-y-auto custom-scrollbar transition-transform duration-300 bg-[var(--bg-secondary)] [backdrop-filter:blur(var(--glass-blur,24px))]
         `}>
         {/* User Profile Section */}
         <div className="p-4 border-b border-[var(--border-color)]/60">
@@ -1707,7 +1707,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
             { id: 'privacy', label: t('settings_ui.privacy.title'), icon: Shield, color: 'text-emerald-400', bg: 'bg-emerald-500/10' },
             { id: 'keyboard', label: t('settings_ui.keyboard.title') || 'Shortcuts', icon: Key, color: 'text-rose-400', bg: 'bg-rose-500/10' },
             { id: 'supporter', label: t('supporter.unlockBtn', 'Supporter'), icon: Coffee, color: 'text-pink-300', bg: 'bg-pink-500/20', openModal: true, highlight: true },
-            ...(isAdminUser ? [{ id: 'supporters', label: t('supporter.adminTitle', 'Supporters'), icon: Coffee, color: 'text-pink-400', bg: 'bg-pink-500/10' }] : []),
+            ...(isAdminUser ? [{ id: 'supporters', label: t('supporter.adminTitle', 'Membership Admin'), icon: ShieldCheck, color: 'text-amber-400', bg: 'bg-amber-500/10', adminOnly: true }] : []),
             { id: 'about', label: t('common.about'), icon: Info, color: 'text-[var(--text-muted)]', bg: 'bg-[var(--bg-tertiary)]' },
           ].map(tab => {
             const isDisabled = tab.requireLogin && !session;
@@ -1772,10 +1772,10 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
       )}
 
       {/* Content */}
-      <div className={`flex-1 overflow-y-auto h-full pb-28 custom-scrollbar ${deploymentOnly ? 'p-6 @3xl:p-10 @4xl:p-12' : 'p-4 @3xl:p-8'}`}>
+      <div className={`flex-1 min-h-0 min-w-0 overflow-y-auto pb-28 custom-scrollbar ${deploymentOnly ? 'p-6 @3xl:p-10 @4xl:p-12' : 'p-4 @3xl:p-8'}`}>
         {/* Mobile Header */}
         {!deploymentOnly && (
-          <div className="flex items-center gap-3 mb-6 @3xl:hidden">
+          <div className="flex items-center gap-3 mb-6 @3xl:hidden relative z-10">
             <button 
               onClick={() => setIsSidebarOpen(true)}
               className="p-2.5 rounded-xl bg-[var(--bg-tertiary)] border border-[var(--border-color)]"

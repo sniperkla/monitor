@@ -1609,9 +1609,9 @@ const resources = {
         unlockBtn: "Supporter",
         welcomeTitle: "Welcome, Supporter!",
         welcomeMsg: "Local Relay and TURBO speeds are now unlocked.",
-        adminTitle: "Supporters",
+        adminTitle: "Membership Admin",
         admin: {
-          heading: "Ko-fi Supporters",
+          heading: "Membership Administration",
           subtitle: "{{active}} active supporters · {{pending}} pending requests",
           refresh: "Refresh",
           daysLabel: "Grant duration",
@@ -1643,6 +1643,11 @@ const resources = {
           kofiUnmatchedTitle: "Unmatched Ko-fi Payments",
           kofiUnmatchedHint: "These payments matched no account. Ask the supporter to submit an access request with their Ko-fi name/email, then grant manually.",
           kofiAnonymous: "anonymous",
+          policyTitle: "Membership policy",
+          policyHint: "Set the default duration used when approving or extending access.",
+          metricMembers: "Active members",
+          metricPending: "Pending review",
+          metricCodes: "Codes available",
         },
       }
     }
@@ -3250,9 +3255,9 @@ const resources = {
         unlockBtn: "ผู้สนับสนุน",
         welcomeTitle: "ยินดีต้อนรับ ผู้สนับสนุน!",
         welcomeMsg: "Local Relay และความเร็ว TURBO ถูกปลดล็อกแล้ว",
-        adminTitle: "ผู้สนับสนุน",
+        adminTitle: "จัดการสมาชิก",
         admin: {
-          heading: "ผู้สนับสนุน Ko-fi",
+          heading: "จัดการสมาชิกผู้สนับสนุน",
           subtitle: "{{active}} ผู้สนับสนุนที่ใช้งานอยู่ · {{pending}} คำขอรอตรวจ",
           refresh: "รีเฟรช",
           daysLabel: "ระยะเวลาที่ให้",
@@ -3284,6 +3289,11 @@ const resources = {
           kofiUnmatchedTitle: "การชำระเงิน Ko-fi ที่จับคู่บัญชีไม่ได้",
           kofiUnmatchedHint: "การชำระเงินเหล่านี้ไม่ตรงกับบัญชีใด ให้ผู้สนับสนุนส่งคำขอพร้อมชื่อ/อีเมล Ko-fi แล้วจึงให้สิทธิ์ด้วยตนเอง",
           kofiAnonymous: "ไม่ระบุตัวตน",
+          policyTitle: "นโยบายสมาชิก",
+          policyHint: "กำหนดระยะเวลาเริ่มต้นสำหรับการอนุมัติหรือต่ออายุสิทธิ์",
+          metricMembers: "สมาชิกที่ใช้งานอยู่",
+          metricPending: "รอตรวจสอบ",
+          metricCodes: "โค้ดที่ใช้ได้",
         },
       }
     }
@@ -4822,9 +4832,9 @@ const resources = {
         unlockBtn: "支持者",
         welcomeTitle: "欢迎，支持者！",
         welcomeMsg: "本地中继和 TURBO 速度已解锁。",
-        adminTitle: "支持者",
+        adminTitle: "会员管理",
         admin: {
-          heading: "Ko-fi 支持者",
+          heading: "会员管理中心",
           subtitle: "{{active}} 位有效支持者 · {{pending}} 个待处理申请",
           refresh: "刷新",
           daysLabel: "授权时长",
@@ -4856,6 +4866,11 @@ const resources = {
           kofiUnmatchedTitle: "未匹配的 Ko-fi 支付",
           kofiUnmatchedHint: "这些付款没有匹配到任何账号。请让支持者用其 Ko-fi 名称/邮箱提交开通申请，然后手动开通。",
           kofiAnonymous: "匿名",
+          policyTitle: "会员策略",
+          policyHint: "设置批准或延长访问权限时使用的默认时长。",
+          metricMembers: "有效会员",
+          metricPending: "待审核",
+          metricCodes: "可用兑换码",
         },
       }
     },

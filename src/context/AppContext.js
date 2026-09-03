@@ -296,6 +296,11 @@ export function AppProvider({ children }) {
 
   const fetchConnections = useCallback(async () => {
     const requestId = ++latestRequestIdRef.current;
+    // A previous request may have completed while the vault was still locked
+    // or while a local relay was reconnecting. Treat every refresh as pending
+    // until it settles so dependent apps never mistake a stale empty list for
+    // a usable connection inventory.
+    dispatch({ type: 'SET_CONNECTIONS_READY', payload: false });
     dispatch({ type: 'SET_LOADING', payload: true });
     
     let dbConnections = [];
@@ -463,11 +468,21 @@ export function AppProvider({ children }) {
     return () => window.removeEventListener('ssh-mode-changed', handleModeChange);
   }, [fetchConnections]);
 
-  // 5. Auto-refresh connections when DB Config changes or on Mount
+  // 5. Load the shared inventory only after authentication has resolved. This
+  // avoids caching the unauthenticated/empty response obtained during the
+  // initial SessionProvider loading phase; without this gate, connection-aware
+  // apps can render an empty picker until SSH Manager happens to force a retry.
+  const sessionStatus = session === undefined ? 'loading' : (session ? 'authenticated' : 'unauthenticated');
   useEffect(() => {
-    console.log(`📡 [AppContext] Fetching connections (URI: ${state.dbConfig?.uri ? 'PRIVATE' : 'CENTER'})`);
+    if (sessionStatus === 'loading') return;
+    if (sessionStatus === 'unauthenticated') {
+      dispatch({ type: 'SET_CONNECTIONS', payload: [] });
+      dispatch({ type: 'SET_CONNECTIONS_READY', payload: true });
+      return;
+    }
+    console.log(`📡 [AppContext] Fetching connections after session ready (URI: ${state.dbConfig?.uri ? 'PRIVATE' : 'CENTER'})`);
     fetchConnections();
-  }, [state.dbConfig?.uri, fetchConnections]);
+  }, [sessionStatus, state.dbConfig?.uri, fetchConnections]);
 
 
   // 4. Persistence: Load active workspace state from localStorage on mount

@@ -1106,13 +1106,18 @@
   scrollbar-color: var(--border-hover) transparent;
 }
 
+html, body {
+  height: 100%;
+}
+
 body {
   background: var(--bg-primary);
   color: var(--text-primary);
   font-family: "Inter", sans-serif;
   min-height: 100vh;
+  min-height: 100dvh;
   overflow-x: hidden;
-  overscroll-behavior-x: none;  
+  overscroll-behavior-x: none;
 }
 
 /* Glass mode — app surfaces inside windows become translucent so the
@@ -1465,9 +1470,25 @@ body {
   border-right: 1px solid var(--border-color);
   width: 100%;
   min-width: 0;
+  min-height: 0;
   height: 100%;
   overflow: hidden;
   transition: none;
+}
+
+/* Every desktop window is a constrained flex column. Without these minimum
+   size overrides, a long child in Settings or a side-panel app expands the
+   window instead of scrolling inside its content area, producing mismatched
+   app heights after navigation. */
+.window-container > .title-bar + div {
+  min-width: 0;
+  min-height: 0;
+}
+
+.window-container .app-viewport,
+.window-container > div > .\@container {
+  min-width: 0;
+  min-height: 0;
 }
 
 /* Connection list item */
