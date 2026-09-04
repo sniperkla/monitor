@@ -1,10 +1,9 @@
 'use client';
 
-import { useState, useEffect, useRef, Component } from 'react';
+import { useState, Component } from 'react';
 import { useSession } from 'next-auth/react';
 import LandingPage from '@/components/landing';
 import { BootSequence } from '@/components/landing/BootSequence';
-import { HyperspaceTransition } from '@/components/landing/HyperspaceTransition';
 import { AnimatePresence, motion } from 'framer-motion';
 
 import dynamic from 'next/dynamic';
@@ -48,7 +47,7 @@ class DesktopErrorBoundary extends Component {
   }
 }
 
-// Boot phases for logged-in users: boot → warp → desktop
+// Boot phases for logged-in users: preflight → desktop
 // Guests keep the existing landing flow
 
 export default function Home() {
@@ -59,35 +58,14 @@ export default function Home() {
   const shouldShowLanding = status !== 'loading' && !session && !dismissed;
 
   // Logged-in boot flow
-  const [bootPhase, setBootPhase] = useState('boot'); // 'boot' | 'warp' | 'desktop'
-  const warpFinishedRef = useRef(false);
-
-  // Warp animation completed its first full cycle
-  const handleWarpComplete = () => {
-    warpFinishedRef.current = true;
-    setBootPhase('desktop');
-  };
-
-  // Safety: force-escape warp phase if it hangs (e.g. OffscreenCanvas crash on mobile)
-  useEffect(() => {
-    if (bootPhase !== 'warp') return;
-    const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
-    const timeout = isMobile ? 500 : 6000;
-    const t = setTimeout(() => {
-      if (bootPhase === 'warp') {
-        warpFinishedRef.current = true;
-        setBootPhase('desktop');
-      }
-    }, timeout);
-    return () => clearTimeout(t);
-  }, [bootPhase]);
+  const [flowPhase, setFlowPhase] = useState('preflight'); // 'preflight' | 'desktop'
 
   // --- Render ---
 
   // Session still loading — show boot screen as placeholder
   if (status === 'loading') {
     return (
-      <div className="fixed inset-0 z-[9999] overflow-hidden bg-black">
+      <div className="fixed inset-0 z-[100000] overflow-hidden bg-black">
         <BootSequence onComplete={() => {}} onSkip={() => {}} />
       </div>
     );
@@ -109,34 +87,23 @@ export default function Home() {
           transition={{ duration: 1.0, ease: 'easeInOut' }}
         >
           <DesktopErrorBoundary>
-            <DesktopEnvironment bootPhase={bootPhase} />
+            <DesktopEnvironment bootPhase={flowPhase} />
           </DesktopErrorBoundary>
         </motion.div>
       )}
 
       <AnimatePresence mode="wait">
-        {bootPhase === 'boot' && (
+        {flowPhase === 'preflight' && (
           <motion.div
-            key="boot"
+            key="preflight"
             exit={{ opacity: 0 }}
-            transition={{ duration: 0.2, ease: 'easeOut' }}
-            className="fixed inset-0 z-[9999] overflow-hidden bg-black"
+            transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+            className="fixed inset-0 z-[100000] overflow-hidden bg-black"
           >
             <BootSequence
-              onComplete={() => setBootPhase('warp')}
-              onSkip={() => setBootPhase('warp')}
+              onComplete={() => setFlowPhase('desktop')}
+              onSkip={() => setFlowPhase('desktop')}
             />
-          </motion.div>
-        )}
-
-        {bootPhase === 'warp' && (
-          <motion.div
-            key="warp"
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.3, ease: 'easeOut' }}
-            className="fixed inset-0 z-[9998] overflow-hidden"
-          >
-            <HyperspaceTransition onComplete={handleWarpComplete} />
           </motion.div>
         )}
       </AnimatePresence>
