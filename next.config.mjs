@@ -54,6 +54,15 @@ const nextConfig = {
           { key: 'X-Permitted-Cross-Domain-Policies', value: 'none' },
         ],
       },
+      {
+        source: '/api/agents/webui-proxy',
+        headers: [
+          { key: 'X-Frame-Options', value: 'SAMEORIGIN' },
+          { key: 'Content-Security-Policy', value: "frame-ancestors 'self'" },
+          { key: 'Cross-Origin-Resource-Policy', value: 'cross-origin' },
+          { key: 'Cross-Origin-Embedder-Policy', value: 'unsafe-none' },
+        ],
+      },
     ];
   },
   webpack: (config, { isServer }) => {

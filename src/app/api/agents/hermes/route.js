@@ -5,6 +5,7 @@ import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
 import { dispatchWithLiveLogs } from '@/app/api/agents/_jobs';
 import { parseInst, gatewayUnit, ensureInstanceUnit, writeInstanceEnv, sdAvailable, sdInstanceCtl, copyInstanceBin, listInstances, instancePorts, instanceIsolationEnv } from '../_multi-instance';
 import { execDetached } from '@/app/api/agents/_remote-bg';
+import { getLatestAgentVersion, isNewerVersion } from '../_version-check';
 import { logger } from '@/lib/logger';
 import { shellQuote } from '@/utils/shellQuote';
 const sq = shellQuote;
@@ -231,19 +232,33 @@ function maskEnvText(text) {
 // NOTE: the literal word "gateway" must never appear in this snippet — only the
 // bracketed regex `gatew[a]y` — or pgrep would match this very command line.
 const procScan = (tag = '') => `PROC=0
-for hp in $(pgrep -f '[h]ermes.*gatew[a]y' 2>/dev/null; pgrep -f '[h]ermes_cli.*gatew[a]y' 2>/dev/null); do
-  [ -n "$hp" ] || continue
-  HME="$(tr '\\0' '\\n' < /proc/$hp/environ 2>/dev/null | sed -n 's/^HERMES_HOME=//p' | head -1)"
-  [ -n "$HME" ] || HME="$(tr '\\0' '\\n' < /proc/$hp/cmdline 2>/dev/null | grep -o '\\.hermes[-a-zA-Z0-9_]*' | head -1)"
-  # A process carrying NO home marker cannot be attributed to this instance.
-  # For the default install we keep the legacy lenient behaviour (an
-  # unattributed gateway is assumed to be the default's). For a TAGGED instance
-  # it must be ignored: it belongs to a sibling or the default, and counting it
-  # would make every instance report itself as running whenever any other
-  # hermes gateway on the box is up — the core cross-instance leak.
-  if [ -z "$HME" ]; then ${tag ? 'continue' : 'PROC=1; break'}; fi
-  case "$HME" in *".hermes${tag ? '-' + tag : ''}") PROC=1; break ;; esac
-done`;
+PHOME="\${HERMES_HOME:-$HOME/.hermes${tag ? `-${tag}` : ''}}"
+for pf in "$PHOME/daemon.pid" "$PHOME/gateway.pid"; do
+  if [ -f "$pf" ]; then
+    p=$(cat "$pf" 2>/dev/null | tr -d '[:space:]')
+    if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then
+      cmd=$(tr '\\0' ' ' < "/proc/$p/cmdline" 2>/dev/null || ps -p "$p" -o args= 2>/dev/null)
+      case "$cmd" in
+        *hermes*|*python*) PROC=1; break ;;
+      esac
+    fi
+  fi
+done
+if [ "$PROC" = 0 ]; then
+  for hp in $(pgrep -f '[h]ermes.*gatew[a]y' 2>/dev/null; pgrep -f '[h]ermes_cli.*gatew[a]y' 2>/dev/null); do
+    [ -n "$hp" ] || continue
+    HME="$(tr '\\0' '\\n' < /proc/$hp/environ 2>/dev/null | sed -n 's/^HERMES_HOME=//p' | head -1)"
+    [ -n "$HME" ] || HME="$(tr '\\0' '\\n' < /proc/$hp/cmdline 2>/dev/null | grep -o '\\.hermes[-a-zA-Z0-9_]*' | head -1)"
+    # A process carrying NO home marker cannot be attributed to this instance.
+    # For the default install we keep the legacy lenient behaviour (an
+    # unattributed gateway is assumed to be the default's). For a TAGGED instance
+    # it must be ignored: it belongs to a sibling or the default, and counting it
+    # would make every instance report itself as running whenever any other
+    # hermes gateway on the box is up — the core cross-instance leak.
+    if [ -z "$HME" ]; then ${tag ? 'continue' : 'PROC=1; break'}; fi
+    case "$HME" in *".hermes${tag ? '-' + tag : ''}" | *".hermes${tag ? '-' + tag : ''}/"*) PROC=1; break ;; esac
+  done
+fi`;
 
 // POSIX sh probe — works on every supported distro.
 // `tag` scopes every process check to one instance home ('' = default install).
@@ -260,7 +275,7 @@ else
   export PATH="$HOME/.local/bin:/usr/local/lib/hermes-agent/venv/bin:$HOME/.hermes/hermes-agent/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 fi
 BIN="$(command -v hermes 2>/dev/null || true)"
-[ -z "$BIN" ] && for p in "\${HH}/hermes-agent/venv/bin/hermes" "/usr/local/lib/hermes-agent/venv/bin/hermes" "/usr/local/lib/hermes-agent/hermes" "$HOME/.local/bin/hermes" "/usr/local/bin/hermes" "/usr/bin/hermes"; do [ -x "$p" ] && BIN="$p" && break; done
+[ -z "$BIN" ] && for p in "\${HH}/hermes-agent/venv/bin/hermes" "$HOME/.hermes/hermes-agent/venv/bin/hermes" "/usr/local/lib/hermes-agent/venv/bin/hermes" "/usr/local/lib/hermes-agent/hermes" "$HOME/.local/bin/hermes" "/usr/local/bin/hermes" "/usr/bin/hermes"; do [ -x "$p" ] && BIN="$p" && break; done
 if [ -n "$BIN" ]; then echo "BIN=SET"; else echo "BIN=UNSET"; fi
 VER=NONE
 [ -n "$BIN" ] && VER="$($BIN --version 2>/dev/null | tail -1 | cut -c1-40)"
@@ -273,11 +288,9 @@ ENVF=0; [ -f "$HH/.env" ] && ENVF=1
 echo "ENVFILE=$ENVF"
 DIR=0; [ -d "$HH" ] && DIR=1
 echo "DIR=$DIR"
-USVC=0; command -v systemctl >/dev/null 2>&1 && systemctl --user is-active hermes-gate""way 2>/dev/null | grep -qx active && USVC=1
-SSVC=0; command -v systemctl >/dev/null 2>&1 && systemctl is-active hermes-gate""way 2>/dev/null | grep -qx active && SSVC=1
+USVC=0; command -v systemctl >/dev/null 2>&1 && { export XDG_RUNTIME_DIR="/run/user/$(id -u)" 2>/dev/null; systemctl --user is-active ${tag ? `"hermes-gate""way@${tag}"` : 'hermes-gate""way'} 2>/dev/null | grep -qx active && USVC=1; }
+SSVC=0; command -v systemctl >/dev/null 2>&1 && systemctl is-active ${tag ? `"hermes-gate""way@${tag}"` : 'hermes-gate""way'} 2>/dev/null | grep -qx active && SSVC=1
 ${procScan(tag)}
-GSTAT=0; if [ "$PROC" = 0 ] && [ -n "$BIN" ]; then timeout 15 "$BIN" gatew""ay status 2>/dev/null | grep -q 'is running' && GSTAT=1; fi
-[ "$GSTAT" = 1 ] && PROC=1
 echo "PROC=$PROC"
 SYSTEMD=0; command -v systemctl >/dev/null 2>&1 && SYSTEMD=1
 SUDO=0; sudo -n true 2>/dev/null && SUDO=1
@@ -371,15 +384,9 @@ async function handleAgentAction(body, session, log = []) {
       ` if [ "$res" = 0 ] && [ -n "${inst}" ]; then` +
       ` export XDG_RUNTIME_DIR="/run/user/$(id -u)" 2>/dev/null; systemctl --user is-active hermes-gate""way@${inst} 2>/dev/null | grep -qx active && res=1;` +
       ` fi;` +
-      // Last resort: ask hermes itself — it reports "is running" only when the
-      // control socket is actually live (its exit code is 0 either way, so we
-      // must match the output, NOT the exit status).
-      ` if [ "$res" = 0 ]; then` +
-      ` export PATH="$HOME/.local/bin:/usr/local/lib/hermes-agent/venv/bin:$HOME/.hermes/hermes-agent/venv/bin:/usr/local/bin:/usr/bin:/bin:$PATH"; ${inst ? `export HERMES_HOME=$HOME/.hermes-${inst};` : ''} timeout 15 hermes gatew""ay status 2>/dev/null | grep -q 'is running' && res=1;` +
-      ` fi;` +
       ` echo "PID_ALIVE=$res"`;
     const pidAlive = async () => {
-      const r = await execCommand(sshConfig, pidScan, { pool: false, timeoutMs: 15000 });
+      const r = await execCommand(sshConfig, pidScan, { pool: true, timeoutMs: 10000 });
       return /PID_ALIVE=1/.test(r.stdout || '');
     };
     // Docker-isolated installs: when set, every install command is executed
@@ -503,7 +510,8 @@ true`,
       return gwCtlHost(op, hbin || '/usr/local/bin/hermes', sysdLive);
 
       function gwCtlHost(operation, binPath, sysd) {
-        const binDir = sq(binPath.replace(/\/\/[^/]+$/, ''));
+        // Strip the filename to get the directory (e.g. /usr/local/bin/hermes → /usr/local/bin)
+        const binDir = sq(binPath.replace(/\/[^/]+$/, ''));
         const ENVX = `export XDG_RUNTIME_DIR="/run/user/$(id -u)" 2>/dev/null; export PATH=${binDir}:$PATH`;
         // pidfile-scoped lifecycle (DEFAULT and tagged instances alike).
         // Every hermes gateway is tracked by $HH/daemon.pid. We never use
@@ -511,13 +519,14 @@ true`,
         // so stopping one instance would silently stop the others (mirror).
         const PIDF = `${HH}/daemon.pid`;
         const HHX = inst ? `export HERMES_HOME=${HH}; ` : '';
-        const SYS_ACTIVE = `(systemctl --user is-active hermes-gate""way 2>/dev/null || systemctl is-active hermes-gate""way 2>/dev/null) | grep -qx active`;
+        const ssvcName = inst ? `hermes-gate""way@${inst}` : 'hermes-gate""way';
+        const SYS_ACTIVE = `(export XDG_RUNTIME_DIR="/run/user/$(id -u)" 2>/dev/null; systemctl --user is-active ${ssvcName} 2>/dev/null || systemctl is-active ${ssvcName} 2>/dev/null) | grep -qx active`;
         if (operation === 'status') {
           return execCommand(sshConfig, `${ENVX}; ${HHX}if [ -f "${PIDF}" ] && kill -0 $(cat "${PIDF}") 2>/dev/null; then echo PROC_ACTIVE; elif ${SYS_ACTIVE}; then echo PROC_ACTIVE;  else echo NO_PROC; fi`, { pool: false, timeoutMs: 30000 })
             .then(r => ({ ok: true, active: /PROC_ACTIVE/.test(r.stdout || '') }));
         }
         if (operation === 'stop') {
-          const sysdStop = sysd ? `timeout 25 systemctl stop hermes-gate""way 2>/dev/null; timeout 25 systemctl --user stop hermes-gate""way 2>/dev/null; ` : '';
+          const sysdStop = sysd ? `timeout 25 systemctl stop ${ssvcName} 2>/dev/null; timeout 25 systemctl --user stop ${ssvcName} 2>/dev/null; ` : '';
           return execCommand(sshConfig, `${ENVX}; ${HHX}${sysdStop} if [ -f "${PIDF}" ]; then kill -9 $(cat "${PIDF}") 2>/dev/null; rm -f "${PIDF}"; fi; echo GW_STOPPED`, { pool: false, timeoutMs: 60000 })
             .then(r => ({ ok: /GW_STOPPED/.test(r.stdout || ''), out: ((r.stdout || '') + (r.stderr || '')).slice(-400) }));
         }
@@ -531,7 +540,7 @@ true`,
         // process started outside the monitor) makes `start` refuse with
         // "Another gateway instance is already running". In that case fall
         // back to `gateway restart` which replaces it cleanly.
-        const startAliveCheck = `${ENVX}; ${HHX}sleep 3; if [ -f "${PIDF}" ] && kill -0 $(cat "${PIDF}") 2>/dev/null; then echo ALIVE; elif ${SYS_ACTIVE}; then echo ALIVE; elif pgrep -f '[h]ermes.*gatew[a]y' >/dev/null 2>&1; then echo ALIVE; else echo DEAD; fi`;
+        const startAliveCheck = `${ENVX}; ${HHX}sleep 3; if [ -f "${PIDF}" ] && kill -0 $(cat "${PIDF}") 2>/dev/null; then echo ALIVE; elif ${SYS_ACTIVE}; then echo ALIVE; else echo DEAD; fi`;
         const finishStart = async (r) => {
           const out = r.stdout || '';
           if (/GW_UP/.test(out)) return { ok: true, out: out.slice(-200) };
@@ -548,7 +557,7 @@ true`,
         if (sysd) {
           const v2 = op === 'restart' ? 'try-restart' : 'start';
           return execCommand(sshConfig,
-            `${ENVX}; ${preStop}timeout 40 systemctl ${v2} hermes-gate""way 2>/dev/null || timeout 40 systemctl --user ${verb || 'start'} hermes-gate""way 2>/dev/null || ${startBackground}`,
+            `${ENVX}; ${preStop}timeout 40 systemctl ${v2} ${ssvcName} 2>/dev/null || timeout 40 systemctl --user ${v2} ${ssvcName} 2>/dev/null || ${startBackground}`,
             { pool: false, timeoutMs: 120000 }).then(finishStart);
         }
         return execCommand(sshConfig, `${ENVX}; ${preStop}${startBackground}`, { pool: false, timeoutMs: 90000 })
@@ -735,10 +744,21 @@ done; true`);
 
     // ── DETAILS / CONFIG / SKILLS / GATEWAY MANAGEMENT ────────────────────
     if (action === 'details') {
+      // For tagged instances: prefer the instance's OWN copied binary (${HH}/hermes-agent/venv/bin/hermes)
+      // so we read that instance's version, not the shared/global install.
+      // For the default install: resolve normally.
       const DETAILS_SCRIPT = `
-export PATH="$HOME/.local/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
-BIN="$(command -v hermes 2>/dev/null || true)"
-[ -z "$BIN" ] && for p in "$HOME/.local/bin/hermes" "/usr/local/bin/hermes" "/usr/bin/hermes" "${HH}/hermes-agent/venv/bin/hermes" "/usr/local/lib/hermes-agent/venv/bin/hermes" "/usr/local/lib/hermes-agent/hermes"; do [ -x "$p" ] && BIN="$p" && break; done
+${inst ? `export HERMES_HOME="$HOME/.hermes-${inst}"` : ''}
+export PATH="${inst ? `$HOME/.hermes-${inst}/hermes-agent/venv/bin:` : ''}$HOME/.local/bin:/usr/local/lib/hermes-agent/venv/bin:$HOME/.hermes/hermes-agent/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+BIN=""
+# Instance-first: prefer the copied runtime tree inside the instance home
+for p in "${HH}/hermes-agent/venv/bin/hermes" "$HOME/.hermes/hermes-agent/venv/bin/hermes" "$HOME/.local/bin/hermes" "/usr/local/lib/hermes-agent/venv/bin/hermes" "/usr/local/lib/hermes-agent/hermes" "/usr/local/bin/hermes" "/usr/bin/hermes"; do [ -x "$p" ] && BIN="$p" && break; done
+[ -z "$BIN" ] && BIN="$(command -v hermes 2>/dev/null || true)"
+echo "===DIR_EXISTS==="
+[ -d "${HH}" ] && echo "1" || echo "0"
+echo "===BINPATH==="
+[ -n "$BIN" ] && echo "$BIN"
+command -v docker >/dev/null 2>&1 && docker exec hermes-agent sh -c 'command -v hermes' 2>/dev/null | head -1 | { read -r cp2; [ -n "$cp2" ] && echo "$cp2"; } || true
 echo "===CONFIG_B64==="
 base64 < "${HH}/config.yaml" 2>/dev/null || true
 echo "===ENV_B64==="
@@ -746,39 +766,67 @@ base64 < "${HH}/.env" 2>/dev/null || true
 echo "===ENVKEYS==="
 grep -E '^[A-Z_]+=' "${HH}/.env" 2>/dev/null | cut -d= -f1 || true
 echo "===SKILLS==="
-# Hermes nests skills as skills/<category>/<skill-name>/; also support flat skills/<skill-name>/
 {
-  find "${HH}/skills" -name "SKILL.md" -o -name "skill.md" 2>/dev/null | while read -r f; do
-    basename "$(dirname "$f")"
+  if [ -n "$BIN" ]; then
+    "$BIN" skills list 2>/dev/null | grep -E '^[a-zA-Z0-9_-]+' | awk '{print $1}'
+  fi
+  for sdir in "${HH}/skills" "${HH}/hermes-agent/skills" "$HOME/.hermes/skills" "$HOME/.hermes/hermes-agent/skills" "/usr/local/lib/hermes-agent/skills" "/opt/hermes-agent/skills"; do
+    if [ -d "$sdir" ]; then
+      find "$sdir" -maxdepth 3 \\( -name "SKILL.md" -o -name "skill.md" -o -name "skill.yaml" -o -name "metadata.json" \\) 2>/dev/null | while read -r f; do
+        basename "$(dirname "$f")"
+      done
+      find "$sdir" -mindepth 1 -maxdepth 2 -type d ! -name ".*" ! -name "__pycache__" ! -name "custom" 2>/dev/null | while read -r d; do
+        if [ -f "$d/SKILL.md" ] || [ -f "$d/skill.md" ] || [ -f "$d/skill.yaml" ] || [ -f "$d/__init__.py" ] || [ -f "$d/README.md" ]; then
+          basename "$d"
+        fi
+      done
+    fi
   done
 } 2>/dev/null | sort -u | grep -v '^$' || true
 echo "===PROMPT_B64==="
-{ base64 < "${HH}/custom_instructions.txt" || base64 < "${HH}/prompt.txt" || base64 < "${HH}/SYSTEM_PROMPT.md"; } 2>/dev/null || true
+for pf in "${HH}/custom_instructions.txt" "${HH}/prompt.txt" "${HH}/instructions.txt" "${HH}/system_prompt.txt" "${HH}/SYSTEM_PROMPT.md" "${HH}/PROMPT.md" "${HH}/workspace/PROMPT.md" "$HOME/.hermes/custom_instructions.txt"; do
+  if [ -f "$pf" ] && [ -s "$pf" ]; then base64 < "$pf" 2>/dev/null && break; fi
+done
 echo "===SOUL_B64==="
-{ base64 < "${HH}/SOUL.md" || base64 < "${HH}/IDENTITY.md"; } 2>/dev/null || true
+for sf in "${HH}/SOUL.md" "${HH}/IDENTITY.md" "${HH}/memories/SOUL.md" "${HH}/memories/IDENTITY.md" "${HH}/workspace/SOUL.md"; do
+  if [ -f "$sf" ] && [ -s "$sf" ]; then base64 < "$sf" 2>/dev/null && break; fi
+done
 echo "===USER_B64==="
-{ base64 < "${HH}/USER.md" || base64 < "${HH}/memories/USER.md"; } 2>/dev/null || true
+for uf in "${HH}/USER.md" "${HH}/memories/USER.md" "${HH}/workspace/USER.md"; do
+  if [ -f "$uf" ] && [ -s "$uf" ]; then base64 < "$uf" 2>/dev/null && break; fi
+done
 echo "===AGENTS_B64==="
-base64 < "${HH}/AGENTS.md" 2>/dev/null || true
+for af in "${HH}/AGENTS.md" "${HH}/workspace/AGENTS.md" "${HH}/memories/AGENTS.md"; do
+  if [ -f "$af" ] && [ -s "$af" ]; then base64 < "$af" 2>/dev/null && break; fi
+done
 echo "===MEMORY_B64==="
-{ base64 < "${HH}/MEMORY.md" || base64 < "${HH}/memories/MEMORY.md"; } 2>/dev/null || true
+for mf in "${HH}/MEMORY.md" "${HH}/memories/MEMORY.md" "${HH}/workspace/MEMORY.md"; do
+  if [ -f "$mf" ] && [ -s "$mf" ]; then base64 < "$mf" 2>/dev/null && break; fi
+done
 echo "===RUNNING==="
-SSVC=0; command -v systemctl >/dev/null 2>&1 && systemctl is-active hermes-gate""way 2>/dev/null | grep -qx active && SSVC=1
-USVC=0; command -v systemctl >/dev/null 2>&1 && systemctl --user is-active hermes-gate""way 2>/dev/null | grep -qx active && USVC=1
+SSVC=0
+USVC=0
+export XDG_RUNTIME_DIR="/run/user/$(id -u)" 2>/dev/null
+if command -v systemctl >/dev/null 2>&1; then
+${inst
+  ? `  systemctl --user is-active "hermes-gate""way@${inst}" 2>/dev/null | grep -qx active && USVC=1
+  systemctl is-active "hermes-gate""way@${inst}" 2>/dev/null | grep -qx active && SSVC=1`
+  : `  systemctl is-active hermes-gate""way 2>/dev/null | grep -qx active && SSVC=1
+  systemctl --user is-active hermes-gate""way 2>/dev/null | grep -qx active && USVC=1`
+}
+fi
 ${procScan(inst)}
 SYSTEMD=0; command -v systemctl >/dev/null 2>&1 && SYSTEMD=1
 echo "SSVC=$SSVC"; echo "USVC=$USVC"; echo "PROC=$PROC"; echo "SYSTEMD=$SYSTEMD"
 echo "===VERSION==="
 [ -n "$BIN" ] && "$BIN" --version 2>/dev/null | tail -1 | cut -c1-40
 echo "===MODEL==="
-MDL="$( [ -n "$BIN" ] && "$BIN" config get model.default 2>/dev/null | tail -1 || true )"
-[ -z "$MDL" ] && MDL="$( [ -n "$BIN" ] && "$BIN" config get model 2>/dev/null | tail -1 || true )"
-[ -z "$MDL" ] && MDL="$(grep -E '^\s*default:' "${HH}/config.yaml" 2>/dev/null | head -1 | awk '{print $2}' | tr -d '"' | tr -d "'")"
-[ -z "$MDL" ] && MDL="$(grep -E '^model:' "${HH}/config.yaml" 2>/dev/null | head -1 | awk '{print $2}' | tr -d '"' | tr -d "'")"
+MDL="$(grep -E '^[[:space:]]*default:' "${HH}/config.yaml" 2>/dev/null | head -1 | awk '{print $2}' | tr -d '"' | tr -d "'")"
+[ -z "$MDL" ] && MDL="$(grep -E '^[[:space:]]*model:' "${HH}/config.yaml" 2>/dev/null | head -1 | awk '{print $2}' | tr -d '"' | tr -d "'")"
 [ -z "$MDL" ] && MDL="$(grep -E '^(MODEL|HERMES_MODEL|DEFAULT_MODEL)=' "${HH}/.env" 2>/dev/null | head -1 | cut -d= -f2-)"
 echo "$MDL"
 `;
-      const r = await execCommand(sshConfig, DETAILS_SCRIPT, { pool: true, timeoutMs: 60000 });
+      const r = await execCommand(sshConfig, DETAILS_SCRIPT, { pool: true, timeoutMs: 30000 });
       const out = r.stdout || '';
       const section = (name, next) => {
         const marker = `===${name}===`;
@@ -798,6 +846,10 @@ echo "$MDL"
       const skills = section('SKILLS', 'PROMPT_B64').split('\n').map(s => s.trim()).filter(Boolean);
       let systemPrompt = '';
       try { systemPrompt = Buffer.from(section('PROMPT_B64', 'SOUL_B64'), 'base64').toString('utf8'); } catch { /* none */ }
+      if (!systemPrompt.trim() && configYaml) {
+        const m = configYaml.match(/^\s*(?:custom_instructions|system_prompt|prompt)\s*:\s*["']?([^"'\r\n#]+)/m);
+        if (m && m[1]) systemPrompt = m[1].trim();
+      }
       let soulPrompt = '';
       try { soulPrompt = Buffer.from(section('SOUL_B64', 'USER_B64'), 'base64').toString('utf8'); } catch { /* none */ }
       let userPrompt = '';
@@ -807,25 +859,40 @@ echo "$MDL"
       let memoryPrompt = '';
       try { memoryPrompt = Buffer.from(section('MEMORY_B64', 'RUNNING'), 'base64').toString('utf8'); } catch { /* none */ }
 
-      // Binary may live on the host OR inside the hermes-agent docker container
-      const dirExists = await execCommand(sshConfig, `[ -d "${HH}" ] && echo "DIR_EXISTS" || true`, { pool: true, timeoutMs: 15000 });
-      const hasHomeDir = /DIR_EXISTS/.test(dirExists.stdout || '');
-      const binR2 = await execCommand(sshConfig,
-        `p="$(export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"; command -v hermes 2>/dev/null)"; [ -n "$p" ] && echo "BIN=$p"; command -v docker >/dev/null 2>&1 && docker exec hermes-agent sh -c 'command -v hermes' 2>/dev/null | head -1 | { read -r cp2; [ -n "$cp2" ] && echo "CBIN=$cp2"; }; true`,
-        { pool: true, timeoutMs: 30000 });
-      const dout = binR2.stdout || '';
-      const remoteBinPath = (dout.match(/BIN=(.*)/)?.[1] || dout.match(/CBIN=(.*)/)?.[1] || '').trim();
-      let running = (await pidAlive()) === true; // pidfile-scoped (never pgrep, which matches other instances)
+      const hasHomeDir = section('DIR_EXISTS', 'BINPATH') === '1';
+      const remoteBinPath = section('BINPATH', 'CONFIG_B64').split('\n').map(s => s.trim()).filter(Boolean)[0] || '';
+      const runningSection = section('RUNNING', 'VERSION');
+      const running = /SSVC=1|USVC=1|PROC=1/.test(runningSection);
       const installed = (!!remoteBinPath && hasHomeDir) || running;
+      const currentVer = section('VERSION', 'MODEL') || null;
+      let model = section('MODEL') || null;
+      if (!model && configYaml) {
+        const m = configYaml.match(/^\s*(?:default|model)\s*:\s*["']?([^"'\r\n#]+)/m);
+        if (m && m[1] && !m[1].trim().startsWith('{')) model = m[1].trim();
+      }
+      if (!model && envText) {
+        const m = envText.match(/^(?:MODEL|HERMES_MODEL|DEFAULT_MODEL)=(.*)$/m);
+        if (m && m[1]) model = m[1].trim();
+      }
+      let latestVersion = null;
+      let updateAvailable = false;
+      try {
+        latestVersion = await getLatestAgentVersion('hermes');
+        if (currentVer && latestVersion) {
+          updateAvailable = isNewerVersion(currentVer, latestVersion);
+        }
+      } catch (_) {}
       return NextResponse.json({
         success: true,
         installed,
-        version: section('VERSION', 'MODEL') || null,
-        model: section('MODEL') || null,
+        version: currentVer,
+        latestVersion,
+        updateAvailable,
+        model,
         running,
         binPath: installed ? (remoteBinPath || null) : null,
-        service: /SSVC=1/.test(out) ? 'system' : /USVC=1/.test(out) ? 'user' : /PROC=1/.test(out) ? 'process' : null,
-        hasSystemd: /SYSTEMD=1/.test(section('RUNNING', 'VERSION')),
+        service: running ? (/SSVC=1/.test(runningSection) ? 'system' : /USVC=1/.test(runningSection) ? 'user' : /PROC=1/.test(runningSection) ? 'process' : null) : null,
+        hasSystemd: /SYSTEMD=1/.test(runningSection),
         // Intentionally NOT masked: these fields round-trip through the config
         // editor. Returning masked placeholders ("••••") would make the UI
         // persist them straight back into config.yaml on save and corrupt it.
@@ -855,17 +922,17 @@ echo "$MDL"
       const promptText = String(config.prompt || '');
       const fileName = config.file || 'PROMPT.md';
       const b64 = Buffer.from(promptText, 'utf8').toString('base64');
-      let SCRIPT = `mkdir -p "${HH}" "${HH}/memories"\n`;
+      let SCRIPT = `mkdir -p "${HH}" "${HH}/memories" "${HH}/workspace"\n`;
       if (fileName === 'SOUL.md' || fileName === 'IDENTITY.md') {
-        SCRIPT += `echo "${b64}" | base64 -d > "${HH}/SOUL.md"\necho "${b64}" | base64 -d > "${HH}/IDENTITY.md"\n`;
+        SCRIPT += `echo "${b64}" | base64 -d > "${HH}/SOUL.md"\necho "${b64}" | base64 -d > "${HH}/IDENTITY.md"\necho "${b64}" | base64 -d > "${HH}/workspace/SOUL.md"\n`;
       } else if (fileName === 'USER.md') {
-        SCRIPT += `echo "${b64}" | base64 -d > "${HH}/USER.md"\necho "${b64}" | base64 -d > "${HH}/memories/USER.md"\n`;
+        SCRIPT += `echo "${b64}" | base64 -d > "${HH}/USER.md"\necho "${b64}" | base64 -d > "${HH}/memories/USER.md"\necho "${b64}" | base64 -d > "${HH}/workspace/USER.md"\n`;
       } else if (fileName === 'AGENTS.md') {
-        SCRIPT += `echo "${b64}" | base64 -d > "${HH}/AGENTS.md"\n`;
+        SCRIPT += `echo "${b64}" | base64 -d > "${HH}/AGENTS.md"\necho "${b64}" | base64 -d > "${HH}/workspace/AGENTS.md"\n`;
       } else if (fileName === 'MEMORY.md') {
-        SCRIPT += `echo "${b64}" | base64 -d > "${HH}/MEMORY.md"\necho "${b64}" | base64 -d > "${HH}/memories/MEMORY.md"\n`;
+        SCRIPT += `echo "${b64}" | base64 -d > "${HH}/MEMORY.md"\necho "${b64}" | base64 -d > "${HH}/memories/MEMORY.md"\necho "${b64}" | base64 -d > "${HH}/workspace/MEMORY.md"\n`;
       } else {
-        SCRIPT += `echo "${b64}" | base64 -d > "${HH}/custom_instructions.txt"\necho "${b64}" | base64 -d > "${HH}/prompt.txt"\necho "${b64}" | base64 -d > "${HH}/SYSTEM_PROMPT.md"\n`;
+        SCRIPT += `echo "${b64}" | base64 -d > "${HH}/custom_instructions.txt"\necho "${b64}" | base64 -d > "${HH}/prompt.txt"\necho "${b64}" | base64 -d > "${HH}/SYSTEM_PROMPT.md"\necho "${b64}" | base64 -d > "${HH}/PROMPT.md"\necho "${b64}" | base64 -d > "${HH}/workspace/PROMPT.md"\n`;
       }
       await execCommand(sshConfig, SCRIPT, { pool: false, timeoutMs: 30000 });
       if (config.restart !== false) {
@@ -1056,27 +1123,36 @@ fi
     if (action === 'health') {
       const script = `
 export PATH="$HOME/.local/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
-SSVC=0; command -v systemctl >/dev/null 2>&1 && systemctl is-active hermes-gate""way 2>/dev/null | grep -qx active && SSVC=1
-USVC=0; command -v systemctl >/dev/null 2>&1 && systemctl --user is-active hermes-gate""way 2>/dev/null | grep -qx active && USVC=1
-PROC=0; pgrep -f '[h]ermes.*gatew[a]y' >/dev/null 2>&1 && PROC=1
+SSVC=0
+USVC=0
+export XDG_RUNTIME_DIR="/run/user/$(id -u)" 2>/dev/null
+if command -v systemctl >/dev/null 2>&1; then
+${inst
+  ? `  systemctl --user is-active "hermes-gate""way@${inst}" 2>/dev/null | grep -qx active && USVC=1
+  systemctl is-active "hermes-gate""way@${inst}" 2>/dev/null | grep -qx active && SSVC=1`
+  : `  systemctl --user is-active hermes-gate""way 2>/dev/null | grep -qx active && USVC=1
+  systemctl is-active hermes-gate""way 2>/dev/null | grep -qx active && SSVC=1`
+}
+fi
 DC=0; command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx hermes-agent && DC=1
-if [ "$DC" = '1' ]; then docker exec hermes-agent pgrep -f '[h]ermes.*gatew[a]y' >/dev/null 2>&1 && PROC=1; fi
-ALIVE=0; [ $SSVC = 1 -o $USVC = 1 -o $PROC = 1 ] && ALIVE=1
-echo "ALIVE=$ALIVE"
-# Resolve the PID from this instance's OWN pidfile first. A bare
-# "pgrep -f '[h]ermes.*gatew[a]y' | head -1" matches EVERY instance on the box
-# and would report a sibling's uptime for this one.
 PID=""
-[ -f "${HH}/daemon.pid" ] && PID=$(cat "${HH}/daemon.pid" 2>/dev/null)
+[ -f "${HH}/daemon.pid" ] && PID=$(cat "${HH}/daemon.pid" 2>/dev/null | tr -d ' \r\n')
+[ -z "$PID" ] && [ -f "${HH}/gateway.pid" ] && PID=$(cat "${HH}/gateway.pid" 2>/dev/null | tr -d ' \r\n')
+if [ -n "$PID" ] && ! kill -0 "$PID" 2>/dev/null; then PID=""; fi
 if [ -z "$PID" ]; then
   for hp in $(pgrep -f '[h]ermes.*gatew[a]y' 2>/dev/null); do
     HME="$(tr '\\0' '\\n' < /proc/$hp/environ 2>/dev/null | sed -n 's/^HERMES_HOME=//p' | head -1)"
     [ -n "$HME" ] || HME="$(tr '\\0' '\\n' < /proc/$hp/cmdline 2>/dev/null | grep -o '\\.hermes[-a-zA-Z0-9_]*' | head -1)"
     # Unattributable process: only the DEFAULT install may adopt it.
     if [ -z "$HME" ]; then ${inst ? 'continue' : 'PID="$hp"; break'}; fi
-    case "$HME" in *".hermes${inst ? '-' + inst : ''}") PID="$hp"; break ;; esac
+    case "$HME" in *".hermes${inst ? '-' + inst : ''}" | *".hermes${inst ? '-' + inst : ''}/"*) PID="$hp"; break ;; esac
   done
 fi
+PROC=0
+[ -n "$PID" ] && PROC=1
+if [ "$DC" = '1' ]; then docker exec hermes-agent pgrep -f '[h]ermes.*gatew[a]y' >/dev/null 2>&1 && PROC=1; fi
+ALIVE=0; [ $SSVC = 1 -o $USVC = 1 -o $PROC = 1 ] && ALIVE=1
+echo "ALIVE=$ALIVE"
 UP=0; [ -n "$PID" ] && UP=$(ps -o etimes= -p "$PID" 2>/dev/null | tr -d ' ')
 [ -z "$UP" ] && UP=0
 echo "UPTIME_SEC=$UP"
@@ -1267,6 +1343,105 @@ fi
         extra = { active: !!g.active };
       }
       return NextResponse.json({ success: true, op: gwOp, output: g.out || (g.active ? 'gateway process active' : ''), ...extra });
+    }
+
+    // ── UPDATE ──────────────────────────────────────────────────────────────
+    if (action === 'update') {
+      log.push(`> [update] Checking installation for Hermes Agent...`);
+      const binCheck = await execCommand(sshConfig,
+        `export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"; command -v hermes 2>/dev/null || [ -x "$HOME/.local/bin/hermes" ] && echo "$HOME/.local/bin/hermes" || true`,
+        { pool: false, timeoutMs: 15000 });
+      const currentBin = (binCheck.stdout || '').trim();
+      if (!currentBin) {
+        return NextResponse.json({ success: false, error: 'Hermes is not installed on this server. Please install it first.', log }, { status: 400 });
+      }
+
+      const verCheckBefore = await execCommand(sshConfig,
+        `export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"; hermes --version 2>/dev/null | tail -1`,
+        { pool: false, timeoutMs: 15000 });
+      const oldVer = (verCheckBefore.stdout || '').trim();
+      log.push(`> [update] Current version: ${oldVer || 'unknown'}`);
+
+      // Stop gateway before upgrading
+      log.push(`> [update] Stopping running gateway service...`);
+      try { await gwCtl('stop'); } catch (e) { log.push(`> [update] Gateway stop note: ${e.message}`); }
+
+      // Upgrade Hermes
+      log.push(`> [update] Pulling and applying latest Hermes updates...`);
+      const upgradeCmd = `
+        export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+        export HOME="${homeDir(sshConfig) || '$HOME'}"
+        export HH="${HH}"
+        # 1. If installed as a git clone in hermes-agent dir, git pull & pip install
+        for d in "\${HH}/hermes-agent" "$HOME/.hermes/hermes-agent" /usr/local/lib/hermes-agent; do
+          if [ -d "$d/.git" ]; then
+            echo "> Git repository found at $d, pulling latest changes..."
+            (cd "$d" && git pull origin main 2>&1 || git pull 2>&1)
+            for v in "$d/venv/bin/pip" "\${HH}/hermes-agent/venv/bin/pip"; do
+              if [ -x "$v" ]; then
+                echo "> Upgrading dependencies in venv..."
+                "$v" install -e "$d" 2>&1 || true
+                break
+              fi
+            done
+          fi
+        done
+
+        # 2. Upgrade pip package in any existing hermes venv
+        for v in "\${HH}/hermes-agent/venv/bin/pip" /usr/local/lib/hermes-agent/venv/bin/pip "$HOME/.hermes/venv/bin/pip"; do
+          if [ -x "$v" ]; then
+            echo "> Running pip upgrade in $v..."
+            "$v" install --upgrade --no-cache-dir hermes-agent 2>&1 || true
+            break
+          fi
+        done
+
+        # 3. Re-run official installer non-interactively
+        echo "> Running official Hermes installer to apply runtime updates..."
+        curl -fsSL ${INSTALLER_URL} | bash -s -- --non-interactive --skip-setup --skip-browser 2>&1
+
+        # 4. Ensure launcher link
+        for v in "\${HH}/hermes-agent/venv/bin/hermes" /usr/local/lib/hermes-agent/venv/bin/hermes /usr/local/lib/hermes-agent/hermes; do
+          if [ -x "$v" ]; then
+            mkdir -p "$HOME/.local/bin"
+            ln -sf "$v" /usr/local/bin/hermes 2>/dev/null || ln -sf "$v" "$HOME/.local/bin/hermes"
+            break
+          fi
+        done
+        echo "UPDATE_SCRIPT_DONE"
+      `;
+
+      let streamed = 0;
+      const upR = await execDetached(sshConfig, upgradeCmd, {
+        pollMs: 2000,
+        timeoutMs: 600000,
+        onLine: (ln) => { if (++streamed <= 400) log.push(ln); }
+      });
+      log.push(`> [update] Update installer script finished${upR.code !== 0 ? ` (exit code ${upR.code})` : ''}.`);
+
+      // Verify new version
+      const verCheckAfter = await execCommand(sshConfig,
+        `export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"; hermes --version 2>/dev/null | tail -1`,
+        { pool: false, timeoutMs: 15000 });
+      const newVer = (verCheckAfter.stdout || '').trim();
+      log.push(`> [update] Verified upgraded version: ${newVer || 'ready'}`);
+
+      // Restart gateway
+      log.push(`> [update] Restarting Hermes gateway service...`);
+      try {
+        const startRes = await gwCtl('start');
+        log.push(`> [update] Gateway restart: ${startRes.ok ? 'active' : (startRes.out || 'done')}`);
+      } catch (e) {
+        log.push(`> [update] Warning restarting gateway: ${e.message}`);
+      }
+
+      log.push(`> [update] ✅ Hermes Agent update complete.`);
+      return NextResponse.json({
+        success: true,
+        message: `Hermes Agent updated successfully (${oldVer || 'previous'} → ${newVer || 'latest'})`,
+        version: newVer,
+        log
+      });
     }
 
     // ── INSTALL ─────────────────────────────────────────────────────────────
@@ -1579,7 +1754,7 @@ PY`, { timeoutMs: 30000 });
         await run('install instance service (HERMES_HOME-qualified)',
           `${ENVPREFIX}; ${HERMES_ENV} ${HB} gateway install 2>&1 | tail -5; ${HERMES_ENV} ${HB} gateway start 2>&1 | tail -3; echo SVC_DONE`,
           { timeoutMs: 120000 });
-        const chk = await execCommand(sshConfig, wrap(`systemctl --user is-active hermes-gate""ay@${inst} 2>/dev/null`), { pool: false, timeoutMs: 15000 });
+        const chk = await execCommand(sshConfig, wrap(`systemctl --user is-active hermes-gate""way@${inst} 2>/dev/null`), { pool: false, timeoutMs: 15000 });
         svcOk = /active/.test(chk.stdout || '');
         if (!svcOk) log.push('> Instance systemd unit not active — falling back to background daemon...');
       }

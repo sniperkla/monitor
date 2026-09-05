@@ -4,6 +4,7 @@ import { authOptions } from '@/lib/auth';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
 import { dispatchWithLiveLogs } from '@/app/api/agents/_jobs';
 import { execDetached } from '@/app/api/agents/_remote-bg';
+import { getLatestAgentVersion, isNewerVersion } from '../_version-check';
 import { logger } from '@/lib/logger';
 import { parseInst, homeDir, instancePort, listInstances, cloneDefaultHome, pidAlive, gatewayUnit, ensureInstanceUnit, writeInstanceEnv, sdAvailable, sdInstanceCtl } from '../_multi-instance';
 import { shellQuote } from '@/utils/shellQuote';
@@ -436,10 +437,22 @@ echo "===ENVKEYS==="
       let memoryPrompt = '';
       try { memoryPrompt = Buffer.from(section('MEMORY_B64', 'ENV_B64'), 'base64').toString('utf8'); } catch { /* none */ }
 
+      const currentVer = section('VERSION', 'MODEL') || null;
+      let latestVersion = null;
+      let updateAvailable = false;
+      try {
+        latestVersion = await getLatestAgentVersion('zeroclaw');
+        if (currentVer && latestVersion) {
+          updateAvailable = isNewerVersion(currentVer, latestVersion);
+        }
+      } catch (_) {}
+
       return NextResponse.json({
         success: true,
         installed: !!binR,
-        version: section('VERSION', 'MODEL') || null,
+        version: currentVer,
+        latestVersion,
+        updateAvailable,
         model: section('MODEL', 'BINPATH') || null,
         running,
         binPath: binR || null,
@@ -449,6 +462,8 @@ echo "===ENVKEYS==="
         envText: envText || '',
         envKeys: section('ENVKEYS').split('\n').map(s => s.trim()).filter(Boolean),
         skills: [...new Set(skillsList)],
+        webUIPort: GW_PORT || 42617,
+        hasWebUI: true,
         systemPrompt,
         promptFiles: {
           'PROMPT.md': systemPrompt,
@@ -1400,6 +1415,81 @@ echo "TG=$TG"
       const out = (r.stdout || '').trim();
       const ok = !/error|failed/i.test(out);
       return NextResponse.json({ success: ok, output: ok ? (out || `Pairing revoked (${which === 'device' && device ? device : 'all devices'}).`) : out, log });
+    }
+
+    // ── UPDATE ──────────────────────────────────────────────────────────────
+    if (action === 'update') {
+      log.push(`> [update] Checking installation for ZeroClaw...`);
+      const binR = await execCommand(sshConfig, binPath(), { pool: false, timeoutMs: 15000 });
+      const currentBin = (binR.stdout || '').match(/BIN=(.*)/)?.[1]?.trim() || null;
+      if (!currentBin) {
+        return NextResponse.json({ success: false, error: 'ZeroClaw is not installed on this server. Please install it first.', log }, { status: 400 });
+      }
+
+      const verCheckBefore = await execCommand(sshConfig,
+        `export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:$PATH"; zeroclaw --version 2>/dev/null | tail -1`,
+        { pool: false, timeoutMs: 15000 });
+      const oldVer = (verCheckBefore.stdout || '').trim();
+      log.push(`> [update] Current version: ${oldVer || 'unknown'}`);
+
+      // Stop gateway before upgrading
+      log.push(`> [update] Stopping running gateway daemon...`);
+      try { await gwCtl('stop'); } catch (e) { log.push(`> [update] Gateway stop note: ${e.message}`); }
+
+      // Upgrade ZeroClaw
+      log.push(`> [update] Pulling and applying latest ZeroClaw updates...`);
+      const upgradeCmd = `
+        export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$HOME/bin:/root/.local/bin:/root/.cargo/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin:\$PATH"
+        export HOME="${homeDir(sshConfig) || '$HOME'}"
+        export HH="${HH}"
+
+        # 1. Alpine/musl prebuilt check
+        MUSL=0; ldd /bin/busybox 2>/dev/null | grep -qi musl && MUSL=1 || { [ -f /etc/alpine-release ] && MUSL=1; }
+        if [ "$MUSL" = 1 ]; then
+          mkdir -p /tmp/zcmusl && cd /tmp/zcmusl
+          if curl -fsSL -o zcm.tar.gz https://github.com/zeroclaw-labs/zeroclaw/releases/download/v0.8.4/zeroclaw-x86_64-unknown-linux-musl.tar.gz 2>/dev/null; then
+            tar -xzf zcm.tar.gz zeroclaw 2>/dev/null && mv -f zeroclaw "$HOME/.cargo/bin/zeroclaw" && chmod 755 "$HOME/.cargo/bin/zeroclaw" && echo "MUSL_UPDATE_SUCCESS"
+          fi
+        fi
+
+        # 2. Re-run official installer
+        echo "> Running official ZeroClaw installer update..."
+        curl -fsSL ${INSTALLER_URL} | bash 2>&1
+
+        echo "UPDATE_SCRIPT_DONE"
+      `;
+
+      let streamed = 0;
+      const upR = await execDetached(sshConfig, upgradeCmd, {
+        pollMs: 2000,
+        timeoutMs: 600000,
+        onLine: (ln) => { if (++streamed <= 400) log.push(ln); }
+      });
+      log.push(`> [update] Update script finished${upR.code !== 0 ? ` (exit code ${upR.code})` : ''}.`);
+
+      // Verify new version
+      const verCheckAfter = await execCommand(sshConfig,
+        `export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:$PATH"; zeroclaw --version 2>/dev/null | tail -1`,
+        { pool: false, timeoutMs: 15000 });
+      const newVer = (verCheckAfter.stdout || '').trim();
+      log.push(`> [update] Verified upgraded version: ${newVer || 'ready'}`);
+
+      // Restart gateway
+      log.push(`> [update] Restarting ZeroClaw gateway daemon...`);
+      try {
+        const startRes = await gwCtl('start');
+        log.push(`> [update] Gateway restart: ${startRes.ok ? 'active' : (startRes.out || 'done')}`);
+      } catch (e) {
+        log.push(`> [update] Warning restarting gateway: ${e.message}`);
+      }
+
+      log.push(`> [update] ✅ ZeroClaw update complete.`);
+      return NextResponse.json({
+        success: true,
+        message: `ZeroClaw updated successfully (${oldVer || 'previous'} → ${newVer || 'latest'})`,
+        version: newVer,
+        log
+      });
     }
 
     return NextResponse.json({ success: false, error: `Unknown action: ${action}` }, { status: 400 });

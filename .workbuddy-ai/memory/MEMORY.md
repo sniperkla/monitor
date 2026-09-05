@@ -40,3 +40,34 @@ Use these instead:
   (Reconnection is driven by the Manager via engine events, not socket-level listeners.)
 - Connections: ownership is scoped by `session.user.id`, but **relay registrations are keyed by
   JWT `sub`** (googleId for OAuth users). `getSshConfig()` translates between the two.
+
+## Local Relay (`public/local-relay.js` → installed to `~/.ssh-monitor-relay/`)
+- Runs as a launchd agent `com.ssh-monitor.relay` (RunAtLoad + KeepAlive); log at
+  `~/Library/Logs/ssh-monitor-relay.log`. Restart:
+  `launchctl kickstart -k gui/$(id -u)/com.ssh-monitor.relay`.
+- **THE STALE-BUNDLE TRAP (cost a full debugging session).** The relay *self-updates* by
+  re-fetching `/local-relay.js`, and `server.js:509` prefers `public/local-relay.min.js`
+  when it exists. That min file was Sep 2 — predating the WebUI gateway feature — so every
+  relay restart **downgraded the relay to a bundle with zero `webui` code**, and port
+  18790 could never open. Quarantined as `public/local-relay.min.js.stale-sep2` (2026-09-05).
+  **Rule: a minified/bundled artifact must never take precedence over the maintained
+  source.** If you regenerate one, rebuild it from current source and check mtimes.
+- Fast diagnostic: `md5 -q ~/.ssh-monitor-relay/local-relay.js` vs each `public/local-relay*.js`,
+  plus `grep -ci webui <file>` — instantly shows which bundle is live and what it supports.
+- `handleWebuiHttp()` forwards browser requests to the agent gateway over an SSH tunnel.
+  **Never strip the `authorization` header there** — the nanobot SPA authenticates every
+  `/api/*` call with `Authorization: Bearer nbwt_…`. Stripping `cookie` IS correct (one
+  cookie jar is shared across all 127.0.0.1 ports, incl. the monitor session cookie).
+  See `2026-09-05.md`.
+- **The Web UI opens in a REAL browser tab, not an embedded iframe** (changed 2026-09-05 at
+  the user's request). The floating panel was deleted. Rationale: the relay has to be
+  installed locally anyway, so embedding bought no isolation — only Chrome's refusal to
+  retry failed top-level navigations ("127.0.0.1 refused to connect" sticks until manual
+  reload). See `openWebUIInTab()` / `openBlankWebUITab()` in `src/apps/AIAgentsApp.js`.
+  Popup-blocker rule baked in there: claim the tab synchronously, never pass `noopener`
+  (it nulls the handle you need to navigate the tab afterward).
+- The WebUI tunnel lives only in memory (`webuiGateways`) and is pushed on demand by
+  `src/app/api/agents/nanobot/route.js` (`webui-ctl` / `relay-start`). **Any relay restart
+  drops it** — there is no re-push on reconnect; the user must click "Start Web UI" again.
+  Local port 18790 auto-increments on EADDRINUSE, so a stale relay can land on 18791.
+- Verifier: `scratch/verify-nanobot-webui-auth.sh [port]`.

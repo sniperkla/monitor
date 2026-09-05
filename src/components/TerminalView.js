@@ -18,8 +18,9 @@ import {
   LoaderCircle, AlertCircle, CircleCheckBig, CircleX, X, Minus, Maximize2, Wifi,
   Sparkles, Copy, CornerDownLeft, ShieldAlert, Settings2, Clock, RefreshCw,
   ListChecks, Trophy, Search, Languages, Lock, Brain, ChevronDown, ChevronUp,
-  AtSign, Folder, File as FileIconAi, Container, Zap, Mouse, SquareArrowOutUpRight
+  AtSign, Folder, FolderClosed, File as FileIconAi, Container, Zap, ZapOff, Mouse, SquareArrowOutUpRight
 } from 'lucide-react';
+import FilesApp from '@/apps/FilesApp';
 import { diff_match_patch } from 'diff-match-patch';
 import { buildSkillsBlock } from '@/utils/promptSafety';
 
@@ -206,7 +207,7 @@ const DYNAMIC_BLOCKER_RECOVERY = {
 
 export default function TerminalView({ connectionId, connectionName, host, color, onClose, connection, isStandalone, initialCommand }) {
   const { state: appState, dispatch, apiFetch } = useApp();
-  const { state: osState, setSshAiHistory, setSshAiPrefs } = useOS();
+  const { state: osState, setSshAiHistory, setSshAiPrefs, openWindow } = useOS();
   const { vaultStatus } = useVault();
 
   const { data: session } = useSession();
@@ -254,6 +255,310 @@ export default function TerminalView({ connectionId, connectionName, host, color
   useEffect(() => {
     termDbUriRef.current = appState.dbConfig?.uri || '';
   }, [appState.dbConfig?.uri]);
+
+  // ── Smart Path Hover Navigation & Live Autocomplete ──
+  const [hoveredTerminalPath, setHoveredTerminalPath] = useState(null);
+  const hoverLeaveTimeoutRef = useRef(null);
+  const autocompleteListRef = useRef(null);    // scroll container for autocomplete
+  const autocompleteSelectedRef = useRef(null); // currently-selected autocomplete item
+
+  // Real-time toggle: enable/disable path autocomplete while SSH is running
+  const [autocompleteEnabled, setAutocompleteEnabled] = useState(() => {
+    try { return localStorage.getItem('terminal_autocomplete_enabled') !== 'false'; } catch { return true; }
+  });
+  const autocompleteEnabledRef = useRef(autocompleteEnabled);
+  useEffect(() => {
+    autocompleteEnabledRef.current = autocompleteEnabled;
+    try { localStorage.setItem('terminal_autocomplete_enabled', String(autocompleteEnabled)); } catch {}
+    // If we're turning it off, close any open dropdown immediately
+    if (!autocompleteEnabled) {
+      setPathAutocomplete(prev => ({ ...prev, active: false }));
+    }
+  }, [autocompleteEnabled]);
+
+  const [pathAutocomplete, setPathAutocomplete] = useState({
+    active: false,
+    dirPath: '',
+    fileQuery: '',
+    results: [],
+    selectedIndex: -1, // -1 means no item auto-selected while typing
+    tokenPrefix: '',
+  });
+  const pathAutocompleteRef = useRef(pathAutocomplete);
+  useEffect(() => {
+    pathAutocompleteRef.current = pathAutocomplete;
+  }, [pathAutocomplete]);
+
+  // Auto-scroll selected autocomplete item into view on keyboard navigation
+  useEffect(() => {
+    if (pathAutocomplete.selectedIndex >= 0 && autocompleteSelectedRef.current) {
+      autocompleteSelectedRef.current.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+  }, [pathAutocomplete.selectedIndex]);
+  const sftpCacheRef = useRef({});
+  const autoDebounceTimerRef = useRef(null);
+
+  const handleGoToDirectory = useCallback((targetPath) => {
+    if (!targetPath) return;
+    let dir = targetPath.trim();
+    if (!dir.endsWith('/') && dir.includes('/')) {
+      const lastSlash = dir.lastIndexOf('/');
+      const lastSegment = dir.slice(lastSlash + 1);
+      if (lastSegment.includes('.') && lastSlash > 0) {
+        dir = dir.slice(0, lastSlash);
+      }
+    }
+    const safeDir = dir.replace(/'/g, "'\\''");
+    sendSshInput(`cd '${safeDir}'\n`);
+    setHoveredTerminalPath(null);
+  }, [sendSshInput]);
+
+  const handleOpenFilesApp = useCallback((targetPath) => {
+    if (!openWindow) return;
+    let dir = (targetPath || '.').trim();
+    if (!dir.endsWith('/') && dir.includes('/')) {
+      const lastSlash = dir.lastIndexOf('/');
+      const lastSegment = dir.slice(lastSlash + 1);
+      if (lastSegment.includes('.') && lastSlash > 0) {
+        dir = dir.slice(0, lastSlash);
+      }
+    }
+    const winId = `files-${connectionId || 'default'}-${Date.now()}`;
+    openWindow(
+      winId,
+      `Files: ${connectionName || host || 'Remote'}`,
+      <FilesApp
+        initialConnection={connection}
+        initialConnectionId={connectionId}
+        initialPath={dir}
+      />,
+      FolderClosed,
+      {
+        initialWidth: 900,
+        initialHeight: 600,
+        appType: 'files-app',
+        props: {
+          initialConnectionId: connectionId,
+          initialPath: dir,
+        }
+      }
+    );
+    setHoveredTerminalPath(null);
+  }, [openWindow, connection, connectionId, connectionName, host]);
+
+  const getCursorPixelPos = useCallback(() => {
+    if (!terminalRef.current || !termInstanceRef.current) return null;
+    const term = termInstanceRef.current;
+    const termEl = terminalRef.current;
+    const parentEl = termEl.closest('.relative') || termEl.parentElement || termEl;
+    const parentRect = parentEl.getBoundingClientRect();
+    const parentWidth = parentRect.width || 800;
+    const parentHeight = parentRect.height || 500;
+
+    let cursorRelativeLeft = 16;
+    let cursorRelativeTop = 0;
+    let cursorRelativeBottom = 20;
+
+    // 1. Try DOM cursor element
+    const cursorEl = termEl.querySelector('.xterm-cursor');
+    if (cursorEl) {
+      const cRect = cursorEl.getBoundingClientRect();
+      cursorRelativeLeft = cRect.left - parentRect.left;
+      cursorRelativeTop = cRect.top - parentRect.top;
+      cursorRelativeBottom = cRect.bottom - parentRect.top;
+    } else {
+      // 2. Fallback using active buffer coordinates
+      const cols = term.cols || 80;
+      const rows = term.rows || 24;
+      const cellWidth = parentWidth / cols;
+      const cellHeight = parentHeight / rows;
+      const cx = term.buffer.active.cursorX || 0;
+      const cy = term.buffer.active.cursorY || 0;
+      cursorRelativeLeft = cx * cellWidth;
+      cursorRelativeTop = cy * cellHeight;
+      cursorRelativeBottom = (cy + 1) * cellHeight;
+    }
+
+    const left = Math.max(8, Math.min(cursorRelativeLeft, parentWidth - 330));
+    // Check if placing above: if remaining space below is tight (< 240px) or cursor is in bottom half
+    const spaceBelow = parentHeight - cursorRelativeBottom;
+    const isAbove = spaceBelow < 240;
+
+    if (isAbove) {
+      // Place cleanly ABOVE cursor with 12px breathing room so it never blocks the user typing
+      const bottom = Math.max(8, parentHeight - cursorRelativeTop + 12);
+      const maxHeight = Math.min(240, Math.max(90, cursorRelativeTop - 20));
+      return { left, top: 'auto', bottom, maxHeight, isAbove: true };
+    } else {
+      // Place cleanly BELOW cursor with 8px breathing room
+      const top = Math.max(8, cursorRelativeBottom + 8);
+      const maxHeight = Math.min(240, Math.max(90, spaceBelow - 20));
+      return { left, top, bottom: 'auto', maxHeight, isAbove: false };
+    }
+  }, []);
+
+  const detectPathAutocomplete = useCallback((buffer) => {
+    // Respect the real-time toggle
+    if (!autocompleteEnabledRef.current) return;
+
+    const line = String(buffer || '');
+    if (!line) {
+      if (pathAutocompleteRef.current.active) {
+        setPathAutocomplete(prev => ({ ...prev, active: false }));
+      }
+      return;
+    }
+
+    const tokens = line.trimStart().split(/\s+/);
+    const lastToken = tokens[tokens.length - 1] || '';
+    const cmd = (tokens[0] || '').toLowerCase();
+
+    const isPathToken = lastToken.includes('/') || lastToken.startsWith('.') || lastToken.startsWith('~');
+    const isNavCommand = ['cd', 'ls', 'cat', 'nano', 'vim', 'vi', 'rm', 'mkdir', 'cp', 'mv', 'tail', 'head', 'source', 'less', 'python', 'python3', 'node', 'sh', 'bash'].includes(cmd) && tokens.length >= 2;
+
+    if (!isPathToken && !isNavCommand) {
+      if (pathAutocompleteRef.current.active) {
+        setPathAutocomplete(prev => ({ ...prev, active: false }));
+      }
+      return;
+    }
+
+    const isCd = cmd === 'cd';
+    const isFileCmd = ['cat', 'nano', 'vim', 'vi', 'rm', 'mkdir', 'cp', 'mv', 'tail', 'head', 'source', 'less', 'python', 'python3', 'node', 'sh', 'bash'].includes(cmd);
+
+    const smartFilterSort = (filesList, query) => {
+      const q = (query || '').toLowerCase();
+      return filesList
+        .filter(f => f.filename !== '.' && f.filename !== '..' && (!q || f.filename.toLowerCase().includes(q)))
+        .sort((a, b) => {
+          const aName = a.filename.toLowerCase();
+          const bName = b.filename.toLowerCase();
+
+          // 1. Exact match / exact prefix match
+          const aExact = aName === q;
+          const bExact = bName === q;
+          if (aExact && !bExact) return -1;
+          if (!aExact && bExact) return 1;
+
+          const aPref = aName.startsWith(q);
+          const bPref = bName.startsWith(q);
+          if (aPref && !bPref) return -1;
+          if (!aPref && bPref) return 1;
+
+          // 2. Command-aware type priority (auto smart ranking)
+          if (isCd) {
+            if (a.isDir && !b.isDir) return -1;
+            if (!a.isDir && b.isDir) return 1;
+          } else if (isFileCmd) {
+            if (!a.isDir && b.isDir) return -1;
+            if (a.isDir && !b.isDir) return 1;
+          }
+
+          // 3. Alphabetical
+          return a.filename.localeCompare(b.filename);
+        })
+        .slice(0, 8);
+    };
+
+    const lastSlash = lastToken.lastIndexOf('/');
+    let dirPath = '.';
+    let fileQuery = '';
+    if (lastSlash !== -1) {
+      dirPath = lastToken.slice(0, lastSlash + 1);
+      fileQuery = lastToken.slice(lastSlash + 1);
+    } else {
+      dirPath = '.';
+      fileQuery = lastToken;
+    }
+
+    const listPath = dirPath || '.';
+
+    const cached = sftpCacheRef.current[listPath];
+    if (cached && Array.isArray(cached)) {
+      const results = smartFilterSort(cached, fileQuery);
+      if (results.length > 0) {
+        const coords = getCursorPixelPos();
+        setPathAutocomplete({
+          active: true,
+          dirPath,
+          fileQuery,
+          results,
+          selectedIndex: -1, // Do not auto-select while typing
+          tokenPrefix: dirPath,
+          coords,
+          fullTypedToken: lastToken,
+        });
+        return;
+      }
+    }
+
+    if (autoDebounceTimerRef.current) clearTimeout(autoDebounceTimerRef.current);
+    autoDebounceTimerRef.current = setTimeout(() => {
+      const sock = socketRef.current;
+      if (!sock?.connected) return;
+
+      const onList = ({ files }) => {
+        if (!files || !Array.isArray(files)) return;
+        const validFiles = files
+          .filter(f => f.filename !== '.' && f.filename !== '..')
+          .map(f => ({
+            filename: f.filename,
+            isDir: Boolean(f.longname?.startsWith('d') || f.attrs?.isDirectory?.()),
+          }));
+        sftpCacheRef.current[listPath] = validFiles;
+
+        const results = smartFilterSort(validFiles, fileQuery);
+
+        if (results.length > 0) {
+          const coords = getCursorPixelPos();
+          setPathAutocomplete({
+            active: true,
+            dirPath,
+            fileQuery,
+            results,
+            selectedIndex: -1, // Do not auto-select while typing
+            tokenPrefix: dirPath,
+            coords,
+            fullTypedToken: lastToken,
+          });
+        } else {
+          setPathAutocomplete(prev => ({ ...prev, active: false }));
+        }
+      };
+
+      sock.once('sftp:list', onList);
+      sock.emit('sftp:list', listPath);
+      setTimeout(() => sock.off('sftp:list', onList), 3500);
+    }, 100);
+  }, [getCursorPixelPos]);
+
+  const insertPathAutocomplete = useCallback((item) => {
+    if (!item) return;
+    const { fileQuery } = pathAutocompleteRef.current;
+    const queryLen = fileQuery ? fileQuery.length : 0;
+    let completion = item.filename.slice(queryLen);
+    if (item.isDir) {
+      completion += '/';
+    }
+
+    sendSshInput(completion);
+    inputBufferRef.current += completion;
+
+    if (item.isDir) {
+      detectPathAutocomplete(inputBufferRef.current);
+    } else {
+      setPathAutocomplete(prev => ({ ...prev, active: false }));
+    }
+  }, [sendSshInput, detectPathAutocomplete]);
+
+  const handleGoToDirectoryRef = useRef(handleGoToDirectory);
+  useEffect(() => { handleGoToDirectoryRef.current = handleGoToDirectory; }, [handleGoToDirectory]);
+
+  const detectPathAutocompleteRef = useRef(detectPathAutocomplete);
+  useEffect(() => { detectPathAutocompleteRef.current = detectPathAutocomplete; }, [detectPathAutocomplete]);
+
+  const insertPathAutocompleteRef = useRef(insertPathAutocomplete);
+  useEffect(() => { insertPathAutocompleteRef.current = insertPathAutocomplete; }, [insertPathAutocomplete]);
 
   // Real-time mode switching: reconnect terminal when user swaps SSH mode in Settings
   useEffect(() => {
@@ -1312,6 +1617,127 @@ logstash:
 
     term.loadAddon(fitAddon);
     term.loadAddon(webLinksAddon);
+
+    // Custom Path Link Provider: enables mouse hover & click "Go to" on any terminal path
+    term.registerLinkProvider({
+      provideLinks(bufferLineNumber, callback) {
+        try {
+          const lineObj = term.buffer.active.getLine(bufferLineNumber - 1);
+          if (!lineObj) return callback([]);
+          const lineStr = lineObj.translateToString(true);
+          if (!lineStr || lineStr.length < 2) return callback([]);
+
+          const pathRegex = /(?:^|[\s"':=([])((?:~|\.{1,2})?\/[a-zA-Z0-9_\-.~/]+|[a-zA-Z0-9_\-.]+\/[a-zA-Z0-9_\-./]+)/g;
+          const links = [];
+          let match;
+
+          while ((match = pathRegex.exec(lineStr)) !== null) {
+            const fullMatch = match[0];
+            const rawPath = match[1];
+            if (!rawPath || rawPath.length < 2) continue;
+            if (rawPath.startsWith('http://') || rawPath.startsWith('https://')) continue;
+            if (/^\d+\/\d+$/.test(rawPath)) continue;
+            if (!rawPath.includes('/') && !rawPath.startsWith('~')) continue;
+
+            const cleanPath = rawPath.replace(/[,;:'"\)\]>]+$/, '');
+            if (cleanPath.length < 2) continue;
+
+            const prefixOffset = fullMatch.indexOf(cleanPath);
+            const startX = match.index + prefixOffset + 1;
+            const endX = startX + cleanPath.length;
+
+            links.push({
+              range: {
+                start: { x: startX, y: bufferLineNumber },
+                end: { x: endX, y: bufferLineNumber }
+              },
+              text: cleanPath,
+              activate(event, text) {
+                handleGoToDirectoryRef.current?.(text);
+              },
+              hover(event, text) {
+                if (hoverLeaveTimeoutRef.current) {
+                  clearTimeout(hoverLeaveTimeoutRef.current);
+                  hoverLeaveTimeoutRef.current = null;
+                }
+                setHoveredTerminalPath({
+                  path: text,
+                  x: event.clientX,
+                  y: event.clientY,
+                });
+              },
+              leave() {
+                if (hoverLeaveTimeoutRef.current) clearTimeout(hoverLeaveTimeoutRef.current);
+                hoverLeaveTimeoutRef.current = setTimeout(() => {
+                  setHoveredTerminalPath(null);
+                }, 750);
+              }
+            });
+          }
+          callback(links);
+        } catch (_) {
+          callback([]);
+        }
+      }
+    });
+
+    // Custom Key Handler: keyboard navigation for path autocomplete dropdown
+    term.attachCustomKeyEventHandler((e) => {
+      const ac = pathAutocompleteRef.current;
+      if (ac?.active && ac.results?.length > 0) {
+        if (e.type === 'keydown') {
+          if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            e.stopPropagation();
+            setPathAutocomplete(prev => ({
+              ...prev,
+              selectedIndex: prev.selectedIndex < 0 ? 0 : Math.min(prev.selectedIndex + 1, prev.results.length - 1)
+            }));
+            return false;
+          }
+          if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            e.stopPropagation();
+            setPathAutocomplete(prev => ({
+              ...prev,
+              selectedIndex: prev.selectedIndex <= 0 ? -1 : prev.selectedIndex - 1
+            }));
+            return false;
+          }
+          if (e.key === 'Tab') {
+            e.preventDefault();
+            e.stopPropagation();
+            const idx = ac.selectedIndex >= 0 ? ac.selectedIndex : 0;
+            const chosen = ac.results[idx];
+            if (chosen) {
+              insertPathAutocompleteRef.current?.(chosen);
+            }
+            return false;
+          }
+          if (e.key === 'Enter') {
+            if (ac.selectedIndex >= 0) {
+              e.preventDefault();
+              e.stopPropagation();
+              const chosen = ac.results[ac.selectedIndex];
+              if (chosen) {
+                insertPathAutocompleteRef.current?.(chosen);
+              }
+              return false;
+            }
+            // Nothing selected: close popup and let Enter execute typed command naturally in terminal
+            setPathAutocomplete(prev => ({ ...prev, active: false }));
+            return true;
+          }
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            e.stopPropagation();
+            setPathAutocomplete(prev => ({ ...prev, active: false }));
+            return false;
+          }
+        }
+      }
+      return true;
+    });
     term.open(terminalRef.current);
 
     // Terminal bell — play sound if enabled in settings
@@ -1723,22 +2149,28 @@ logstash:
         sendSshInput(data);
       }
 
-      // Capture user commands (best-effort) for AI context
+      // Capture user commands (best-effort) for AI context & live path autocomplete
       // xterm sends \r on Enter; also handle \n.
       const chunk = String(data || '');
       for (const ch of chunk) {
         if (ch === '\r' || ch === '\n') {
           const line = inputBufferRef.current;
           inputBufferRef.current = '';
+          setPathAutocomplete(prev => ({ ...prev, active: false }));
           const cleaned = String(line || '').trim();
           if (cleaned) {
             recentCommandsRef.current = [...recentCommandsRef.current, cleaned].slice(-25);
           }
+        } else if (ch === '\x03') { // Ctrl+C
+          inputBufferRef.current = '';
+          setPathAutocomplete(prev => ({ ...prev, active: false }));
         } else if (ch === '\u007f') {
           // backspace
           inputBufferRef.current = inputBufferRef.current.slice(0, -1);
+          detectPathAutocompleteRef.current?.(inputBufferRef.current);
         } else if (ch >= ' ') {
           inputBufferRef.current += ch;
+          detectPathAutocompleteRef.current?.(inputBufferRef.current);
         }
       }
     });
@@ -2148,7 +2580,25 @@ logstash:
     const interactive = getTag('interactive');
     const searchSkills = getTag('search_skills');
     const stepRaw = getTag('step');
-    const danger = String(dangerRaw || '').trim().toLowerCase() === 'true';
+    let danger = String(dangerRaw || '').trim().toLowerCase() === 'true';
+
+    // 🛡️ CRITICAL SAFETY INTERCEPTOR: Automatically enforce danger=true on harmful commands
+    const catastrophicDestructivePatterns = [
+      /\brm\s+-[rfR]{1,3}\s+[/~]/i,                         // rm -rf / or rm -rf ~
+      /\brm\s+-[rfR]{1,3}\s+\/\*/i,                        // rm -rf /*
+      /\bmkfs(\.\w+)?\s+\/dev\/(sd[a-z]|nvme\d|vd[a-z]|hd[a-z])/i, // formatting disks
+      /\bdd\s+if=\/dev\/(zero|urandom)\s+of=\/dev\//i,     // wiping drive with zeros
+      /:\(\)\s*\{\s*:\|:&\s*\}\s*;/i,                      // fork bomb
+      /\bchmod\s+-[rR]\s+[07]{3,4}\s+\//i,                 // destructive root permission changes
+      /\b(systemctl|service)\s+(stop|disable|mask)\s+ssh(d)?\b/i, // stopping SSH daemon
+      /\biptables\s+-F\b(?!\s*&&.*22)/i,                   // flushing iptables (lockout risk)
+    ];
+
+    if (command && catastrophicDestructivePatterns.some(p => p.test(command))) {
+      console.warn('[AI Agent] 🚨 Harmful command intercepted, enforcing danger=true:', command);
+      danger = true;
+    }
+
     const doneRawLower = String(doneRaw || '').trim().toLowerCase();
     let done = doneRawLower === 'true';
 
@@ -4361,6 +4811,8 @@ logstash:
             connectionName,
             host,
             prefs: sshAiPrefs,
+            mode: 'manual',
+            taskMode: sshAiPrefs?.aiTask || 'ssh',
             model: sshAiPrefs.aiModel || 'auto',
             tmuxActive: !!sshAiPrefs?.autoTmux,
             history: aiConversationRef.current.slice(-8).slice(0, -1),
@@ -4439,6 +4891,8 @@ logstash:
             connectionName,
             host,
             prefs: sshAiPrefs,
+            mode: 'manual',
+            taskMode: sshAiPrefs?.aiTask || 'ssh',
             model: sshAiPrefs.aiModel || 'auto',
             tmuxActive: !!sshAiPrefs?.autoTmux,
             history: aiConversationRef.current.slice(-8).slice(0, -1),
@@ -5745,6 +6199,8 @@ ${isExecutionGoal ? '⚡ EXECUTION: run commands directly.\n' : ''}${scoutFirstR
           connectionName,
           host,
           prefs: sshAiPrefs,
+          mode: 'auto',
+          taskMode: sshAiPrefs?.aiTask || 'ssh',
           model: sshAiPrefs.aiModel || 'auto',
           tmuxActive: !!sshAiPrefs?.autoTmux,
           history: aiConversationRef.current.slice(-12),
@@ -6894,6 +7350,24 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
             <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium ${sshMode === 'local' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-blue-500/15 text-blue-400'}`}>
               {sshMode === 'local' ? '⚡ Local' : '☁ Server'}
             </span>
+
+            {/* Autocomplete real-time toggle */}
+            <button
+              type="button"
+              title={autocompleteEnabled ? 'Path autocomplete ON — click to disable' : 'Path autocomplete OFF — click to enable'}
+              onClick={() => setAutocompleteEnabled(v => !v)}
+              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-semibold transition-all duration-200 border ${
+                autocompleteEnabled
+                  ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/40 hover:bg-indigo-500/30 shadow-[0_0_6px_rgba(99,102,241,0.3)]'
+                  : 'bg-slate-800/60 text-slate-500 border-slate-700/50 hover:bg-slate-700/60'
+              }`}
+            >
+              {autocompleteEnabled
+                ? <Zap size={9} className="shrink-0" />
+                : <ZapOff size={9} className="shrink-0" />}
+              <span>{autocompleteEnabled ? 'Auto' : 'Auto'}</span>
+            </button>
+
             <div className="flex items-center gap-1.5 text-xs" style={{ color: statusInfo.color }}>
               {statusInfo.icon}
               <span>{statusInfo.text}</span>
@@ -6906,18 +7380,42 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
       <div className="flex-1 relative bg-transparent min-h-0 overflow-hidden group/term">
 
 
-        {/* Floating Latency Badge (Visible in all modes) */}
-        {latency !== null && status === 'connected' && (
-          <div 
-            className="absolute top-3 right-5 z-20 flex items-center gap-1.5 text-[10px] font-bold px-2.5 py-1 rounded-md bg-black/60 backdrop-blur-md border border-white/10 shadow-lg opacity-80 group-hover/term:opacity-100 transition-all pointer-events-none"
-            style={{ 
-              color: latency < 150 ? '#4ade80' : latency < 300 ? '#fbbf24' : '#f43f5e' 
-            }}
+        {/* Top-Right Floating Controls (Auto toggle + Latency Badge) */}
+        <div className="absolute top-3 right-4 z-20 flex items-center gap-2">
+          {/* Floating Autocomplete Toggle — compact 'Auto' pill */}
+          <button
+            type="button"
+            title={autocompleteEnabled ? 'Path autocomplete: ON (Click to disable)' : 'Path autocomplete: OFF (Click to enable)'}
+            onClick={() => setAutocompleteEnabled(v => !v)}
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] font-semibold font-mono transition-all duration-200 border backdrop-blur-md shadow-lg ${
+              autocompleteEnabled
+                ? 'bg-indigo-950/80 text-indigo-300 border-indigo-500/50 hover:bg-indigo-900/90 shadow-[0_0_10px_rgba(99,102,241,0.3)]'
+                : 'bg-black/70 text-slate-400 border-white/10 hover:bg-black/90 hover:text-slate-300'
+            }`}
           >
-            <Wifi size={10} strokeWidth={3} />
-            <span className="font-mono tracking-tighter">{latency}ms</span>
-          </div>
-        )}
+            {autocompleteEnabled
+              ? <Zap size={10} className="shrink-0 text-indigo-400" />
+              : <ZapOff size={10} className="shrink-0 text-slate-500" />}
+            <span>Auto</span>
+            <span className={`w-1.5 h-1.5 rounded-full ${autocompleteEnabled ? 'bg-indigo-400 animate-pulse' : 'bg-slate-600'}`} />
+          </button>
+
+          {/* Floating Latency Badge */}
+          {latency !== null && status === 'connected' && (
+            <div 
+              className="flex items-center gap-1.5 text-[10px] font-bold px-2.5 py-1 rounded-md bg-black/60 backdrop-blur-md border border-white/10 shadow-lg opacity-80 group-hover/term:opacity-100 transition-all pointer-events-none"
+              style={{ 
+                color: latency < 150 ? '#4ade80' : latency < 300 ? '#fbbf24' : '#f43f5e' 
+              }}
+            >
+              <Wifi size={10} strokeWidth={3} />
+              <span className="font-mono tracking-tighter">{latency}ms</span>
+            </div>
+          )}
+        </div>
+
+
+
 
         <div
           className="h-full w-full p-1" // Padding moved here to avoid breaking FitAddon
@@ -6957,6 +7455,128 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
             style={{ fontFamily: osState?.terminalSettings?.activePreset === 'retro' ? 'VT323, monospace' : 'inherit' }}
           />
         </div>
+
+        {/* Floating Path Autocomplete Dropdown (positioned cleanly above/below user typing cursor) */}
+        {pathAutocomplete.active && pathAutocomplete.results.length > 0 && (
+          <div 
+            className="absolute z-30 w-80 rounded-xl bg-slate-950/95 border border-indigo-500/50 shadow-2xl backdrop-blur-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150 text-xs font-mono select-none flex flex-col"
+            style={{
+              left: pathAutocomplete.coords?.left ?? 16,
+              top: pathAutocomplete.coords?.top ?? 'auto',
+              bottom: pathAutocomplete.coords?.bottom ?? (!pathAutocomplete.coords ? 16 : 'auto'),
+              maxHeight: pathAutocomplete.coords?.maxHeight ?? 240,
+            }}
+          >
+            {/* Header showing the block the user is typing */}
+            <div className="px-3 py-1.5 border-b border-white/10 flex items-center justify-between text-[10px] bg-indigo-950/50 text-slate-300 shrink-0">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <Folder size={11} className="text-indigo-400 shrink-0" />
+                <span className="text-slate-400 text-[9.5px]">Typing:</span>
+                <span className="font-mono font-bold text-indigo-300 truncate max-w-[150px]">
+                  {pathAutocomplete.fullTypedToken || (pathAutocomplete.dirPath !== '.' ? pathAutocomplete.dirPath : '') + pathAutocomplete.fileQuery}
+                </span>
+              </div>
+              <span className="text-[9px] px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-semibold tracking-wider uppercase shrink-0">
+                {pathAutocomplete.selectedIndex >= 0 ? 'Enter / Tab' : '↓ / Click'}
+              </span>
+            </div>
+
+            {/* Smart Sorted Suggestion List */}
+            <div ref={autocompleteListRef} className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-1 flex flex-col gap-0.5">
+              {pathAutocomplete.results.map((item, idx) => {
+                const isSelected = idx === pathAutocomplete.selectedIndex;
+                return (
+                  <button
+                    key={item.filename}
+                    type="button"
+                    ref={isSelected ? autocompleteSelectedRef : null}
+                    onMouseEnter={() => setPathAutocomplete(prev => ({ ...prev, selectedIndex: idx }))}
+                    onClick={() => insertPathAutocomplete(item)}
+                    className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-left transition-all cursor-pointer ${
+                      isSelected
+                        ? 'bg-indigo-600/35 text-white border border-indigo-500/50 shadow-sm'
+                        : 'hover:bg-white/5 text-slate-300 border border-transparent'
+                    }`}
+                  >
+                    {item.isDir ? (
+                      <Folder size={13} className="text-blue-400 shrink-0" />
+                    ) : (
+                      <FileIconAi size={13} className="text-emerald-400 shrink-0" />
+                    )}
+                    <span className="truncate flex-1 font-mono text-[11px] font-medium">
+                      {item.filename}{item.isDir ? '/' : ''}
+                    </span>
+                    {isSelected && (
+                      <span className="text-[9px] text-indigo-300 font-mono flex items-center gap-0.5 shrink-0 opacity-80" title="Press Tab or Enter to select">
+                        <CornerDownLeft size={9} />
+                      </span>
+                    )}
+                    <span className={`text-[9px] px-1.5 py-0.5 rounded font-semibold uppercase shrink-0 ${
+                      item.isDir ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' : 'bg-slate-800 text-slate-400 border border-slate-700'
+                    }`}>
+                      {item.isDir ? 'dir' : 'file'}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Hovered Path "Go To" Action Pill */}
+        {hoveredTerminalPath && (
+          <div
+            className="fixed z-[99999] pointer-events-auto flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-950/95 border border-indigo-500/50 shadow-2xl backdrop-blur-md text-xs font-mono select-none -translate-x-1/2 -translate-y-full mb-2 animate-in fade-in zoom-in-95 duration-150"
+            style={{
+              left: Math.max(120, Math.min(typeof window !== 'undefined' ? window.innerWidth - 140 : 500, hoveredTerminalPath.x)),
+              top: Math.max(40, hoveredTerminalPath.y - 8),
+            }}
+            onMouseEnter={() => {
+              if (hoverLeaveTimeoutRef.current) {
+                clearTimeout(hoverLeaveTimeoutRef.current);
+                hoverLeaveTimeoutRef.current = null;
+              }
+            }}
+            onMouseLeave={() => {
+              setHoveredTerminalPath(null);
+            }}
+          >
+            <div className="flex items-center gap-1.5 text-indigo-300 font-semibold max-w-[180px] truncate text-[11px]">
+              <Folder size={12} className="text-indigo-400 shrink-0" />
+              <span className="truncate">{hoveredTerminalPath.path}</span>
+            </div>
+            <div className="h-3.5 w-px bg-white/20 mx-0.5" />
+            <button
+              type="button"
+              onClick={() => handleGoToDirectory(hoveredTerminalPath.path)}
+              className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white font-medium text-[10px] transition-all shadow-sm cursor-pointer"
+              title="cd to this directory in terminal"
+            >
+              <CornerDownLeft size={10} />
+              <span>Go to</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleOpenFilesApp(hoveredTerminalPath.path)}
+              className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white/10 hover:bg-white/20 active:scale-95 text-slate-200 font-medium text-[10px] transition-all cursor-pointer"
+              title="Open in Files Manager"
+            >
+              <FolderClosed size={10} className="text-amber-400" />
+              <span>Files</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                sendSshInput(hoveredTerminalPath.path);
+                setHoveredTerminalPath(null);
+              }}
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded-lg bg-white/5 hover:bg-white/15 active:scale-95 text-slate-400 hover:text-white text-[10px] transition-all cursor-pointer"
+              title="Paste path into terminal"
+            >
+              <Copy size={10} />
+            </button>
+          </div>
+        )}
 
         {/* AI Processing Overlay removed per user request */}
 

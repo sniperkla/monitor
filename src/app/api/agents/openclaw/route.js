@@ -4,6 +4,7 @@ import { authOptions } from '@/lib/auth';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
 import { dispatchWithLiveLogs } from '@/app/api/agents/_jobs';
 import { execDetached } from '@/app/api/agents/_remote-bg';
+import { getLatestAgentVersion, isNewerVersion } from '../_version-check';
 import { logger } from '@/lib/logger';
 import { parseInst, homeDir, instancePort, listInstances, cloneDefaultHome, pidAlive, gatewayUnit, ensureInstanceUnit, writeInstanceEnv, sdAvailable, sdInstanceCtl, copyInstanceBin } from '../_multi-instance';
 
@@ -381,10 +382,21 @@ echo "===ENVKEYS==="
           systemPrompt = c.systemPrompt || c.instructions;
         }
       } catch {}
+      const currentVer = section('VERSION', 'MODEL') || null;
+      let latestVersion = null;
+      let updateAvailable = false;
+      try {
+        latestVersion = await getLatestAgentVersion('openclaw');
+        if (currentVer && latestVersion) {
+          updateAvailable = isNewerVersion(currentVer, latestVersion);
+        }
+      } catch (_) {}
       return NextResponse.json({
         success: true,
         installed: !!binR || !!configJson,
-        version: section('VERSION', 'MODEL') || null,
+        version: currentVer,
+        latestVersion,
+        updateAvailable,
         model: section('MODEL', 'BINPATH') || null,
         running,
         binPath: binR || null,
@@ -394,6 +406,8 @@ echo "===ENVKEYS==="
         envText: envText || '',
         envKeys,
         skills: [...skillsList],
+        webUIPort: GW_PORT || 18789,
+        hasWebUI: true,
         systemPrompt,
         promptFiles: {
           'PROMPT.md': systemPrompt,
@@ -1013,6 +1027,78 @@ print('MCP_ADDED')
         }
       }
       return NextResponse.json({ success: true, pending, raw: out.slice(-1000) });
+    }
+
+    // ── UPDATE ──────────────────────────────────────────────────────────────
+    if (action === 'update') {
+      log.push(`> [update] Checking installation for OpenClaw...`);
+      const binR = await execCommand(sshConfig, binPath(), { pool: false, timeoutMs: 15000 });
+      const currentBin = (binR.stdout || '').match(/BIN=(.*)/)?.[1]?.trim() || null;
+      if (!currentBin) {
+        return NextResponse.json({ success: false, error: 'OpenClaw is not installed on this server. Please install it first.', log }, { status: 400 });
+      }
+
+      const verCheckBefore = await execCommand(sshConfig,
+        `export PATH="$HOME/.openclaw/local/bin:$HOME/.local/bin:/usr/local/bin:$PATH"; openclaw --version 2>/dev/null | tail -1`,
+        { pool: false, timeoutMs: 15000 });
+      const oldVer = (verCheckBefore.stdout || '').trim();
+      log.push(`> [update] Current version: ${oldVer || 'unknown'}`);
+
+      // Stop gateway before upgrading
+      log.push(`> [update] Stopping running gateway daemon...`);
+      try { await gwCtl('stop'); } catch (e) { log.push(`> [update] Gateway stop note: ${e.message}`); }
+
+      // Upgrade OpenClaw
+      log.push(`> [update] Pulling and applying latest OpenClaw updates...`);
+      const upgradeCmd = `
+        export PATH="$HOME/.openclaw/local/bin:$HOME/.local/bin:/usr/local/bin:\$PATH"
+        export HOME="${homeDir(sshConfig) || '$HOME'}"
+        export HH="${HH}"
+
+        # 1. If global npm is available, update openclaw package
+        if command -v npm >/dev/null 2>&1; then
+          echo "> Updating global openclaw via npm..."
+          npm update -g openclaw 2>&1 || true
+        fi
+
+        # 2. Re-run official installer (updates node/binaries/gateway without touching config)
+        echo "> Running official OpenClaw installer update..."
+        curl -fsSL ${INSTALLER_URL} | bash -s -- --no-onboard 2>&1
+
+        echo "UPDATE_SCRIPT_DONE"
+      `;
+
+      let streamed = 0;
+      const upR = await execDetached(sshConfig, upgradeCmd, {
+        pollMs: 2000,
+        timeoutMs: 600000,
+        onLine: (ln) => { if (++streamed <= 400) log.push(ln); }
+      });
+      log.push(`> [update] Update script finished${upR.code !== 0 ? ` (exit code ${upR.code})` : ''}.`);
+
+      // Verify new version
+      const verCheckAfter = await execCommand(sshConfig,
+        `export PATH="$HOME/.openclaw/local/bin:$HOME/.local/bin:/usr/local/bin:$PATH"; openclaw --version 2>/dev/null | tail -1`,
+        { pool: false, timeoutMs: 15000 });
+      const newVer = (verCheckAfter.stdout || '').trim();
+      log.push(`> [update] Verified upgraded version: ${newVer || 'ready'}`);
+
+      // Restart gateway
+      log.push(`> [update] Restarting OpenClaw gateway daemon...`);
+      try {
+        const startRes = await gwCtl('start');
+        log.push(`> [update] Gateway restart: ${startRes.ok ? 'active' : (startRes.out || 'done')}`);
+      } catch (e) {
+        log.push(`> [update] Warning restarting gateway: ${e.message}`);
+      }
+
+      log.push(`> [update] ✅ OpenClaw update complete.`);
+      return NextResponse.json({
+        success: true,
+        message: `OpenClaw updated successfully (${oldVer || 'previous'} → ${newVer || 'latest'})`,
+        version: newVer,
+        log
+      });
     }
 
     return NextResponse.json({ success: false, error: `Unknown action: ${action}` }, { status: 400 });

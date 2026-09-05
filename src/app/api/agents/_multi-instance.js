@@ -151,15 +151,6 @@ if [ "$PR" = 0 ]; then
       ;;
   esac
 fi
-# Hermes self-reports its own lifecycle via control socket — catches gateways
-# the (possibly stale) pidfile/systemd cannot see. Run through the venv so
-# hermes_cli imports resolve (bare /usr/local/lib/hermes-agent/hermes fails
-# on system python without venv site-packages).
-if [ "$PR" = 0 ] && [ "${agentId}" = "hermes" ]; then
-  export PATH="$HOME/.local/bin:/usr/local/lib/hermes-agent/venv/bin:$HOME/.hermes/hermes-agent/venv/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
-  HB=$(command -v hermes 2>/dev/null)
-  [ -n "$HB" ] && { HERMES_HOME="$HOME/.hermes" timeout 12 "$HB" gatew""ay status 2>/dev/null | grep -q 'is running' && PR=1; }
-fi
 echo "PROC=$PR"
 for d in "$HOME"/.${agentId}-*; do
   [ -d "$d" ] || continue
@@ -201,12 +192,6 @@ for d in "$HOME"/.${agentId}-*; do
           done
           ;;
       esac
-    fi
-    # Hermes fallback: control-socket self-report (stale-pidfile proof)
-    if [ "$RUN" = 0 ] && [ "${agentId}" = "hermes" ]; then
-      export PATH="$d/hermes-agent/venv/bin:$HOME/.local/bin:/usr/local/lib/hermes-agent/venv/bin:$HOME/.hermes/hermes-agent/venv/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
-      HB=$(command -v hermes 2>/dev/null)
-      [ -n "$HB" ] && { HERMES_HOME="$d" timeout 8 "$HB" gatew""ay status 2>/dev/null | grep -q 'is running' && RUN=1; }
     fi
   fi
   if [ "$RUN" = 1 ] || [ "$VALID" = 1 ]; then

@@ -4,6 +4,7 @@ import { authOptions } from '@/lib/auth';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
 import { dispatchWithLiveLogs } from '@/app/api/agents/_jobs';
 import { execDetached } from '@/app/api/agents/_remote-bg';
+import { getLatestAgentVersion, isNewerVersion } from '../_version-check';
 import { logger } from '@/lib/logger';
 import { parseInst, homeDir, instancePort, listInstances, cloneDefaultHome, pidAlive, gatewayUnit, ensureInstanceUnit, writeInstanceEnv, sdAvailable, sdInstanceCtl, copyInstanceBin } from '../_multi-instance';
 import { shellQuote } from '@/utils/shellQuote';
@@ -409,6 +410,13 @@ for f in "${HH}/logs/gatew""ay.log" "${HH}-gatew""ay.log"; do [ -f "$f" ] && [ -
 [ -z "$LOG" ] && LOG="${HH}/logs/gatew""ay.log"
 echo "$LOG"
 tail -n 30 "$LOG" 2>/dev/null | tail -5
+echo "===WEBUI_SECRET==="
+# Prefer config.json — the authoritative secret. Flatten newlines so the whole
+# JSON is one line (the webui.log wraps the token across two lines, truncating
+# it when grepped).
+SEC=$(tr -d '\n' < "${HH}/config.json" 2>/dev/null | grep -oE '"(tokenIssueSecret|token_issue_secret|bootstrapSecret|bootstrap_secret)" *: *"[A-Za-z0-9+/=_-]+"' | tail -1 | awk -F"' '{print $(NF-1)}')
+[ -z "$SEC" ] && SEC=$(grep -oE 'bootstrapSecret=[A-Za-z0-9+/=_-]+' "${HH}/logs/webui.log" 2>/dev/null | tail -1 | cut -d= -f2)
+echo "$SEC"
 `;
       const r = await execCommand(sshConfig, D, { pool: true, timeoutMs: 60000 });
       const out = r.stdout || '';
@@ -502,11 +510,80 @@ tail -n 30 "$LOG" 2>/dev/null | tail -5
           activeModelPreset = c.agents?.defaults?.modelPreset || Object.keys(c.modelPresets || {})[0] || null;
         } catch {}
       } catch {}
+      // Web UI port — nanobot exposes a browser UI on the
+      // websocket/webui channel port. Read from config, fall back to 8765 (or GW_PORT + 1).
+      let webUIPort = GW_PORT ? (GW_PORT + 1) : 8765;
+      let webUIBootstrapPath = '/';
+      const secFromLog = sec('WEBUI_SECRET', '').trim();
+      if (secFromLog) {
+        webUIBootstrapPath = `/#/?bootstrapSecret=${secFromLog}`;
+      }
+      try {
+        const c = JSON.parse(configJson || '{}');
+        const wsPort = c?.channels?.websocket?.port;
+        if (wsPort && typeof wsPort === 'number' && wsPort > 0) webUIPort = wsPort;
+        // Some nanobot builds expose a dedicated webui channel
+        const wuPort = c?.channels?.webui?.port;
+        if (wuPort && typeof wuPort === 'number' && wuPort > 0) webUIPort = wuPort;
+
+        if (webUIBootstrapPath === '/') {
+          // The nanobot webui writes its bootstrap secret into the websocket
+          // channel config (tokenIssueSecret) and may also store it under
+          // webui.* bootstrap keys. The webui.log can split the token across
+          // two lines, which truncates it — config.json is the authoritative
+          // source, so prefer it here.
+          const secToken = c?.channels?.websocket?.tokenIssueSecret
+            || c?.channels?.websocket?.token_issue_secret
+            || c?.webui?.bootstrapSecret
+            || c?.channels?.webui?.bootstrapSecret
+            || c?.webui?.bootstrap_secret
+            || c?.channels?.webui?.bootstrap_secret
+            || c?.bootstrapSecret;
+          if (secToken) {
+            webUIBootstrapPath = `/#/?bootstrapSecret=${secToken}`;
+          }
+        }
+      } catch {}
+      // Is the Web UI actually answering on its port?
+      //
+      // `running` above is the GATEWAY process, which is a different thing —
+      // `nanobot webui` is its own process on webUIPort. Reusing the gateway
+      // flag here would let the UI claim "Running" when the Web UI is really
+      // down (and, worse, disable the Start button that would have fixed it),
+      // so probe the port instead of guessing from the process table.
+      //
+      // Port probe rather than `pgrep -f '[n]anobot.*webui'`: the webui-ctl
+      // handler has to filter out its own shell's argv, and that trick is
+      // fragile to layer into this much bigger script. A curl against the
+      // port answers the question we actually care about — is it serving?
+      let webUIActive = false;
+      try {
+        const wuResp = await execCommand(
+          sshConfig,
+          `HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 2 "http://127.0.0.1:${webUIPort}/" 2>/dev/null || true); echo "HTTP_CODE=$HTTP_CODE"`,
+          { pool: false, timeoutMs: 8000 },
+        );
+        const hc = parseInt((wuResp?.stdout || '').match(/HTTP_CODE=(\d+)/)?.[1] || '0', 10);
+        // Anything that answers at all (2xx–4xx) means something is listening
+        // and serving; only 000/5xx-network means "not up".
+        webUIActive = hc >= 200 && hc < 500;
+      } catch { /* treat as not running */ }
       envText = envText.trim();
+      const currentVer = sec('VERSION', 'BINPATH') || null;
+      let latestVersion = null;
+      let updateAvailable = false;
+      try {
+        latestVersion = await getLatestAgentVersion('nanobot');
+        if (currentVer && latestVersion) {
+          updateAvailable = isNewerVersion(currentVer, latestVersion);
+        }
+      } catch (_) {}
       return NextResponse.json({
         success: true,
         installed: !!binR,
-        version: sec('VERSION', 'BINPATH') || null,
+        version: currentVer,
+        latestVersion,
+        updateAvailable,
         model,
         models,
         activeModelPreset,
@@ -520,6 +597,12 @@ tail -n 30 "$LOG" 2>/dev/null | tail -5
         skills: [...skillsList],
         bundledSkills: [...bundledList],
         systemPrompt,
+        webUIPort,
+        webUIBootstrapPath,
+        hasWebUI: true,
+        // True only when the Web UI is actually serving on webUIPort. Distinct
+        // from `running` (the gateway process) — see the probe above.
+        webUIActive,
         promptFiles: {
           'PROMPT.md': systemPrompt,
           'SOUL.md': soulPrompt,
@@ -1068,6 +1151,229 @@ if [ ${cursor} -gt 0 ] && [ ${cursor} -le $SZ ]; then tail -c +$((cursor + 1)) "
       });
     }
 
+    // ── WEBUI control ──
+    if (action === 'webui-ctl') {
+      const op = ['start', 'stop', 'restart', 'status', 'relay-start'].includes(config.op) ? config.op : 'status';
+      const wuPIDF = `${HH}/webui.pid`;
+      const wuPort = parseInt(config.port || (GW_PORT ? (GW_PORT + 1) : 8765), 10);
+      const wuLog = `${HH}/logs/webui.log`;
+      const binR = await execCommand(sshConfig, binPath(), { pool: false, timeoutMs: 15000 });
+      const bp = (binR.stdout || '').match(/BIN=(.*)/)?.[1]?.trim();
+      if (!bp) {
+        log.push('✗ Nanobot binary not found on this server');
+        return NextResponse.json({ success: false, error: 'nanobot binary not found', log });
+      }
+      const BP = sq(bp);
+      const ENVX = `export PATH="$HOME/.local/bin:$HOME/.nanobot/venv/bin:/usr/local/bin:$PATH"`;
+
+      if (op === 'status') {
+        // NOTE: the bash -c wrapper's own argv contains the script text (paths with
+        // "nanobot" + the word "webui"), so a bare `pgrep -f '[n]anobot.*webui'`
+        // matches the shell itself and always reports UP=1. Skip self/parent PIDs.
+        const r = await execCommand(sshConfig, `${ENVX}; UP=0; for P in $(pgrep -f '[n]anobot.*webui' 2>/dev/null); do if [ "$P" != "$$" ] && [ "$P" != "$PPID" ]; then UP=1; break; fi; done; echo "UP=$UP"`, { pool: false, timeoutMs: 15000 });
+        const active = /UP=1/.test(r.stdout || '');
+        return NextResponse.json({ success: true, active, op, port: wuPort });
+      }
+      if (op === 'stop' || op === 'restart') {
+        log.push(`> Stopping Nanobot Web UI...`);
+        // Skip $$/$PPID — pkill -f '[n]anobot.*webui' would match this shell's own
+        // argv (script text contains nanobot paths + webui words) and kill it.
+        await execCommand(sshConfig, `${ENVX}; if [ -f "${wuPIDF}" ]; then kill $(cat "${wuPIDF}") 2>/dev/null; sleep 1; kill -9 $(cat "${wuPIDF}") 2>/dev/null; fi; rm -f "${wuPIDF}"; for P in $(pgrep -f '[n]anobot.*webui' 2>/dev/null); do [ "$P" != "$$" ] && [ "$P" != "$PPID" ] && kill "$P" 2>/dev/null; done; true`, { pool: false, timeoutMs: 20000 });
+        log.push(`✓ Stopped previous Web UI processes`);
+      }
+      if (op === 'relay-start') {
+        // Direct-transfer mode: the user's Local Relay opens the SSH tunnel on
+        // the user's own machine and serves the WebUI at 127.0.0.1:18790 — the
+        // central server is control-plane only (no data flows through it).
+        if (typeof global.__sendToRelayForUserAny !== 'function') {
+          return NextResponse.json({ success: false, error: 'relay bridge unavailable' }, { status: 503, log });
+        }
+        const monitorOrigin = String(config.monitorOrigin || '');
+        const forwardId = `${connectionId}-${wuPort}`;
+        // Pass the bootstrap secret so the relay gateway can auto-pair the SPA on
+        // ANY page load — deep links like /#/settings?section=models otherwise load
+        // with no secret → no api_token → settings API answers 401 "Unauthorized".
+        let bootstrapSecret = '';
+        try {
+          const secResp = await execCommand(sshConfig, `${ENVX}; SEC=$(tr -d '\n' < "${HH}/config.json" 2>/dev/null | grep -oE '"(tokenIssueSecret|token_issue_secret|bootstrapSecret|bootstrap_secret)" *: *"[A-Za-z0-9+/=_-]+"' | tail -1 | awk -F'"' '{print $(NF-1)}'); [ -z "$SEC" ] && SEC=$(grep -oE 'bootstrapSecret=[A-Za-z0-9+/=_-]+' "${wuLog}" 2>/dev/null | tail -1 | cut -d= -f2); echo "SEC=$SEC"`, { pool: false, timeoutMs: 10000 });
+          bootstrapSecret = (secResp.stdout || '').match(/SEC=(.*)/)?.[1]?.trim() || '';
+        } catch {}
+        const forwardMsg = {
+          type: 'webui:forward',
+          forwardId,
+          remotePort: wuPort,
+          localPort: 18790,
+          monitorOrigin,
+          bootstrapSecret,
+          connection: {
+            host: sshConfig.host, port: sshConfig.port, username: sshConfig.username,
+            password: sshConfig.password, privateKey: sshConfig.privateKey, passphrase: sshConfig.passphrase,
+          },
+        };
+        const sent = await (global.__sendToRelayForUserAny([session?.user?.id, session?.user?.dbId, session?.user?.sub], forwardMsg) || Promise.resolve(false));
+        if (!sent) {
+          return NextResponse.json({ success: false, error: 'Local Relay is not connected — start it or use the central proxy' }, { status: 409, log });
+        }
+        log.push('> [webui] Direct relay requested — gateway will serve at http://127.0.0.1:18790');
+        return NextResponse.json({ success: true, active: true, relay: true, localPort: 18790, log });
+      }
+      if (op === 'start' || op === 'restart') {
+        log.push(`> [webui] Nanobot binary: ${bp}`);
+
+        // 1. Check if WebUI is ALREADY responding to HTTP requests on wuPort
+        if (op === 'start') {
+          const checkResp = await execCommand(sshConfig, `${ENVX}; HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 2 "http://127.0.0.1:${wuPort}/" 2>/dev/null || true); echo "HTTP_CODE=$HTTP_CODE"`, { pool: false, timeoutMs: 10000 });
+          const httpCode = parseInt((checkResp.stdout || '').match(/HTTP_CODE=(\d+)/)?.[1] || '0', 10);
+          if (httpCode >= 200 && httpCode < 500) {
+            log.push(`✓ Nanobot Web UI is already running and responding on port ${wuPort} (HTTP ${httpCode})`);
+            const secResp = await execCommand(sshConfig, `${ENVX}; SEC=$(tr -d '\n' < "${HH}/config.json" 2>/dev/null | grep -oE '"(tokenIssueSecret|token_issue_secret|bootstrapSecret|bootstrap_secret)" *: *"[A-Za-z0-9+/=_-]+"' | tail -1 | awk -F"' '{print $(NF-1)}'); [ -z "$SEC" ] && SEC=$(grep -oE 'bootstrapSecret=[A-Za-z0-9+/=_-]+' "${wuLog}" 2>/dev/null | tail -1 | cut -d= -f2); echo "SEC=$SEC"`, { pool: false, timeoutMs: 10000 });
+            const secFound = (secResp.stdout || '').match(/SEC=(.*)/)?.[1]?.trim() || '';
+            const webUIBootstrapPath = secFound ? `/#/?bootstrapSecret=${secFound}` : '/';
+            return NextResponse.json({
+              success: true,
+              active: true,
+              op,
+              port: wuPort,
+              webUIBootstrapPath,
+              output: `Nanobot Web UI is already running on port ${wuPort}`,
+              log
+            });
+          }
+        }
+
+        // Check supported CLI commands — detect --yes and --gateway-port flag support
+        const helpR = await execCommand(sshConfig, `${ENVX}; ${BP} webui --help 2>&1`, { pool: false, timeoutMs: 15000 });
+        const helpTxt = (helpR.stdout || '').trim();
+        const hasWebui = !helpTxt.includes('invalid choice') && !helpTxt.includes('error:');
+        const hasYesFlag = /--yes\b/.test(helpTxt);
+        const hasGwPortFlag = /--gateway-port\b/.test(helpTxt);
+        const wuGwPort = wuPort === 8765 ? 18799 : (wuPort + 100);
+        const gwPortFlag = hasGwPortFlag ? ` --gateway-port ${wuGwPort}` : '';
+        log.push(`> [webui] CLI support: ${hasWebui ? 'nanobot webui available' : 'checking fallback'}${hasYesFlag ? ' (--yes supported)' : ''}${hasGwPortFlag ? ` (--gateway-port: ${wuGwPort})` : ''}`);
+
+        await execCommand(sshConfig, `mkdir -p "${HH}/logs"`, { pool: false, timeoutMs: 10000 });
+
+        const yesFlag = hasYesFlag ? ' --yes' : '';
+        const cmd = hasWebui
+          ? `${BP} webui --port ${wuPort}${gwPortFlag}${yesFlag}`
+          : `${BP} gateway --port ${wuPort}`;
+
+        log.push(`$ nohup ${cmd} > "${wuLog}" 2>&1 &`);
+
+        const launchScript = `${ENVX}
+export PYTHONUNBUFFERED=1
+mkdir -p "${HH}/logs"
+
+# Wipe old log so we always get a fresh error trace
+> "${wuLog}"
+
+# Kill any lingering webui processes — skip $$/$PPID: this shell's own argv
+# contains the script text (nanobot paths + webui words) so a bare pkill -f
+# '[n]anobot.*webui' would kill THIS shell before the webui process is launched.
+for P in $(pgrep -f '[n]anobot.*webui' 2>/dev/null); do [ "$P" != "$$" ] && [ "$P" != "$PPID" ] && kill "$P" 2>/dev/null || true; done
+sleep 0.5
+
+# Free ports if occupied
+P_WU=$(lsof -ti :${wuPort} 2>/dev/null || fuser ${wuPort}/tcp 2>/dev/null || true)
+[ -n "$P_WU" ] && kill -9 $P_WU 2>/dev/null || true
+
+# Run nanobot foreground for 2s so its exit code and stderr are captured
+${cmd} >> "${wuLog}" 2>&1 &
+PID=$!
+echo $PID > "${wuPIDF}"
+sleep 4
+ALIVE=0
+if kill -0 $PID 2>/dev/null; then
+  ALIVE=1
+else
+  REAL=""
+  for P in $(pgrep -f '[n]anobot.*webui' 2>/dev/null); do
+    if [ "$P" != "$$" ] && [ "$P" != "$PPID" ]; then REAL="$P"; break; fi
+  done
+  if [ -n "$REAL" ]; then
+    echo "$REAL" > "${wuPIDF}"
+    ALIVE=1
+  fi
+fi
+echo "ALIVE=$ALIVE"
+echo "===WEBUI_SECRET==="
+SEC=$(tr -d '\n' < "${HH}/config.json" 2>/dev/null | grep -oE '"(tokenIssueSecret|token_issue_secret|bootstrapSecret|bootstrap_secret)" *: *"[A-Za-z0-9+/=_-]+"' | tail -1 | awk -F"' '{print $(NF-1)}')
+[ -z "$SEC" ] && SEC=$(grep -oE 'bootstrapSecret=[A-Za-z0-9+/=_-]+' "${wuLog}" 2>/dev/null | tail -1 | cut -d= -f2)
+echo "$SEC"
+echo "===LOG_TAIL==="
+cat "${wuLog}" 2>/dev/null || echo "(no log)"
+`;
+        const r = await execCommand(sshConfig, launchScript, { pool: false, timeoutMs: 35000 });
+        const out = r.stdout || '';
+        const alive = /ALIVE=1/.test(out);
+        log.push(`> [webui] process status: ${alive ? 'active (PID found)' : 'not running'}`);
+
+        // Extract bootstrapSecret from out or log
+        let bootstrapSecret = '';
+        const secBlock = out.includes('===WEBUI_SECRET===')
+          ? out.split('===WEBUI_SECRET===')[1].split('===LOG_TAIL===')[0].trim()
+          : '';
+        if (secBlock) {
+          bootstrapSecret = secBlock.split('\n')[0].trim();
+        }
+        const logContent = out.includes('===LOG_TAIL===') ? out.split('===LOG_TAIL===')[1].trim() : '';
+
+        if (!bootstrapSecret) {
+          const secretMatch = (logContent + '\n' + out).match(/bootstrapSecret=([A-Za-z0-9+/=_-]+)/);
+          bootstrapSecret = secretMatch?.[1] || null;
+        }
+
+        const webUIBootstrapPath = bootstrapSecret ? `/#/?bootstrapSecret=${bootstrapSecret}` : '/';
+
+        // Treat "port already in use" as success — WebUI is already running
+        const portInUse = /port (?:is )?already in use|already in use/i.test(logContent);
+
+        // Redact secret from log lines before pushing to client
+        if (logContent) {
+          for (const l of logContent.split('\n')) {
+            const redacted = bootstrapSecret ? l.split(bootstrapSecret).join('<redacted>') : l;
+            log.push(`  ${redacted}`);
+          }
+        }
+
+        // Detect known failure patterns in the log even when ALIVE=1 (brief fork then exit)
+        const needsConfirm = /needs confirmation|Re-run with --yes|use `nanobot onboard/i.test(logContent);
+
+        if ((alive || portInUse) && !needsConfirm) {
+          const statusDesc = portInUse ? 'already running' : 'started successfully';
+          log.push(`✓ Nanobot Web UI ${statusDesc} on port ${wuPort}`);
+          return NextResponse.json({
+            success: true,
+            active: true,
+            op,
+            port: wuPort,
+            webUIBootstrapPath,
+            output: `Nanobot Web UI ${statusDesc} on port ${wuPort}`,
+            log
+          });
+        } else {
+          // Surface a meaningful error
+          let errMsg;
+          if (needsConfirm) {
+            errMsg = 'WebUI setup needs confirmation — the --yes flag was not accepted. Try running: nanobot onboard --wizard on the server.';
+          } else if (logContent) {
+            errMsg = logContent.split('\n').filter(l => /error|fail/i.test(l)).pop() || logContent.split('\n').pop();
+          } else {
+            errMsg = 'Web UI process exited immediately';
+          }
+          log.push(`✗ ${errMsg}`);
+          return NextResponse.json({
+            success: false,
+            active: false,
+            op,
+            port: wuPort,
+            error: errMsg,
+            log
+          });
+        }
+      }
+    }
+
     // ── HEALTH ──
     if (action === 'health') {
       const script = `
@@ -1152,6 +1458,81 @@ echo "TG=$TG"
         return NextResponse.json({ success: true, restarted: g.ok, output: `Installed skill "${rawName}" with full content` });
       }
       return NextResponse.json({ success: false, error: `Unknown skills op: ${op}` }, { status: 400 });
+    }
+
+    // ── UPDATE ──────────────────────────────────────────────────────────────
+    if (action === 'update') {
+      log.push(`> [update] Checking installation for Nanobot...`);
+      const binR = await execCommand(sshConfig, binPath(), { pool: false, timeoutMs: 15000 });
+      const currentBin = (binR.stdout || '').match(/BIN=(.*)/)?.[1]?.trim() || null;
+      if (!currentBin) {
+        return NextResponse.json({ success: false, error: 'Nanobot is not installed on this server. Please install it first.', log }, { status: 400 });
+      }
+
+      const verCheckBefore = await execCommand(sshConfig,
+        `export PATH="$HOME/.local/bin:$HOME/.nanobot/venv/bin:/usr/local/bin:$PATH"; nanobot --version 2>/dev/null | tail -1`,
+        { pool: false, timeoutMs: 15000 });
+      const oldVer = (verCheckBefore.stdout || '').trim();
+      log.push(`> [update] Current version: ${oldVer || 'unknown'}`);
+
+      // Stop gateway before upgrading
+      log.push(`> [update] Stopping running gateway daemon...`);
+      try { await gwCtl('stop'); } catch (e) { log.push(`> [update] Gateway stop note: ${e.message}`); }
+
+      // Upgrade Nanobot
+      log.push(`> [update] Pulling and applying latest Nanobot updates...`);
+      const upgradeCmd = `
+        export PATH="/usr/local/bin:$HOME/.local/bin:$HOME/.nanobot/venv/bin:\$PATH"
+        export HOME="${homeDir(sshConfig) || '$HOME'}"
+        export HH="${HH}"
+
+        # 1. Upgrade pip package in venv if available
+        for p in "$HOME/.nanobot/venv/bin/pip" "\${HH}/venv/bin/pip"; do
+          if [ -x "$p" ]; then
+            echo "> Running pip upgrade in $p..."
+            "$p" install --upgrade --no-cache-dir nanobot-ai 2>&1 || true
+            break
+          fi
+        done
+
+        # 2. Re-run official installer
+        echo "> Running official Nanobot installer update..."
+        curl -fsSL ${INSTALLER_URL} | sh 2>&1
+
+        echo "UPDATE_SCRIPT_DONE"
+      `;
+
+      let streamed = 0;
+      const upR = await execDetached(sshConfig, upgradeCmd, {
+        pollMs: 2000,
+        timeoutMs: 600000,
+        onLine: (ln) => { if (++streamed <= 400) log.push(ln); }
+      });
+      log.push(`> [update] Update script finished${upR.code !== 0 ? ` (exit code ${upR.code})` : ''}.`);
+
+      // Verify new version
+      const verCheckAfter = await execCommand(sshConfig,
+        `export PATH="$HOME/.local/bin:$HOME/.nanobot/venv/bin:/usr/local/bin:$PATH"; nanobot --version 2>/dev/null | tail -1`,
+        { pool: false, timeoutMs: 15000 });
+      const newVer = (verCheckAfter.stdout || '').trim();
+      log.push(`> [update] Verified upgraded version: ${newVer || 'ready'}`);
+
+      // Restart gateway
+      log.push(`> [update] Restarting Nanobot gateway daemon...`);
+      try {
+        const startRes = await gwCtl('start');
+        log.push(`> [update] Gateway restart: ${startRes.ok ? 'active' : (startRes.out || 'done')}`);
+      } catch (e) {
+        log.push(`> [update] Warning restarting gateway: ${e.message}`);
+      }
+
+      log.push(`> [update] ✅ Nanobot update complete.`);
+      return NextResponse.json({
+        success: true,
+        message: `Nanobot updated successfully (${oldVer || 'previous'} → ${newVer || 'latest'})`,
+        version: newVer,
+        log
+      });
     }
 
     return NextResponse.json({ success: false, error: `Unknown action: ${action}` }, { status: 400 });

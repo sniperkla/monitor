@@ -148,9 +148,16 @@ function buildCsp(nonce) {
     // excluded from production builds unless explicitly enabled via
     // CSP_ALLOW_LOCAL_RELAY=1. In development it is always included so the
     // relay auto-detection feature works out of the box.
-    `connect-src 'self' blob: data: https://api.ipify.org${!isProd || process.env.CSP_ALLOW_LOCAL_RELAY === '1' ? ' http://127.0.0.1:48923' : ''}${process.env.CSP_LOCAL_RELAY ? ` ${process.env.CSP_LOCAL_RELAY}` : ''}`,
-    // File preview renders documents in a data:/blob: iframe.
-    "frame-src blob: data:",
+    `connect-src 'self' blob: data: https://api.ipify.org${!isProd || process.env.CSP_ALLOW_LOCAL_RELAY === '1' ? ' http://127.0.0.1:48923' : ''}${process.env.CSP_LOCAL_RELAY ? ` ${process.env.CSP_LOCAL_RELAY}` : ''} http://127.0.0.1:18790 http://localhost:18790`,
+    // File preview renders documents in a data:/blob: iframe. 'self' is
+    // required for the agent Web UI embedded browser (AIAgentsApp), which frames
+    // the same-origin /api/agents/webui-proxy route. Local Relay WebUI
+    // gateways (http://127.0.0.1:<port>) serve agent UIs on the user's own
+    // machine in direct-transfer mode. When frame-src is present it does NOT
+    // fall back to default-src, so a list without 'self' blocks every
+    // same-origin iframe with "This content is blocked. Contact the site
+    // owner to fix the issue." in Chromium.
+    "frame-src 'self' blob: data: http://127.0.0.1:* http://localhost:*",
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self' https://accounts.google.com",
@@ -529,6 +536,6 @@ export const config = {
     // both now receive the middleware auth gate, CSP, and CSRF. External deploy
     // hooks with a signed token/webhook_token are handled by the narrow
     // isExternalDeployTrigger() exception above, then validated in-route.
-    "/((?!api/auth/signin|api/auth/callback|api/auth/session|api/auth/signout|api/auth/csrf|api/auth/providers|api/csrf|api/health|api/deploy/webhook|_next/static|_next/image|favicon.ico|manifest\\.json|icon\\.svg|sw\\.js|monitor-agent\\.min\\.js|monitor-agent\\.js|local-relay\\.min\\.js|local-relay\\.js|agents/.*).*)"
+    "/((?!api/auth/signin|api/auth/callback|api/auth/session|api/auth/signout|api/auth/csrf|api/auth/providers|api/csrf|api/health|api/deploy/webhook|api/agents/webui-proxy|_next/static|_next/image|favicon.ico|manifest\\.json|icon\\.svg|sw\\.js|monitor-agent\\.min\\.js|monitor-agent\\.js|local-relay\\.min\\.js|local-relay\\.js|agents/.*).*)"
   ],
 };

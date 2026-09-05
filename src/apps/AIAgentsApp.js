@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Bot, Server as ServerIcon, RefreshCw, Loader2, CheckCircle2, XCircle, AlertCircle, Settings2, Puzzle, Trash2, Play, Square, RotateCw, Plus, ExternalLink, Send, Search, Sparkles, Check, FileText, Copy, Lock, Radio, Zap, Shield, ShieldOff, UserX, Cable, ChevronRight, Flame, Heart, Terminal, ChevronDown, ChevronUp, X, Minus, Maximize2, Minimize2, GripHorizontal, Eye, EyeOff, UserPlus } from 'lucide-react';
+import { Bot, Server as ServerIcon, RefreshCw, Loader2, CheckCircle2, XCircle, AlertCircle, Settings2, Puzzle, Trash2, Play, Square, RotateCw, Plus, ExternalLink, Send, Search, Sparkles, Check, FileText, Copy, Lock, Radio, Zap, Shield, ShieldOff, UserX, Cable, ChevronRight, Flame, Heart, Terminal, ChevronDown, ChevronUp, X, Minus, Maximize2, Minimize2, GripHorizontal, Eye, EyeOff, UserPlus, ArrowUpCircle, DownloadCloud, MonitorSmartphone, ChevronLeft } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 import { useOS } from '@/context/OSContext';
 import { useSupporter } from '@/hooks/useSupporter';
@@ -85,8 +85,74 @@ const AGENTS = [
     api: '/api/agents/zeroclaw',
     logo: '/agents/zeroclaw.jpg',
   },
-  // Future agents — add entries here:
 ];
+
+function buildWebUIProxyUrl(connectionId, port, p) {
+  // Defensive: only a non-empty string is meaningful here. Some code paths can
+  // hand us a non-string (e.g. an object from the details payload) — guard
+  // before calling string methods on it.
+  const full = (typeof p === 'string' && p) ? p : '/';
+  // Local Relay direct-transfer mode: absolute URL served by the gateway on the
+  // user's own machine (http://127.0.0.1:<port>) — no central proxy involved.
+  if (/^https?:\/\//i.test(full)) return full;
+  const hashIdx = full.indexOf('#');
+  if (hashIdx >= 0) {
+    const pathPart = full.slice(0, hashIdx) || '/';
+    const hashPart = full.slice(hashIdx);
+    return `/api/agents/webui-proxy?connectionId=${encodeURIComponent(connectionId)}&port=${port}&path=${encodeURIComponent(pathPart)}${hashPart}`;
+  }
+  return `/api/agents/webui-proxy?connectionId=${encodeURIComponent(connectionId)}&port=${port}&path=${encodeURIComponent(full)}`;
+}
+
+/**
+ * Is `url` reachable from the browser?
+ *
+ * `mode: 'no-cors'` is deliberate: an opaque response still means the TCP
+ * connect succeeded, while a refused/reset connection rejects. That gives us a
+ * cheap cross-origin liveness probe without needing CORS headers we don't
+ * control.
+ */
+async function probeReachable(url, timeoutMs = 4000) {
+  if (typeof AbortController === 'undefined') return false;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    await fetch(url, { mode: 'no-cors', cache: 'no-store', signal: ctrl.signal });
+    return true;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Poll `url` until it answers.
+ *
+ * Why this exists: after `webui:forward` the relay binds its local listener
+ * immediately but opens the SSH tunnel to the agent asynchronously. A single
+ * probe races that, and a tab pointed at a not-yet-tunnelled URL lands on
+ * "127.0.0.1 refused to connect" — Chrome does not retry failed top-level
+ * navigations, so the user would have to reload by hand. Proving the whole
+ * path (relay → SSH → agent gateway) is live first means we either hand over
+ * a working URL or fall back to the central proxy.
+ */
+async function waitUntilReachable(url, { attempts = 24, intervalMs = 750, timeoutMs = 4000 } = {}) {
+  for (let i = 0; i < attempts; i += 1) {
+    if (await probeReachable(url, timeoutMs)) return true;
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  return false;
+}
+
+// The nanobot WebUI pair credential is its bootstrap secret — the value in the
+// webUIBootstrapPath payload (`/#/?bootstrapSecret=<token>`). Extract just the
+// token so the Pairing card can show a copyable code for the workbench prompt.
+function extractWebUISecret(webUIBootstrapPath) {
+  if (typeof webUIBootstrapPath !== 'string' || !webUIBootstrapPath) return '';
+  const m = webUIBootstrapPath.match(/bootstrapSecret=([A-Za-z0-9+/=_-]+)/);
+  return m ? m[1] : '';
+}
 
 export default function AIAgentsApp({ apiFetch }) {
   const { state, connectionsReady, relayInfo } = useApp();
@@ -105,6 +171,26 @@ export default function AIAgentsApp({ apiFetch }) {
   const [details, setDetails] = useState(null);
   const [loading, setLoading] = useState(false);
   const [busyMsg, setBusyMsg] = useState('');
+  // The Web UI is opened in a REAL browser tab (see openWebUIInTab), so there
+  // is no floating browser window state any more. All that's left is the
+  // in-flight flag for the "Start Web UI" button.
+  const [startingWebUI, setStartingWebUI] = useState(false);
+  const startingWebUIRef = useRef(false);
+  const handleStartWebUIRef = useRef(null);
+
+  // Listen for 'START_WEBUI' postMessage from the embedded diagnostic screen
+  useEffect(() => {
+    const onMsg = (e) => {
+      if (e.data?.type === 'START_WEBUI') {
+        // Call the function directly via ref — more reliable than DOM button.click()
+        // which can fail when the button is hidden, disabled, or not rendered yet.
+        if (handleStartWebUIRef.current) handleStartWebUIRef.current();
+      }
+    };
+    window.addEventListener('message', onMsg);
+    return () => window.removeEventListener('message', onMsg);
+  }, []);
+
   // Floating Draggable Live Log window state
   const [liveLogLines, setLiveLogLines] = useState([]);
   const [liveLogOpen, setLiveLogOpen] = useState(false);
@@ -283,6 +369,10 @@ export default function AIAgentsApp({ apiFetch }) {
   const activeInstance = instanceSel[instKey] || '';
   const instRef = useRef('');
   useEffect(() => { instRef.current = activeInstance; }, [activeInstance]);
+  // Race-condition guard: each loadDetails call gets a generation stamp.
+  // If the agent/target/instance changes before the response arrives, the
+  // stale response checks this ref and discards itself.
+  const loadGenRef = useRef(0);
   // autoHeal is per agent+instance (keyed), persisted in localStorage —
   // enabling it on the default must NOT auto-restart other instances.
   const healKey = `${agentId}:${activeInstance || 'default'}:${target || ''}`;
@@ -303,11 +393,12 @@ export default function AIAgentsApp({ apiFetch }) {
 
   const call = useCallback(async (action, extra = {}) => {
     if (!target) return null;
+    const instParam = extra.instance !== undefined ? extra.instance : (instRef.current || undefined);
     const res = await doFetch(agent.api, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ connectionId: target, action, instance: instRef.current || undefined, ...extra }),
+      body: JSON.stringify({ connectionId: target, action, ...extra, instance: instParam }),
     });
     return res.json();
   }, [doFetch, agent.api, target]);
@@ -376,9 +467,14 @@ export default function AIAgentsApp({ apiFetch }) {
 
   const loadDetails = useCallback(async () => {
     if (!target) return;
+    // Stamp this fetch with the current generation so we can detect if a newer
+    // fetch supersedes us before our response arrives (fast agent switching).
+    const myGen = ++loadGenRef.current;
     setLoading(true);
     try {
-      const d = await call('details');
+      const d = await call('details', { instance: activeInstance || undefined });
+      // Discard stale response — user has already switched to a different agent/target
+      if (myGen !== loadGenRef.current) return;
       if (d && (d.installed != null || d.success)) {
         setDetails(d);
         const draftText = ['nanobot', 'openclaw', 'zeroclaw'].includes(agent.id) ? (d?.configJson || '') : (d?.configYaml || '');
@@ -395,8 +491,11 @@ export default function AIAgentsApp({ apiFetch }) {
       } else {
         setDetails(null);
       }
-    } catch { setDetails(null); }
-    finally { setLoading(false); }
+    } catch {
+      if (myGen === loadGenRef.current) setDetails(null);
+    } finally {
+      if (myGen === loadGenRef.current) setLoading(false);
+    }
   }, [target, call, agent.id, promptActiveFile]);
 
   // Instance list (multi-instance) — fetch directly so callers can await a
@@ -471,11 +570,16 @@ export default function AIAgentsApp({ apiFetch }) {
   }, [connectionsReady, connections, target]);
 
   useEffect(() => {
+    // Immediately clear stale data so the UI never shows the previous agent's
+    // details while the new fetch is in flight.
     setYamlDraft('');
     setPromptDraft('');
     setPromptActiveFile('PROMPT.md');
     setDetails(null);
+    setLoading(false);
     setTab('overview');
+    // Bump the generation so any in-flight fetch for the old agent is discarded.
+    loadGenRef.current += 1;
     if (target) loadDetails();
   }, [target, agentId, activeInstance]); // eslint-disable-line react-hooks/exhaustive-deps
   // When fresh details arrive (e.g. after wizard install), refresh the config draft
@@ -527,10 +631,10 @@ export default function AIAgentsApp({ apiFetch }) {
         r = await call(action, extra);
       }
       const elapsed = ((Date.now() - startTs) / 1000).toFixed(1);
-      if (liveLogs) {
-        setLiveLogLines(prev => [...prev, `— done in ${elapsed}s —`]);
-      } else if (Array.isArray(r?.log) && r.log.length) {
+      if (Array.isArray(r?.log) && r.log.length) {
         setLiveLogLines(prev => [...prev, ...r.log.flatMap(l => String(l).split('\n')), `— done in ${elapsed}s —`]);
+      } else if (liveLogs) {
+        setLiveLogLines(prev => [...prev, `— done in ${elapsed}s —`]);
       } else {
         const ok = r?.success !== false;
         const msg = r?.output ? String(r.output).trim() : (ok ? 'done' : (r?.error || 'failed'));
@@ -551,6 +655,129 @@ export default function AIAgentsApp({ apiFetch }) {
       setBusyMsg('');
       console.log(`[AIAgents] busyMsg cleared for "${label}"`);
     }
+  };
+
+  // Claim a blank browser tab for the Web UI.
+  //
+  // MUST be called synchronously from a click handler: window.open() after an
+  // `await` has lost the user-gesture token and gets popup-blocked. Callers
+  // that need to do async work first should grab the tab up front and hand it
+  // to openWebUIInTab() to navigate once the URL is known.
+  //
+  // Returns null if the popup was blocked (callers fall back to showing/copying
+  // the URL instead of navigating the app away).
+  const openBlankWebUITab = () => {
+    if (typeof window === 'undefined') return null;
+    let tab = null;
+    try {
+      tab = window.open('', '_blank');
+    } catch {
+      return null;
+    }
+    if (!tab) return null;
+    // Deliberately NOT passing 'noopener' in the features string — that nulls
+    // out the handle we need in order to navigate the tab later. Sever the
+    // reverse link by hand instead, so the opened page can't script us.
+    try { tab.opener = null; } catch { /* ignore */ }
+    try {
+      tab.document.write('<!doctype html><meta charset="utf-8"><title>Opening Web UI…</title>'
+        + '<body style="margin:0;height:100vh;display:grid;place-items:center;background:#0b1020;color:#8ec5ff;font:14px system-ui,-apple-system,sans-serif">Opening Web UI…</body>');
+      tab.document.close();
+    } catch { /* cosmetic only */ }
+    return tab;
+  };
+
+  const handleStartWebUI = async () => {
+    if (startingWebUIRef.current) return;
+    startingWebUIRef.current = true;
+    setStartingWebUI(true);
+    // Claim the browser tab NOW, synchronously. The whole point is that
+    // window.open() after an await loses the user-gesture token and gets
+    // blocked — so we take the tab first and navigate it once the gateway
+    // is actually up.
+    const startTab = openBlankWebUITab();
+    try {
+      const r = await callAction('Start Web UI', 'webui-ctl', {
+        config: { op: 'start', port: details?.webUIPort || 8765 }
+      });
+      if (r?.active || r?.success) {
+        // Wait a beat for the gateway process to bind its port, then open.
+        // The tab itself was already created synchronously below, so this
+        // delay doesn't cost us the user-gesture token.
+        await new Promise((res) => setTimeout(res, 1000));
+        await openWebUIInTab(r?.webUIBootstrapPath, startTab);
+      }
+    } catch (err) {
+      console.error('[WebUI] Failed to start Web UI:', err);
+    } finally {
+      startingWebUIRef.current = false;
+      setStartingWebUI(false);
+    }
+  };
+  // Keep the ref in sync so the postMessage listener (stale closure) can call it
+  handleStartWebUIRef.current = handleStartWebUI;
+
+  // Open the agent Web UI in a REAL browser tab.
+  //
+  // Why this replaced the floating <iframe> panel: the Local Relay has to be
+  // installed on this machine for any of this to work anyway, so embedding
+  // bought no isolation — it only bought failure modes. Chrome does not retry
+  // a failed top-level navigation, so an iframe pointed at a not-yet-tunnelled
+  // 127.0.0.1 URL gets permanently stranded on "refused to connect", with no
+  // way back but a manual remount. A real tab has none of that, and gets a
+  // proper reload button, devtools, zoom and its own cookie jar.
+  //
+  // Transport: direct transfer through the user's Local Relay first
+  // (http://127.0.0.1:<localPort>, data flows device→agent, central server is
+  // control plane only), falling back to the same-origin central SSH proxy.
+  //
+  // Popup-blocker note: window.open() only escapes the blocker when called
+  // SYNCHRONOUSLY inside the click handler. We therefore open a blank tab
+  // up-front and navigate it once the relay has told us which port it bound —
+  // waiting to call window.open() until after the await would be blocked.
+  const openWebUIInTab = async (overridePath, preopenedTab = null) => {
+    const tab = preopenedTab || openBlankWebUITab();
+
+    const basePath = (typeof overridePath === 'string' && overridePath)
+      ? overridePath
+      : (typeof details?.webUIBootstrapPath === 'string' ? details.webUIBootstrapPath : '/');
+
+    const navigate = (url, note) => {
+      if (tab) {
+        try { tab.location.href = url; setNotice({ ok: true, text: note }); return; }
+        catch { /* fall through */ }
+      }
+      // Popup blocked: hand over the URL rather than navigating the app away.
+      try { navigator.clipboard?.writeText(url); } catch { /* ignore */ }
+      setNotice({ ok: true, text: `Popup blocked — URL copied to clipboard: ${url}` });
+    };
+
+    // 1. Direct transfer via the Local Relay, if it answers.
+    if (agentRef.current?.id === 'nanobot' && callRef.current) {
+      try {
+        const rr = await callRef.current('webui-ctl', {
+          config: { op: 'relay-start', port: details?.webUIPort || 8765, monitorOrigin: window.location.origin },
+        });
+        if (rr?.success && rr?.localPort) {
+          const candidate = `http://127.0.0.1:${rr.localPort}`;
+          // Probe the gateway root, NOT /__relay_ping. The relay answers the
+          // ping the instant its listener binds — *before* the SSH tunnel to
+          // the agent is usable. Fetching "/" exercises the whole path
+          // (relay → SSH → agent gateway), so an answer here means the tab
+          // will actually get content instead of "refused to connect".
+          if (await waitUntilReachable(`${candidate}/`, { attempts: 12, intervalMs: 750 })) {
+            navigate(`${candidate}${basePath}`,
+              `Opened in a new tab — direct via your Local Relay (${candidate}).`);
+            return;
+          }
+        }
+      } catch { /* relay path is best-effort */ }
+    }
+
+    // 2. Fall back to the central same-origin SSH proxy.
+    const proxyPath = buildWebUIProxyUrl(target, details?.webUIPort, basePath);
+    const absolute = /^https?:\/\//i.test(proxyPath) ? proxyPath : `${window.location.origin}${proxyPath}`;
+    navigate(absolute, 'Opened in a new tab — via the central SSH proxy (no local relay).');
   };
 
   const act = async (label, fn) => {
@@ -756,6 +983,10 @@ export default function AIAgentsApp({ apiFetch }) {
     } finally {
       setBusyMsg('');
     }
+  };
+  const updateAgent = () => {
+    if (!confirm(`Update ${agent.name} to the latest version?\n\nThis will pull the latest updates from the official repository and restart the gateway daemon. Your configuration, API keys, and memory files will be preserved.`)) return;
+    return callAction(`Update ${agent.name}`, 'update', { instance: activeInstance || undefined });
   };
   const uninstall = () => {
     setShowUninstallModal(true);
@@ -1460,8 +1691,19 @@ export default function AIAgentsApp({ apiFetch }) {
               {details.running ? 'Gateway running' : 'Gateway stopped'}
             </span>
             {details.version && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/5 border border-[var(--border-color)] text-[var(--text-muted)] font-mono">
-                {txt(details.version.match(/v?[0-9]+\.[0-9]+(\.[0-9]+)?(-[0-9]+)?/)?.[0] || details.version.split('\n')[0].slice(0, 30))}
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/5 border border-[var(--border-color)] text-[var(--text-muted)] font-mono flex items-center gap-1.5" title={details?.updateAvailable ? `Update available: v${details.latestVersion}` : 'Up to date'}>
+                <span>{txt(details.version.match(/v?[0-9]+\.[0-9]+(\.[0-9]+)?(-[0-9]+)?/)?.[0] || details.version.split('\n')[0].slice(0, 30))}</span>
+                {!details?.updateAvailable && (
+                  <span className="text-emerald-400 font-sans font-bold text-[9px] flex items-center gap-0.5">
+                    <Check size={9} /> up to date
+                  </span>
+                )}
+                {details?.updateAvailable && (
+                  <span className="text-emerald-400 font-sans font-bold text-[9px] flex items-center gap-0.5">
+                    <span className="w-1 h-1 rounded-full bg-emerald-400 animate-ping" />
+                    update
+                  </span>
+                )}
               </span>
             )}
             {details.binPath && (
@@ -1542,9 +1784,9 @@ export default function AIAgentsApp({ apiFetch }) {
           {/* Abnormal-state banner */}
           {!details.binPath && (
             <div className="flex flex-wrap items-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-300">
-              <AlertCircle size={14} /> ZeroClaw binary is not found on this server.
+              <AlertCircle size={14} /> {agent.name} binary is not found on this server.
               <button onClick={() => setShowWizard(true)} disabled={!!busyMsg} className={`${btn} !py-1 !px-2.5 ml-auto bg-indigo-500 text-white hover:bg-indigo-400 font-bold`}>
-                <Send size={11} /> 1-Click Install ZeroClaw
+                <Send size={11} /> 1-Click Install {agent.name}
               </button>
             </div>
           )}
@@ -1581,11 +1823,59 @@ export default function AIAgentsApp({ apiFetch }) {
           <div className="p-4">
             {tab === 'overview' && (
               <div className="space-y-3 text-xs">
+                {/* ── Update Available Notification Banner ── */}
+                {details?.updateAvailable && (
+                  <div className="rounded-xl border border-emerald-500/30 bg-gradient-to-r from-emerald-500/15 via-emerald-500/10 to-transparent p-3 flex items-center justify-between gap-3 flex-wrap shadow-[0_0_20px_rgba(16,185,129,0.12)] animate-in fade-in duration-200">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
+                        <ArrowUpCircle size={17} className="animate-bounce" />
+                      </div>
+                      <div>
+                        <div className="font-bold text-white text-xs flex items-center gap-2">
+                          <span>Update available for {agent.name}</span>
+                          <span className="px-1.5 py-0.2 rounded text-[9px] font-mono font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                            {details.version || 'installed'} → v{details.latestVersion}
+                          </span>
+                        </div>
+                        <div className="text-[10px] text-[var(--text-muted)]">
+                          One-click update pulls the newest release, upgrades packages, and restarts the gateway without losing settings.
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      onClick={updateAgent}
+                      disabled={!!busyMsg}
+                      className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow-md shadow-emerald-500/25 transition cursor-pointer"
+                    >
+                      <ArrowUpCircle size={13} /> One-Click Update
+                    </button>
+                  </div>
+                )}
+
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                   {[['Version', details.version || '—'], ['Model', details.model || '—'], ['Service', details.service || '—'], ['Skills', String((details.skills || []).length)]].map(([k, v]) => (
-                    <div key={k} className="rounded-lg bg-black/30 border border-[var(--border-color)] px-3 py-2">
-                      <div className="text-[9px] uppercase tracking-wider font-bold text-[var(--text-muted)]">{k}</div>
-                      <div className="text-xs font-bold mt-0.5 truncate" title={txt(v)}>{txt(v)}</div>
+                    <div key={k} className="rounded-lg bg-black/30 border border-[var(--border-color)] px-3 py-2 relative">
+                      <div className="flex items-center justify-between">
+                        <div className="text-[9px] uppercase tracking-wider font-bold text-[var(--text-muted)]">{k}</div>
+                        {k === 'Version' && details?.updateAvailable && (
+                          <span className="flex items-center gap-1 text-[8px] font-bold text-emerald-400 uppercase tracking-wider">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                            update
+                          </span>
+                        )}
+                        {k === 'Version' && !details?.updateAvailable && details?.version && details?.version !== '—' && (
+                          <span className="flex items-center gap-1 text-[8px] font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.5 rounded-full uppercase tracking-wider">
+                            <Check size={8} className="text-emerald-400" />
+                            up to date
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-xs font-bold mt-0.5 truncate flex items-center gap-1.5" title={txt(v)}>
+                        <span>{txt(v)}</span>
+                        {k === 'Version' && details?.updateAvailable && details?.latestVersion && (
+                          <span className="text-[9px] font-normal text-emerald-400 shrink-0">→ v{details.latestVersion}</span>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -1603,6 +1893,41 @@ export default function AIAgentsApp({ apiFetch }) {
                     <Zap size={10} className="text-emerald-400" /> Auto-restart (watchdog){activeInstance ? ` · ${activeInstance}` : ' · default'}
                   </label>
                   <span className="flex-1" />
+                  <button
+                    onClick={details?.updateAvailable || !(details?.version && details?.version !== '—') ? updateAgent : undefined}
+                    disabled={!!busyMsg || (details?.version && details?.version !== '—' && !details?.updateAvailable)}
+                    title={
+                      details?.updateAvailable
+                        ? `Update ${agent.name} to v${details.latestVersion} (1-click)`
+                        : details?.version && details?.version !== '—'
+                        ? `${agent.name} is up to date (v${details.version})`
+                        : `Update ${agent.name} runtime and restart gateway`
+                    }
+                    className={`${btn} ${
+                      details?.updateAvailable
+                        ? 'bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 border-emerald-500/40 shadow-[0_0_12px_rgba(16,185,129,0.2)]'
+                        : details?.version && details?.version !== '—'
+                        ? 'bg-emerald-500/10 text-emerald-300/90 border border-emerald-500/20 cursor-default opacity-80'
+                        : 'bg-white/5 text-[var(--text-secondary)] hover:bg-white/10 hover:text-white'
+                    } !py-1 !px-2.5 flex items-center gap-1.5`}
+                  >
+                    {details?.updateAvailable ? (
+                      <>
+                        <ArrowUpCircle size={11} className="text-emerald-400 animate-pulse" />
+                        <span>Update to v{details.latestVersion}</span>
+                      </>
+                    ) : details?.version && details?.version !== '—' ? (
+                      <>
+                        <CheckCircle2 size={11} className="text-emerald-400" />
+                        <span>Up to date</span>
+                      </>
+                    ) : (
+                      <>
+                        <ArrowUpCircle size={11} className="text-emerald-400" />
+                        <span>Update</span>
+                      </>
+                    )}
+                  </button>
                   <button onClick={() => setShowWizard(true)} title="Update settings (API key, model, endpoints)" className={`${btn} bg-indigo-500/15 text-indigo-300 hover:bg-indigo-500/25 !py-1 !px-2.5`}>
                     <Settings2 size={11} /> Reconfigure
                   </button>
@@ -1610,7 +1935,68 @@ export default function AIAgentsApp({ apiFetch }) {
                     <Trash2 size={11} />{activeInstance ? ` Remove "${activeInstance}"` : ' Uninstall'}
                   </button>
                 </div>
+                {/* ── Web UI quick-launch card (for agents with a built-in web interface) ── */}
+                {details?.hasWebUI && (
+                  <div className="rounded-xl border border-sky-500/25 bg-sky-500/5 p-3 flex items-center justify-between gap-3 flex-wrap">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-lg bg-sky-500/20 text-sky-400 flex items-center justify-center shrink-0">
+                        <MonitorSmartphone size={16} />
+                      </div>
+                      <div>
+                        {/* No separate status pill — the Start button to the
+                            right carries the running/stopped state instead. */}
+                        <div className="font-bold text-white text-xs flex items-center gap-2">
+                          <span>Web UI</span>
+                          <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-sky-500/20 text-sky-300 border border-sky-500/30">:{details.webUIPort}</span>
+                        </div>
+                        <div className="text-[10px] text-[var(--text-muted)]">
+                          {agent.name} built-in web interface — opens in a real browser tab, no SSH or manual port-forwarding.
+                          {agent.id === 'nanobot' && ' Served straight from your Local Relay when it is connected.'}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {agent.id === 'nanobot' && (
+                        <button
+                          data-start-webui-btn
+                          onClick={handleStartWebUI}
+                          // Blocked while already running (nothing to start) and
+                          // while a start is in flight (avoid double-launch).
+                          // webUIActive reflects the Web UI port itself, NOT the
+                          // gateway process — they are separate processes.
+                          disabled={startingWebUI || !!details?.webUIActive}
+                          className={
+                            details?.webUIActive
+                              ? 'px-3 py-1.5 rounded-xl bg-emerald-500/15 text-emerald-300 font-bold text-xs flex items-center gap-1.5 border border-emerald-500/30 cursor-default'
+                              : 'px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 hover:text-amber-200 font-bold text-xs flex items-center gap-1.5 border border-amber-500/30 transition cursor-pointer disabled:opacity-50'
+                          }
+                          title={
+                            details?.webUIActive
+                              ? `Web UI is already running on port ${details.webUIPort}`
+                              : `Start the Nanobot webui process on port ${details.webUIPort || 8765}`
+                          }
+                        >
+                          {details?.webUIActive ? (
+                            <><CheckCircle2 size={12} /> Running</>
+                          ) : startingWebUI ? (
+                            <><Loader2 size={11} className="animate-spin" /> Starting…</>
+                          ) : (
+                            <><span>⚡</span> Start Web UI</>
+                          )}
+                        </button>
+                      )}
+                      <button
+                        onClick={() => openWebUIInTab()}
+                        className="px-3 py-1.5 rounded-xl bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 hover:text-sky-200 font-bold text-xs flex items-center gap-1.5 border border-sky-500/30 transition cursor-pointer"
+                        title="Open in a new browser tab (direct via your Local Relay when it's connected)"
+                      >
+                        <ExternalLink size={12} /> Open in New Tab
+                      </button>
+                    </div>
+                  </div>
+                )}
                 {/* ── Pairing & Access Approval Card ── */}{agent.id === 'zeroclaw' ? (
+
                   <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/5 p-4 space-y-3">
                     <div className="flex items-center justify-between gap-2 flex-wrap">
                       <div className="flex items-center gap-2">
@@ -1734,6 +2120,43 @@ export default function AIAgentsApp({ apiFetch }) {
                       </div>
                       <button onClick={fetchPairings} className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-[10px] font-bold text-[var(--text-muted)] hover:text-white border border-[var(--border-color)] flex items-center gap-1 cursor-pointer transition"><RotateCw size={10} /> Scan Pending Requests</button>
                     </div>
+
+                    {details?.hasWebUI && details?.webUIBootstrapPath && (
+                      <div className="rounded-lg bg-black/30 border border-sky-500/30 p-3 space-y-2">
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-5 h-5 rounded bg-sky-500/20 text-sky-300 flex items-center justify-center text-[10px]">🌐</span>
+                          <span className="text-[10px] font-bold text-sky-300">Web UI pairing code (browser workbench)</span>
+                        </div>
+                        <p className="text-[10px] text-[var(--text-muted)]">
+                          The Web UI asks for a bootstrap secret the first time it pairs a browser. Copy this code and paste it into the workbench&apos;s pair prompt — or just open the Web UI from the app, which applies it automatically.
+                        </p>
+                        {extractWebUISecret(details.webUIBootstrapPath) ? (
+                          <div className="flex items-center gap-2">
+                            <code className="flex-1 bg-black/50 border border-sky-500/20 rounded px-2 py-1 text-[10px] font-mono text-sky-200 break-all min-w-0">{extractWebUISecret(details.webUIBootstrapPath)}</code>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const s = extractWebUISecret(details.webUIBootstrapPath);
+                                if (s) {
+                                  navigator.clipboard.writeText(s).catch(() => {});
+                                  setNotice({ ok: true, text: 'WebUI bootstrap secret copied' });
+                                }
+                              }}
+                              className="px-2 py-1 rounded bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 text-[10px] font-bold border border-sky-500/30 transition cursor-pointer whitespace-nowrap flex items-center gap-1"
+                              title="Copy bootstrap secret"
+                            >
+                              <Copy size={10} /> Copy
+                            </button>
+                          </div>
+                        ) : (
+                          <code className="block bg-black/50 border border-sky-500/20 rounded px-2 py-1 text-[10px] font-mono text-[var(--text-muted)]">
+                            no bootstrap secret available — start the Web UI first
+                          </code>
+                        )}
+                        <p className="text-[9px] text-sky-400/60 font-mono break-all">{details.webUIBootstrapPath}</p>
+                      </div>
+                    )}
+
                     {pendingPairings.length > 0 && (
                       <div className="rounded-lg bg-black/40 border border-indigo-500/30 p-2.5 space-y-2">
                         <div className="text-[10px] font-bold text-indigo-300 flex items-center gap-1.5"><Sparkles size={11} className="text-amber-400 animate-pulse" /> Pending pairing request(s) detected:</div>
@@ -3078,6 +3501,7 @@ export default function AIAgentsApp({ apiFetch }) {
           </div>
         )
       )}
+
 
       <HermesAgentWizard
         isOpen={showWizard}

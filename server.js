@@ -508,7 +508,28 @@ app.prepare().then(async () => {
       if (req.url === '/local-relay.js' || req.url.startsWith('/local-relay.js?')) {
         const minifiedPath = path.join(__dirname, 'public', 'local-relay.min.js');
         const sourcePath   = path.join(__dirname, 'public', 'local-relay.js');
-        const scriptPath   = fs.existsSync(minifiedPath) ? minifiedPath : sourcePath;
+        // Prefer the SOURCE, not the minified bundle.
+        //
+        // The relay self-updates by re-fetching this URL, so whatever we serve here
+        // becomes what runs on every user's machine. Preferring the .min.js meant a
+        // stale minified bundle (Sep 2) silently won over newer source, and because
+        // that bundle predated the WebUI gateway feature, every relay restart
+        // DOWNGRADED the relay to a build with no `webui:forward` handler — the
+        // gateway tunnel could then never open, no matter how many times the user
+        // clicked "Start Web UI". Took a whole session to spot. Don't repeat it.
+        //
+        // Only use the minified file if the source is missing, or if the minified
+        // file is genuinely NEWER than the source (i.e. freshly rebuilt from it).
+        let scriptPath = sourcePath;
+        try {
+          const haveMin = fs.existsSync(minifiedPath);
+          const haveSrc = fs.existsSync(sourcePath);
+          if (haveMin && (!haveSrc || fs.statSync(minifiedPath).mtimeMs > fs.statSync(sourcePath).mtimeMs)) {
+            scriptPath = minifiedPath;
+          }
+        } catch {
+          scriptPath = sourcePath;
+        }
         res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
         res.setHeader('Cache-Control', 'no-store, no-cache');
         res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -527,14 +548,22 @@ app.prepare().then(async () => {
       // against the currently-deployed build, and next.config.mjs keeps them
       // correct after the next `next build`.
       const isNextInternal = req.url.startsWith('/_next/') || req.url.includes('/favicon.ico');
+      const isWebUIProxy = req.url.startsWith('/api/agents/webui-proxy');
 
       if (!isNextInternal) {
-        // NOTE: Content-Security-Policy is intentionally NOT set here.
+        // NOTE: Content-Security-Policy is intentionally NOT set here for general pages.
         // src/proxy.js (middleware) owns CSP so it can inject a fresh per-request
         // nonce. Two CSP headers are enforced as an intersection, which would
         // silently break nonce-based script loading and the blob:/data: iframe
         // used by the file preview.
-        res.setHeader('X-Frame-Options', 'DENY');
+        // For the agent Web UI proxy, we must permit same-origin framing so the
+        // embedded browser window can render the agent interface.
+        if (isWebUIProxy) {
+          res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+          res.setHeader('Content-Security-Policy', "frame-ancestors 'self'");
+        } else {
+          res.setHeader('X-Frame-Options', 'DENY');
+        }
         res.setHeader('X-Content-Type-Options', 'nosniff');
         res.setHeader('X-XSS-Protection', '1; mode=block');
         res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
@@ -542,21 +571,9 @@ app.prepare().then(async () => {
         res.setHeader('Strict-Transport-Security', 'max-age=63072000; includeSubDomains; preload');
 
         // ── Cross-origin isolation / resource containment ───────────────────
-        // 'same-origin-allow-popups' rather than 'same-origin': the Google Drive
-        // and rclone OAuth flows open a popup and receive the result through
-        // window.opener.postMessage(). Plain 'same-origin' severs that link and
-        // silently breaks both integrations, while 'same-origin-allow-popups'
-        // still defends the reverse direction — a hostile page that opens us
-        // gets no opener handle back.
         res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
-        // 'credentialless' instead of 'require-corp' deliberately: require-corp
-        // blocks every cross-origin image that does not opt in via CORP (Google
-        // avatars, Unsplash, GitHub avatars), which would break the UI.
-        res.setHeader('Cross-Origin-Embedder-Policy', process.env.COEP === 'unsafe-none' ? 'unsafe-none' : 'credentialless');
-        // Stops other origins pulling our images/scripts/JSON into an
-        // <img>/<script> tag as a side channel.
-        res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
-        // Tells legacy Adobe/Acrobat clients there is no cross-domain policy.
+        res.setHeader('Cross-Origin-Embedder-Policy', isWebUIProxy ? 'unsafe-none' : (process.env.COEP === 'unsafe-none' ? 'unsafe-none' : 'credentialless'));
+        res.setHeader('Cross-Origin-Resource-Policy', isWebUIProxy ? 'cross-origin' : 'same-origin');
         res.setHeader('X-Permitted-Cross-Domain-Policies', 'none');
       }
 
@@ -571,6 +588,12 @@ app.prepare().then(async () => {
 
   const io = new Server(server, {
     maxHttpBufferSize: 10 * 1024 * 1024, // 10MB limit for high-speed file transfers & base64 previews
+    // Engine.io otherwise installs a 1s "destroyUpgradeTimeout" that socket.end()s
+    // ANY upgrade request whose path is not /api/socket and where nothing was
+    // written yet — including /api/agents/webui-proxy. The WebUI proxy tunnels
+    // those over SSH (often >1s to respond), so engine.io would kill the client
+    // socket mid-handshake. Keep unhandled upgrades alive for our handlers.
+    destroyUpgrade: false,
     cors: {
       origin: (origin, callback) => {
         if (!origin) return callback(null, true);
@@ -648,6 +671,22 @@ function sendToRelayForUser(userId, preferredRelay, msgObj) {
   if (ws?.readyState === 1) { ws.send(JSON.stringify(msgObj)); return true; }
   return false;
 }
+// Bridge for Next.js API routes (ESM) to reach the relay control plane.
+// Relay registrations are keyed by the JWT sub (googleId), while sessions
+// carry the Mongo _id — translate like getSshConfig does.
+global.__sendToRelayForUser = sendToRelayForUser;
+global.__sendToRelayForUserAny = async function (userIds, msgObj) {
+  const arr = (Array.isArray(userIds) ? userIds : [userIds]).filter(Boolean).map(String);
+  for (const id of arr) { if (sendToRelayForUser(id, null, msgObj)) return true; }
+  try {
+    if (mongoose.connection.readyState === 1 && arr.length) {
+      const u = await mongoose.connection.db.collection('users').findOne({ _id: new (require('mongodb').ObjectId)(arr[0]) });
+      const gid = u?.googleId || u?.sub;
+      if (gid && sendToRelayForUser(String(gid), null, msgObj)) return true;
+    }
+  } catch (_) {}
+  return false;
+};
 
 // Idle timeout (30 minutes — browser throttles background-tab timers aggressively)
 const SSH_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
@@ -4877,12 +4916,143 @@ fi'`;
       const relayWss = new WebSocketServer({ noServer: true });
       const agentWss = new WebSocketServer({ noServer: true });
 
+      // ── Agent Web UI proxy: WebSocket tunneling ───────────────────────────
+      // The embedded webui-proxy (src/app/api/agents/webui-proxy/route.js) is
+      // HTTP-only. Some hosted UIs (e.g. nanobot's workbench) are driven by a
+      // WebSocket served on the same tunneled port, so upgrade requests for
+      // that path are bridged over an SSH direct-tcpip channel. The WS
+      // handshake is replayed verbatim to the remote service and the raw
+      // socket is piped both ways — the proxy stays protocol-transparent.
+      async function handleWebUIProxyUpgrade(req, sock, head) {
+        const dbg = (...a) => { if (process.env.WS_PROXY_DEBUG === '1') console.log('[webui-proxy-ws]', ...a); };
+        const destroy = () => { try { sock.destroy(); } catch {} };
+        try {
+          const u = new URL(req.url, 'http://localhost');
+          const connectionId = u.searchParams.get('connectionId');
+          const port = parseInt(u.searchParams.get('port'), 10);
+          dbg('upgrade hit', req.url, 'cid=', connectionId, 'port=', port);
+          if (!connectionId || !port || port < 1 || port > 65535) return destroy();
+
+          // Rebuild the REMOTE request target. req.url is the monitor-side proxy
+          // URL (/api/agents/webui-proxy?...), which the remote service would
+          // reject. The path the browser actually wants is the `path` query
+          // param, with any extra params merged in.
+          let remotePath = (u.searchParams.get('path') || '/').split('#')[0];
+          const extraParams = new URLSearchParams(u.searchParams);
+          for (const k of ['connectionId', 'port', 'path', '_base']) extraParams.delete(k);
+          if (remotePath.includes('?')) {
+            const qIdx = remotePath.indexOf('?');
+            for (const [k, v] of new URLSearchParams(remotePath.slice(qIdx + 1))) {
+              if (!extraParams.has(k)) extraParams.append(k, v);
+            }
+            remotePath = remotePath.slice(0, qIdx);
+          }
+          const rawUrl = remotePath + (extraParams.toString() ? '?' + extraParams.toString() : '');
+
+          // Session check — same NextAuth token the HTTP proxy route requires.
+          const { getToken } = require('next-auth/jwt');
+          if (!req.cookies) {
+            const cookieHeader = req.headers.cookie || '';
+            req.cookies = Object.fromEntries(cookieHeader.split('; ').filter(Boolean).map(c => {
+              const i = c.indexOf('=');
+              return [c.slice(0, i).trim(), decodeURIComponent(c.slice(i + 1))];
+            }));
+          }
+          const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET });
+          dbg('token', !!token, '| mongo readyState', mongoose.connection.readyState);
+          if (!token) return destroy();
+          const actingUserId = token.dbId || token.sub || null;
+
+          if (mongoose.connection.readyState !== 1) return destroy();
+          const { decrypt } = require('./src/utils/encryption');
+          const { ObjectId } = require('mongodb');
+          let connDoc = null;
+          try {
+            connDoc = await mongoose.connection.db.collection('connections').findOne({ _id: new ObjectId(connectionId) });
+          } catch (e) { dbg('conn lookup err', e.message); }
+          dbg('connDoc', !!connDoc);
+          if (!connDoc) return destroy();
+          // Ownership — mirror getSshConfig: an owned connection is only
+          // reachable by its owner (db id or relay/google subject).
+          if (connDoc.userId && actingUserId &&
+              String(connDoc.userId) !== String(actingUserId) &&
+              String(connDoc.userId) !== String(token.sub || '')) return destroy();
+
+          const sshCfg = {
+            host: connDoc.host,
+            port: connDoc.port || 22,
+            username: connDoc.username || 'root',
+            readyTimeout: 20000,
+            keepaliveInterval: 10000,
+          };
+          if (connDoc.authType === 'password' && connDoc.password) {
+            let dec = decrypt(connDoc.password);
+            if (dec && dec.includes(':') && dec.length > 40) { const t = decrypt(dec); if (t && !t.includes(':')) dec = t; }
+            sshCfg.password = dec;
+          } else if (connDoc.authType === 'privateKey' && connDoc.privateKey) {
+            let dec = decrypt(connDoc.privateKey);
+            if (dec && dec.includes(':') && dec.length > 40) { const t = decrypt(dec); if (t && !t.includes(':')) dec = t; }
+            sshCfg.privateKey = dec;
+            if (connDoc.passphrase) sshCfg.passphrase = decrypt(connDoc.passphrase);
+          } else {
+            return destroy();
+          }
+
+          const ssh = new Client();
+          dbg('connecting ssh', sshCfg.host, sshCfg.port, sshCfg.username);
+          ssh.on('ready', () => {
+            dbg('ssh ready, forwardOut', port);
+            ssh.forwardOut('127.0.0.1', 0, '127.0.0.1', port, (err, stream) => {
+              if (err) { dbg('forwardOut err', err.message); destroy(); try { ssh.end(); } catch {} return; }
+              dbg('forwardOut ok, rawUrl=', rawUrl);
+              // Node consumed the client's request bytes — rebuild the
+              // upgrade request for the remote service.
+              const skip = new Set(['host', 'connection', 'upgrade', 'cookie', 'authorization', 'origin']);
+              let raw = `${req.method} ${rawUrl} HTTP/1.1\r\n`;
+              raw += `Host: 127.0.0.1:${port}\r\n`;
+              // Origin must match the tunneled origin — some WS servers reject
+              // handshakes whose Origin is a foreign host.
+              raw += `Origin: http://127.0.0.1:${port}\r\n`;
+              for (const [k, v] of Object.entries(req.headers)) {
+                if (skip.has(k)) continue;
+                raw += `${k}: ${Array.isArray(v) ? v.join(', ') : v}\r\n`;
+              }
+              raw += 'Connection: Upgrade\r\nUpgrade: websocket\r\n\r\n';
+              dbg('sending raw len', raw.length + (head ? head.length : 0));
+              stream.write(raw);
+              if (head && head.length) stream.write(head);
+              // Explicit bidirectional forwarding. (pipe() would also work; manual
+              // handlers keep each direction debuggable.)
+              stream.on('data', (d) => { if (sock.destroyed) return dbg('dropping remote bytes (sock gone)'); try { sock.write(d); } catch {} });
+              sock.on('data', (d) => { try { stream.write(d); } catch {} });
+              stream.on('close', () => { dbg('ssh stream closed'); cleanup(); });
+              stream.on('error', (e) => { dbg('ssh stream err', e.message); cleanup(); });
+              sock.on('close', () => { dbg('client sock closed'); cleanup(); });
+              sock.on('error', (e) => { dbg('client sock err', e.message); cleanup(); });
+              function cleanup() {
+                dbg('cleanup');
+                try { stream.end(); } catch {}
+                try { sock.destroy(); } catch {}
+                try { ssh.end(); } catch {}
+              }
+            });
+          });
+          ssh.on('error', () => destroy());
+          ssh.connect(sshCfg);
+        } catch (e) {
+          console.error('[webui-proxy] WS upgrade error:', e?.message);
+          destroy();
+        }
+      }
+
       // Intercept HTTP upgrades — /relay-ws for local relay, /agent-ws for monitor agents
       server.on('upgrade', (req, sock, head) => {
         if (req.url && req.url.startsWith('/relay-ws')) {
           relayWss.handleUpgrade(req, sock, head, (ws) => relayWss.emit('connection', ws, req));
         } else if (req.url && req.url.startsWith('/agent-ws')) {
           agentWss.handleUpgrade(req, sock, head, (ws) => agentWss.emit('connection', ws, req));
+        } else if (req.url && (req.url.startsWith('/api/agents/webui-proxy') || req.url.startsWith('/api/agents/webui-ws-proxy'))) {
+          handleWebUIProxyUpgrade(req, sock, head);
         }
       });
 

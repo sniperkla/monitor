@@ -582,7 +582,7 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
             backdropFilter: !isMobile && glassmorphism ? `blur(${glassIntensity ?? 20}px)` : 'none',
             borderColor: 'var(--border-color)',
           }}
-          onClick={() => focusWindow(id)}
+          onPointerDown={() => focusWindow(id)}
         >
           {/* Title Bar — transparent in glass mode so the blurred window
               background shows through; opaque gradient when glassmorphism is off */}

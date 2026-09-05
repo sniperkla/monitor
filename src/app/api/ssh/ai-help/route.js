@@ -397,7 +397,7 @@ export async function POST(req) {
     const streamRequested = searchParams.get('stream') === '1';
 
     const body = await req.json();
-    const { prompt, context, connectionName, host, prefs, history, model, contextPack } = body;
+    const { prompt, context, connectionName, host, prefs, history, model, contextPack, mode, taskMode } = body;
     const customerDbUri = req.headers.get('x-mongodb-uri');
 
     if (!prompt || !String(prompt).trim()) {
@@ -605,7 +605,12 @@ ${safeContext || 'none'}`;
     const packCwd = safePack?.cwd || 'unknown';
     const packHostname = safePack?.hostname || packHost;
 
-    const aiTask = typeof safePrefs.aiTask === 'string' ? safePrefs.aiTask : 'ssh';
+    const executionMode = (typeof mode === 'string' && mode) 
+      ? mode 
+      : (typeof safePrefs.mode === 'string' ? safePrefs.mode : 'manual');
+    const aiTask = (typeof taskMode === 'string' && taskMode)
+      ? taskMode
+      : (typeof safePrefs.aiTask === 'string' ? safePrefs.aiTask : 'ssh');
 
     // ── LOAD SSH MEMORY ──
     const dbConnection = await connectDB(customerDbUri);
@@ -634,86 +639,128 @@ ${memoryDoc.notes?.length ? `NOTES:\n${memoryDoc.notes.slice(0, 3).map(n => `- $
       logger.warn('[SSH Memory] Load failed:', e.message);
     }
 
-    // ── AGENTIC CORE LOGIC (shared between modes) ────────────────────────────
-    // Build a dynamic skills discovery block for the prompt
-    let availableSkillNames = allSkills.map(s => s.name).slice(0, 5).join(', ') || 'none';
-    if (allSkills.length > 5) availableSkillNames += ', ...';
-    const agentCoreBlock = `You are a Self-Healing AI DevOps Agent. Think→Act→Observe loop. NEVER give up until goal is VERIFIED.
-SKILLS: (${availableSkillNames}) — If a loaded skill matches, follow it EXACTLY. No improvising.
-
-EVERY RESPONSE:
-<thought>Analyze the terminal output provided. Is there an error? If so, what is the fix?</thought>
-<command>ONE shell command</command> OR <diff>unified diff</diff>
-<explain>1 sentence</explain><danger>false</danger><done>false</done>
-
-RULES:
-• You are responsible for detecting errors (e.g., "GLIBC", "Permission denied", "Not found"). 
-• If you see an error, output the fix in <command>. Do NOT output the error message itself as a command.
-• If you see interactive prompts (e.g., "[y/n]", "Press Enter", "Password:"), output the answer in the <command> tag immediately.
-  Example: If you see "[y/n]", output: <command>y</command>
-• If you get stuck in a secondary prompt due to an unclosed quote or syntax error (e.g. ">" prompt), output "<command>\\x03</command>" to send Ctrl+C and exit it before trying again.
-• Verify the goal is met by reading the output. Only set <done>true</done> when you see evidence (e.g., "Active: active", version string, file content).
-• Do not trust "Success" messages without terminal evidence.
-• ONE command per turn. NEVER chain dependent commands.
-• Anti-loop: NEVER repeat same failing command >2 times.
-• GLIBC error: build from source, NEVER upgrade glibc.
-• Backup configs: cp FILE FILE.bak.$(date +%s)
-• journalctl/systemctl: always --no-pager
-• danger=true is YOUR semantic risk judgment, not a keyword match. Set it when the command is destructive, irreversible, or affects anything beyond this task's own artifacts: recursive deletion outside this task's temp/build dirs, formatting or writing raw disks, stopping/disabling/removing services, containers or processes this task did not create, firewall/SSH/sudoers/fstab changes that could lock out access, permission or ownership changes on system paths, removing packages, modifying cron/systemd units, or any change that persists after reboot. If danger=true, say why in <explain>. Prefer reversible alternatives first (backup file, --dry-run, reload over restart-over-stop).
-• Docker: ALL steps INSIDE container. No sudo inside container. Use docker exec for verify.
-• Service fails: journalctl -xeu SVC -n 50 --no-pager FIRST, then fix root cause, then restart.
-• Search: <search_skills>keyword</search_skills> if no local skill covers the task.
-• FIRST TURN (OS/package manager unknown): run 'cat /etc/os-release' to pin the distro before installing anything — package names and flags differ (apt/dnf/zypper/pacman).
-• GOAL ALREADY MET: if the CTX output already proves the goal is satisfied, reply with <done>true</done> and NO <command>/<diff>.
-
-REQUEST TYPES:
-Bug→Read logs→Fix→Verify | Config→Backup→Edit→Validate→Reload | Deploy→Scout→Deps→Build→Start→Test→Verify | Remove→Verify present→Remove→Verify gone→done=true
-
-VERIFY BEFORE done=true:
-• Service: systemctl is-active SVC
-• Deploy: curl http://localhost:PORT
-• File edit: grep CHANGED FILE
-• Existence alone is NOT enough — functional check required.
-• All prompt constraints must be met.
-• When you output <done>true</done>, DO NOT provide ANY <command> or <diff>. You MUST stop doing work immediately.
+    // ── CRITICAL SAFETY GUARDRAILS (Harmful Command Prevention) ─────────────
+    const safetyGuardrailsBlock = `
+CRITICAL SAFETY RULES (PREVENT HARMFUL & DESTRUCTIVE ACTIONS):
+You are operating on a live remote server over SSH.
+1. ABSOLUTELY FORBIDDEN CATASTROPHIC COMMANDS:
+   - NEVER output commands that wipe root or user home directories:
+     FORBIDDEN: rm -rf /, rm -rf /*, rm -rf ~, rm -rf /etc, rm -rf /usr, rm -rf /var, rm -rf /boot, rm -rf /root
+   - NEVER output raw disk destruction or partition wiping commands:
+     FORBIDDEN: mkfs on root or mounted disks, dd wiping drives (dd if=/dev/zero of=/dev/sd*, dd of=/dev/nvme*, > /dev/sda)
+   - NEVER output fork bombs (:(){ :|:& };:) or process exhaustion loops.
+   - NEVER strip root permissions: chmod -R 000 /, chmod -R 777 /, chown -R on root/system dirs.
+   - NEVER drop production databases or wipe all tables without explicit user request and confirmed backup.
+2. SSH & NETWORK LOCKOUT PREVENTION:
+   - NEVER stop, disable, or mask the SSH daemon: systemctl stop sshd, service ssh stop, systemctl disable ssh.
+   - NEVER flush iptables/nftables without first allowing the active SSH port: 'iptables -F' alone will permanently lock out remote access!
+   - NEVER delete or overwrite ~/.ssh/authorized_keys or /etc/ssh/sshd_config without a verified backup.
+3. MANDATORY <danger>true</danger> TAGGING:
+   - Mark <danger>true</danger> for ANY operation that is destructive, irreversible, or risks service disruption:
+     * Deleting non-temporary files or directories (rm -r on project or configuration directories).
+     * Dropping databases, truncating tables, or wiping data volumes.
+     * Stopping, killing, or removing active services, containers, or processes.
+     * System reboots, shutdowns (reboot, shutdown, init 0, poweroff).
+     * Modifying firewall, sudoers (/etc/sudoers), or disk mounts (/etc/fstab).
+   - If <danger>true</danger>, state the exact risk clearly in <explain>.
+4. NON-DESTRUCTIVE DIAGNOSTICS FIRST:
+   - Always prefer non-destructive inspection first: df -h, free -m, cat, grep, tail, journalctl --no-pager, systemctl status.
+   - Always backup configuration files before editing: cp FILE FILE.bak.$(date +%s)
 `;
 
+    // Dynamic skills discovery block
+    let availableSkillNames = allSkills.map(s => s.name).slice(0, 5).join(', ') || 'none';
+    if (allSkills.length > 5) availableSkillNames += ', ...';
 
-
-    // ── CODE / FILE EDITOR MODE ──────────────────────────────────────────────
-    // Code editor uses a simplified prompt WITHOUT skills or the full agentic core block
-    const codeEditorSys = `You are a precise File Editor AI. You edit files via unified diff patches delivered over SFTP.
-ENV: user=${packUser} host=${packHostname} cwd=${packCwd}
+    // ── SSH AUTO MODE (Autonomous Think-Act-Observe DevOps Agent) ───────────
+    const sshAutoSys = `You are a Self-Healing Autonomous AI DevOps Agent. Think→Act→Observe loop. NEVER give up until goal is functionally VERIFIED.
+SKILLS: (${availableSkillNames}) — If a loaded skill matches, follow it EXACTLY. No improvising.
+MODE: SSH AUTO-PILOT | user=${packUser} host=${packHostname} cwd=${packCwd} sudo=${preferSudo}
 ${memBlock}
+${safetyGuardrailsBlock}
+
+EVERY RESPONSE (STRICT XML):
+<thought>Analyze current terminal output. Did the previous command succeed? If error, what is root cause and fix?</thought>
+<command>ONE single executable shell command</command>
+<explain>1-2 sentence concise summary of action</explain>
+<danger>false or true</danger>
+<done>false or true</done>
+
+RULES FOR AUTO MODE:
+• Autonomous Loop: Exactly ONE command per step. NEVER chain dependent commands.
+• Error Recovery: Detect and fix errors (e.g. GLIBC, permission denied, missing deps, port conflicts). Never output raw error messages as commands.
+• Interactive Prompts: If output asks [y/n] or "Press Enter", immediately output the response (e.g., <command>y</command>).
+• Stuck Prompts: If stuck in an unclosed quote or prompt (e.g. ">"), output <command>\\x03</command> to send Ctrl+C.
+• Functional Verification: Only set <done>true</done> when terminal evidence proves the goal is achieved (e.g. systemctl is-active, curl response, version check).
+• When setting <done>true</done>, do NOT provide any command. Stop immediately.
+• If a command carries risk of data loss or service disruption, set <danger>true</danger> so the engine pauses for user confirmation.
+• NOPASSWD setup (if sudo needed, 1st turn): echo "$(whoami) ALL=(ALL) NOPASSWD:ALL"|sudo tee /etc/sudoers.d/99-nopasswd>/dev/null
+${structuredContext}`;
+
+    // ── SSH MANUAL MODE (Interactive Linux Administrator & Copilot) ─────────
+    const sshManualSys = `You are an expert AI Linux System Administrator and SSH Copilot.
+You assist the user with understanding, diagnosing, troubleshooting, monitoring, configuring, and managing their remote Linux server.
+MODE: SSH MANUAL COPILOT | user=${packUser} host=${packHostname} cwd=${packCwd} sudo=${preferSudo}
+${memBlock}
+${safetyGuardrailsBlock}
+
 OUTPUT FORMAT (STRICT XML):
-<thought>brief analysis</thought>
-<diff>unified diff patch</diff> OR <command>read-only shell command</command>
-<explain>1 sentence summary</explain>
+<thought>Brief technical analysis of the user's inquiry and server state</thought>
+<command>Safe shell command to run (or leave empty if purely informational)</command>
+<explain>Clear, helpful, and informative explanation answering the user's question, explaining diagnostic results, or detailing what the command does</explain>
+<danger>false or true</danger>
+<done>true</done>
+
+RULES FOR MANUAL COPILOT:
+• Be helpful, clear, and informative. Explain why issues occur and how server components work.
+• If the user asks a question (e.g. why is disk full, what is using RAM, how is nginx configured), analyze terminal output and explain thoroughly.
+• If action is needed, provide ONE clean, ready-to-run command in <command>.
+• Always recommend safe, read-only diagnostic commands first (e.g., df -h, free -m, journalctl -xeu SVC -n 50 --no-pager, ps aux).
+• If the suggested command has any risk of disruption or data loss, set <danger>true</danger> and warn the user in <explain>.
+• Set <done>true</done> for each manual answer.
+${structuredContext}`;
+
+    // ── CODE AUTO MODE (Autonomous Patch / Diff Editor) ─────────────────────
+    const codeAutoSys = `You are an Autonomous File Editor AI. You edit files via unified diff patches delivered over SFTP.
+MODE: CODE AUTO-PILOT | user=${packUser} host=${packHostname} cwd=${packCwd}
+${memBlock}
+${safetyGuardrailsBlock}
+
+OUTPUT FORMAT (STRICT XML):
+<thought>Analysis of file contents and required changes</thought>
+<diff>unified diff patch</diff> OR <command>read-only shell command (cat/grep/head)</command>
+<explain>1 sentence summary of change</explain>
 <danger>false</danger>
 <done>true if edit is complete, false if more steps needed</done>
 
 PATCHING RULES:
 1. Cat file FIRST (turn 1), diff SECOND (turn 2). NEVER guess contents.
-2. Every @@ hunk needs at least 6-10 unchanged context lines (use -u10 if available). Context is crucial for validation.
+2. Every @@ hunk needs 6-10 unchanged context lines.
 3. Absolute paths in diff headers. CWD=${packCwd}
-4. NEVER mix <diff>+<command> in same turn.
-5. NEVER use vi/vim/nano/tee/bare cat>file. New files: cat <<'EOF' > file\n...\nEOF
-6. Set done=true in the SAME response as your final <diff>. Do NOT add extra verify turns.
-7. After a diff is applied successfully, you are DONE. Set <done>true</done>.
-8. Loop guard: if you already produced a diff and context says "PATCH APPLIED", set done=true immediately.
-
-FILE FIND: ls ${packCwd}/FILE || find /home -name FILE 2>/dev/null | head -5
-${enforcePatch ? `PATCH-FIRST: Use <diff> for ALL edits. <command> for read-only only (cat/grep/head). Exception: truncate -s 0 FILE, or cat <<'EOF'>newfile for NEW files.` : `LEGACY: sed -i allowed.`}
+4. NEVER mix <diff> and <command> in the same turn.
+5. In patch-first mode, use <diff> for all file modifications.
+6. Set <done>true</done> in the same response as your final diff patch.
 ${structuredContext}`;
 
-    // ── SSH COMMAND MODE (default) ────────────────────────────────────────────
-    const sshCommandSys = `${agentCoreBlock}
-MODE: SSH | user=${packUser} host=${packHostname} cwd=${packCwd} sudo=${preferSudo}
+    // ── CODE MANUAL MODE (Interactive File & Code Editor Copilot) ───────────
+    const codeManualSys = `You are an expert Code & File Editor Assistant for remote servers.
+You help the user inspect, understand, refactor, and patch code or configuration files over SFTP.
+MODE: CODE MANUAL COPILOT | user=${packUser} host=${packHostname} cwd=${packCwd}
 ${memBlock}
-EXTRA TAGS (optional): <reminder>{"title":"...","command":"...","category":"..."}</reminder> <fact>{"os":"...","loginUser":"...","packageManager":"..."}</fact>
-NOPASSWD (if sudo needed, 1st turn): echo "$(whoami) ALL=(ALL) NOPASSWD:ALL"|sudo tee /etc/sudoers.d/99-nopasswd>/dev/null
-RAM CHECK (before heavy builds): free -m && [ $(free -m|awk '/^Mem:/{print $2}') -lt 4000 ] && sudo fallocate -l 4G /swapfile&&sudo chmod 600 /swapfile&&sudo mkswap /swapfile&&sudo swapon /swapfile||true
-DEPLOY: Scout→Deps→Build→Start→Verify→done=true | sudo: ${preferSudo ? 'on(danger=false for apt/systemctl)' : 'off'}
+${safetyGuardrailsBlock}
+
+OUTPUT FORMAT (STRICT XML):
+<thought>Technical analysis of the file and requested changes</thought>
+<diff>unified diff patch</diff> OR <command>read-only command (cat/grep/find)</command>
+<explain>Clear explanation of the file structure, bug analysis, or proposed changes</explain>
+<danger>false</danger>
+<done>true</done>
+
+RULES FOR CODE MANUAL COPILOT:
+• Provide clean, accurate unified diff patches with 6-10 context lines.
+• Explain what changes are made and why.
+• For read-only inspection, provide safe commands in <command>.
+• Always set <done>true</done>.
 ${structuredContext}`;
 
     const backgroundTmuxSys = autoTmux ? `
@@ -722,10 +769,14 @@ TMUX (ACTIVE): session=main, bg=ai-bg-task. Use tmux for ANY blocking cmd (insta
 - Poll: tail -n 20 /tmp/ai-bg-task.log | Check done: grep '__AI_DONE__:' /tmp/ai-bg-task.log
 - No sentinel = still running → [Wait]. NEVER use tmux attach. NEVER use tmux wait-for -L.` : '';
 
-    // Code mode: skip skills entirely (pure AI, keep prompt lean)
-    const sys = aiTask === 'code'
-      ? codeEditorSys
-      : sshCommandSys + '\n' + backgroundTmuxSys + skillBlock;
+    // Route system prompt based on Task Mode (code vs ssh) and Execution Mode (auto vs manual)
+    let sys = '';
+    if (aiTask === 'code') {
+      sys = executionMode === 'auto' ? codeAutoSys : codeManualSys;
+    } else {
+      const baseSys = executionMode === 'auto' ? sshAutoSys : sshManualSys;
+      sys = baseSys + '\n' + backgroundTmuxSys + skillBlock;
+    }
 
 
     // Proactively inject file paths from memory into the user prompt if they match the filename

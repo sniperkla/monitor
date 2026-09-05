@@ -829,7 +829,8 @@ export default function DesktopEnvironment({ bootPhase }) {
           new Map((allWins || []).map((w) => [w.id, w])).values()
         );
 
-        return deduped.map((win) => {
+        const sorted = [...deduped].sort((a, b) => (a.zIndex ?? 0) - (b.zIndex ?? 0));
+        return sorted.map((win) => {
         let component = win.component;
         
         // Inject shared props (like onEditConnection) for restored windows

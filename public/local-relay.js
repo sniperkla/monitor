@@ -317,6 +317,7 @@ function connect() {
 
       // ── SSH ──
       case 'ssh:connect':     handleSshConnect(ws, msg); break;
+      case 'webui:forward':   handleWebuiForward(msg).catch(err => console.error(`✗ [Relay WebUI] ${err.message}`)); break;
       case 'ssh:exec':        handleSshExec(ws, msg);    break;
       case 'ssh:disconnect':  cleanupSsh(msg.connId);    break;
       case 'ai:chat':         handleAiChat(ws, msg);     break;
@@ -427,6 +428,204 @@ function isDir(attrs) {
 }
 
 // ── SSH handlers ──────────────────────────────────────────────────────────
+// ── WebUI direct gateway ─────────────────────────────────────────────────────
+// Browser → http://127.0.0.1:<localPort> (this relay) → SSH direct-tcpip →
+// target's WebUI port. The central server stays out of the data path entirely;
+// it only sends this control message. The WebSocket the hosted app opens is
+// same-origin (the gateway rewrites the bootstrap ws_url), so it tunnels here too.
+const webuiGateways = new Map(); // forwardId → { server, ssh, port, remotePort }
+
+function webuiSshConnect(gw) {
+  return new Promise((resolve, reject) => {
+    const ssh = new ssh2.Client();
+    ssh.on('ready', () => resolve(ssh));
+    ssh.on('error', reject);
+    ssh.on('close', () => { try { gw.sshDead = true; } catch {} });
+    const cfg = {
+      host: gw.sshCfg.host,
+      port: gw.sshCfg.port || 22,
+      username: gw.sshCfg.username || 'root',
+      readyTimeout: 20000,
+      keepaliveInterval: 10000,
+    };
+    if (gw.sshCfg.privateKey) cfg.privateKey = gw.sshCfg.privateKey;
+    if (gw.sshCfg.password) cfg.password = gw.sshCfg.password;
+    if (gw.sshCfg.passphrase) cfg.passphrase = gw.sshCfg.passphrase;
+    ssh.connect(cfg);
+  });
+}
+
+// Reconnect on demand — the SSH connection can drop (network hiccup, target
+// restart); without this every request would 502 forever after one drop.
+async function webuiEnsureSsh(gw) {
+  if (gw.ssh && !gw.sshDead) return gw.ssh;
+  console.log(`🔁 [Relay WebUI] SSH connection stale — reconnecting...`);
+  gw.sshDead = false;
+  gw.ssh = await webuiSshConnect(gw);
+  return gw.ssh;
+}
+
+async function handleWebuiForward(msg) {
+  if (!ssh2) throw new Error('ssh2 not installed on relay agent');
+  const { forwardId, connection, remotePort, monitorOrigin, bootstrapSecret } = msg;
+  if (!forwardId || !connection) throw new Error('webui:forward missing fields');
+  if (webuiGateways.has(forwardId)) {
+    console.log(`🔁 [Relay WebUI] gateway already running for ${forwardId}`);
+    return;
+  }
+  const gw = {
+    forwardId,
+    remotePort: Number(remotePort) || 8765,
+    port: Number(msg.localPort) || 18790,
+    monitorOrigin: monitorOrigin || '',
+    bootstrapSecret: (typeof bootstrapSecret === 'string' && bootstrapSecret) ? bootstrapSecret : '',
+    ssh: null,
+    sshCfg: {
+      host: connection.host,
+      port: connection.port || 22,
+      username: connection.username || 'root',
+    },
+  };
+  if (connection.privateKey) gw.sshCfg.privateKey = connection.privateKey;
+  if (connection.password) gw.sshCfg.password = connection.password;
+  if (connection.passphrase) gw.sshCfg.passphrase = connection.passphrase;
+
+  gw.ssh = await webuiSshConnect(gw);
+  console.log(`✅ [Relay WebUI] SSH ready → forwarding 127.0.0.1:${gw.port} → 127.0.0.1:${gw.remotePort}`);
+
+  const server = http.createServer((req, res) => {
+    handleWebuiHttp(gw, req, res).catch(() => { try { res.end(); } catch {} });
+  });
+  server.on('upgrade', (req, sock, head) => handleWebuiUpgrade(gw, req, sock, head));
+
+  await new Promise((resolve, reject) => {
+    let attempts = 0;
+    const tryListen = () => {
+      server.once('error', (e) => {
+        if (attempts < 10 && e.code === 'EADDRINUSE') { gw.port += 1; attempts += 1; tryListen(); }
+        else reject(e);
+      });
+      server.listen(gw.port, '127.0.0.1', resolve);
+    };
+    tryListen();
+  });
+  webuiGateways.set(forwardId, gw);
+  console.log(`🌐 [Relay WebUI] gateway live at http://127.0.0.1:${gw.port} (direct transfer, no central middleman)`);
+}
+
+async function handleWebuiHttp(gw, req, res) {
+  if (req.url === '/__relay_ping') {
+    res.writeHead(200, { 'content-type': 'text/plain', 'access-control-allow-origin': '*' });
+    res.end('pong');
+    return;
+  }
+  if (!gw.ssh) { res.writeHead(503); res.end('gateway connecting'); return; }
+  const ssh = await webuiEnsureSsh(gw);
+  const stream = await new Promise((resolve, reject) =>
+    ssh.forwardOut('127.0.0.1', 0, '127.0.0.1', gw.remotePort, (e, s) => e ? reject(e) : resolve(s)));
+  const chunks = [];
+  req.on('data', (c) => chunks.push(c));
+  req.on('end', () => {
+    const body = Buffer.concat(chunks);
+    const headers = { ...req.headers, host: `127.0.0.1:${gw.remotePort}` };
+    // Drop cookies: the browser shares one cookie jar across every 127.0.0.1
+    // port, so this jar also holds the monitor app's session cookie — it must
+    // not leak to the agent gateway.
+    delete headers.cookie;
+    // NEVER drop `authorization`. The nanobot SPA mints an api_token from
+    // GET /webui/bootstrap and then sends it as `Authorization: Bearer nbwt_…`
+    // on every /api/* call. Stripping it here makes the gateway answer
+    // 401 "Unauthorized" to all of them (settings/sessions/workspaces), while
+    // the token still works if passed as ?token= — which is why the failure
+    // looks like "the Web UI loaded but can't load settings".
+    const upstream = http.request({
+      createConnection: () => stream,
+      hostname: '127.0.0.1', port: gw.remotePort, path: req.url, method: req.method, headers,
+    }, (ur) => {
+      const out = [];
+      ur.on('data', (c) => out.push(c));
+      ur.on('end', () => {
+        let buf = Buffer.concat(out);
+        const ct = (ur.headers['content-type'] || '').toLowerCase();
+        // Point the hosted app's WebSocket at this gateway (same origin)
+        if (ct.includes('application/json') || ct.includes('javascript') || ct.includes('text/')) {
+          const re = new RegExp('(wss?://)(?:localhost|127\\.0\\.0\\.1)(?::' + gw.remotePort + ')?(/[^\\s"\'`]*)?', 'gi');
+          const nt = buf.toString('utf8').replace(re, (_m, sch, p) => `${sch}127.0.0.1:${gw.port}${p || '/'}`);
+          if (nt !== buf.toString('utf8')) {
+            buf = Buffer.from(nt, 'utf8');
+          }
+        }
+        // Auto-pair the SPA on ANY page load: nanobot authenticates the browser via
+        // the bootstrap secret, which it only reads from the entry URL hash
+        // (#/?bootstrapSecret=…) or localStorage. A deep link opened directly
+        // (e.g. /#/settings?section=models) carries neither → the app bootstraps
+        // with no secret → no api_token → settings/API calls answer 401
+        // "Unauthorized" → "Could not load settings". The relay knows the secret
+        // (sent by the monitor route), so inject it like the entry URL does.
+        if (ct.includes('text/html') && gw.bootstrapSecret) {
+          const reactKey = 'nanobot-webui.bootstrap-secret';
+          const secJson = JSON.stringify(gw.bootstrapSecret);
+          const pairScript =
+            `<script>(function(){try{var k=${JSON.stringify(reactKey)};` +
+            `if(!window.localStorage.getItem(k))window.localStorage.setItem(k,${secJson});` +
+            `var h=window.location.hash||"";` +
+            `if(h.indexOf("bootstrapSecret=")<0){` +
+            `var qi=h.indexOf("?"),b=qi<0?h:h.slice(0,qi),q=qi<0?"":h.slice(qi+1);` +
+            `var p=new URLSearchParams(q);p.set("bootstrapSecret",${secJson});` +
+            `var ns=b+"?"+p.toString();window.history.replaceState(null,"",ns);` +
+            `}}catch(e){}})();</script>`;
+          const html = buf.toString('utf8');
+          if (html.includes('</head>') || html.includes('<head>')) {
+            const injected = html.includes('</head>')
+              ? html.replace('</head>', pairScript + '</head>')
+              : html.replace('<head>', '<head>' + pairScript);
+            if (injected !== html && !html.includes('nanobot-webui.bootstrap-secret')) {
+              buf = Buffer.from(injected, 'utf8');
+            }
+          }
+        }
+        const h = { ...ur.headers };
+        delete h['x-frame-options']; delete h['content-security-policy'];
+        h['cross-origin-resource-policy'] = 'cross-origin';
+        h['cache-control'] = 'no-store, max-age=0';
+        // A rewrite changed the body length — content-length must match or
+        // clients truncate the body (JSON parse errors / clipped scripts).
+        delete h['transfer-encoding'];
+        h['content-length'] = String(buf.length);
+        try { res.writeHead(ur.statusCode || 502, h); } catch {}
+        try { res.end(buf); } catch {}
+      });
+    });
+    upstream.on('error', () => { try { res.writeHead(502); res.end('tunnel error'); } catch {} });
+    if (body.length) upstream.write(body);
+    upstream.end();
+  });
+}
+
+function handleWebuiUpgrade(gw, req, sock, head) {
+  webuiEnsureSsh(gw).then(ssh => {
+    ssh.forwardOut('127.0.0.1', 0, '127.0.0.1', gw.remotePort, (err, stream) => {
+    if (err) { try { sock.destroy(); } catch {} return; }
+    // Replay the handshake to the remote (rewrite loopback origin so the
+    // remote's own origin checks pass).
+    const skip = new Set(['host', 'connection', 'upgrade', 'cookie', 'authorization', 'origin']);
+    let raw = `${req.method} ${req.url} HTTP/1.1\r\nHost: 127.0.0.1:${gw.remotePort}\r\nOrigin: http://127.0.0.1:${gw.remotePort}\r\n`;
+    for (const [k, v] of Object.entries(req.headers)) {
+      if (skip.has(k)) continue;
+      raw += `${k}: ${Array.isArray(v) ? v.join(', ') : v}\r\n`;
+    }
+    raw += 'Connection: Upgrade\r\nUpgrade: websocket\r\n\r\n';
+    stream.write(raw);
+    if (head && head.length) stream.write(head);
+    stream.on('data', (d) => { try { sock.write(d); } catch {} });
+    sock.on('data', (d) => { try { stream.write(d); } catch {} });
+    const cleanup = () => { try { stream.end(); } catch {} try { sock.destroy(); } catch {} };
+    sock.on('close', cleanup); sock.on('error', cleanup);
+    stream.on('close', cleanup); stream.on('error', cleanup);
+    });
+  }).catch(() => { try { sock.destroy(); } catch {} });
+}
+
 function handleSshConnect(ws, msg) {
   if (!ssh2) {
     ws.send(JSON.stringify({ type: 'ssh:error', connId: msg.connId, error: 'ssh2 not installed on relay agent' }));
