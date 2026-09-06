@@ -6,7 +6,7 @@ import { useEffect } from 'react';
    One capture-phase scroll listener (the scroll root is a fixed div, so
    window listeners never fire), rAF-throttled. Everything is measured in
    content coordinates once and then cheap math per scroll frame. */
-function useScrollStory({ motionOff, heroRef, cueRef, railRef, storyRailRef, cmdRef }) {
+function useScrollStory({ motionOff, heroRef, railRef, storyRailRef, cmdRef }) {
   useEffect(() => {
     const root = document.querySelector('[data-scroll-root]') || document.scrollingElement;
     if (!root) return undefined;
@@ -53,9 +53,6 @@ function useScrollStory({ motionOff, heroRef, cueRef, railRef, storyRailRef, cmd
         heroRef.current.style.opacity = Math.max(0, 1 - p * 1.15).toFixed(3);
         heroRef.current.style.transform =
           `translate3d(0, ${(st * 0.3).toFixed(1)}px, 0) scale(${(1 - p * 0.07).toFixed(4)})`;
-      }
-      if (cueRef.current) {
-        cueRef.current.style.opacity = Math.max(0, 1 - st / 220).toFixed(3);
       }
 
       if (!motionOff) {
@@ -153,7 +150,7 @@ function useScrollStory({ motionOff, heroRef, cueRef, railRef, storyRailRef, cmd
       io.disconnect();
       cancelAnimationFrame(raf);
     };
-  }, [motionOff, heroRef, cueRef, railRef, storyRailRef, cmdRef]);
+  }, [motionOff, heroRef, railRef, storyRailRef, cmdRef]);
 }
 
 

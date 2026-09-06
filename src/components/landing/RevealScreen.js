@@ -24,7 +24,7 @@
 import { signIn } from 'next-auth/react';
 import { useState, useEffect, useRef } from 'react';
 import { AnimatePresence } from 'framer-motion';
-import { ChevronDown, Activity } from 'lucide-react';
+import { Activity } from 'lucide-react';
 import NeuralWeb from './NeuralWeb';
 import MatrixRain from './MatrixRain';
 import { CinematicAuthModal } from './CinematicAuthModal';
@@ -73,7 +73,6 @@ export function RevealScreen({ onDismiss }) {
 
   const cardRef = useRef(null);
   const heroRef = useRef(null);
-  const cueRef = useRef(null);
   const railRef = useRef(null);
   const storyRailRef = useRef(null);
   const cmdRef = useRef(null);
@@ -113,7 +112,7 @@ export function RevealScreen({ onDismiss }) {
     };
   }, [motionOff]);
 
-  useScrollStory({ motionOff, heroRef, cueRef, railRef, storyRailRef, cmdRef });
+  useScrollStory({ motionOff, heroRef, railRef, storyRailRef, cmdRef });
 
   const handlePasskeySignIn = async () => {
     setPasskeyError(null);
@@ -422,19 +421,6 @@ export function RevealScreen({ onDismiss }) {
               </div>
             </div>
           </div>
-        </div>
-
-        {/* Scroll cue */}
-        <div
-          ref={cueRef}
-          className="cue absolute bottom-6 left-1/2 -translate-x-1/2 flex flex-col items-center gap-1 pointer-events-none"
-        >
-          <span className="font-mono text-[8px] tracking-[0.34em] uppercase text-slate-500">
-            scroll
-          </span>
-          <span className="cue-bob">
-            <ChevronDown size={15} className="text-slate-500" />
-          </span>
         </div>
       </div>
 
