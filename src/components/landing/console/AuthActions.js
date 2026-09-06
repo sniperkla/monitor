@@ -68,14 +68,16 @@ function AuthActions({
         <span>Email &amp; Password Login</span>
       </button>
 
-      <button
-        type="button"
-        onClick={onDemo}
-        className="w-full flex items-center justify-center gap-1.5 px-5 py-2 min-h-[40px] rounded-lg text-[11px] font-medium cursor-pointer text-slate-400 hover:text-slate-200 transition-colors bg-white/[0.03] hover:bg-white/[0.07] border border-white/5"
-      >
-        <span>Continue to Demo Mode</span>
-        <ChevronRight size={13} className="opacity-60" />
-      </button>
+      {onDemo && (
+        <button
+          type="button"
+          onClick={onDemo}
+          className="w-full flex items-center justify-center gap-1.5 px-5 py-2 min-h-[40px] rounded-lg text-[11px] font-medium cursor-pointer text-slate-400 hover:text-slate-200 transition-colors bg-white/[0.03] hover:bg-white/[0.07] border border-white/5"
+        >
+          <span>Continue to Demo Mode</span>
+          <ChevronRight size={13} className="opacity-60" />
+        </button>
+      )}
     </div>
   );
 }
@@ -122,14 +124,18 @@ function CloserActions({
         >
           Email &amp; Password
         </button>
-        <span className="text-slate-700 select-none">·</span>
-        <button
-          type="button"
-          onClick={onDemo}
-          className="flex items-center gap-0.5 hover:text-slate-300 transition-colors cursor-pointer"
-        >
-          Demo Mode <ChevronRight size={10} className="opacity-60" />
-        </button>
+        {onDemo && (
+          <>
+            <span className="text-slate-700 select-none">·</span>
+            <button
+              type="button"
+              onClick={onDemo}
+              className="flex items-center gap-0.5 hover:text-slate-300 transition-colors cursor-pointer"
+            >
+              Demo Mode <ChevronRight size={10} className="opacity-60" />
+            </button>
+          </>
+        )}
       </div>
     </div>
   );

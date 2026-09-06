@@ -42,6 +42,10 @@ import { SectionHead, FleetMock, MonitorMock, SecurityMock, BackupMock, AgentMoc
    flip to true to restore the "Sign in with Passkey" buttons. */
 const SHOW_PASSKEY = false;
 
+/* Demo mode stays wired (onDismiss) but is not offered on this screen —
+   flip to true to restore the "Continue to Demo Mode" entry. */
+const SHOW_DEMO = false;
+
 /* ── Main Reveal Screen ── */
 export function RevealScreen({ onDismiss }) {
   const [reduced] = useState(() => prefersReducedMotion());
@@ -259,7 +263,7 @@ export function RevealScreen({ onDismiss }) {
     passkeyError,
     onPasskey: handlePasskeySignIn,
     onEmail: () => setShowAuthModal(true),
-    onDemo: onDismiss,
+    onDemo: SHOW_DEMO ? onDismiss : null,
   };
 
   return (
