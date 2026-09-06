@@ -45,12 +45,25 @@ function MatrixRain({ fps = 30, active = true, reduced = false, density = 0.55, 
     // console card) so the rain never fights real text. Rects refresh every
     // rendered frame (cheap: two selectors).
     let excludeRects = [];
+    // Glyphs inside an excluded rect dim to 10%, then ramp smoothly back to
+    // full over a 40px band around it — no hard edge, no glyphs hugging the
+    // card border at full brightness.
+    const EXCLUDE_MARGIN = 40;
     const dimAt = (x, y) => {
       let f = 1;
       for (let i = 0; i < excludeRects.length; i++) {
         const r = excludeRects[i];
-        if (x >= r.left - 6 && x <= r.right + 6 && y >= r.top - 6 && y <= r.bottom + 6) {
+        const insideX = x >= r.left && x <= r.right;
+        const insideY = y >= r.top && y <= r.bottom;
+        if (insideX && insideY) {
           f = Math.min(f, 0.1);
+          continue;
+        }
+        const dxIn = Math.max(r.left - x, x - r.right, 0);
+        const dyIn = Math.max(r.top - y, y - r.bottom, 0);
+        const dIn = Math.hypot(dxIn, dyIn);
+        if (dIn < EXCLUDE_MARGIN) {
+          f = Math.min(f, 0.1 + 0.9 * (dIn / EXCLUDE_MARGIN));
         }
       }
       return f;
