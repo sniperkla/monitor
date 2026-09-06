@@ -34,7 +34,7 @@ import { useIsTouch, useDocumentVisible } from './story/hooks';
 import { ScrambleTitle } from './console/ScrambleTitle';
 import { LiveUplink } from './console/LiveUplink';
 import { Statusline } from './console/Statusline';
-import { AuthActions } from './console/AuthActions';
+import { AuthActions, CloserActions } from './console/AuthActions';
 import { useScrollStory } from './story/useScrollStory';
 import { SectionHead, FleetMock, MonitorMock, SecurityMock, BackupMock, AgentMock } from './story/mocks';
 
@@ -575,7 +575,7 @@ export function RevealScreen({ onDismiss }) {
                 Sign in and your terminals, vault and fleet light up. Your first
                 server is sixty seconds away.
               </p>
-              <AuthActions {...authProps} />
+              <CloserActions {...authProps} />
             </div>
           </div>
         </section>
