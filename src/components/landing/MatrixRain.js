@@ -30,7 +30,7 @@ function MatrixRain({ fps = 30, active = true, reduced = false, density = 0.55, 
     if (!ctx) return undefined;
 
     const FS = 14; // glyph size / column width, CSS px
-    const TRAIL = 12; // pre-rendered tail length for freshly spawned columns
+    const TRAIL = 5; // visible tail length, in rows
     let W = 1;
     let H = 1;
     let rows = 1;
@@ -56,13 +56,13 @@ function MatrixRain({ fps = 30, active = true, reduced = false, density = 0.55, 
       return f;
     };
 
-    const drawGlyph = (c, row, bright, scale = 1) => {
+    const drawGlyph = (c, row, ch, bright, scale = 1) => {
       const y = row * FS;
       const f = dimAt(c.x, y) * scale;
       if (f <= 0.02) return;
       ctx.font = `${FS - 2}px ui-monospace, "JetBrains Mono", "Cascadia Mono", monospace`;
       ctx.fillStyle = bright ? `rgba(134,239,172,${(0.85 * f).toFixed(3)})` : `rgba(74,222,128,${(0.4 * f).toFixed(3)})`;
-      ctx.fillText(glyph(), c.x, y);
+      ctx.fillText(ch, c.x, y);
     };
 
     const resize = () => {
@@ -84,6 +84,7 @@ function MatrixRain({ fps = 30, active = true, reduced = false, density = 0.55, 
           x: cols.length * FS + FS / 2,
           row: rand(-rows * 0.5, rows),
           speed: rand(3.5, 9),
+          chars: new Map(), // row -> glyph; stable so redraws don't flicker
         };
         cols.push(col);
       }
@@ -92,10 +93,10 @@ function MatrixRain({ fps = 30, active = true, reduced = false, density = 0.55, 
     };
 
     const fadeStrip = (c) => {
-      // Erase a little of the column's own strip — dissolves the tail
-      // without painting anything over the layers behind.
+      // Erase the column's own strip fast enough that anything behind the
+      // redraw window is gone within ~0.5s — no lingering ghost letters.
       ctx.globalCompositeOperation = 'destination-out';
-      ctx.fillStyle = 'rgba(0,0,0,0.045)';
+      ctx.fillStyle = 'rgba(0,0,0,0.12)';
       ctx.fillRect(c.x - FS / 2, 0, FS, H);
       ctx.globalCompositeOperation = 'source-over';
     };
@@ -105,19 +106,31 @@ function MatrixRain({ fps = 30, active = true, reduced = false, density = 0.55, 
       const prev = Math.floor(c.row);
       c.row += c.speed * dt;
       const cur = Math.floor(c.row);
+
+      // Assign a stable glyph to each new row the head crosses.
       for (let r = prev + 1; r <= cur; r++) {
-        if (r >= 1 && r <= rows) drawGlyph(c, r, false);
+        if (r >= 1 && !c.chars.has(r)) c.chars.set(r, glyph());
       }
-      if (cur >= 1 && cur <= rows) {
-        // A fresh head brightens as its trail develops, so entering columns
-        // ease in instead of a lone glyph popping at the top edge.
-        const headScale = Math.min(1, cur / 4);
-        drawGlyph(c, cur, true, headScale);
+
+      // Redraw the fixed-length trail: bright head, linear falloff behind.
+      // Rows outside the window just decay via fadeStrip — no remnants.
+      const from = Math.max(1, cur - TRAIL);
+      for (let r = from; r <= cur; r++) {
+        if (r > rows) break;
+        const ch = c.chars.get(r) || glyph();
+        const d = cur - r;
+        drawGlyph(c, r, ch, d === 0, d === 0 ? Math.min(1, cur / 4) : Math.max(0, 1 - d * 0.18));
       }
+
+      if (c.chars.size > TRAIL + 24) {
+        for (const k of c.chars.keys()) if (k < cur - TRAIL - 8) c.chars.delete(k);
+      }
+
       if (cur > rows + 4) {
         // Continuous wall: respawn at the top immediately, no gaps.
         c.row = -rand(0, 6);
         c.speed = rand(3.5, 9);
+        c.chars.clear();
       }
     };
 
@@ -128,7 +141,9 @@ function MatrixRain({ fps = 30, active = true, reduced = false, density = 0.55, 
       const c = cols[i];
       const start = Math.max(1, Math.floor(c.row - TRAIL));
       for (let r = start; r <= Math.min(Math.floor(c.row), rows); r++) {
-        drawGlyph(c, r, r === Math.floor(c.row));
+        const ch = c.chars.has(r) ? c.chars.get(r) : glyph();
+        c.chars.set(r, ch);
+        drawGlyph(c, r, ch, r === Math.floor(c.row));
       }
     }
 
@@ -140,7 +155,7 @@ function MatrixRain({ fps = 30, active = true, reduced = false, density = 0.55, 
           const top = rand(1, Math.max(2, rows - 10));
           const len = rand(4, 12);
           for (let r = top; r < top + len && r <= rows; r++) {
-            drawGlyph(cols[i], r, r === top);
+            drawGlyph(cols[i], r, glyph(), r === top);
           }
         }
       };
