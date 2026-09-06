@@ -1,4 +1,4 @@
-const CACHE_NAME = 'webtop-monitor-v5';
+const CACHE_NAME = 'webtop-monitor-v6';
 const ASSETS_TO_CACHE = [
   '/',
   '/manifest.json',
