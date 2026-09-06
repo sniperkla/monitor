@@ -17,7 +17,7 @@ import { useEffect, useRef } from 'react';
  * Reduced motion: one static frame of dim columns, no loop.
  */
 
-const GLYPHS = 'アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホ0123456789ABCDEF$#@%&';
+const GLYPHS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
 
 function MatrixRain({ fps = 30, active = true, reduced = false, density = 0.55, exclude = '', className, style }) {
   const canvasRef = useRef(null);
@@ -56,9 +56,9 @@ function MatrixRain({ fps = 30, active = true, reduced = false, density = 0.55, 
       return f;
     };
 
-    const drawGlyph = (c, row, bright) => {
+    const drawGlyph = (c, row, bright, scale = 1) => {
       const y = row * FS;
-      const f = dimAt(c.x, y);
+      const f = dimAt(c.x, y) * scale;
       if (f <= 0.02) return;
       ctx.font = `${FS - 2}px ui-monospace, "JetBrains Mono", "Cascadia Mono", monospace`;
       ctx.fillStyle = bright ? `rgba(134,239,172,${(0.85 * f).toFixed(3)})` : `rgba(74,222,128,${(0.4 * f).toFixed(3)})`;
@@ -108,7 +108,12 @@ function MatrixRain({ fps = 30, active = true, reduced = false, density = 0.55, 
       for (let r = prev + 1; r <= cur; r++) {
         if (r >= 1 && r <= rows) drawGlyph(c, r, false);
       }
-      if (cur >= 1 && cur <= rows) drawGlyph(c, cur, true);
+      if (cur >= 1 && cur <= rows) {
+        // A fresh head brightens as its trail develops, so entering columns
+        // ease in instead of a lone glyph popping at the top edge.
+        const headScale = Math.min(1, cur / 4);
+        drawGlyph(c, cur, true, headScale);
+      }
       if (cur > rows + 4) {
         // Continuous wall: respawn at the top immediately, no gaps.
         c.row = -rand(0, 6);
