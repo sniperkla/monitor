@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
 import { logger } from '@/lib/logger';
+import { requireSession } from '@/lib/requireSession';
 
 function quote(str) {
   return `'${String(str).replace(/'/g, `'\\''`)}'`;
@@ -21,6 +22,11 @@ function quote(str) {
  * Body: { connectionId, remoteName, clientId, clientSecret, scope? }
  */
 export async function POST(req) {
+  // Defence in depth: these routes are also covered by the middleware
+  // session gate, but an explicit check keeps a matcher change from
+  // silently exposing remote-command endpoints.
+  const { error: authError } = await requireSession(req);
+  if (authError) return authError;
   try {
     const { connectionId, remoteName, clientId, clientSecret, scope = 'drive' } = await req.json();
 

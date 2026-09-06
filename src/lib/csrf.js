@@ -63,6 +63,14 @@ export const CSRF_EXEMPT_PATTERNS = [
   /^\/api\/deploy\/webhook(\/|$)/, // GitHub / Bitbucket (HMAC signature verified in-route)
   /^\/api\/deploy\/telegram(\/|$)/, // Telegram webhook
   /^\/api\/firewall\/agent-sync(\/|$)/, // installed monitor-agent (x-agent-token)
+
+  // Relay device pairing, steps 1 and 3. Called by local-relay.js / monitor-agent.js,
+  // which have no cookie to double-submit. Their only credential is the single-use
+  // 256-bit device code in the request body, and step 1 mints nothing at all.
+  // Step 2 (/api/relay/device/approve) is deliberately NOT exempt — it binds a device
+  // to an account, so it must stay behind the token.
+  /^\/api\/relay\/device\/code(\/|$)/,
+  /^\/api\/relay\/device\/token(\/|$)/,
 ];
 
 function getSecret() {

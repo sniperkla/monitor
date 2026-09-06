@@ -117,7 +117,21 @@ export async function POST(request) {
       status: 'success',
     });
 
-    return NextResponse.json({ success: true, data: decrypted });
+    // This is the only response in the app whose body is a plaintext SSH
+    // private key or password. Without an explicit no-store, a shared cache
+    // (corporate proxy, browser disk cache, CDN) may persist it — which turns a
+    // caching default into a credential-disclosure bug rather than a staleness
+    // bug. Every other route's worst case from caching is stale data; this one's
+    // is a live secret on someone else's disk.
+    return NextResponse.json(
+      { success: true, data: decrypted },
+      {
+        headers: {
+          'Cache-Control': 'no-store, no-cache, must-revalidate, private',
+          Pragma: 'no-cache',
+        },
+      },
+    );
   } catch (error) {
     await auditLog({
       req: request,

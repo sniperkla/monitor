@@ -41,6 +41,9 @@ import { getClientIp } from './clientIp.js';
  *    write must never be able to break a user's request.
  *  - Bounded: `detail` is truncated so a hostile payload cannot turn the audit
  *    collection into a memory-exhaustion vector.
+ *  - Redacting: values under secret-looking keys are replaced with `[redacted]`
+ *    rather than stored (see `SECRET_KEY_RE`). Enforced here, not left to the
+ *    caller's discretion.
  *  - TTL: 90 days, matching the pre-existing retention.
  */
 
@@ -90,19 +93,54 @@ function userAgent(req) {
   return get('user-agent') || null;
 }
 
+/**
+ * Key names whose VALUES must never reach the audit collection.
+ *
+ * The JSDoc on `auditLog()` has always said "NO secrets" in `detail`, but the
+ * module only enforced size — a caller passing `{ password: '...' }` was stored
+ * verbatim. That makes the audit trail, of all places, a credential store: the
+ * one collection an attacker with DB read would target first, and the one an
+ * operator is least likely to suspect.
+ *
+ * Matched as a substring rather than anchored, so `tokenIssueSecret`,
+ * `userApiKey`, `sshPassword` etc. are caught by the same rule. Deliberately
+ * broad — over-redacting costs a little forensic detail, under-redacting leaks
+ * credentials.
+ */
+const SECRET_KEY_RE =
+  /(password|passwd|pwd|secret|token|api[-_]?key|apikey|authorization|bearer|cookie|credential|private[-_]?key|privatekey|passphrase|otp|recovery[-_]?code|session[-_]?id)/i;
+
+/**
+ * Same rule applied to an already-serialised snapshot, so secrets nested inside
+ * an object/array value are caught too — `sanitizeDetail` stringifies those, and
+ * key-name matching at the top level alone would walk straight past them.
+ */
+function redactSerialized(json) {
+  return json.replace(
+    /"([A-Za-z0-9_.\-]*?(?:password|passwd|pwd|secret|token|api[-_]?key|apikey|authorization|bearer|cookie|credential|private[-_]?key|privatekey|passphrase|otp|recovery[-_]?code|session[-_]?id)[A-Za-z0-9_.\-]*?)"\s*:\s*"[^"]*"/gi,
+    '"$1":"[redacted]"',
+  );
+}
+
 /** Truncate a JSON-serialisable detail object so it cannot bloat the cluster. */
 function sanitizeDetail(detail) {
   if (!detail || typeof detail !== 'object') return {};
   const out = {};
   for (const [key, value] of Object.entries(detail)) {
     if (value === undefined) continue;
+    // Secret-looking key: drop the value regardless of type.
+    if (SECRET_KEY_RE.test(key)) {
+      out[key] = '[redacted]';
+      continue;
+    }
     if (value === null || ['string', 'number', 'boolean'].includes(typeof value)) {
       out[key] = value;
       continue;
     }
-    // Arrays/objects: keep a compact JSON snapshot, capped.
+    // Arrays/objects: keep a compact JSON snapshot, capped, with any nested
+    // secret-bearing keys scrubbed out of the snapshot itself.
     try {
-      out[key] = JSON.stringify(value).slice(0, 512);
+      out[key] = redactSerialized(JSON.stringify(value).slice(0, 512));
     } catch {
       out[key] = '[unserialisable]';
     }
@@ -124,7 +162,9 @@ function sanitizeDetail(detail) {
  *                                 'admin.supporters.grant', 'vault.unlock'
  * @param {string}  [p.userId]     acting user id
  * @param {string}  [p.userEmail]  acting user email
- * @param {object}  [p.detail]     small JSON-serialisable context — NO secrets
+ * @param {object}  [p.detail]     small JSON-serialisable context. Values under
+ *                                 secret-looking keys are redacted automatically,
+ *                                 but do not rely on that — don't pass secrets.
  * @param {string}  [p.status]     'success' | 'failure'
  * @param {string}  [p.target]     what the action acted on (id, never a secret)
  */

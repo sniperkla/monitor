@@ -12,7 +12,11 @@
  * 
  * First run:  node local-relay.js --server URL --token TOKEN
  * Install:    node local-relay.js --install --server URL --token TOKEN
+ * Pair:       node local-relay.js --pair --server URL
  * Uninstall:  node local-relay.js --uninstall
+ *
+ * --pair is the recommended path. The token is delivered out of band and never
+ * appears in argv, the shell history, or the service definition.
  */
 'use strict';
 
@@ -99,7 +103,101 @@ function loadConfig() {
   return {};
 }
 function saveConfig(cfg) {
-  try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2)); } catch (e) { console.warn('⚠ Config save failed:', e.message); }
+  try {
+    // 0600 — this file holds the relay token. `mode` only applies when the file
+    // is created, so chmod afterwards for configs written by older versions.
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2), { mode: 0o600 });
+    try { fs.chmodSync(CONFIG_PATH, 0o600); } catch (_) {}
+  } catch (e) { console.warn('⚠ Config save failed:', e.message); }
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Device pairing. Asks the server for a device code, prints a short code for
+ * the user to approve in the browser, then polls until the token arrives.
+ *
+ * The point of this is that the install command carries no secret. Compare:
+ *
+ *   --install --token <365_DAY_TOKEN>   token in argv, shell history, ps output
+ *   --pair                              token arrives over the wire, written 0600
+ *
+ * @param {object} o
+ * @param {string} o.client  identifier reported to the server
+ * @param {string} o.scope   'relay' (supporter-gated) | 'agent'
+ * @returns {Promise<string>} the relay token
+ */
+async function pairAndGetToken({ client, scope }) {
+  const base = String(SERVER || '').replace(/\/+$/, '');
+  if (!base) throw new Error('No --server URL to pair against.');
+
+  const post = async (p, body) => {
+    const res = await fetch(base + p, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {}),
+    });
+    let data = {};
+    try { data = await res.json(); } catch (_) {}
+    return { status: res.status, data };
+  };
+
+  let init;
+  try {
+    init = await post('/api/relay/device/code', {
+      client,
+      label: args.label || os.hostname(),
+      scope,
+    });
+  } catch (e) {
+    throw new Error(`Could not reach ${base} — ${e.message}`);
+  }
+
+  if (!init.data || !init.data.deviceCode) {
+    throw new Error((init.data && init.data.error) || `Pairing failed (HTTP ${init.status})`);
+  }
+
+  const { deviceCode, userCode, expiresIn, interval } = init.data;
+  const mins = Math.max(1, Math.round((expiresIn || 600) / 60));
+
+  const W = 46;
+  const pad = (s) => String(s) + ' '.repeat(Math.max(0, W - String(s).length));
+  const row = (s) => `  │${pad(s)}│`;
+
+  console.log('');
+  console.log(`  ┌${'─'.repeat(W)}┐`);
+  console.log(row(''));
+  console.log(row('    Approve this device in Settings'));
+  console.log(row(''));
+  console.log(row(`          >>>   ${userCode}   <<<`));
+  console.log(row(''));
+  console.log(`  └${'─'.repeat(W)}┘`);
+  console.log('');
+  console.log(`  Settings → Local Relay → enter the code above.`);
+  console.log(`  Waiting for approval (this code expires in ${mins} min)`);
+
+  const deadline = Date.now() + (expiresIn || 600) * 1000;
+  const pollMs = Math.max(2000, (interval || 5) * 1000);
+
+  while (Date.now() < deadline) {
+    await sleep(pollMs);
+    let r;
+    try {
+      r = await post('/api/relay/device/token', { deviceCode });
+    } catch (_) {
+      process.stdout.write('.');
+      continue; // transient network blip — keep waiting
+    }
+    if (r.status === 200 && r.data && r.data.token) {
+      console.log('\n✅ Approved — installing.');
+      return r.data.token;
+    }
+    if (r.status === 410) {
+      throw new Error((r.data && r.data.error) || 'Pairing expired — run the command again.');
+    }
+    process.stdout.write('.');
+  }
+  throw new Error('Timed out waiting for approval. Run the command again.');
 }
 
 const savedConfig = loadConfig();
@@ -114,25 +212,46 @@ const NODE_BIN = process.execPath;
 const SCRIPT = path.resolve(__filename);
 const INSTALLED_SCRIPT = path.join(INSTALL_DIR, 'local-relay.js');
 
-if (args.install) {
-  if (!SERVER || !TOKEN) { console.error('--server and --token required'); process.exit(1); }
-  saveConfig({ server: SERVER, token: TOKEN, name: RELAY_NAME });
-  ensureInstalledScript();
-  if (PLATFORM === 'darwin') installMacOS();
-  else if (PLATFORM === 'linux') installLinux();
-  else if (PLATFORM === 'win32') installWindows();
-  console.log('✅ Relay agent installed as service');
-
-  // Self-cleanup: remove temporary installer script if running outside INSTALL_DIR
-  try {
-    if (path.resolve(SCRIPT) !== path.resolve(INSTALLED_SCRIPT) && fs.existsSync(SCRIPT)) {
-      fs.unlinkSync(SCRIPT);
+if (args.install || args.pair) {
+  // Async IIFE: pairing has to await network round trips. connect() is guarded
+  // at the bottom of the file so it cannot start underneath this.
+  (async () => {
+    if (!SERVER) {
+      console.error('❌ --server URL is required.');
+      process.exit(1);
     }
-  } catch (_) {}
 
-  process.exit(0);
-}
-if (args.uninstall) {
+    // Pairing delivers the token out of band, so it never reaches argv, the
+    // shell history, or the service definition.
+    if (!TOKEN) {
+      try {
+        TOKEN = await pairAndGetToken({
+          client: 'local-relay',
+          scope: args.scope === 'agent' ? 'agent' : 'relay',
+        });
+      } catch (e) {
+        console.error(`\n❌ Pairing failed: ${e.message}`);
+        process.exit(1);
+      }
+    }
+
+    saveConfig({ server: SERVER, token: TOKEN, name: RELAY_NAME });
+    ensureInstalledScript();
+    if (PLATFORM === 'darwin') installMacOS();
+    else if (PLATFORM === 'linux') installLinux();
+    else if (PLATFORM === 'win32') installWindows();
+    console.log('✅ Relay agent installed as service');
+
+    // Self-cleanup: remove temporary installer script if running outside INSTALL_DIR
+    try {
+      if (path.resolve(SCRIPT) !== path.resolve(INSTALLED_SCRIPT) && fs.existsSync(SCRIPT)) {
+        fs.unlinkSync(SCRIPT);
+      }
+    } catch (_) {}
+
+    process.exit(0);
+  })();
+} else if (args.uninstall) {
   if (PLATFORM === 'darwin') uninstallMacOS();
   else if (PLATFORM === 'linux') uninstallLinux();
   else if (PLATFORM === 'win32') uninstallWindows();
@@ -471,6 +590,15 @@ async function handleWebuiForward(msg) {
   if (!forwardId || !connection) throw new Error('webui:forward missing fields');
   if (webuiGateways.has(forwardId)) {
     console.log(`🔁 [Relay WebUI] gateway already running for ${forwardId}`);
+    // Still ack: the monitor is waiting for the port before it answers the
+    // browser, and "already running" is the common case (second click, or a
+    // page reload). Without this the request would sit until it timed out.
+    try {
+      const existing = webuiGateways.get(forwardId);
+      if (activeWs && activeWs.readyState === 1) {
+        activeWs.send(JSON.stringify({ type: 'webui:ready', forwardId, localPort: existing.port, remotePort: existing.remotePort }));
+      }
+    } catch (_) { /* best effort */ }
     return;
   }
   const gw = {
@@ -511,6 +639,18 @@ async function handleWebuiForward(msg) {
   });
   webuiGateways.set(forwardId, gw);
   console.log(`🌐 [Relay WebUI] gateway live at http://127.0.0.1:${gw.port} (direct transfer, no central middleman)`);
+  // Report the port we ACTUALLY bound. The monitor asks for 18790, but if a
+  // gateway for another connection already holds it we silently walk up to
+  // 18791, 18792… Without this ack the monitor keeps telling the browser
+  // "18790", so opening connection B's Web UI would show connection A's
+  // gateway — wrong nanobot instance, and usually a 401 because that
+  // instance's bootstrap secret doesn't match. Always send, even when the
+  // port matches, so the monitor never has to time out waiting.
+  try {
+    if (activeWs && activeWs.readyState === 1) {
+      activeWs.send(JSON.stringify({ type: 'webui:ready', forwardId, localPort: gw.port, remotePort: gw.remotePort }));
+    }
+  } catch (_) { /* best effort */ }
 }
 
 async function handleWebuiHttp(gw, req, res) {
@@ -3226,13 +3366,29 @@ function handleDockerCommand(ws, msg) {
 function shellQuote(s) { return `'${String(s).replace(/'/g, `'\\''`)}'`; }
 function xmlEscape(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
+/**
+ * Arguments baked into the service definition (plist / unit / startup launcher).
+ *
+ * When the token came from --pair it lives only in CONFIG_PATH at 0600, so the
+ * service starts with no arguments and reads the config at boot. Copying the
+ * token into a LaunchAgent plist, a systemd unit, or a VBS launcher would park
+ * it in a world-readable file — exactly the leak pairing exists to close.
+ *
+ * With an explicit --token on the command line we keep the previous behaviour,
+ * so existing one-liners and scripts are unaffected.
+ */
+function serviceArgs() {
+  if (args.token) return [NODE_BIN, INSTALLED_SCRIPT, '--server', SERVER, '--token', TOKEN];
+  return [NODE_BIN, INSTALLED_SCRIPT];
+}
+
 function installMacOS() {
   const plistDir = path.join(os.homedir(), 'Library', 'LaunchAgents');
   const plistPath = path.join(plistDir, SVC_ID + '.plist');
   const logFile = path.join(os.homedir(), 'Library', 'Logs', 'ssh-monitor-relay.log');
   fs.mkdirSync(plistDir, { recursive: true });
   const LT = '<', GT = '>';
-  const argTags = [NODE_BIN, INSTALLED_SCRIPT, '--server', SERVER, '--token', TOKEN]
+  const argTags = serviceArgs()
     .map(a => `    ${LT}string${GT}${xmlEscape(a)}${LT}/string${GT}`).join('\n');
   const xml = [
     `<?xml version="1.0" encoding="UTF-8"?>`,
@@ -3276,7 +3432,7 @@ function installLinux() {
   const unit = [
     '[Unit]', `Description=${SVC_NAME}`, 'After=network.target', '',
     '[Service]', 'Type=simple',
-    `ExecStart=${shellQuote(NODE_BIN)} ${shellQuote(INSTALLED_SCRIPT)} --server ${shellQuote(SERVER)} --token ${shellQuote(TOKEN)}`,
+    `ExecStart=${serviceArgs().map(shellQuote).join(' ')}`,
     'Restart=always', 'RestartSec=5', '',
     '[Install]', 'WantedBy=default.target',
   ].join('\n') + '\n';
@@ -3309,9 +3465,14 @@ function installWindows() {
     spawnSync('powershell', ['-Command', "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*local-relay.js*' -and $_.ProcessId -ne " + process.pid + " } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"], { stdio: 'ignore' });
   } catch (_) {}
 
+  // Each argument is emitted inside its own pair of quotes. Inside a VBS string
+  // literal a doubled quote means one literal quote.
+  const vbsCmd = serviceArgs()
+    .map((s) => '""' + String(s).replace(/"/g, '""') + '""')
+    .join(' ');
   const vbsContent = [
     'Set WshShell = CreateObject("WScript.Shell")',
-    `WshShell.Run """" & "${NODE_BIN.replace(/"/g, '""')}" & """ """" & "${INSTALLED_SCRIPT.replace(/"/g, '""')}" & """ --server """ & "${SERVER.replace(/"/g, '""')}" & """ --token """ & "${TOKEN.replace(/"/g, '""')}" & """", 0, False`,
+    `WshShell.Run "${vbsCmd}", 0, False`,
   ].join('\r\n');
 
   try {
@@ -3339,4 +3500,7 @@ function uninstallWindows() {
 }
 
 // ── Start ─────────────────────────────────────────────────────────────────
-connect();
+// --install / --pair run an async IIFE above. Without this guard the module
+// would fall through and open a relay connection while pairing is still
+// waiting for the user to approve.
+if (!args.install && !args.pair) connect();

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
 import { logger } from '@/lib/logger';
+import { requireSession } from '@/lib/requireSession';
 
 function parseCronHuman(cronExpr) {
   const parts = cronExpr.trim().split(/\s+/);
@@ -19,6 +20,11 @@ function parseCronHuman(cronExpr) {
 }
 
 export async function GET(req) {
+  // Defence in depth: these routes are also covered by the middleware
+  // session gate, but an explicit check keeps a matcher change from
+  // silently exposing remote-command endpoints.
+  const { error: authError } = await requireSession(req);
+  if (authError) return authError;
   try {
     const { searchParams } = new URL(req.url);
     const connectionId = searchParams.get('connectionId');
@@ -173,6 +179,11 @@ function bashSingleQuote(str) {
 }
 
 export async function POST(req) {
+  // Defence in depth: these routes are also covered by the middleware
+  // session gate, but an explicit check keeps a matcher change from
+  // silently exposing remote-command endpoints.
+  const { error: authError } = await requireSession(req);
+  if (authError) return authError;
   try {
     const { connectionId, schedule, action, source, target, projectName, options = {} } = await req.json();
     const reqProjectName = projectName || '';
@@ -355,6 +366,11 @@ rm -f "$TMP_CRON"
 }
 
 export async function PUT(req) {
+  // Defence in depth: these routes are also covered by the middleware
+  // session gate, but an explicit check keeps a matcher change from
+  // silently exposing remote-command endpoints.
+  const { error: authError } = await requireSession(req);
+  if (authError) return authError;
   try {
     const { connectionId, oldRawLine, schedule, action, source, target, options = {} } = await req.json();
 
@@ -519,6 +535,11 @@ rm -f "$TMP_CRON"
 }
 
 export async function DELETE(req) {
+  // Defence in depth: these routes are also covered by the middleware
+  // session gate, but an explicit check keeps a matcher change from
+  // silently exposing remote-command endpoints.
+  const { error: authError } = await requireSession(req);
+  if (authError) return authError;
   try {
     const { searchParams } = new URL(req.url);
     const connectionId = searchParams.get('connectionId');

@@ -4,6 +4,15 @@ on:
   push:
     branches: [main]
   pull_request:
+  # A push-only audit misses CVEs disclosed while the tree is untouched — which
+  # is most of the time for a small repo. Weekly sweep catches those.
+  schedule:
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
+
+# Least privilege: this workflow only reads the repo and reports status.
+permissions:
+  contents: read
 
 jobs:
   lint-and-test:
@@ -17,3 +26,30 @@ jobs:
       - run: npm ci
       - run: npm run lint -- --quiet
       - run: npm test
+
+  # Dependency vulnerability gate.
+  #
+  # Runs in its own job so a lint failure cannot mask it, and vice versa.
+  # Fails on high/critical only — moderate advisories in build-time-only
+  # packages would otherwise make the pipeline a permanent red.
+  #
+  # If a transitive high lands with no fixed version available upstream, this
+  # will block. That is deliberate: the honest options are then to pin an
+  # override, drop the dependency, or accept the risk in writing. Silently
+  # lowering the threshold is how a gate becomes decoration.
+  dependency-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: npm audit (high and above)
+        run: npm audit --audit-level=high
+      # Informational: dev-only advisories still get surfaced in the job log
+      # without failing the build.
+      - name: npm audit (full report, non-blocking)
+        if: always()
+        run: npm audit || true

@@ -2,8 +2,14 @@ import { NextResponse } from 'next/server';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
 import { logger } from '@/lib/logger';
 import { shellQuote, shellInt } from '@/utils/shellQuote';
+import { requireSession } from '@/lib/requireSession';
 
 export async function POST(req) {
+  // Defence in depth: these routes are also covered by the middleware
+  // session gate, but an explicit check keeps a matcher change from
+  // silently exposing remote-command endpoints.
+  const { error: authError } = await requireSession(req);
+  if (authError) return authError;
   try {
     const { connectionId } = await req.json();
 
@@ -131,6 +137,11 @@ export async function POST(req) {
 }
 
 export async function GET(req) {
+  // Defence in depth: these routes are also covered by the middleware
+  // session gate, but an explicit check keeps a matcher change from
+  // silently exposing remote-command endpoints.
+  const { error: authError } = await requireSession(req);
+  if (authError) return authError;
   try {
     const { searchParams } = new URL(req.url);
     const connectionId = searchParams.get('connectionId');

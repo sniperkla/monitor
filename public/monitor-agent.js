@@ -9,8 +9,17 @@
  * 
  * Usage:
  *   node monitor-agent.js --server https://your-server.com --token <TOKEN> [--name <NAME>]
+ *   node monitor-agent.js --pair --server https://your-server.com
+ *   node monitor-agent.js --claim <CODE> --server https://your-server.com
  *   node monitor-agent.js --install --server https://your-server.com --token <TOKEN>
  *   node monitor-agent.js --uninstall
+ *
+ * --pair prints a short code to approve in the browser.
+ * --claim consumes a single-use code minted by the Agent Setup Wizard, so an
+ * SSH-driven install needs no interaction at all.
+ *
+ * Both keep the token off the command line and out of the service definition —
+ * it is written to a 0600 config file and read back at boot.
  */
 
 'use strict';
@@ -35,12 +44,122 @@ function getArg(flag, fallback = null) {
   return idx !== -1 && args[idx + 1] ? args[idx + 1] : fallback;
 }
 
-const SERVER = (getArg('--server') || process.env.MONITOR_SERVER || '').replace(/\/$/, '');
-const TOKEN = getArg('--token') || process.env.MONITOR_TOKEN || '';
-const AGENT_NAME = getArg('--name') || process.env.AGENT_NAME || os.hostname();
-const CONNECTION_ID = getArg('--connection-id') || process.env.MONITOR_CONNECTION_ID || '';
+// ── Config persistence (holds the relay token — keep it 0600) ──
+const CONFIG_DIR = path.join(os.homedir(), '.config', 'server-monitor-agent');
+const CONFIG_PATH = path.join(CONFIG_DIR, 'config.json');
+function loadConfig() {
+  try { return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')); } catch (_) { return {}; }
+}
+function saveConfig(cfg) {
+  try {
+    fs.mkdirSync(CONFIG_DIR, { recursive: true });
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2), { mode: 0o600 });
+    // `mode` applies only when the file is created; chmod covers configs
+    // written by older versions of this agent.
+    try { fs.chmodSync(CONFIG_PATH, 0o600); } catch (_) {}
+  } catch (e) { console.warn('⚠ Config save failed:', e.message); }
+}
+const savedConfig = loadConfig();
+
+let SERVER = (getArg('--server') || process.env.MONITOR_SERVER || savedConfig.server || '').replace(/\/$/, '');
+let TOKEN = getArg('--token') || process.env.MONITOR_TOKEN || savedConfig.token || '';
+const AGENT_NAME = getArg('--name') || process.env.AGENT_NAME || savedConfig.name || os.hostname();
+let CONNECTION_ID = getArg('--connection-id') || process.env.MONITOR_CONNECTION_ID || savedConfig.connectionId || '';
 const IS_INSTALL = args.includes('--install');
+const IS_PAIR = args.includes('--pair');
+const CLAIM_CODE = getArg('--claim') || process.env.MONITOR_CLAIM || '';
 const IS_UNINSTALL = args.includes('--uninstall');
+// --pair and --claim both imply install: there is no reason to fetch a token
+// and then not install the service that uses it.
+const IS_INSTALLING = IS_INSTALL || IS_PAIR || Boolean(CLAIM_CODE);
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ── Device pairing ───────────────────────────────────────────────────────
+// The token is fetched over the wire and written straight to a 0600 config, so
+// it never sits in argv (readable via `ps` by any local user), in shell history,
+// or in the systemd unit / LaunchAgent plist — all world-readable.
+async function postJson(pathname, body) {
+  const res = await fetch(SERVER + pathname, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body || {}),
+  });
+  let data = {};
+  try { data = await res.json(); } catch (_) {}
+  return { status: res.status, data };
+}
+
+async function pairAndGetToken() {
+  if (!SERVER) throw new Error('--server URL is required to pair.');
+
+  let init;
+  try {
+    init = await postJson('/api/relay/device/code', {
+      client: 'server-agent',
+      label: AGENT_NAME,
+      scope: 'agent',
+    });
+  } catch (e) {
+    throw new Error(`Could not reach ${SERVER} — ${e.message}`);
+  }
+  if (!init.data || !init.data.deviceCode) {
+    throw new Error((init.data && init.data.error) || `Pairing failed (HTTP ${init.status})`);
+  }
+
+  const { deviceCode, userCode, expiresIn, interval } = init.data;
+  const mins = Math.max(1, Math.round((expiresIn || 600) / 60));
+
+  const W = 46;
+  const pad = (s) => String(s) + ' '.repeat(Math.max(0, W - String(s).length));
+  const row = (s) => `  │${pad(s)}│`;
+
+  console.log('');
+  console.log(`  ┌${'─'.repeat(W)}┐`);
+  console.log(row(''));
+  console.log(row('    Approve this server in the wizard'));
+  console.log(row(''));
+  console.log(row(`          >>>   ${userCode}   <<<`));
+  console.log(row(''));
+  console.log(`  └${'─'.repeat(W)}┘`);
+  console.log('');
+  console.log(`  Waiting for approval (code expires in ${mins} min)`);
+
+  const deadline = Date.now() + (expiresIn || 600) * 1000;
+  const pollMs = Math.max(2000, (interval || 5) * 1000);
+
+  while (Date.now() < deadline) {
+    await sleep(pollMs);
+    let r;
+    try {
+      r = await postJson('/api/relay/device/token', { deviceCode });
+    } catch (_) {
+      process.stdout.write('.');
+      continue; // transient network blip — keep waiting
+    }
+    if (r.status === 200 && r.data && r.data.token) {
+      console.log('\n✅ Approved — installing.');
+      return r.data.token;
+    }
+    if (r.status === 410) {
+      throw new Error((r.data && r.data.error) || 'Pairing expired — run the command again.');
+    }
+    process.stdout.write('.');
+  }
+  throw new Error('Timed out waiting for approval. Run the command again.');
+}
+
+async function claimWithCode(code) {
+  if (!SERVER) throw new Error('--server URL is required to claim an install code.');
+  try {
+    const r = await postJson('/api/relay/device/token', { deviceCode: code });
+    if (r.status === 200 && r.data && r.data.token) return r.data.token;
+    throw new Error((r.data && r.data.error) || `Could not claim the install code (HTTP ${r.status}).`);
+  } catch (e) {
+    if (e && /^Could not claim/.test(e.message || '')) throw e;
+    throw new Error(`Could not reach ${SERVER} — ${e.message}`);
+  }
+}
 
 // ── Service Installation / Uninstallation ──
 if (IS_UNINSTALL) {
@@ -48,29 +167,46 @@ if (IS_UNINSTALL) {
   process.exit(0);
 }
 
-if (IS_INSTALL) {
-  if (!SERVER || !TOKEN) {
-    console.error('❌ Error: --server and --token are required for --install');
-    process.exit(1);
-  }
-  installService();
-  process.exit(0);
-}
+if (IS_INSTALLING) {
+  // Async IIFE: pairing awaits network round trips. The agent loop at the
+  // bottom of this file is guarded so it cannot start underneath this.
+  (async () => {
+    if (!SERVER) {
+      console.error('❌ Error: --server is required.');
+      process.exit(1);
+    }
 
-if (!SERVER || !TOKEN) {
-  console.log(`
+    if (!TOKEN) {
+      try {
+        TOKEN = CLAIM_CODE ? await claimWithCode(CLAIM_CODE) : await pairAndGetToken();
+      } catch (e) {
+        console.error(`\n❌ ${e.message}`);
+        process.exit(1);
+      }
+      // Saved before installService() so the service can boot with no secrets
+      // in its definition.
+      saveConfig({ server: SERVER, token: TOKEN, name: AGENT_NAME, connectionId: CONNECTION_ID });
+    }
+
+    installService();
+    process.exit(0);
+  })();
+} else {
+  if (!SERVER || !TOKEN) {
+    console.log(`
 ⚡ Server Monitor Telemetry Agent
 
 Usage:
   node monitor-agent.js --server <URL> --token <TOKEN> [--name <NAME>]
+  node monitor-agent.js --pair --server <URL>
+  node monitor-agent.js --claim <CODE> --server <URL>
   node monitor-agent.js --install --server <URL> --token <TOKEN>
   node monitor-agent.js --uninstall
   `);
-  process.exit(1);
-}
+    process.exit(1);
+  }
 
-// ── Ephemeral Execution: self-delete script file from disk to prevent reverse-engineering ──
-if (!IS_INSTALL && !IS_UNINSTALL) {
+  // ── Ephemeral Execution: self-delete script file from disk to prevent reverse-engineering ──
   try {
     const currentScript = path.resolve(__filename);
     if (fs.existsSync(currentScript) && !currentScript.includes('.config/server-monitor-agent')) {
@@ -79,37 +215,64 @@ if (!IS_INSTALL && !IS_UNINSTALL) {
   } catch (_) {}
 }
 
+function xmlEscape(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
 function installService() {
   const platform = os.platform();
   const nodeBin = process.execPath;
 
   console.log(`📦 Installing ${SVC_NAME}...`);
 
-  if (platform === 'linux') {
-    const appDir = path.join(os.homedir(), '.config', 'server-monitor-agent');
-    const unitDir = path.join(os.homedir(), '.config', 'systemd', 'user');
-    const secureScriptPath = path.join(appDir, '.agent.js');
-    const unitPath = path.join(unitDir, `${SVC_ID}.service`);
+  const appDir = path.join(os.homedir(), '.config', 'server-monitor-agent');
+  const secureScriptPath = path.join(appDir, '.agent.js');
 
-    fs.mkdirSync(appDir, { recursive: true });
-    fs.mkdirSync(unitDir, { recursive: true });
+  fs.mkdirSync(appDir, { recursive: true });
 
-    // Copy script to secure hidden location and remove current installer script
-    try {
+  // Copy script to secure hidden location and remove current installer script
+  try {
+    if (path.resolve(__filename) !== secureScriptPath) {
       fs.copyFileSync(path.resolve(__filename), secureScriptPath);
       fs.chmodSync(secureScriptPath, 0o600);
-      if (path.resolve(__filename) !== secureScriptPath && fs.existsSync(__filename)) {
-        fs.unlinkSync(__filename);
-      }
-    } catch (_) {}
+    }
+    if (path.resolve(__filename) !== secureScriptPath && fs.existsSync(__filename)) {
+      fs.unlinkSync(__filename);
+    }
+  } catch (_) {}
 
+  /**
+   * Arguments baked into the service definition (systemd unit / LaunchAgent plist).
+   *
+   * When the token came from --pair or --claim it lives only in the 0600 config
+   * file, so the service starts with no arguments and reads the config at boot.
+   * Mirroring the token into a unit or a plist would leave it world-readable —
+   * exactly the leak pairing exists to close.
+   *
+   * With an explicit --token on the command line we keep the previous behaviour,
+   * so existing one-liners and scripts are unaffected.
+   */
+  const serviceArgs = () => {
+    if (!getArg('--token')) return [nodeBin, secureScriptPath];
+    const a = [nodeBin, secureScriptPath, '--server', SERVER, '--token', TOKEN, '--name', AGENT_NAME];
+    if (CONNECTION_ID) a.push('--connection-id', CONNECTION_ID);
+    return a;
+  };
+
+  if (platform === 'linux') {
+    const unitDir = path.join(os.homedir(), '.config', 'systemd', 'user');
+    const unitPath = path.join(unitDir, `${SVC_ID}.service`);
+
+    fs.mkdirSync(unitDir, { recursive: true });
+
+    const systemdQuote = (s) => `"${String(s).replace(/"/g, '\\"')}"`;
     const unitContent = `[Unit]
 Description=${SVC_NAME}
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=${nodeBin} ${secureScriptPath} --server "${SERVER}" --token "${TOKEN}" --name "${AGENT_NAME}"${CONNECTION_ID ? ` --connection-id "${CONNECTION_ID}"` : ''}
+ExecStart=${serviceArgs().map(systemdQuote).join(' ')}
 Restart=always
 RestartSec=3
 
@@ -130,6 +293,14 @@ WantedBy=default.target
     const plistPath = path.join(plistDir, `com.monitor.${SVC_ID}.plist`);
     fs.mkdirSync(plistDir, { recursive: true });
 
+    // NOTE: this previously referenced an undefined `scriptPath`, which wrote
+    // the literal string "undefined" as the program path and left the agent
+    // unable to start on macOS. It now points at secureScriptPath, matching
+    // the Linux branch.
+    const argTags = serviceArgs()
+      .map((a) => `    <string>${xmlEscape(a)}</string>`)
+      .join('\n');
+
     const plistContent = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -138,14 +309,7 @@ WantedBy=default.target
   <string>com.monitor.${SVC_ID}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${nodeBin}</string>
-    <string>${scriptPath}</string>
-    <string>--server</string>
-    <string>${SERVER}</string>
-    <string>--token</string>
-    <string>${TOKEN}</string>
-    <string>--name</string>
-    <string>${AGENT_NAME}</string>
+${argTags}
   </array>
   <key>RunAtLoad</key>
   <true/>
@@ -690,4 +854,7 @@ function connect() {
 }
 
 // Start agent loop
-connect();
+// --install / --pair run an async IIFE above. Without this guard the module
+// would fall through and open a telemetry connection while pairing is still
+// waiting for approval.
+if (!IS_INSTALLING) connect();

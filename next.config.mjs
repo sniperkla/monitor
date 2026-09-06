@@ -23,9 +23,14 @@ const nextConfig = {
           { key: 'X-Frame-Options', value: 'DENY' },
           { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
           { key: 'X-Robots-Tag', value: 'noai, noimageai' },
-          // Legacy XSS auditor. Ignored by modern browsers, kept for the ones
-          // that still honour it. CSP is the real control.
-          { key: 'X-XSS-Protection', value: '1; mode=block' },
+          // Legacy XSS auditor — explicitly DISABLED (`0`), not just omitted.
+          // Omitting the header leaves browsers that still default the auditor
+          // ON running it, and the auditor is itself an attack surface (it can
+          // be tricked into blocking legitimate scripts and its heuristics have
+          // leaked data). Chrome/Edge/Firefox/Safari have all removed it. CSP
+          // is the real control and is set in src/proxy.js with a per-request
+          // nonce. Keep this in sync with the same header in server.js.
+          { key: 'X-XSS-Protection', value: '0' },
           { key: 'Strict-Transport-Security', value: 'max-age=63072000; includeSubDomains; preload' },
           // NOTE: Content-Security-Policy is deliberately absent here.
           // src/proxy.js (middleware) sets it with a per-request nonce and a
@@ -33,7 +38,7 @@ const nextConfig = {
           // as an intersection and undo the nonce hardening.
           {
             key: 'Permissions-Policy',
-            value: 'camera=(), microphone=(), geolocation=(), payment=()'
+            value: 'camera=(), microphone=(), geolocation=(), payment=(), interest-cohort=()'
           },
           // ── Cross-origin isolation / resource containment ─────────────────
           // 'same-origin-allow-popups' rather than 'same-origin': the Google

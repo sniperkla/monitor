@@ -107,9 +107,12 @@ test('self-authenticating bypass is limited to passkey login', () => {
   // Passkey auth must reach its own handler while signed out — but "signed out
   // route that skips the gate" is a dangerous thing to leave unbounded. The
   // list must stay a short literal of WebAuthn paths.
+  // Ends at the NEXT declaration, not at `function isPublicPath`. Slicing to
+  // the function boundary would swallow DEVICE_PAIRING_PATHS, which is a
+  // separate allowlist with different callers and its own test below.
   const block = proxy.slice(
     proxy.indexOf('const SELF_AUTHENTICATING_PATHS'),
-    proxy.indexOf('function isPublicPath')
+    proxy.indexOf('const DEVICE_PAIRING_PATHS')
   );
   const entries = [...block.matchAll(/"(\/api\/[^"]+)"/g)].map((m) => m[1]);
   assert.ok(entries.length > 0, 'the allowlist must not be empty (test is stale if it is)');
@@ -118,6 +121,29 @@ test('self-authenticating bypass is limited to passkey login', () => {
     assert.ok(p.startsWith('/api/auth/webauthn/authenticate'),
       `non-passkey path in the self-authenticating allowlist: ${p}`);
   }
+});
+
+test('device-pairing bypass is limited to the relay pairing endpoints', () => {
+  // local-relay.js --pair calls these with no session and no API key: the
+  // caller is a freshly downloaded script on a machine that has never
+  // authenticated here. That makes this the widest gate bypass in the proxy,
+  // so it is pinned to an exact list rather than a prefix — a stray
+  // /api/relay/device/* pattern would also exempt /api/relay/device/invite,
+  // which DOES require a signed-in user to mint the code in the first place.
+  const block = proxy.slice(
+    proxy.indexOf('const DEVICE_PAIRING_PATHS'),
+    proxy.indexOf('function isPublicPath')
+  );
+  const entries = [...block.matchAll(/"(\/api\/[^"]+)"/g)].map((m) => m[1]);
+  assert.deepStrictEqual(
+    entries,
+    ['/api/relay/device/code', '/api/relay/device/token'],
+    `device-pairing allowlist changed unexpectedly: ${entries.join(', ')}`
+  );
+
+  // ...and the bypass must actually be wired into the gate.
+  assert.ok(proxy.includes('isDevicePairingPath(pathname)'),
+    'device-pairing paths are exempted from the session gate');
 });
 
 test('API-key deferral is allowlisted and closed by the route', () => {

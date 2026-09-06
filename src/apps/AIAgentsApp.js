@@ -701,6 +701,18 @@ export default function AIAgentsApp({ apiFetch }) {
         config: { op: 'start', port: details?.webUIPort || 8765 }
       });
       if (r?.active || r?.success) {
+        // Re-read the agent details BEFORE opening the tab.
+        //
+        // `webUIActive` is not a flag we can set locally — it is a live curl
+        // probe against the agent's Web UI port that only runs inside the
+        // `details` action. Without this refresh, `details.webUIActive` stays
+        // false after a successful start, so the button flips straight back to
+        // "Start Web UI" even though the Web UI really is up — and stays
+        // clickable, offering to start something already running.
+        //
+        // It doubles as the settle delay: this is an SSH round-trip, which
+        // gives the webui process time to bind its port.
+        await loadDetails();
         // Wait a beat for the gateway process to bind its port, then open.
         // The tab itself was already created synchronously below, so this
         // delay doesn't cost us the user-gesture token.

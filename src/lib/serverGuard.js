@@ -45,6 +45,8 @@ export function checkRateLimit(identifier, maxRequests = RATE_LIMIT_MAX_REQUESTS
 // Cleanup old rate limit entries every 5 minutes
 if (!global.__rateLimitCleanupStarted) {
   global.__rateLimitCleanupStarted = true;
+  // unref: a background sweep must never keep the process alive. Without it
+  // this timer holds the event loop open and `node --test` never exits.
   setInterval(() => {
     const now = Date.now();
     for (const [key, entry] of rateLimitStore.entries()) {
@@ -52,7 +54,7 @@ if (!global.__rateLimitCleanupStarted) {
         rateLimitStore.delete(key);
       }
     }
-  }, 5 * 60 * 1000);
+  }, 5 * 60 * 1000).unref?.();
 }
 
 

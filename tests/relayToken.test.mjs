@@ -29,8 +29,14 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const readSrc = (rel) => fs.readFileSync(path.join(here, '..', rel), 'utf8');
 
 const routeSrc = readSrc('src/app/api/relay/token/route.js');
+const relayTokensSrc = readSrc('src/lib/relayTokens.js');
 const serverSrc = readSrc('server.js');
 const agentSyncSrc = readSrc('src/app/api/firewall/agent-sync/route.js');
+
+// Issuance rules (cap, eviction, audit metadata, TTL) live in lib/relayTokens.js,
+// deliberately extracted so /api/relay/token and the device-pairing exchange
+// can't drift. The tests below check features against both files so a regression
+// in either place fails loudly — the file comments document the split.
 
 test('issuance is throttled', () => {
   assert.ok(routeSrc.includes('checkRateLimit'), 'rate limit helper imported');
@@ -40,25 +46,39 @@ test('issuance is throttled', () => {
 });
 
 test('per-user token cap exists and evicts the oldest', () => {
-  assert.ok(routeSrc.includes('MAX_TOKENS_PER_USER'), 'cap constant present');
-  assert.match(routeSrc, /owned\.sort\(\(a, b\) =>[\s\S]{0,120}issuedAt/,
+  // Cap and eviction are in lib/relayTokens.js (route.js delegates via
+  // `issueRelayToken`). The route still owns the per-call bookkeeping for
+  // DELETE so `__relayTokens.delete(t)` is checked across both files.
+  const capSrc = relayTokensSrc;
+  assert.ok(capSrc.includes('MAX_TOKENS_PER_USER'), 'cap constant present');
+  // Pin the direction, not just the presence: ascending (a - b) means the
+  // OLDEST token lands at index 0 and is what gets evicted. A descending sort
+  // would silently evict the newest token, so it must not match here.
+  assert.match(capSrc,
+    /owned\.sort\(\s*\(a,\s*b\)\s*=>\s*\(a\[1\]\.issuedAt[\s\S]{0,140}?\)\s*-\s*\(b\[1\]\.issuedAt/,
     'eviction orders by issue time so the OLDEST token goes first');
-  assert.ok(routeSrc.includes('global.__relayTokens.delete(t)'), 'eviction actually deletes');
+  assert.ok(
+    capSrc.includes('tokens.delete(t)') || routeSrc.includes('global.__relayTokens.delete(t)'),
+    'eviction actually deletes'
+  );
 });
 
 test('tokens carry audit metadata', () => {
-  assert.ok(routeSrc.includes('tokenId:'), 'short handle for GET/DELETE');
-  assert.ok(routeSrc.includes('issuedAt: now'), 'issue timestamp');
-  assert.ok(routeSrc.includes('lastUsed: null'), 'lastUsed initialised');
-  assert.ok(routeSrc.includes('label:'), 'optional human label');
+  assert.ok(relayTokensSrc.includes('tokenId:'), 'short handle for GET/DELETE');
+  assert.ok(relayTokensSrc.includes('issuedAt: now'), 'issue timestamp');
+  assert.ok(relayTokensSrc.includes('lastUsed: null'), 'lastUsed initialised');
+  assert.ok(relayTokensSrc.includes('label:'), 'optional human label');
 });
 
 test('TTL is configurable rather than hardcoded', () => {
-  assert.ok(routeSrc.includes('RELAY_TOKEN_TTL_DAYS'), 'env override present');
-  assert.ok(routeSrc.includes('tokenTtlMs'), 'computed per call');
-  // The old code was a module-level 365-day const used blindly.
-  assert.ok(!/^const TOKEN_TTL = 365/m.test(routeSrc),
+  assert.ok(relayTokensSrc.includes('RELAY_TOKEN_TTL_DAYS'), 'env override present');
+  assert.ok(relayTokensSrc.includes('tokenTtlMs'), 'computed per call');
+  // The old code was a module-level 365-day const used blindly. Check both files
+  // because the constant has lived in different places over time.
+  assert.ok(!/^const TOKEN_TTL = 365/m.test(relayTokensSrc),
     'hardcoded 365-day const must not come back');
+  assert.ok(!/^const TOKEN_TTL = 365/m.test(routeSrc),
+    'route file must not reintroduce a hardcoded TTL');
 });
 
 test('GET returns a masked token, never the credential itself', () => {

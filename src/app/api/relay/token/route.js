@@ -1,31 +1,16 @@
 import { getToken } from 'next-auth/jwt';
-import { randomUUID } from 'crypto';
 import { getSupporterStatus, supporterRequiredResponse } from '@/utils/supporter';
 import { checkRateLimit } from '@/lib/serverGuard';
 import { tokensToRevoke } from '@/lib/relayRevoke';
+import { issueRelayToken, persistRelayTokens, sanitizeLabel } from '@/lib/relayTokens';
 import connectDB from '@/lib/mongodb';
 import User from '@/models/User';
 
 /**
- * Relay tokens are long-lived by necessity: public/local-relay.js bakes the
- * token into a background service and there is no renewal handshake, so
- * shortening the TTL would silently break every running relay.
- *
- * The TTL is therefore configurable rather than hardcoded, and the security
- * controls are the ones that do not break the product: throttled issuance, a
- * per-user cap, lastUsed tracking, and an auditable inventory.
- *
- * Override with RELAY_TOKEN_TTL_DAYS once a refresh path exists.
+ * Issuance lives in lib/relayTokens.js so this endpoint and the device-pairing
+ * exchange enforce identical TTL and per-user caps. See that file for why the
+ * TTL is long and configurable rather than short.
  */
-const DEFAULT_TTL_DAYS = 365;
-function tokenTtlMs() {
-  const raw = Number(process.env.RELAY_TOKEN_TTL_DAYS);
-  const days = Number.isFinite(raw) && raw > 0 ? Math.min(raw, 3650) : DEFAULT_TTL_DAYS;
-  return days * 24 * 60 * 60 * 1000;
-}
-
-/** Issuance cap — stops unbounded token accumulation from a script or a bug. */
-const MAX_TOKENS_PER_USER = 10;
 
 /** Issuance throttle. Legitimate use is a handful of tokens, not hundreds. */
 const ISSUE_RATE_LIMIT = 20;
@@ -67,53 +52,18 @@ export async function POST(request) {
       if (!status.isSupporter) return supporterRequiredResponse('relay');
     }
 
-    // Optional human-readable label so a user can tell their tokens apart in
-    // the inventory. Truncated and control characters stripped.
-    const label = String(body.label ?? '')
-      .replace(/[\r\n\t\x00-\x1f]/g, ' ')
-      .trim()
-      .slice(0, 60);
-
-    global.__relayTokens = global.__relayTokens || new Map();
-
-    // Clean up expired tokens for this user (but keep active ones)
-    const now = Date.now();
-    for (const [t, e] of global.__relayTokens) {
-      if (e.userId === userId && e.expiresAt < now) {
-        global.__relayTokens.delete(t);
-      }
-    }
-
-    // Enforce the cap by evicting the oldest tokens for this user first.
-    const owned = [];
-    for (const [t, e] of global.__relayTokens) {
-      if (e.userId === userId) owned.push([t, e]);
-    }
-    if (owned.length >= MAX_TOKENS_PER_USER) {
-      owned.sort((a, b) => (a[1].issuedAt || a[1].createdAt || 0) - (b[1].issuedAt || b[1].createdAt || 0));
-      const evictCount = owned.length - MAX_TOKENS_PER_USER + 1;
-      for (const [t] of owned.slice(0, evictCount)) {
-        global.__relayTokens.delete(t);
-      }
-    }
-
-    const relayToken = randomUUID();
-    global.__relayTokens.set(relayToken, {
+    const { token: relayToken, expiresAt } = issueRelayToken({
       userId,
-      email: token.email || null, // lets the /relay-ws supporter gate resolve the account
+      email: token.email || null,
       scope,
-      tokenId: relayToken.slice(0, 8), // short handle for GET/DELETE, not a secret
-      label: label || null,
-      issuedAt: now,
-      lastUsed: null,
-      expiresAt: now + tokenTtlMs(),
+      label: sanitizeLabel(body.label),
     });
 
-    if (typeof global.__persistRelayTokens === 'function') await global.__persistRelayTokens();
+    await persistRelayTokens();
     return Response.json({
       success: true,
       token: relayToken,
-      expiresAt: new Date(now + tokenTtlMs()).toISOString(),
+      expiresAt: new Date(expiresAt).toISOString(),
     });
   } catch (err) {
     return Response.json({ error: err.message }, { status: 500 });

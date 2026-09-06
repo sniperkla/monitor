@@ -11,6 +11,7 @@ import {
   Box, Layers, Image, HardDrive, Network,
   Play, CircleCheckBig, CircleHelp, Zap, Activity
 } from 'lucide-react';
+import { useOnboardingLayout } from '@/hooks/useOnboardingLayout';
 
 const STORAGE_KEY = 'docker-onboarding-completed';
 
@@ -215,6 +216,7 @@ function useSpotlightRect(target) {
 
 // Main center panel
 function ImmersiveCenterPanel({ step, meta, total, contentStep, contentTotal, onNext, onPrev, onDismiss, show }) {
+  const R = useOnboardingLayout();
   const { t } = useTranslation();
   const isWelcome = meta.id === 'welcome';
   const isLast = step === STEPS.length - 1;
@@ -223,7 +225,7 @@ function ImmersiveCenterPanel({ step, meta, total, contentStep, contentTotal, on
     return (
       <div style={{
         position: 'fixed', inset: 0, zIndex: 999997,
-        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: R.overlayPad,
         pointerEvents: show ? 'auto' : 'none',
         opacity: show ? 1 : 0,
         transition: 'opacity 0.5s ease',
@@ -246,7 +248,7 @@ function ImmersiveCenterPanel({ step, meta, total, contentStep, contentTotal, on
               </span>
             </div>
             <h1 style={{
-              margin: '0 0 16px', fontSize: 42, fontWeight: 800,
+              margin: '0 0 16px', fontSize: R.heroSize, fontWeight: 800,
               background: `linear-gradient(135deg, #fff, ${meta.accentColor})`,
               WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
               backgroundClip: 'text', lineHeight: 1.1,
@@ -259,7 +261,7 @@ function ImmersiveCenterPanel({ step, meta, total, contentStep, contentTotal, on
           </div>
 
           {/* Feature Grid */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16, marginBottom: 40 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(200px, 100%), 1fr))', gap: 16, marginBottom: 40 }}>
             {[
               { icon: Box, title: 'Containers', desc: 'Start, stop, inspect running containers' },
               { icon: Layers, title: 'Swarm Services', desc: 'Manage Docker Swarm deployments' },
@@ -267,7 +269,7 @@ function ImmersiveCenterPanel({ step, meta, total, contentStep, contentTotal, on
               { icon: HardDrive, title: 'Volumes & Networks', desc: 'Manage persistent storage and networking' },
             ].map((feature, i) => (
               <div key={i} style={{
-                padding: 20, borderRadius: 16,
+                padding: R.cardPad, borderRadius: 16,
                 background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)',
                 textAlign: 'left',
                 opacity: show ? 1 : 0,
@@ -315,7 +317,7 @@ function ImmersiveCenterPanel({ step, meta, total, contentStep, contentTotal, on
     return (
       <div style={{
         position: 'fixed', inset: 0, zIndex: 999997,
-        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: R.overlayPad,
         pointerEvents: show ? 'auto' : 'none',
         opacity: show ? 1 : 0, transition: 'opacity 0.5s ease',
       }}>
@@ -367,7 +369,7 @@ function ImmersiveCenterPanel({ step, meta, total, contentStep, contentTotal, on
   // Regular step panel
   return (
     <div style={{
-      position: 'fixed', bottom: 32, left: '50%',
+      position: 'fixed', bottom: R.panelBottom, left: '50%',
       transform: `translateX(-50%) ${show ? 'translateY(0)' : 'translateY(120px)'}`,
       zIndex: 999997,
       opacity: show ? 1 : 0,
@@ -375,10 +377,10 @@ function ImmersiveCenterPanel({ step, meta, total, contentStep, contentTotal, on
       pointerEvents: show ? 'auto' : 'none',
     }}>
       <div style={{
-        width: 'calc(100vw - 64px)', maxWidth: 720,
+        width: R.panelWidth, maxWidth: 720,
         background: 'linear-gradient(165deg, rgba(15,23,42,0.98) 0%, rgba(8,12,24,0.99) 100%)',
         border: `1px solid ${meta.color}35`,
-        borderRadius: 24, overflow: 'hidden',
+        borderRadius: 24, display: 'flex', flexDirection: 'column', overflow: 'hidden', maxHeight: R.panelMaxHeight,
         boxShadow: `0 8px 48px rgba(0,0,0,0.5), 0 0 80px ${meta.color}15`,
         backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)',
       }}>
@@ -391,9 +393,9 @@ function ImmersiveCenterPanel({ step, meta, total, contentStep, contentTotal, on
           }} />
         </div>
 
-        <div style={{ padding: '24px 28px' }}>
+        <div style={{ padding: R.contentPad, flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden' }}>
           {/* Header */}
-          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 20, marginBottom: 20 }}>
+          <div style={{ display: 'flex', flexDirection: R.stackHeader ? 'column' : 'row', alignItems: 'flex-start', gap: R.headerGap, marginBottom: 20 }}>
             <div style={{ position: 'relative', width: 64, height: 64, flexShrink: 0 }}>
               <div style={{
                 position: 'absolute', inset: 0, borderRadius: 18,
@@ -459,7 +461,13 @@ function ImmersiveCenterPanel({ step, meta, total, contentStep, contentTotal, on
           {/* Footer */}
           <div style={{
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            paddingTop: 20, borderTop: '1px solid rgba(255,255,255,0.05)',
+            flexWrap: 'wrap',
+            gap: 12,
+            position: 'sticky',
+            bottom: 0,
+            paddingTop: 20,
+            paddingBottom: R.footerPad,
+            background: 'rgb(10,15,28)', borderTop: '1px solid rgba(255,255,255,0.05)',
           }}>
             {/* Step dots */}
             <div style={{ display: 'flex', gap: 6 }}>

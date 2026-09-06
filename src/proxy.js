@@ -130,6 +130,28 @@ function buildCsp(nonce) {
     : // Dev needs eval/inline for HMR and the React devtools bridge.
       `script-src 'self' 'nonce-${nonce}' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval'`;
 
+  // Ports the Local Relay can bind for agent Web UI gateways. It starts at
+  // 18790 and walks up one port at a time when that one is already taken (see
+  // handleWebuiForward in public/local-relay.js). Listing only 18790 therefore
+  // silently blocked the *second* gateway — exactly the case the port
+  // handshake was added to fix — so the whole small range is covered.
+  //
+  // The range is bounded on purpose: `http://127.0.0.1:*` would also work for
+  // the app but would let a client-side XSS probe every port on the victim's
+  // machine, which is the risk the 48923 entry below is narrowed to avoid.
+  const webuiPorts = Array.from({ length: 10 }, (_, i) => 18790 + i);
+
+  // Localhost entries are dev-only unless explicitly opted in, matching how
+  // the relay-discovery port is already treated. In production the Web UI
+  // reachability probe fails closed and the app falls back to the central
+  // proxy rather than touching a port on the user's machine.
+  const localAllowed = !isProd || process.env.CSP_ALLOW_LOCAL_RELAY === '1';
+  const localSrc = localAllowed
+    ? [' http://127.0.0.1:48923']
+        .concat(webuiPorts.flatMap((p) => [` http://127.0.0.1:${p}`, ` http://localhost:${p}`]))
+        .join('')
+    : '';
+
   return [
     "default-src 'self'",
     scriptSrc,
@@ -148,7 +170,7 @@ function buildCsp(nonce) {
     // excluded from production builds unless explicitly enabled via
     // CSP_ALLOW_LOCAL_RELAY=1. In development it is always included so the
     // relay auto-detection feature works out of the box.
-    `connect-src 'self' blob: data: https://api.ipify.org${!isProd || process.env.CSP_ALLOW_LOCAL_RELAY === '1' ? ' http://127.0.0.1:48923' : ''}${process.env.CSP_LOCAL_RELAY ? ` ${process.env.CSP_LOCAL_RELAY}` : ''} http://127.0.0.1:18790 http://localhost:18790`,
+    `connect-src 'self' blob: data: https://api.ipify.org${localSrc}${process.env.CSP_LOCAL_RELAY ? ` ${process.env.CSP_LOCAL_RELAY}` : ''}`,
     // File preview renders documents in a data:/blob: iframe. 'self' is
     // required for the agent Web UI embedded browser (AIAgentsApp), which frames
     // the same-origin /api/agents/webui-proxy route. Local Relay WebUI
@@ -190,6 +212,39 @@ const SELF_AUTHENTICATING_PATHS = new Set([
   "/api/auth/webauthn/authenticate/options",
   "/api/auth/webauthn/authenticate/verify",
 ]);
+
+/**
+ * Relay device-pairing endpoints — the RFC 8628 flow local-relay.js --pair
+ * drives.
+ *
+ * These are the only API routes reachable with neither a session nor an API
+ * key, and that is deliberate: the caller is a script the user downloaded
+ * thirty seconds ago, running on a machine that has never authenticated here.
+ * Requiring a session is what made the old installer hand out a 365-day token
+ * on the command line instead.
+ *
+ * Skipping the gate here does not make them anonymous in any useful sense:
+ *
+ *   - ./code  mints an inert 8-character claim ticket. Possessing one lets you
+ *             attach a device to your OWN account after you approve it while
+ *             signed in. It authenticates nothing and reads nothing.
+ *   - ./token takes a 256-bit single-use device code as its only credential,
+ *             and returns a token only after a signed-in user approved that
+ *             exact enrollment.
+ *
+ * Neither can read or mutate another user's account. Both are additionally
+ * throttled inside lib/relayPairing.js (per-IP issuance, per-user approval,
+ * exchange polling), and both are CSRF-exempt because a CLI has no cookie to
+ * echo — the same reasoning as an external deploy webhook.
+ */
+const DEVICE_PAIRING_PATHS = new Set([
+  "/api/relay/device/code",
+  "/api/relay/device/token",
+]);
+
+function isDevicePairingPath(pathname) {
+  return DEVICE_PAIRING_PATHS.has(pathname);
+}
 
 function isPublicPath(pathname) {
   return PUBLIC_PATHS.has(pathname);
@@ -396,7 +451,8 @@ export default async function wrappedProxy(req) {
   const skipsSessionGate =
     isPublicPath(pathname) ||
     isSelfAuthenticating(pathname) ||
-    isPreAuthPath(pathname);
+    isPreAuthPath(pathname) ||
+    isDevicePairingPath(pathname);
 
   if (!skipsSessionGate && !authToken && !externalDeployTrigger && !apiKeyDeferred) {
     if (pathname.startsWith("/api/")) {

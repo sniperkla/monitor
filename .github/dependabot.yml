@@ -1,0 +1,65 @@
+# Automated dependency maintenance.
+#
+# Why this exists: the CI workflow now fails on high/critical advisories. Without
+# automated patching, that gate turns into a chore someone has to remember — and
+# the failure mode of a security gate nobody maintains is that it gets switched
+# off. Dependabot keeps the tree current so the gate stays green.
+
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      # Monday, before the weekly scheduled audit sweep.
+      day: monday
+      time: "03:00"
+    open-pull-requests-limit: 10
+
+    # One PR per logical upgrade instead of thirty. Without grouping, a Next.js
+    # minor bump arrives as a dozen separate PRs and gets merged piecemeal or,
+    # more likely, ignored.
+    groups:
+      # Framework + bundler move together; splitting them produces builds that
+      # fail for reasons unrelated to the change.
+      next-and-build:
+        patterns:
+          - "next"
+          - "eslint-config-next"
+          - "@next/*"
+      linting:
+        patterns:
+          - "eslint"
+          - "@eslint/*"
+          - "eslint-*"
+          - "@typescript-eslint/*"
+      # Everything else: patch and minor only. Majors are opened individually
+      # because they can change behaviour and need a real look.
+      dependencies:
+        patterns:
+          - "*"
+        update-types:
+          - "patch"
+          - "minor"
+
+    # npm audit findings that have a fix get a PR automatically.
+    # (Dependabot security updates are enabled by default for public repos, but
+    # stating it means it survives an accidental repo visibility change.)
+    insecure-external-code-execution: deny
+
+    commit-message:
+      prefix: "chore(deps)"
+      include: scope
+
+    # Assign review explicitly — an unowned security PR is a PR that sits.
+    labels:
+      - dependencies
+      - security
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    labels:
+      - dependencies
+      - ci

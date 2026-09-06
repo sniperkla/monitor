@@ -10,6 +10,7 @@ import {
   CircleCheckBig, Zap, Ban, Power, Activity,
   Bug, HardDrive, FileWarning, Download, Clock3,
 } from 'lucide-react';
+import { useOnboardingLayout } from '@/hooks/useOnboardingLayout';
 
 const STORAGE_KEY = 'virus-onboarding-completed';
 
@@ -204,6 +205,7 @@ function useSpotlightRect(target) {
 }
 
 function ImmersiveCenterPanel({ step, meta, total, contentStep, contentTotal, onNext, onPrev, onDismiss, show }) {
+  const R = useOnboardingLayout();
   const isWelcome = meta.id === 'welcome';
   const isLast = step === STEPS.length - 1;
 
@@ -211,7 +213,7 @@ function ImmersiveCenterPanel({ step, meta, total, contentStep, contentTotal, on
     return (
       <div style={{
         position: 'fixed', inset: 0, zIndex: 999997,
-        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: R.overlayPad,
         pointerEvents: show ? 'auto' : 'none', opacity: show ? 1 : 0, transition: 'opacity 0.5s ease',
       }}>
         <FloatingParticles color={meta.color} count={30} />
@@ -231,7 +233,7 @@ function ImmersiveCenterPanel({ step, meta, total, contentStep, contentTotal, on
               </span>
             </div>
             <h1 style={{
-              margin: '0 0 16px', fontSize: 42, fontWeight: 800,
+              margin: '0 0 16px', fontSize: R.heroSize, fontWeight: 800,
               background: `linear-gradient(135deg, #fff, ${meta.accentColor})`,
               WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text', lineHeight: 1.1,
             }}>
@@ -241,14 +243,14 @@ function ImmersiveCenterPanel({ step, meta, total, contentStep, contentTotal, on
               <TypedText text={(CONTENT[meta.id] || {}).description} speed={15} delay={300} />
             </p>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16, marginBottom: 40 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(200px, 100%), 1fr))', gap: 16, marginBottom: 40 }}>
             {[
               { icon: Bug, title: 'Trusted Antivirus', desc: 'ClamAV + LMD detections flow straight into your Findings tab' },
             { icon: HardDrive, title: 'Three Scan Modes', desc: '⚡ Quick health checks · ▶ Deep common paths · 💽 Full entire disk' },
             { icon: Radar, title: 'Wazuh HIDS Alerts', desc: 'Level-7+ intrusion alerts surface automatically in your findings' },
             { icon: FileWarning, title: 'Actionable Findings', desc: 'Quarantine, delete or kill threats directly from the results list' },].map((feature, i) => (
               <div key={i} style={{
-                padding: 20, borderRadius: 16,
+                padding: R.cardPad, borderRadius: 16,
                 background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)',
                 textAlign: 'left', opacity: show ? 1 : 0,
                 transform: show ? 'translateY(0)' : 'translateY(20px)',
@@ -288,7 +290,7 @@ function ImmersiveCenterPanel({ step, meta, total, contentStep, contentTotal, on
     return (
       <div style={{
         position: 'fixed', inset: 0, zIndex: 999997,
-        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: R.overlayPad,
         pointerEvents: show ? 'auto' : 'none', opacity: show ? 1 : 0, transition: 'opacity 0.5s ease',
       }}>
         <FloatingParticles color={meta.color} count={40} />
@@ -337,16 +339,16 @@ function ImmersiveCenterPanel({ step, meta, total, contentStep, contentTotal, on
   // Regular step panel
   return (
     <div style={{
-      position: 'fixed', bottom: 32, left: '50%',
+      position: 'fixed', bottom: R.panelBottom, left: '50%',
       transform: `translateX(-50%) ${show ? 'translateY(0)' : 'translateY(120px)'}`,
       zIndex: 999997, opacity: show ? 1 : 0,
       transition: 'all 0.5s cubic-bezier(0.34, 1.3, 0.64, 1)',
       pointerEvents: show ? 'auto' : 'none',
     }}>
       <div style={{
-        width: 'calc(100vw - 64px)', maxWidth: 720,
+        width: R.panelWidth, maxWidth: 720,
         background: 'linear-gradient(165deg, rgba(15,23,42,0.98) 0%, rgba(8,12,24,0.99) 100%)',
-        border: `1px solid ${meta.color}35`, borderRadius: 24, overflow: 'hidden',
+        border: `1px solid ${meta.color}35`, borderRadius: 24, display: 'flex', flexDirection: 'column', overflow: 'hidden', maxHeight: R.panelMaxHeight,
         boxShadow: `0 8px 48px rgba(0,0,0,0.5), 0 0 80px ${meta.color}15`,
         backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)',
       }}>
@@ -357,8 +359,8 @@ function ImmersiveCenterPanel({ step, meta, total, contentStep, contentTotal, on
             transition: 'width 0.5s ease',
           }} />
         </div>
-        <div style={{ padding: '24px 28px' }}>
-          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 20, marginBottom: 20 }}>
+        <div style={{ padding: R.contentPad, flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden' }}>
+          <div style={{ display: 'flex', flexDirection: R.stackHeader ? 'column' : 'row', alignItems: 'flex-start', gap: R.headerGap, marginBottom: 20 }}>
             <div style={{ position: 'relative', width: 64, height: 64, flexShrink: 0 }}>
               <div style={{
                 position: 'absolute', inset: 0, borderRadius: 18,
@@ -420,7 +422,13 @@ function ImmersiveCenterPanel({ step, meta, total, contentStep, contentTotal, on
           </div>
           <div style={{
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            paddingTop: 20, borderTop: '1px solid rgba(255,255,255,0.05)',
+            flexWrap: 'wrap',
+            gap: 12,
+            position: 'sticky',
+            bottom: 0,
+            paddingTop: 20,
+            paddingBottom: R.footerPad,
+            background: 'rgb(10,15,28)', borderTop: '1px solid rgba(255,255,255,0.05)',
           }}>
             <div style={{ display: 'flex', gap: 6 }}>
               {STEPS.slice(1, -1).map((s, i) => (

@@ -8,14 +8,13 @@ import {
   Settings2, BookOpen, PackageX
 } from 'lucide-react';
 
-export default function AgentSetupWizard({ 
-  isOpen, 
-  onClose, 
-  connection, 
-  relayToken,
+export default function AgentSetupWizard({
+  isOpen,
+  onClose,
+  connection,
   onRefreshStatus,
   onAgentInstalled,
-  apiFetch 
+  apiFetch
 }) {
   const [activeTab, setActiveTab] = useState('service'); // 'service' | 'manual' | 'uninstall'
   const [status, setStatus] = useState({ loading: true, isRunning: false, nodeInstalled: false, inTmux: false, inService: false });
@@ -25,22 +24,32 @@ export default function AgentSetupWizard({
   const [installSuccess, setInstallSuccess] = useState(false);
   const [uninstallSuccess, setUninstallSuccess] = useState(false);
 
-  const [agentToken, setAgentToken] = useState(relayToken || '');
+  // A single-use install code, minted for whoever is signed in. The agent
+  // redeems it during install, so no long-lived token is ever pasted into a
+  // terminal, written into the systemd unit, or left in shell history.
+  const [claimCode, setClaimCode] = useState('');
 
   const serverUrl = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000';
-  const effectiveToken = agentToken || relayToken || 'GENERATING_TOKEN...';
+  const effectiveCode = claimCode || 'GENERATING_CODE...';
 
-  const fetchToken = useCallback(async () => {
+  const fetchClaimCode = useCallback(async () => {
     try {
-      const res = await apiFetch('/api/relay/token', { method: 'POST' });
+      const res = await apiFetch('/api/relay/device/invite', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scope: 'agent',
+          label: connection?.name || connection?.host || undefined,
+        }),
+      });
       if (res.ok) {
         const data = await res.json();
-        if (data.token) setAgentToken(data.token);
+        if (data.claimCode) setClaimCode(data.claimCode);
       }
     } catch (err) {
-      console.error('Failed to generate agent token:', err);
+      console.error('Failed to mint install code:', err);
     }
-  }, [apiFetch]);
+  }, [apiFetch, connection?.name, connection?.host]);
 
   const checkAgentStatus = useCallback(async () => {
     if (!connection?._id) return;
@@ -72,7 +81,7 @@ export default function AgentSetupWizard({
 
   useEffect(() => {
     if (isOpen) {
-      fetchToken();
+      fetchClaimCode();
       if (connection?._id) {
         checkAgentStatus();
         setOutputLog('');
@@ -80,7 +89,7 @@ export default function AgentSetupWizard({
         setUninstallSuccess(false);
       }
     }
-  }, [isOpen, connection?._id, fetchToken, checkAgentStatus]);
+  }, [isOpen, connection?._id, fetchClaimCode, checkAgentStatus]);
 
   const handleInstallNode = async () => {
     if (!connection?._id) return;
@@ -126,13 +135,12 @@ export default function AgentSetupWizard({
           action: 'install',
           method,
           serverUrl,
-          token: agentToken || undefined
+          claimCode: claimCode || undefined
         })
       });
 
       const data = await res.json();
       if (res.ok && data.success) {
-        if (data.token) setAgentToken(data.token);
         setOutputLog(prev => prev + `\n` + (data.output || '✅ Agent successfully launched!') + `\n\n🎉 Done! Real-time WebRTC telemetry is now active.`);
         await checkAgentStatus();
         if (onRefreshStatus) onRefreshStatus();
@@ -190,9 +198,12 @@ export default function AgentSetupWizard({
   if (!isOpen) return null;
 
   const connIdFlag = connection?._id ? ` --connection-id '${connection._id}'` : '';
-  const tmuxCommand = `curl -sSL -H 'Cache-Control: no-cache' '${serverUrl}/monitor-agent.min.js' -o /tmp/.agent.js && NODE_BIN=\$(command -v node || which node || echo node) && tmux new-session -d -s monitor-agent "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:\$PATH; \$NODE_BIN /tmp/.agent.js --server '${serverUrl}' --token '${effectiveToken}'${connection?._id ? ` --connection-id '${connection._id}'` : ''} >> ~/.monitor-agent.log 2>&1" && rm -f /tmp/.agent.js`;
-  const serviceCommand = `curl -sSL -H 'Cache-Control: no-cache' '${serverUrl}/monitor-agent.min.js' -o /tmp/.agent.js && node /tmp/.agent.js --install --server '${serverUrl}' --token '${effectiveToken}'${connIdFlag} && rm -f /tmp/.agent.js`;
-  const foregroundCommand = `curl -sSL -H 'Cache-Control: no-cache' '${serverUrl}/monitor-agent.min.js' | node - --server '${serverUrl}' --token '${effectiveToken}'${connIdFlag}`;
+  // --claim instead of --token: the code is single-use and expires in 10
+  // minutes, and the resulting token is written to a 0600 config on the server
+  // rather than stored in the service definition.
+  const tmuxCommand = `curl -sSL -H 'Cache-Control: no-cache' '${serverUrl}/monitor-agent.min.js' -o /tmp/.agent.js && NODE_BIN=\$(command -v node || which node || echo node) && tmux new-session -d -s monitor-agent "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:\$PATH; \$NODE_BIN /tmp/.agent.js --server '${serverUrl}' --claim '${effectiveCode}'${connection?._id ? ` --connection-id '${connection._id}'` : ''} >> ~/.monitor-agent.log 2>&1" && rm -f /tmp/.agent.js`;
+  const serviceCommand = `curl -sSL -H 'Cache-Control: no-cache' '${serverUrl}/monitor-agent.min.js' -o /tmp/.agent.js && node /tmp/.agent.js --claim '${effectiveCode}' --server '${serverUrl}'${connIdFlag} && rm -f /tmp/.agent.js`;
+  const foregroundCommand = `curl -sSL -H 'Cache-Control: no-cache' '${serverUrl}/monitor-agent.min.js' | node - --claim '${effectiveCode}' --server '${serverUrl}'${connIdFlag}`;
   const uninstallCommand = `systemctl --user stop server-monitor-agent.service 2>/dev/null; systemctl --user disable server-monitor-agent.service 2>/dev/null; tmux kill-session -t monitor-agent 2>/dev/null; pkill -9 -f '[.]monitor-agent' 2>/dev/null; pkill -9 -f '[m]onitor-agent.js' 2>/dev/null; rm -rf ~/.config/server-monitor-agent ~/.monitor-agent.js ~/.monitor-agent-launcher.sh /tmp/.agent.js 2>/dev/null; echo "✅ Done"`;
 
   return (

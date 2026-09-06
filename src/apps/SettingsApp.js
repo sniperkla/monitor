@@ -2,6 +2,8 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import DeploymentOnboarding, { hasCompletedDeploymentOnboarding, resetDeploymentOnboarding } from '@/components/DeploymentOnboarding';
+import RelayPairingPanel from '@/components/RelayPairingPanel';
+import RelayTrustPanel from '@/components/RelayTrustPanel';
 
 function safeStringify(obj) {
   const seen = new WeakSet();
@@ -16,7 +18,7 @@ function safeStringify(obj) {
 import {
   Palette, Image as ImageIcon, Monitor, Layout, Bell, Shield, Info,
   Database, CircleCheck, AlertCircle, RefreshCw, Zap, Wifi, WifiOff, Server, Box, Package,
-  LoaderCircle, Trash2, Lock, Unlock, Key, Mail, Code, Volume2, Sun, Moon, Cpu,
+  LoaderCircle, Trash2, Lock, Unlock, Key, Mail, Code, Sun, Moon, Cpu,
   Search, Terminal, Network, Download, Copy, X, CheckCheck, Sparkles,
   GitBranch, GitCommit, ChevronDown, Settings, Send, Music, ChevronRight, LogOut, Check,
   RotateCcw, Menu, Coffee, CircleHelp, ShieldCheck
@@ -292,6 +294,9 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
   const [relayWizardStep, setRelayWizardStep] = useState(1);
   // Set of relay IDs that were already connected before starting the wizard
   const [existingRelayIds, setExistingRelayIds] = useState(new Set());
+  // Integrity manifest for the file the user is about to download and run.
+  // Null until fetched; the trust panel degrades to facts-without-checksum.
+  const [relayRelease, setRelayRelease] = useState(null);
   // The relay this browser prefers to route through (saved in localStorage)
   const [preferredRelay, setPreferredRelay] = useState(() =>
     typeof window !== 'undefined' ? (localStorage.getItem('ssh_monitor_preferred_relay') || null) : null
@@ -1292,10 +1297,39 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
     }
   }, [relayModalOpen, session, isSupporter]);
 
-  // Auto-generate token when relay wizard is opened and no token yet
+  // Integrity manifest for the agent the wizard asks the user to download and
+  // run. Fetched on open so the trust panel can show a checksum the user can
+  // verify themselves. Failure is non-fatal: the panel just omits the digest.
   useEffect(() => {
-    if (relayModalOpen && isSupporter && !relayToken && !relayLoading) {
-      handleGenerateRelayToken();
+    if (!relayModalOpen || relayRelease) return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        // Default credentials (same-origin): the manifest stays behind the
+        // session gate like the rest of the relay API. It is fetched from
+        // Settings, where the user is always signed in.
+        const res = await fetch('/api/relay/release');
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!cancelled && data?.success && data?.sha256) setRelayRelease(data);
+      } catch {
+        /* checksum is a bonus, never a blocker */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [relayModalOpen, relayRelease]);
+
+  // Relay wizard bookkeeping on open/close.
+  //
+  // This used to auto-generate a 365-day relay token whenever the wizard
+  // opened. Pairing made that unnecessary — and undesirable: it minted a
+  // long-lived bearer credential on every visit, whether or not the user ever
+  // ran the install command. Tokens are now only ever created when an agent
+  // actually redeems an approved pairing code.
+  useEffect(() => {
+    if (relayModalOpen) {
       // Snapshot currently-connected relays so new ones can be detected
       setExistingRelayIds(new Set(relays.map(r => r.relayId || r.relayName)));
     }
@@ -1417,13 +1451,14 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
       return 'node local-relay.js --uninstall';
     }
 
-    if (!relayToken) return '⚠ Token not yet generated — click Generate Token first';
-
+    // --pair carries no token. The agent asks the server for a device code,
+    // prints an 8-character code, and receives the token out of band once the
+    // user approves it in RelayPairingPanel.
     if (os === 'windows') {
-      return `node local-relay.js --install --server ${quoteWindowsArg(window.location.origin)} --token ${quoteWindowsArg(relayToken)}`;
+      return `node local-relay.js --pair --server ${quoteWindowsArg(window.location.origin)}`;
     }
 
-    return `node local-relay.js --install --server ${quotePosixArg(window.location.origin)} --token ${quotePosixArg(relayToken)}`;
+    return `node local-relay.js --pair --server ${quotePosixArg(window.location.origin)}`;
   };
 
   const getRelayScriptFilename = (mode, os = detectedOS) => {
@@ -1498,8 +1533,8 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
     if (mode === 'uninstall') {
       return `rm -f ${targetPath} && curl -fsSL -H 'Cache-Control: no-cache' "${scriptUrl}" -o ${targetPath} && node ${targetPath} --uninstall && rm -f ${targetPath}`;
     }
-    if (!relayToken) return '⚠ Token not yet generated — click Generate Token first';
-    return `rm -f ${targetPath} && curl -fsSL -H 'Cache-Control: no-cache' "${scriptUrl}" -o ${targetPath} && node ${targetPath} --install --server ${quotePosixArg(server)} --token ${quotePosixArg(relayToken)} && rm -f ${targetPath}`;
+    // No secret on the command line — see RelayPairingPanel for the flow.
+    return `rm -f ${targetPath} && curl -fsSL -H 'Cache-Control: no-cache' "${scriptUrl}" -o ${targetPath} && node ${targetPath} --pair --server ${quotePosixArg(server)} && rm -f ${targetPath}`;
   };
 
   const setVaultPreset = (uri) => {
@@ -2001,7 +2036,6 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
             <section className="space-y-3">
               {[
                 { id: 'system', icon: Bell, title: t('settings_ui.notifications.system'), desc: t('settings_ui.notifications.systemDesc'), accent: 'indigo' },
-                { id: 'terminal', icon: Volume2, title: t('settings_ui.notifications.terminal'), desc: t('settings_ui.notifications.terminalDesc'), accent: 'emerald' },
                 { id: 'desktop', icon: Monitor, title: t('settings_ui.notifications.desktop'), desc: t('settings_ui.notifications.desktopDesc'), accent: 'blue' },
               ].map(item => {
                 const isActive = notifications[item.id];
@@ -2409,32 +2443,20 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                             >
                               <Lock size={11} /> {t('supporter.unlockBtn', 'Supporter')}
                             </button>
-                          ) : !relayToken ? (
-                            <button
-                              onClick={async () => {
-                                setExistingRelayIds(new Set(relays.map(r => r.relayId || r.relayName)));
-                                const success = await handleGenerateRelayToken();
-                                if (success) {
-                                  setRelayWizardStep(2);
-                                  setRelayInstallSuccess(false);
-                                  setRelayModalOpen(true);
-                                }
-                              }}
-                              disabled={relayLoading}
-                              className="px-3 py-1.5 rounded-xl text-[11px] font-bold transition-all flex items-center gap-1.5 bg-amber-500 hover:bg-amber-600 text-white shadow-md shadow-amber-500/20 disabled:opacity-50"
-                            >
-                              {relayLoading ? <LoaderCircle size={11} className="animate-spin" /> : <Zap size={11} />}
-                              {relayLoading ? 'Generating…' : 'Generate Token'}
-                            </button>
                           ) : (
+                            // No token is needed to install any more — the guide
+                            // hands out a pairing code instead. Revoke All stays
+                            // available for credentials that already exist.
                             <>
-                              <button
-                                onClick={handleRevokeAllRelays}
-                                className="px-2.5 py-1.5 rounded-xl text-[10px] font-bold transition-all flex items-center gap-1 border border-red-500/30 text-red-400 hover:bg-red-500/10"
-                                title="Revoke token and disconnect all relays"
-                              >
-                                <X size={10} /> Revoke All
-                              </button>
+                              {relayToken && (
+                                <button
+                                  onClick={handleRevokeAllRelays}
+                                  className="px-2.5 py-1.5 rounded-xl text-[10px] font-bold transition-all flex items-center gap-1 border border-red-500/30 text-red-400 hover:bg-red-500/10"
+                                  title="Revoke token and disconnect all relays"
+                                >
+                                  <X size={10} /> Revoke All
+                                </button>
+                              )}
                               <button
                                 onClick={() => {
                                   setExistingRelayIds(new Set(relays.map(r => r.relayId || r.relayName)));
@@ -2504,8 +2526,8 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                         </div>
                       )}
 
-                      {/* Install command when token exists but relay not connected */}
-                      {relayToken && !relayConnected && (
+                      {/* Install command — no token needed, it pairs itself */}
+                      {!relayConnected && (
                         <div className="px-4 py-3 border-t border-[var(--border-color)] space-y-2">
                           <p className="text-[10px] font-bold text-[var(--text-secondary)]">Run this on your machine:</p>
                           <div className="relative">
@@ -2525,8 +2547,8 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                         </div>
                       )}
 
-                      {/* Info when not connected and no token */}
-                      {!relayConnected && !relayToken && (
+                      {/* Explainer — hides once they have started the install */}
+                      {!relayConnected && !relayWaiting && (
                         <div className="px-4 py-3 border-t border-[var(--border-color)] bg-[var(--bg-tertiary)]/30">
                           <div className="flex items-start gap-2.5">
                             <Info size={13} className="text-blue-400 shrink-0 mt-0.5" />
@@ -4487,19 +4509,31 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
 
                 ) : (
                   <>
-                    {/* What is it? — concise explanation */}
+                    {/* What is it? — precise, checkable claims only.
+                        The old copy leaned on "end-to-end encrypted" and
+                        "nothing stored on our servers", which a user standing
+                        at a terminal cannot verify and therefore cannot trust.
+                        Everything stated here is something they can confirm. */}
                     <div className="flex gap-3 p-3.5 rounded-xl bg-blue-500/[0.06] border border-blue-500/15">
                       <Info size={14} className="shrink-0 text-blue-400 mt-0.5" />
                       <div className="text-[11px] text-[var(--text-muted)] leading-relaxed space-y-1.5">
                         <p className="font-semibold text-[var(--text-secondary)]">What is the Relay Agent?</p>
-                        <p>A small background service you run on <strong className="text-[var(--text-primary)]">your own computer</strong>. It creates a secure tunnel so this dashboard can reach services on <code className="text-amber-300">localhost</code>.</p>
+                        <p>A background service you run on <strong className="text-[var(--text-primary)]">your own computer</strong>. It dials out to this dashboard so the dashboard can reach services on <code className="text-amber-300">localhost</code>.</p>
                         <div className="flex flex-col gap-1 pt-1">
                           <span className="text-emerald-400/90">✓ Only needed for localhost/127.0.0.1 — remote servers don&apos;t need it</span>
-                          <span className="text-emerald-400/90">✓ Nothing stored on our servers — fully end-to-end encrypted</span>
+                          <span className="text-emerald-400/90">✓ No sudo, no root — installs as a user-level service</span>
+                          <span className="text-emerald-400/90">✓ Listens on 127.0.0.1 only — no port exposed to your network</span>
                           <span className="text-blue-400/80">✓ Install on your desktop machine, not the server</span>
                         </div>
                       </div>
                     </div>
+
+                    {/* Verify-then-trust: checksum, readable source, revoke */}
+                    <RelayTrustPanel
+                      server={typeof window !== 'undefined' ? window.location.origin : ''}
+                      detectedOS={detectedOS}
+                      release={relayRelease}
+                    />
 
                     {/* Install command */}
                     <div className="space-y-3">
@@ -4523,27 +4557,18 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                           <span className="text-[9px] text-slate-500 font-mono flex-1">
                             {detectedOS === 'windows' ? 'PowerShell / CMD' : 'Terminal'}
                           </span>
-                          {relayToken && (
-                            <button
-                              onClick={() => {
-                                navigator.clipboard.writeText(getRelayOneLiner('install'));
-                                addNotification({ title: 'Copied!', message: detectedOS === 'windows' ? 'Paste in PowerShell or CMD and press Enter.' : 'Open Terminal, paste and press Enter.', type: 'success' });
-                              }}
-                              className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/20 text-amber-400 text-[9px] font-bold transition-colors"
-                            >
-                              <Copy size={9} /> Copy
-                            </button>
-                          )}
+                          <button
+                            onClick={() => {
+                              navigator.clipboard.writeText(getRelayOneLiner('install'));
+                              addNotification({ title: 'Copied!', message: detectedOS === 'windows' ? 'Paste in PowerShell or CMD and press Enter.' : 'Open Terminal, paste and press Enter.', type: 'success' });
+                            }}
+                            className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/20 text-amber-400 text-[9px] font-bold transition-colors"
+                          >
+                            <Copy size={9} /> Copy
+                          </button>
                         </div>
                         <div className="p-3 bg-slate-950 min-h-[56px] flex items-center">
-                          {relayToken ? (
-                            <code className="text-[10px] font-mono text-amber-300 break-all leading-relaxed">{getRelayOneLiner('install')}</code>
-                          ) : (
-                            <div className="flex items-center gap-2 text-[10px] text-slate-500 italic">
-                              <LoaderCircle size={11} className="animate-spin" />
-                              <span>Generating your unique install command…</span>
-                            </div>
-                          )}
+                          <code className="text-[10px] font-mono text-amber-300 break-all leading-relaxed">{getRelayOneLiner('install')}</code>
                         </div>
                       </div>
 
@@ -4553,19 +4578,16 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                           <>
                             <button
                               onClick={() => downloadInstallerScript('install')}
-                              disabled={!relayToken}
-                              className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-amber-500 hover:bg-amber-600 active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed rounded-xl text-white font-bold text-xs transition-all shadow-lg shadow-amber-500/25"
+                              className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-amber-500 hover:bg-amber-600 active:scale-[0.98] rounded-xl text-white font-bold text-xs transition-all shadow-lg shadow-amber-500/25"
                             >
                               <Download size={13} /> Download {getRelayScriptFilename('install')}
                             </button>
                             <button
                               onClick={() => {
-                                if (!relayToken) return;
                                 navigator.clipboard.writeText(getRelayOneLiner('install'));
                                 addNotification({ title: 'Copied!', message: 'Paste in PowerShell or CMD and press Enter.', type: 'success' });
                               }}
-                              disabled={!relayToken}
-                              className="px-3 py-2.5 bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] border border-[var(--border-color)] disabled:opacity-40 disabled:cursor-not-allowed rounded-xl text-[var(--text-secondary)] text-xs font-bold transition-colors"
+                              className="px-3 py-2.5 bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] border border-[var(--border-color)] rounded-xl text-[var(--text-secondary)] text-xs font-bold transition-colors"
                             >
                               <Copy size={13} />
                             </button>
@@ -4574,33 +4596,33 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                           <button
                             onClick={() => {
                               navigator.clipboard.writeText(getRelayOneLiner('install'));
-                              addNotification({ title: 'Copied!', message: 'Open Terminal, paste and press Enter. Connection will be detected automatically.', type: 'success' });
+                              addNotification({ title: 'Copied!', message: 'Open Terminal, paste and press Enter, then enter the code it prints below.', type: 'success' });
                             }}
-                            disabled={!relayToken}
-                            className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-amber-500 hover:bg-amber-600 active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed rounded-xl text-white font-bold text-xs transition-all shadow-lg shadow-amber-500/20"
+                            className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-amber-500 hover:bg-amber-600 active:scale-[0.98] rounded-xl text-white font-bold text-xs transition-all shadow-lg shadow-amber-500/20"
                           >
                             <Copy size={13} /> Copy Install Command
-                          </button>
-                        )}
-                        {!relayToken && (
-                          <button
-                            onClick={handleGenerateRelayToken}
-                            disabled={relayLoading}
-                            className="px-3 py-2.5 bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] border border-[var(--border-color)] disabled:opacity-40 rounded-xl text-[var(--text-muted)] hover:text-[var(--text-secondary)] text-xs font-bold transition-colors"
-                          >
-                            {relayLoading ? <LoaderCircle size={13} className="animate-spin" /> : <RefreshCw size={13} />}
                           </button>
                         )}
                       </div>
                     </div>
 
-                    {/* Step 2 — waiting for connection */}
+                    {/* Step 2 — approve the code printed in the terminal */}
+                    <RelayPairingPanel
+                      onApproved={() => {
+                        // Start watching for the relay to appear; the existing
+                        // poll below flips this panel to connected on its own.
+                        setRelayWaiting(true);
+                      }}
+                      onSupporterRequired={() => setSupporterModalOpen(true)}
+                    />
+
+                    {/* Step 3 — waiting for connection */}
                     <div className="space-y-2.5">
                       <div className="flex items-center gap-2">
                         <div className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 transition-colors ${relayConnected ? 'bg-emerald-500' : 'bg-[var(--bg-tertiary)] border border-[var(--border-color)]'}`}>
                           {relayConnected
                             ? <CircleCheck size={12} className="text-white" />
-                            : <span className="text-[10px] font-bold text-[var(--text-muted)]">2</span>
+                            : <span className="text-[10px] font-bold text-[var(--text-muted)]">3</span>
                           }
                         </div>
                         <p className="text-xs font-bold text-[var(--text-secondary)]">

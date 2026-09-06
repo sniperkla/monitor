@@ -1707,7 +1707,11 @@ body {
     font-size: 10px !important;
   }
 
-  h1 { font-size: 1.5rem !important; }
+  /* The landing wordmark is exempt. It sizes itself with a fluid clamp and is
+     the one heading meant to scale with the viewport — this reset pinned it to
+     24px on every screen up to 768px, so the title shrank as the viewport grew.
+     `.glitch-text` is used on that single element. */
+  h1:not(.glitch-text) { font-size: 1.5rem !important; }
   h2 { font-size: 1.25rem !important; }
   
   .window-container {
@@ -2720,3 +2724,4 @@ body {
   from { opacity: 0; transform: translateX(24px); }
   to   { opacity: 1; transform: translateX(0); }
 }
+

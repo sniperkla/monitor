@@ -204,6 +204,17 @@ async function handleAgentAction(body, session, log = []) {
     const inst = parseInst(body);
     const HH = homeDir('nanobot', inst);        // ${HH} or ${HH}-<tag>
     const GW_PORT = instancePort('nanobot', inst);          // distinct port for instances (null for default)
+    // Instance-aware launch flags — ALWAYS pass --config/--workspace, including
+    // for the DEFAULT install. A bare `nanobot gateway` puts no
+    // instance-identifying text in its command line, so no process scan can
+    // find or attribute it: the dashboard reported "Gateway is DOWN" while the
+    // bot was running. These flags resolve to nanobot's own defaults, so
+    // behaviour is unchanged — only discoverability improves.
+    //
+    // Defined here (not inside the gateway helper) because BOTH the helper and
+    // the installer start the gateway. It used to live only in the helper, so
+    // `action: 'install'` hit an undefined `GW_FLAGS` and threw.
+    const GW_FLAGS = ` --config "${HH}/config.json" --workspace "${HH}/workspace"${GW_PORT ? ` --port ${GW_PORT}` : ''}`;
     const PIDF = `${HH}/daemon.pid`;
 
     const binPath = () => `p="${HH}/venv/bin/nanobot"; [ ! -x "$p" ] && p="$(export PATH="$HOME/.local/bin:$HOME/.nanobot/venv/bin:/usr/local/bin:/usr/bin:$PATH"; command -v nanobot 2>/dev/null)"; [ -z "$p" ] && for q in "$HOME/.local/bin/nanobot" "$HOME/.nanobot/venv/bin/nanobot" "/usr/local/bin/nanobot" "/usr/bin/nanobot"; do [ -x "$q" ] && p="$q" && break; done; echo "BIN=$p"`;
@@ -232,16 +243,8 @@ async function handleAgentAction(body, session, log = []) {
       if (!bp) return { ok: false, out: 'nanobot binary not found' };
       const BP = sq(bp);
       const ENVX = `export PATH="$HOME/.local/bin:$HOME/.nanobot/venv/bin:/usr/local/bin:$PATH"`;
-      // Instance-aware launch: explicit config/workspace/port so multiple
-      // gateways on the same server never share a data dir or bind port.
-      // ALWAYS pass --config/--workspace — including for the DEFAULT install.
-      // The default used to be launched as a bare `nanobot gateway`; with no
-      // instance-identifying text anywhere in its command line, no process
-      // scan could ever find or attribute it, which is exactly what made the
-      // dashboard report "Gateway is DOWN" while the bot was running. These
-      // flags resolve to the very paths nanobot would have defaulted to, so
-      // behaviour is unchanged — only discoverability improves.
-      const GW_FLAGS = ` --config "${HH}/config.json" --workspace "${HH}/workspace"${GW_PORT ? ` --port ${GW_PORT}` : ''}`;
+      // GW_FLAGS comes from the enclosing scope (see the definition beside
+      // GW_PORT) — the installer needs the exact same flags.
       const pidScan = `${ENVX}; ${gwProbe(HH, PIDF, inst)}`;
       if (op === 'status') {
         const r = await execCommand(sshConfig, pidScan, { pool: false, timeoutMs: 30000 });
@@ -1202,6 +1205,9 @@ if [ ${cursor} -gt 0 ] && [ ${cursor} -le $SZ ]; then tail -c +$((cursor + 1)) "
           type: 'webui:forward',
           forwardId,
           remotePort: wuPort,
+          // Requested port only — a hint. If a gateway for another connection
+          // already owns it, the relay binds the next free port and reports the
+          // real one via `webui:ready`. Never assume this is the final answer.
           localPort: 18790,
           monitorOrigin,
           bootstrapSecret,
@@ -1210,12 +1216,27 @@ if [ ${cursor} -gt 0 ] && [ ${cursor} -le $SZ ]; then tail -c +$((cursor + 1)) "
             password: sshConfig.password, privateKey: sshConfig.privateKey, passphrase: sshConfig.passphrase,
           },
         };
+        // Register the waiter BEFORE sending, or the relay's ack can arrive
+        // before we're listening and we'd wait for the full timeout.
+        const ackPromise = typeof global.__waitForWebuiForward === 'function'
+          ? global.__waitForWebuiForward(forwardId, 20000)
+          : Promise.resolve(null);
         const sent = await (global.__sendToRelayForUserAny([session?.user?.id, session?.user?.dbId, session?.user?.sub], forwardMsg) || Promise.resolve(false));
         if (!sent) {
           return NextResponse.json({ success: false, error: 'Local Relay is not connected — start it or use the central proxy' }, { status: 409, log });
         }
-        log.push('> [webui] Direct relay requested — gateway will serve at http://127.0.0.1:18790');
-        return NextResponse.json({ success: true, active: true, relay: true, localPort: 18790, log });
+        // The relay opens the SSH tunnel before it can bind the local listener,
+        // so this usually takes a second or two.
+        const ackedPort = await ackPromise;
+        const localPort = Number(ackedPort) || 18790;
+        log.push(`> [webui] Direct relay requested — gateway serving at http://127.0.0.1:${localPort}`);
+        return NextResponse.json({
+          success: true, active: true, relay: true, localPort,
+          // True when the relay reported its own port; false means we fell back
+          // to the default (older relay build) and the port may be wrong.
+          portConfirmed: !!ackedPort,
+          log,
+        });
       }
       if (op === 'start' || op === 'restart') {
         log.push(`> [webui] Nanobot binary: ${bp}`);

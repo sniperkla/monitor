@@ -8,6 +8,7 @@ import { auditLog } from '@/lib/auditLog';
 import { shellQuote, shellArg, shellInt } from '@/utils/shellQuote';
 import { checkRateLimit } from '@/lib/serverGuard';
 import { getClientIp } from '@/lib/clientIp';
+import { requireSession } from '@/lib/requireSession';
 
 const RCLONE_RATE_LIMIT = 10;
 
@@ -16,6 +17,11 @@ function quote(str) {
 }
 
 export async function POST(req) {
+  // Defence in depth: these routes are also covered by the middleware
+  // session gate, but an explicit check keeps a matcher change from
+  // silently exposing remote-command endpoints.
+  const { error: authError } = await requireSession(req);
+  if (authError) return authError;
   try {
     // Defence in depth: this route executes commands remotely. Keep the
     // middleware gate, but assert the session here too so a matcher regression
@@ -169,6 +175,11 @@ export async function POST(req) {
 }
 
 export async function GET(req) {
+  // Defence in depth: these routes are also covered by the middleware
+  // session gate, but an explicit check keeps a matcher change from
+  // silently exposing remote-command endpoints.
+  const { error: authError } = await requireSession(req);
+  if (authError) return authError;
   try {
     const { searchParams } = new URL(req.url);
     const connectionId = searchParams.get('connectionId');

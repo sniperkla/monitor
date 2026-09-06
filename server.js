@@ -565,9 +565,15 @@ app.prepare().then(async () => {
           res.setHeader('X-Frame-Options', 'DENY');
         }
         res.setHeader('X-Content-Type-Options', 'nosniff');
-        res.setHeader('X-XSS-Protection', '1; mode=block');
+        // Legacy XSS auditor. `0` EXPLICITLY disables it rather than merely
+        // omitting the header — a few older browsers still default the auditor
+        // ON, and it is itself an attack surface (it can be tricked into
+        // blocking legitimate scripts, and its heuristics have leaked data).
+        // Chrome/Edge/Firefox/Safari have all removed it; CSP is the real
+        // control and is set in src/proxy.js with a per-request nonce.
+        res.setHeader('X-XSS-Protection', '0');
         res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-        res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
+        res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(), interest-cohort=()');
         res.setHeader('Strict-Transport-Security', 'max-age=63072000; includeSubDomains; preload');
 
         // ── Cross-origin isolation / resource containment ───────────────────
@@ -686,6 +692,33 @@ global.__sendToRelayForUserAny = async function (userIds, msgObj) {
     }
   } catch (_) {}
   return false;
+};
+
+// ── WebUI gateway port handshake ─────────────────────────────────────────────
+// The monitor asks the Local Relay to serve an agent's Web UI on 127.0.0.1:18790.
+// That port is a HINT, not a guarantee: if a gateway for a different connection
+// already holds 18790, the relay walks up to 18791, 18792… Until now the route
+// answered the browser with the hardcoded 18790 regardless, so opening
+// connection B's Web UI could land on connection A's gateway — a different
+// nanobot instance whose bootstrap secret doesn't match, surfacing as
+// `GET /api/settings → 401 Unauthorized`.
+//
+// Fix: the relay acks with the port it really bound (`webui:ready`), and the
+// route waits for that ack before answering. Falls back to 18790 if the relay
+// is an older build that doesn't ack (it still serves there when free).
+global.__webuiForwardWaiters = new Map(); // forwardId → { resolve, timer }
+
+global.__waitForWebuiForward = function waitForWebuiForward(forwardId, timeoutMs = 15000) {
+  return new Promise((resolve) => {
+    let timer = null;
+    const finish = (port) => {
+      if (timer) clearTimeout(timer);
+      global.__webuiForwardWaiters.delete(forwardId);
+      resolve(port);
+    };
+    timer = setTimeout(() => finish(null), timeoutMs);
+    global.__webuiForwardWaiters.set(forwardId, { resolve: finish, timer });
+  });
 };
 
 // Idle timeout (30 minutes — browser throttles background-tab timers aggressively)
@@ -5328,6 +5361,19 @@ fi'`;
             if (msg.type === 'ping') {
               // Keepalive — respond with pong to confirm relay is alive
               if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'pong' }));
+              return;
+            }
+            if (msg.type === 'webui:ready') {
+              // Local Relay acks a `webui:forward` with the local port it
+              // actually bound (see __waitForWebuiForward above).
+              const waiter = global.__webuiForwardWaiters?.get(String(msg.forwardId));
+              if (waiter) {
+                const port = Number(msg.localPort) || null;
+                if (port) {
+                  console.log(`🌐 [Relay WebUI] gateway ack: ${msg.forwardId} → 127.0.0.1:${port}`);
+                }
+                waiter.resolve(port);
+              }
               return;
             }
             if (msg.type === 'init') {
