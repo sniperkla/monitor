@@ -224,16 +224,26 @@ export function createDataStream(canvas, opts = {}) {
           continue;
         }
 
+        // Near-camera fade: an element about to pass the camera would render
+        // as a big blocky glyph; dissolve it instead.
+        const nearFade = px > 16 ? Math.max(0, 1 - (px - 16) / 26) : 1;
+        if (nearFade <= 0.04) {
+          el.z -= travel;
+          if (el.z <= cfg.zNear) spawn(el, false);
+          continue;
+        }
+
         // Motion trail: project one exposure earlier and draw the segment.
-        if (sweep > 0.5 && project(el.x, el.y, el.z + sweep)) {
+        // Small elements only — trails on near-camera glyphs read as streaks.
+        if (sweep > 0.5 && px < 16 && project(el.x, el.y, el.z + sweep)) {
           const tx = PX;
           const ty = PY;
           const dx = tx - hx;
           const dy = ty - hy;
           if (dx * dx + dy * dy > 4) {
             ctx.globalCompositeOperation = 'lighter';
-            ctx.strokeStyle = `rgba(${col[0]}, ${col[1]}, ${col[2]}, ${(a * 0.3).toFixed(3)})`;
-            ctx.lineWidth = Math.max(0.6, px * 0.16);
+            ctx.strokeStyle = `rgba(${col[0]}, ${col[1]}, ${col[2]}, ${(a * nearFade * 0.3).toFixed(3)})`;
+            ctx.lineWidth = Math.min(1.2, Math.max(0.6, px * 0.16));
             ctx.beginPath();
             ctx.moveTo(tx, ty);
             ctx.lineTo(hx, hy);
@@ -242,9 +252,9 @@ export function createDataStream(canvas, opts = {}) {
         }
 
         ctx.globalCompositeOperation = 'source-over';
-        const size = Math.min(26, Math.max(6, px));
+        const size = Math.min(13, Math.max(6, px));
         ctx.font = `${size < 11 ? 500 : 400} ${size.toFixed(1)}px var(--font-jetbrains), "JetBrains Mono", ui-monospace, monospace`;
-        ctx.fillStyle = `rgba(${col[0]}, ${col[1]}, ${col[2]}, ${Math.min(0.92, a).toFixed(3)})`;
+        ctx.fillStyle = `rgba(${col[0]}, ${col[1]}, ${col[2]}, ${Math.min(0.92, a * nearFade).toFixed(3)})`;
         ctx.fillText(el.glyph, hx, hy);
         any = true;
 
