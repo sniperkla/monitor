@@ -24,6 +24,7 @@ import DesktopChrome from './DesktopChrome';
 import { prefersReducedMotion, useIsTouch, useDocumentVisible } from './story/hooks';
 import { ScrambleTitle } from './console/ScrambleTitle';
 import { AuthActions, CloserActions } from './console/AuthActions';
+import { Statusline } from './console/Statusline';
 import { useScrollStory } from './story/useScrollStory';
 import { SectionHead, FleetMock, MonitorMock, SecurityMock, BackupMock, AgentMock } from './story/mocks';
 
@@ -64,6 +65,7 @@ export function RevealScreen({ onDismiss }) {
   const heroRef = useRef(null);
   const railRef = useRef(null);
   const storyRailRef = useRef(null);
+  const cmdRef = useRef(null);
 
   /* Pointer tilt on the hero card: CSS variables from a rAF-throttled
      pointermove. No idle loop — work happens only while the pointer moves. */
@@ -100,7 +102,7 @@ export function RevealScreen({ onDismiss }) {
     };
   }, [motionOff]);
 
-  useScrollStory({ motionOff, heroRef, railRef, storyRailRef });
+  useScrollStory({ motionOff, heroRef, railRef, storyRailRef, cmdRef });
 
   const handlePasskeySignIn = async () => {
     setPasskeyError(null);
@@ -460,6 +462,8 @@ export function RevealScreen({ onDismiss }) {
           </p>
         </footer>
       </div>
+
+      <Statusline cmdRef={cmdRef} />
 
       {/* ── Cinematic Email & Password Authentication Modal ── */}
       <AnimatePresence>

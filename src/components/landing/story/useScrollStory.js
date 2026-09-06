@@ -6,7 +6,7 @@ import { useEffect } from 'react';
    One capture-phase scroll listener (the scroll root is a fixed div, so
    window listeners never fire), rAF-throttled. Everything is measured in
    content coordinates once and then cheap math per scroll frame. */
-function useScrollStory({ motionOff, heroRef, railRef, storyRailRef }) {
+function useScrollStory({ motionOff, heroRef, railRef, storyRailRef, cmdRef }) {
   useEffect(() => {
     const root = document.querySelector('[data-scroll-root]') || document.scrollingElement;
     if (!root) return undefined;
@@ -64,12 +64,17 @@ function useScrollStory({ motionOff, heroRef, railRef, storyRailRef }) {
         railRef.current.style.transform = `scaleY(${Math.min(1, st / max).toFixed(4)})`;
       }
 
-      // The timeline node of the active section lights up. data-cmd carries
-      // the "$ " prompt but data-dot does not, so normalize before matching.
+      // The statusline follows the story like a shell prompt would, and the
+      // timeline node of the active section lights up. data-cmd carries the
+      // "$ " prompt but data-dot does not, so normalize before matching.
       if (sections.length) {
         let cur = null;
         for (let i = 0; i < sections.length; i++) {
           if (sections[i].docTop <= st + vh * 0.55) cur = sections[i].cmd;
+        }
+        if (cmdRef.current) {
+          const next = cur || 'auth: PENDING';
+          if (cmdRef.current.textContent !== next) cmdRef.current.textContent = next;
         }
         if (cur !== lastActiveCmd) {
           lastActiveCmd = cur;
@@ -126,7 +131,7 @@ function useScrollStory({ motionOff, heroRef, railRef, storyRailRef }) {
       io.disconnect();
       cancelAnimationFrame(raf);
     };
-  }, [motionOff, heroRef, railRef, storyRailRef]);
+  }, [motionOff, heroRef, railRef, storyRailRef, cmdRef]);
 }
 
 
