@@ -4,6 +4,12 @@ import { motion } from 'framer-motion';
 
 // Old-school legacy terminal banner — ANSI color text, double-line DOS box.
 // Readable at all themes (no ASCII-art font tricks).
+//
+// The box is a fixed 48-column grid, so it cannot reflow: on a 320px screen
+// the glyphs are wider than the terminal column and the right border clips.
+// The `boot-banner` class (see BootSequence's CRT_CSS) scales the type down to
+// keep the box whole instead. Font size lives there, not here, so the box
+// width and the size that fits it stay in one place.
 const BOX_W = 46;
 const topBot = `${'═'.repeat(BOX_W)}`;
 
@@ -22,7 +28,7 @@ export function LegacyBanner({ hovered }) {
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       transition={{ duration: 0.5 }}
-      className="font-mono text-[10px] md:text-[13px] leading-relaxed mb-3 select-none"
+      className="boot-banner font-mono leading-relaxed mb-3 select-none"
       style={{
         textShadow: '0 0 6px rgba(34,211,238,0.25)',
         animation: hovered ? 'boot-glitch 3s infinite' : 'none',
@@ -36,7 +42,11 @@ export function LegacyBanner({ hovered }) {
           <span className="font-bold" style={{ color: '#4ade80', textShadow: '0 0 8px rgba(74,222,128,0.5)' }}> MONITOR</span>
           <span> </span>
           <span style={{ color: '#fbbf24' }}>v1.0.0</span>
-          <span style={{ color: 'rgba(34,211,238,0.45)' }}>{' '.repeat(BOX_W - 22)}║</span>
+          {/* Row budget: "║  " (3) + content + pad + "║" (1) = 48, so
+              content + pad = 44. "██ SSH MONITOR v1.0.0" is 21 columns, hence
+              BOX_W - 23. It was -22, which pushed this row's right border a
+              column past the box. */}
+          <span style={{ color: 'rgba(34,211,238,0.45)' }}>{' '.repeat(BOX_W - 23)}║</span>
         </span>
       </Row>
 

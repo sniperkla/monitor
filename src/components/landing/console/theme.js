@@ -33,42 +33,32 @@ const SCENES = [
   {
     name: 'hero',
     wash: 'radial-gradient(ellipse 62% 46% at 50% 34%, rgba(99,102,241,0.09) 0%, transparent 72%)',
-    p: { speed: 1.1, intensity: 0.05, tunnel: 0, exposure: 1, glitch: 0, brightness: 0.5, scanlines: 0.3 },
   },
   {
     name: 'fleet',
     wash: 'radial-gradient(ellipse 62% 46% at 50% 40%, rgba(34,211,238,0.08) 0%, transparent 72%)',
-    p: { speed: 1.7, intensity: 0.14, tunnel: 0, exposure: 1.2, glitch: 0, brightness: 0.58, scanlines: 0.26 },
   },
   {
     name: 'watch',
     wash: 'radial-gradient(ellipse 62% 46% at 50% 40%, rgba(52,211,153,0.065) 0%, transparent 72%)',
-    p: { speed: 2.3, intensity: 0.22, tunnel: 0.18, exposure: 1.5, glitch: 0, brightness: 0.62, scanlines: 0.22 },
   },
   {
     name: 'vault',
     wash: 'radial-gradient(ellipse 62% 46% at 50% 40%, rgba(129,140,248,0.075) 0%, transparent 72%)',
-    p: { speed: 0.45, intensity: 0.06, tunnel: 0, exposure: 1, glitch: 0, brightness: 0.38, scanlines: 0.5 },
   },
   {
     name: 'backup',
     wash: 'radial-gradient(ellipse 62% 46% at 50% 40%, rgba(245,158,11,0.05) 0%, transparent 72%)',
-    p: { speed: 1.35, intensity: 0.1, tunnel: 0, exposure: 1, glitch: 0, brightness: 0.55, scanlines: 0.3 },
   },
   {
     name: 'agents',
     wash: 'radial-gradient(ellipse 62% 46% at 50% 40%, rgba(232,121,249,0.055) 0%, transparent 72%)',
-    p: { speed: 1.9, intensity: 0.18, tunnel: 0, exposure: 1, glitch: 0, brightness: 0.55, scanlines: 0.35 },
   },
   {
     name: 'grant',
     wash: 'radial-gradient(ellipse 62% 46% at 50% 45%, rgba(125,211,252,0.085) 0%, transparent 72%)',
-    p: { speed: 0.9, intensity: 0.1, tunnel: 0.08, exposure: 1, glitch: 0, brightness: 0.55, scanlines: 0.28 },
   },
 ];
-const SCENE_BY_NAME = Object.fromEntries(SCENES.map((s) => [s.name, s]));
-const SCENE_KEYS = Object.keys(SCENES[0].p);
-
 
 /* ── One-shot CSS: entrance stagger, caret, CSS typing, motes, IO reveals ── */
 const CONSOLE_CSS = `
@@ -176,4 +166,4 @@ const CONSOLE_CSS = `
 `;
 
 
-export { TITLE, SUBTITLE, SCRAMBLE_GLYPHS, CAPABILITIES, SCENES, SCENE_BY_NAME, SCENE_KEYS, CONSOLE_CSS };
+export { TITLE, SUBTITLE, SCRAMBLE_GLYPHS, CAPABILITIES, SCENES, CONSOLE_CSS };

@@ -2,11 +2,16 @@
 
 import { useState, useEffect } from 'react';
 
+export function prefersReducedMotion() {
+  if (typeof window === 'undefined' || !window.matchMedia) return false;
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
 /**
  * True when the primary pointer cannot hover — phones, tablets, touch
  * laptops. Gates the tilt/parallax (a drag would leave content stranded at
- * the last offset) and halves the particle field. Resolved in an effect so
- * the first client render still matches the server HTML.
+ * the last offset). Resolved in an effect so the first client render still
+ * matches the server HTML.
  */
 function useIsTouch() {
   const [touch, setTouch] = useState(false);
@@ -18,7 +23,7 @@ function useIsTouch() {
   return touch;
 }
 
-/** Pauses the field when the tab is hidden — an unseen canvas is pure waste. */
+/** Pauses animated layers when the tab is hidden — unseen work is pure waste. */
 function useDocumentVisible() {
   const [visible, setVisible] = useState(true);
   useEffect(() => {
@@ -28,6 +33,5 @@ function useDocumentVisible() {
   }, []);
   return visible;
 }
-
 
 export { useIsTouch, useDocumentVisible };

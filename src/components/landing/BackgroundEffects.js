@@ -418,7 +418,10 @@ export function ShootingStars() {
 /* ── Nebula Background ── */
 export function Nebula() {
   return (
-    <div className="absolute inset-0 pointer-events-none overflow-hidden z-0">
+    // `fixed` so the nebula stays with the viewport while the reveal content
+    // scrolls over it. As an `absolute` layer it sized to the scroll container
+    // and scrolled away, leaving the page on flat black once past the fold.
+    <div className="fixed inset-0 pointer-events-none overflow-hidden z-0">
       <div className="absolute inset-0" style={{
         background: 'radial-gradient(ellipse at 20% 50%, rgba(99,102,241,0.08) 0%, transparent 50%), radial-gradient(ellipse at 80% 20%, rgba(124,58,237,0.06) 0%, transparent 50%), radial-gradient(ellipse at 50% 80%, rgba(6,182,212,0.04) 0%, transparent 50%)',
       }} />

@@ -25,12 +25,11 @@ import { signIn } from 'next-auth/react';
 import { useState, useEffect, useRef } from 'react';
 import { AnimatePresence } from 'framer-motion';
 import { ChevronDown, Activity } from 'lucide-react';
-import { DataStreamCanvas, prefersReducedMotion } from './DataStream';
 import NeuralWeb from './NeuralWeb';
 import { CinematicAuthModal } from './CinematicAuthModal';
 import { signInWithPasskey, passkeysSupported } from '@/utils/passkey';
-import { CONSOLE_CSS, SUBTITLE, CAPABILITIES, SCENES, SCENE_BY_NAME, SCENE_KEYS } from './console/theme';
-import { useIsTouch, useDocumentVisible } from './story/hooks';
+import { CONSOLE_CSS, SUBTITLE, CAPABILITIES, SCENES } from './console/theme';
+import { prefersReducedMotion, useIsTouch, useDocumentVisible } from './story/hooks';
 import { ScrambleTitle } from './console/ScrambleTitle';
 import { LiveUplink } from './console/LiveUplink';
 import { Statusline } from './console/Statusline';
@@ -69,10 +68,6 @@ export function RevealScreen({ onDismiss }) {
   const railRef = useRef(null);
   const storyRailRef = useRef(null);
   const cmdRef = useRef(null);
-  const sceneRef = useRef('hero');
-  // Live canvas parameters — damped toward the active scene every frame,
-  // which is what makes one atmosphere melt into the next.
-  const sceneCurRef = useRef({ ...SCENES[0].p });
 
   /* Pointer tilt on the hero card: CSS variables from a rAF-throttled
      pointermove. No idle loop — work happens only while the pointer moves. */
@@ -109,7 +104,7 @@ export function RevealScreen({ onDismiss }) {
     };
   }, [motionOff]);
 
-  useScrollStory({ motionOff, sceneRef, heroRef, cueRef, railRef, storyRailRef, cmdRef });
+  useScrollStory({ motionOff, heroRef, cueRef, railRef, storyRailRef, cmdRef });
 
   const handlePasskeySignIn = async () => {
     setPasskeyError(null);
@@ -268,45 +263,6 @@ export function RevealScreen({ onDismiss }) {
     <div className="relative w-full overflow-x-hidden bg-black">
       <style>{CONSOLE_CSS}</style>
 
-      {/* ── The one animated layer: a quiet hex-byte network, 30fps, paused
-              while the modal is open or the tab is hidden. Its mood follows
-              the active story scene only — never the scroll itself. ── */}
-      <DataStreamCanvas
-        className="fixed inset-0 z-0 block"
-        count={motionOff ? 55 : 120}
-        fps={30}
-        active={fieldActive}
-        onFrame={(ds, dt) => {
-          const s = ds.state;
-
-          // Damp toward the active scene: the background morphs between
-          // section moods instead of switching. Exponential damping is
-          // framerate-independent, so the melt looks the same at any fps.
-          // Deliberately independent of scroll velocity — the field never
-          // reacts to the wheel, only to where you are in the story.
-          const target = motionOff ? SCENES[0].p : (SCENE_BY_NAME[sceneRef.current] || SCENES[0]).p;
-          const cur = sceneCurRef.current;
-          const k = 1 - Math.exp(-dt / 550);
-          for (let i = 0; i < SCENE_KEYS.length; i++) {
-            const key = SCENE_KEYS[i];
-            cur[key] += (target[key] - cur[key]) * k;
-          }
-
-          s.speed = motionOff ? 0.3 : cur.speed;
-          s.intensity = cur.intensity;
-          s.tunnel = cur.tunnel;
-          s.exposure = cur.exposure;
-          s.glitch = cur.glitch;
-          s.fade = 0.9;
-          s.brightness = cur.brightness;
-          s.scanlines = cur.scanlines;
-          s.parallaxX = 0;
-          s.parallaxY = 0;
-          s.shake = 0;
-          s.roll = 0;
-        }}
-      />
-
       {/* Static light: vignette + horizon glow + faint grid. Painted once. */}
       <div
         className="fixed inset-0 z-[1] pointer-events-none"
@@ -315,7 +271,8 @@ export function RevealScreen({ onDismiss }) {
             'radial-gradient(ellipse 70% 55% at 50% 30%, rgba(2,4,10,0.55) 0%, rgba(2,4,10,0.25) 55%, rgba(2,4,10,0) 80%),' +
             'radial-gradient(ellipse 45% 26% at 50% 100%, rgba(34,211,238,0.05) 0%, transparent 70%),' +
             'repeating-linear-gradient(0deg, rgba(148,163,184,0.025) 0 1px, transparent 1px 56px),' +
-            'repeating-linear-gradient(90deg, rgba(148,163,184,0.025) 0 1px, transparent 1px 56px)',
+            'repeating-linear-gradient(90deg, rgba(148,163,184,0.025) 0 1px, transparent 1px 56px),' +
+            'repeating-linear-gradient(0deg, rgba(0,0,0,0.16) 0 1px, transparent 1px 3px)',
         }}
       />
 
