@@ -162,26 +162,22 @@ export default function NeuralWeb({ count = 60, fps = 30, active = true, reduced
         const n = nodes[i];
         const x = n.x * W;
         const y = n.y * H;
+        // Edge fade: nodes crossing the viewport border dissolve instead of
+        // being clipped mid-shape (a half-drawn hub reads as an artifact).
+        const ef = Math.max(0, Math.min(1, Math.min(x, y, W - x, H - y) / 18));
+        if (ef <= 0.02) continue;
         ctx.beginPath();
         ctx.arc(x, y, n.r + n.glow * 1.5, 0, TAU);
-        ctx.fillStyle = `rgba(165,180,252,${Math.min(0.85, (n.hub ? 0.42 : 0.3) + n.glow * 0.5).toFixed(3)})`;
+        ctx.fillStyle = `rgba(165,180,252,${(Math.min(0.85, (n.hub ? 0.42 : 0.3) + n.glow * 0.5) * ef).toFixed(3)})`;
         ctx.fill();
         if (n.glow > 0.02) {
           ctx.beginPath();
           ctx.arc(x, y, n.r * 3, 0, TAU);
-          ctx.fillStyle = `rgba(103,232,249,${(n.glow * 0.25).toFixed(3)})`;
+          ctx.fillStyle = `rgba(103,232,249,${(n.glow * 0.25 * ef).toFixed(3)})`;
           ctx.fill();
         }
-        if (n.hub) {
-          // Orbit ring; a pulse arriving swells it via glow.
-          const ringR = n.r + 4 + Math.sin(elapsed * 1.3 + i * 1.7) * 0.8 + n.glow * 3;
-          ctx.beginPath();
-          ctx.arc(x, y, ringR, 0, TAU);
-          ctx.strokeStyle = `rgba(103,232,249,${(0.16 + n.glow * 0.5).toFixed(3)})`;
-          ctx.lineWidth = 1;
-          ctx.stroke();
-          ctx.lineWidth = 1;
-        }
+        // Hub orbit rings removed — a lone circle around a dot read as an
+        // artifact, not an anchor. Hubs stay distinct via size + brightness.
       }
     };
 
@@ -192,13 +188,15 @@ export default function NeuralWeb({ count = 60, fps = 30, active = true, reduced
         const b = nodes[p.b];
         const x = (a.x + (b.x - a.x) * p.t) * W;
         const y = (a.y + (b.y - a.y) * p.t) * H;
+        const ef = Math.max(0, Math.min(1, Math.min(x, y, W - x, H - y) / 18));
+        if (ef <= 0.02) continue;
         ctx.beginPath();
         ctx.arc(x, y, 1.6, 0, TAU);
-        ctx.fillStyle = 'rgba(125,211,252,0.9)';
+        ctx.fillStyle = `rgba(125,211,252,${(0.9 * ef).toFixed(3)})`;
         ctx.fill();
         ctx.beginPath();
         ctx.arc(x, y, 4, 0, TAU);
-        ctx.fillStyle = 'rgba(125,211,252,0.18)';
+        ctx.fillStyle = `rgba(125,211,252,${(0.18 * ef).toFixed(3)})`;
         ctx.fill();
       }
     };
