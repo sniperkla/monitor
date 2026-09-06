@@ -87,7 +87,13 @@ const AGENTS = [
   },
 ];
 
-function buildWebUIProxyUrl(connectionId, port, p) {
+// Agents whose Web UI is a separate process we can start/stop on demand via
+// the `webui-ctl` action, and whose traffic can be direct-transferred through
+// the user's Local Relay (`op: 'relay-start'`). Anything else only has a
+// gateway port, reachable through the central proxy alone.
+const WEBUI_START_AGENTS = ['nanobot', 'hermes'];
+
+function buildWebUIProxyUrl(connectionId, port, p, agentId = 'nanobot') {
   // Defensive: only a non-empty string is meaningful here. Some code paths can
   // hand us a non-string (e.g. an object from the details payload) — guard
   // before calling string methods on it.
@@ -99,9 +105,9 @@ function buildWebUIProxyUrl(connectionId, port, p) {
   if (hashIdx >= 0) {
     const pathPart = full.slice(0, hashIdx) || '/';
     const hashPart = full.slice(hashIdx);
-    return `/api/agents/webui-proxy?connectionId=${encodeURIComponent(connectionId)}&port=${port}&path=${encodeURIComponent(pathPart)}${hashPart}`;
+    return `/api/agents/webui-proxy?connectionId=${encodeURIComponent(connectionId)}&port=${port}&agent=${encodeURIComponent(agentId)}&path=${encodeURIComponent(pathPart)}${hashPart}`;
   }
-  return `/api/agents/webui-proxy?connectionId=${encodeURIComponent(connectionId)}&port=${port}&path=${encodeURIComponent(full)}`;
+  return `/api/agents/webui-proxy?connectionId=${encodeURIComponent(connectionId)}&port=${port}&agent=${encodeURIComponent(agentId)}&path=${encodeURIComponent(full)}`;
 }
 
 /**
@@ -177,6 +183,8 @@ export default function AIAgentsApp({ apiFetch }) {
   const [startingWebUI, setStartingWebUI] = useState(false);
   const startingWebUIRef = useRef(false);
   const handleStartWebUIRef = useRef(null);
+  const [stoppingWebUI, setStoppingWebUI] = useState(false);
+  const stoppingWebUIRef = useRef(false);
 
   // Listen for 'START_WEBUI' postMessage from the embedded diagnostic screen
   useEffect(() => {
@@ -687,6 +695,11 @@ export default function AIAgentsApp({ apiFetch }) {
     return tab;
   };
 
+  // Port the agent's Web UI listens on. Prefer the live value from `details`
+  // (tagged instances get their own allocated port) and fall back to the
+  // agent's shipped default: Hermes' dashboard is 9119, nanobot's webui 8765.
+  const webUIPort = () => details?.webUIPort || (agent.id === 'hermes' ? 9119 : 8765);
+
   const handleStartWebUI = async () => {
     if (startingWebUIRef.current) return;
     startingWebUIRef.current = true;
@@ -698,7 +711,7 @@ export default function AIAgentsApp({ apiFetch }) {
     const startTab = openBlankWebUITab();
     try {
       const r = await callAction('Start Web UI', 'webui-ctl', {
-        config: { op: 'start', port: details?.webUIPort || 8765 }
+        config: { op: 'start', port: webUIPort() }
       });
       if (r?.active || r?.success) {
         // Re-read the agent details BEFORE opening the tab.
@@ -728,6 +741,29 @@ export default function AIAgentsApp({ apiFetch }) {
   };
   // Keep the ref in sync so the postMessage listener (stale closure) can call it
   handleStartWebUIRef.current = handleStartWebUI;
+
+  // Stop the Web UI daemon. Only offered while it is actually serving
+  // (webUIActive), and only for agents that own a startable Web UI process —
+  // zeroclaw/openclaw expose a gateway port we never launched, so there is
+  // nothing for us to stop.
+  //
+  // `callAction` re-runs `loadDetails()` on completion, which is what flips the
+  // button back to "Start Web UI" — webUIActive is a live probe, not local state.
+  const handleStopWebUI = async () => {
+    if (stoppingWebUIRef.current) return;
+    stoppingWebUIRef.current = true;
+    setStoppingWebUI(true);
+    try {
+      await callAction('Stop Web UI', 'webui-ctl', {
+        config: { op: 'stop', port: webUIPort() }
+      });
+    } catch (err) {
+      console.error('[WebUI] Failed to stop Web UI:', err);
+    } finally {
+      stoppingWebUIRef.current = false;
+      setStoppingWebUI(false);
+    }
+  };
 
   // Open the agent Web UI in a REAL browser tab.
   //
@@ -765,10 +801,10 @@ export default function AIAgentsApp({ apiFetch }) {
     };
 
     // 1. Direct transfer via the Local Relay, if it answers.
-    if (agentRef.current?.id === 'nanobot' && callRef.current) {
+    if (WEBUI_START_AGENTS.includes(agentRef.current?.id) && callRef.current) {
       try {
         const rr = await callRef.current('webui-ctl', {
-          config: { op: 'relay-start', port: details?.webUIPort || 8765, monitorOrigin: window.location.origin },
+          config: { op: 'relay-start', port: webUIPort(), monitorOrigin: window.location.origin },
         });
         if (rr?.success && rr?.localPort) {
           const candidate = `http://127.0.0.1:${rr.localPort}`;
@@ -787,7 +823,7 @@ export default function AIAgentsApp({ apiFetch }) {
     }
 
     // 2. Fall back to the central same-origin SSH proxy.
-    const proxyPath = buildWebUIProxyUrl(target, details?.webUIPort, basePath);
+    const proxyPath = buildWebUIProxyUrl(target, webUIPort(), basePath, agentRef.current?.id);
     const absolute = /^https?:\/\//i.test(proxyPath) ? proxyPath : `${window.location.origin}${proxyPath}`;
     navigate(absolute, 'Opened in a new tab — via the central SSH proxy (no local relay).');
   };
@@ -1962,13 +1998,13 @@ export default function AIAgentsApp({ apiFetch }) {
                           <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-sky-500/20 text-sky-300 border border-sky-500/30">:{details.webUIPort}</span>
                         </div>
                         <div className="text-[10px] text-[var(--text-muted)]">
-                          {agent.name} built-in web interface — opens in a real browser tab, no SSH or manual port-forwarding.
-                          {agent.id === 'nanobot' && ' Served straight from your Local Relay when it is connected.'}
+                          {agent.name} built-in web interface — chat, sessions, skills, cron and logs in your browser. Opens in a real tab, no SSH or manual port-forwarding.
+                          {WEBUI_START_AGENTS.includes(agent.id) && ' Served straight from your Local Relay when it is connected.'}
                         </div>
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
-                      {agent.id === 'nanobot' && (
+                      {WEBUI_START_AGENTS.includes(agent.id) && (
                         <button
                           data-start-webui-btn
                           onClick={handleStartWebUI}
@@ -1985,7 +2021,7 @@ export default function AIAgentsApp({ apiFetch }) {
                           title={
                             details?.webUIActive
                               ? `Web UI is already running on port ${details.webUIPort}`
-                              : `Start the Nanobot webui process on port ${details.webUIPort || 8765}`
+                              : `Start the ${agent.name} Web UI process on port ${webUIPort()}`
                           }
                         >
                           {details?.webUIActive ? (
@@ -1994,6 +2030,21 @@ export default function AIAgentsApp({ apiFetch }) {
                             <><Loader2 size={11} className="animate-spin" /> Starting…</>
                           ) : (
                             <><span>⚡</span> Start Web UI</>
+                          )}
+                        </button>
+                      )}
+                      {WEBUI_START_AGENTS.includes(agent.id) && details?.webUIActive && (
+                        <button
+                          data-stop-webui-btn
+                          onClick={handleStopWebUI}
+                          disabled={stoppingWebUI || !!busyMsg}
+                          className="px-3 py-1.5 rounded-xl bg-red-500/15 hover:bg-red-500/25 text-red-300 hover:text-red-200 font-bold text-xs flex items-center gap-1.5 border border-red-500/30 transition cursor-pointer disabled:opacity-50"
+                          title={`Stop the ${agent.name} Web UI process listening on port ${webUIPort()}`}
+                        >
+                          {stoppingWebUI ? (
+                            <><Loader2 size={11} className="animate-spin" /> Stopping…</>
+                          ) : (
+                            <><Square size={10} /> Stop</>
                           )}
                         </button>
                       )}
@@ -2133,7 +2184,12 @@ export default function AIAgentsApp({ apiFetch }) {
                       <button onClick={fetchPairings} className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-[10px] font-bold text-[var(--text-muted)] hover:text-white border border-[var(--border-color)] flex items-center gap-1 cursor-pointer transition"><RotateCw size={10} /> Scan Pending Requests</button>
                     </div>
 
-                    {details?.hasWebUI && details?.webUIBootstrapPath && (
+                    {/* Only agents that gate their Web UI behind a bootstrap
+                        secret (nanobot) have anything to show here. Hermes
+                        injects its own session token into the served page and
+                        disables auth on a loopback bind, so there is no code
+                        to copy — suppress the card entirely. */}
+                    {details?.hasWebUI && extractWebUISecret(details?.webUIBootstrapPath) && (
                       <div className="rounded-lg bg-black/30 border border-sky-500/30 p-3 space-y-2">
                         <div className="flex items-center gap-1.5">
                           <span className="w-5 h-5 rounded bg-sky-500/20 text-sky-300 flex items-center justify-center text-[10px]">🌐</span>
@@ -2142,29 +2198,23 @@ export default function AIAgentsApp({ apiFetch }) {
                         <p className="text-[10px] text-[var(--text-muted)]">
                           The Web UI asks for a bootstrap secret the first time it pairs a browser. Copy this code and paste it into the workbench&apos;s pair prompt — or just open the Web UI from the app, which applies it automatically.
                         </p>
-                        {extractWebUISecret(details.webUIBootstrapPath) ? (
-                          <div className="flex items-center gap-2">
-                            <code className="flex-1 bg-black/50 border border-sky-500/20 rounded px-2 py-1 text-[10px] font-mono text-sky-200 break-all min-w-0">{extractWebUISecret(details.webUIBootstrapPath)}</code>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                const s = extractWebUISecret(details.webUIBootstrapPath);
-                                if (s) {
-                                  navigator.clipboard.writeText(s).catch(() => {});
-                                  setNotice({ ok: true, text: 'WebUI bootstrap secret copied' });
-                                }
-                              }}
-                              className="px-2 py-1 rounded bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 text-[10px] font-bold border border-sky-500/30 transition cursor-pointer whitespace-nowrap flex items-center gap-1"
-                              title="Copy bootstrap secret"
-                            >
-                              <Copy size={10} /> Copy
-                            </button>
-                          </div>
-                        ) : (
-                          <code className="block bg-black/50 border border-sky-500/20 rounded px-2 py-1 text-[10px] font-mono text-[var(--text-muted)]">
-                            no bootstrap secret available — start the Web UI first
-                          </code>
-                        )}
+                        <div className="flex items-center gap-2">
+                          <code className="flex-1 bg-black/50 border border-sky-500/20 rounded px-2 py-1 text-[10px] font-mono text-sky-200 break-all min-w-0">{extractWebUISecret(details.webUIBootstrapPath)}</code>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const s = extractWebUISecret(details.webUIBootstrapPath);
+                              if (s) {
+                                navigator.clipboard.writeText(s).catch(() => {});
+                                setNotice({ ok: true, text: 'WebUI bootstrap secret copied' });
+                              }
+                            }}
+                            className="px-2 py-1 rounded bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 text-[10px] font-bold border border-sky-500/30 transition cursor-pointer whitespace-nowrap flex items-center gap-1"
+                            title="Copy bootstrap secret"
+                          >
+                            <Copy size={10} /> Copy
+                          </button>
+                        </div>
                         <p className="text-[9px] text-sky-400/60 font-mono break-all">{details.webUIBootstrapPath}</p>
                       </div>
                     )}

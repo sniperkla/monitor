@@ -100,6 +100,19 @@ export function issueRelayToken({ userId, email = null, scope = 'agent', label =
   return { token, expiresAt, entry };
 }
 
+/**
+ * Drop a token from the live store.
+ *
+ * Exists for rollback: if a caller mints a token and then fails to persist it,
+ * the credential is live in memory but unrecorded — invisible to the inventory
+ * and to revocation, and it would survive until the next restart. Callers must
+ * be able to undo their own mint.
+ */
+export function revokeRelayToken(token) {
+  if (!token) return false;
+  return tokenStore().delete(token);
+}
+
 /** Persist to disk if the running server has a persistence hook registered. */
 export async function persistRelayTokens() {
   if (typeof global.__persistRelayTokens === 'function') {

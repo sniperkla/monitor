@@ -23,6 +23,9 @@ beforeEach(() => {
   global.__relayDeviceCodes = new Map();
   global.__relayPairingFailures = new Map();
   global.__relayTokens = new Map();
+  // No persistence hook unless a test installs one — the exchange must not
+  // quietly depend on disk for its happy path.
+  delete global.__persistRelayTokens;
   supporterState.isSupporter = true;
 });
 
@@ -225,6 +228,35 @@ describe('exchangeEnrollment', () => {
     const res = await approveEnrollment({ userCode: e.userCode, userId: 'user-1' });
     assert.equal(res.ok, false);
   });
+
+  // F4 — the enrollment used to be consumed and the token minted before
+  // persistence was attempted. A persist failure then left the agent holding a
+  // 500 with a dead code on retry, plus a live credential no inventory listed.
+  test('a persist failure rolls the whole exchange back', async () => {
+    const e = enroll({ scope: 'agent' });
+    await approveEnrollment({ userCode: e.userCode, userId: 'user-1' });
+
+    global.__persistRelayTokens = async () => {
+      throw new Error('disk full');
+    };
+
+    await assert.rejects(
+      exchangeEnrollment({ deviceCode: e.deviceCode, ip: nextIp() }),
+      /disk full/,
+      'a failed persist must surface as an error, not a silent success'
+    );
+
+    assert.equal(global.__relayTokens.size, 0,
+      'the unpersisted token must be revoked, not left live in memory');
+    assert.ok(global.__relayDeviceCodes.has(e.deviceCode),
+      'the single-use code must be given back so the retry can succeed');
+
+    // And the retry actually does succeed once persistence works again.
+    delete global.__persistRelayTokens;
+    const retry = await exchangeEnrollment({ deviceCode: e.deviceCode, ip: nextIp() });
+    assert.equal(retry.status, 'ok', 'retry after a transient persist failure must work');
+    assert.equal(global.__relayTokens.size, 1);
+  });
 });
 
 describe('end-to-end pairing', () => {
@@ -270,6 +302,25 @@ describe('createInvite (browser-driven install over SSH)', () => {
     const got = await exchangeEnrollment({ deviceCode: r.claimCode, ip: nextIp() });
     assert.equal(got.status, 'ok');
     assert.equal(global.__relayTokens.get(got.token).userId, 'user-1');
+  });
+
+  // F6 — createInvite leaves userCode null, so `pairingId: entry.userCode`
+  // recorded every wizard-installed token as null: indistinguishable from a
+  // hand-pasted one, which is exactly the signal provenance exists to provide.
+  test('an invite-minted token still records where it came from', async () => {
+    const r = createInvite({ userId: 'user-1', ip: nextIp() });
+    const got = await exchangeEnrollment({ deviceCode: r.claimCode, ip: nextIp() });
+    const entry = global.__relayTokens.get(got.token);
+
+    assert.ok(entry.pairingId,
+      'provenance must not be dropped just because there is no typable user code');
+    assert.equal(entry.pairingId, 'invite');
+
+    // And it must not be confused with a device-paired install.
+    const e = enroll({ scope: 'agent' });
+    await approveEnrollment({ userCode: e.userCode, userId: 'user-1' });
+    const paired = await exchangeEnrollment({ deviceCode: e.deviceCode, ip: nextIp() });
+    assert.equal(global.__relayTokens.get(paired.token).pairingId, e.userCode);
   });
 
   test('is single use', async () => {

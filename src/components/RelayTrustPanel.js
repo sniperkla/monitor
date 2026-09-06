@@ -8,7 +8,6 @@ import {
   ChevronDown,
   Copy,
   Check,
-  FileCode2,
   Trash2,
   LoaderCircle,
   CircleCheck,
@@ -28,12 +27,16 @@ import { getCsrfToken, refreshCsrfToken } from '@/utils/csrfClient';
  * The previous copy answered with reassurance — "fully end-to-end encrypted",
  * "nothing stored on our servers". Those are unfalsifiable from where the user
  * is standing, so they do no work. What actually reduces the hesitation is
- * giving the user things they can *check*: a checksum, a file they can read,
- * the exact paths the install writes to, and the command that removes it.
+ * giving the user things they can *check*: a checksum, the exact paths the
+ * install writes to, the permissions it uses, and the command that removes it.
  *
  * So every claim below is verifiable by the person reading it, and the one
  * claim we cannot fully back — that our server itself is honest — is stated as
  * a limit rather than papered over.
+ *
+ * The source itself is no longer one of those things: the shipped file is a
+ * build. Nothing below claims otherwise — a claim the user can disprove in ten
+ * seconds costs more trust than it buys.
  */
 
 /* ── Small building blocks ─────────────────────────────────────────────── */
@@ -134,6 +137,34 @@ function downloadOnly(url) {
   return `curl -fsSL -H 'Cache-Control: no-cache' "${url}" -o local-relay.js`;
 }
 
+/**
+ * The npm path — preferred over piping a download into node.
+ *
+ * Why it is genuinely safer, rather than just feeling safer: the registry
+ * verifies the tarball integrity for you, versions are pinnable and auditable,
+ * and this package ships NO install lifecycle scripts, so `npm install` cannot
+ * execute anything. Nothing runs until the user types `local-relay`.
+ */
+export const NPM_PACKAGE = 'ssh-monitor-relay';
+
+export function npmInstallCommand({ server }) {
+  return [
+    `npm install -g ${NPM_PACKAGE}`,
+    `local-relay --pair --server ${shellQuote(server)}`,
+  ].join('\n');
+}
+
+/**
+ * Uninstall for the npm route.
+ *
+ * Order matters: `--uninstall` (which stops the service and removes
+ * ~/.ssh-monitor-relay) has to run while the `local-relay` binary still
+ * exists, so the `npm uninstall` that removes it comes second.
+ */
+export function npmUninstallCommand() {
+  return [`local-relay --uninstall`, `npm uninstall -g ${NPM_PACKAGE}`].join('\n');
+}
+
 /* ── Panel ─────────────────────────────────────────────────────────────── */
 
 export default function RelayTrustPanel({ server, detectedOS = 'macos', release = null }) {
@@ -145,8 +176,6 @@ export default function RelayTrustPanel({ server, detectedOS = 'macos', release 
 
   const sha256 = release?.sha256 || null;
   const url = `${server}${release?.url || '/local-relay.js'}`;
-
-  const sizeKb = release?.bytes ? (release.bytes / 1024).toFixed(0) : null;
 
   const revokeAll = async () => {
     setRevoking(true);
@@ -233,11 +262,20 @@ export default function RelayTrustPanel({ server, detectedOS = 'macos', release 
                   The token is stored <code className="text-amber-300">0600</code> in your home directory. It
                   never enters argv, shell history, or the service definition.
                 </FactRow>
-                <FactRow>
-                  It is one dependency-free file{sizeKb ? ` (${sizeKb} KB)` : ''}, served unminified — you can
-                  read it end to end.
-                </FactRow>
               </ul>
+
+              {/* Recommended: install from npm */}
+              <div className="space-y-2">
+                <p className="text-[10px] font-bold text-[var(--text-secondary)]">
+                  Recommended — install from npm
+                </p>
+                <CodeRow
+                  value={npmInstallCommand({ server })}
+                  hint="No pipe-to-shell. The registry checks integrity, you get real versions and `npm audit`, and the package ships no install scripts — so installing it runs nothing. Nothing happens until you type `local-relay` yourself."
+                >
+                  {npmInstallCommand({ server })}
+                </CodeRow>
+              </div>
 
               {/* Integrity */}
               {sha256 ? (
@@ -257,7 +295,7 @@ export default function RelayTrustPanel({ server, detectedOS = 'macos', release 
                       />
                     </div>
                     <p className="text-[9px] text-[var(--text-muted)] mt-1.5">
-                      SHA-256 of <code className="text-amber-300">{release?.file || 'local-relay.js'}</code>
+                      SHA-256 of the file at <code className="text-amber-300">/local-relay.js</code>
                     </p>
                   </div>
 
@@ -268,7 +306,7 @@ export default function RelayTrustPanel({ server, detectedOS = 'macos', release 
                     {verifyThenRun({ os: detectedOS, server, sha256, url })}
                   </CodeRow>
 
-                  <CodeRow value={downloadOnly(url)} hint="Or just download it and read it first — nothing runs.">
+                  <CodeRow value={downloadOnly(url)} hint="Or just download it and hold onto it — nothing runs until you execute it yourself.">
                     {downloadOnly(url)}
                   </CodeRow>
                 </div>
@@ -288,20 +326,6 @@ export default function RelayTrustPanel({ server, detectedOS = 'macos', release 
                   out-of-band code signature, which we do not ship yet.
                 </p>
               </div>
-
-              {/* Read the source */}
-              <a
-                href={release?.url || '/local-relay.js'}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] border border-[var(--border-color)] transition-colors"
-              >
-                <FileCode2 size={12} className="text-cyan-400 shrink-0" />
-                <span className="flex-1 text-[10px] text-[var(--text-secondary)]">
-                  Read the agent source in your browser
-                </span>
-                <span className="text-[9px] text-[var(--text-muted)]">↗</span>
-              </a>
 
               {/* Revoke */}
               <div className="border-t border-[var(--border-color)] pt-3 space-y-2">

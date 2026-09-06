@@ -292,6 +292,10 @@ async function handleProxy(request) {
     const connectionId = searchParams.get('connectionId');
     const port         = parseInt(searchParams.get('port') || '8765', 10);
     let remotePath     = searchParams.get('path') || '/';
+    // Which agent owns this Web UI. The "service not running" rescue screen
+    // below has to call that agent's `webui-ctl` to start it, and different
+    // agents ship different UIs (nanobot's webui vs Hermes' dashboard).
+    const agentId      = (searchParams.get('agent') || 'nanobot').replace(/[^a-z0-9_-]/gi, '');
     // Strip hash fragment from remote HTTP request (fragments are client-side only per RFC 7230)
     if (remotePath.includes('#')) {
       remotePath = remotePath.split('#')[0] || '/';
@@ -426,7 +430,7 @@ async function handleProxy(request) {
                 }
               } catch(e) {}
               // Direct fallback if opened as standalone tab
-              fetch('/api/agents/nanobot', {
+              fetch('/api/agents/${agentId}', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({

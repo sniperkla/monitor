@@ -31,6 +31,7 @@ const readSrc = (rel) => fs.readFileSync(path.join(here, '..', rel), 'utf8');
 const routeSrc = readSrc('src/app/api/relay/token/route.js');
 const relayTokensSrc = readSrc('src/lib/relayTokens.js');
 const serverSrc = readSrc('server.js');
+const relaySrc = readSrc('public/local-relay.js');
 const agentSyncSrc = readSrc('src/app/api/firewall/agent-sync/route.js');
 
 // Issuance rules (cap, eviction, audit metadata, TTL) live in lib/relayTokens.js,
@@ -115,8 +116,38 @@ test('DELETE revokes a scoped target, never the whole inventory', () => {
   assert.ok(routeSrc.includes('revokedTokens'), 'reports how many were revoked');
 });
 
+// F2 — the relay token used to ride in /relay-ws?token=... Access logs record
+// query strings, so pairing kept the secret out of argv only to have it
+// persisted in log storage. It now goes in an Authorization header.
+test('relay-ws accepts the token from a header, not only the query string', () => {
+  const handler = /relayWss\.on\('connection'[\s\S]{0,1200}?global\.__relayTokens\.get\(token\)/
+    .exec(serverSrc);
+  assert.ok(handler, 'relay-ws connection handler must read a token');
+  const block = handler[0];
+  assert.match(block, /req\.headers\.authorization/,
+    'token must be read from the Authorization header');
+  assert.match(block, /\/\^Bearer\\s\+\/i/,
+    'header must be parsed as a bearer credential');
+  assert.match(block, /url\.searchParams\.get\('token'\)/,
+    'query-string token must still be accepted so pre-update relays keep working');
+});
+
+test('relay client sends the token as a header when it can', () => {
+  assert.match(relaySrc, /new WS\(wsUrl, \{ headers: \{ authorization: `Bearer \$\{TOKEN\}` \} \}\)/,
+    'the `ws` client must send the token as a bearer header');
+  assert.match(relaySrc, /WS_CAN_SET_HEADERS/,
+    'the client must branch on whether its WebSocket can set headers at all');
+  // The WHATWG global WebSocket silently ignores its second argument, so using
+  // it with { headers } would drop the token and fail auth with no explanation.
+  const urlAt = relaySrc.indexOf('const wsUrl = WS_CAN_SET_HEADERS');
+  assert.ok(urlAt >= 0, 'wsUrl must be built from the header-capability branch');
+  const urlExpr = relaySrc.slice(urlAt, urlAt + 260);
+  assert.match(urlExpr, /:\s*wsBase \+ `\/relay-ws\?token=\$\{encodeURIComponent\(TOKEN\)\}`/,
+    'without `ws`, the client must fall back to the query string rather than send no token');
+});
+
 test('relay-ws and agent-sync both record lastUsed', () => {
-  assert.match(serverSrc, /relayWss\.on\('connection'[\s\S]{0,700}entry\.lastUsed = Date\.now\(\)/,
+  assert.match(serverSrc, /relayWss\.on\('connection'[\s\S]{0,1400}entry\.lastUsed = Date\.now\(\)/,
     'relay WebSocket records usage');
   assert.match(agentSyncSrc, /entry\.lastUsed = Date\.now\(\)/,
     'agent-sync records usage');
@@ -125,7 +156,7 @@ test('relay-ws and agent-sync both record lastUsed', () => {
 test('supporter gate is enforced at the relay WebSocket, not by scope', () => {
   // Guards the corrected understanding: if this check ever moves to depending on
   // entry.scope, an agent-scope token becomes a supporter bypass.
-  assert.match(serverSrc, /relayWss\.on\('connection'[\s\S]{0,900}isRelaySupporter\(entry\)/,
+  assert.match(serverSrc, /relayWss\.on\('connection'[\s\S]{0,1600}isRelaySupporter\(entry\)/,
     'relay-ws re-checks supporter status on every connect');
   assert.ok(routeSrc.includes('does not by itself gate Local Relay access'),
     'the route documents that scope is not the gate');

@@ -1183,6 +1183,19 @@ if [ ${cursor} -gt 0 ] && [ ${cursor} -le $SZ ]; then tail -c +$((cursor + 1)) "
         // argv (script text contains nanobot paths + webui words) and kill it.
         await execCommand(sshConfig, `${ENVX}; if [ -f "${wuPIDF}" ]; then kill $(cat "${wuPIDF}") 2>/dev/null; sleep 1; kill -9 $(cat "${wuPIDF}") 2>/dev/null; fi; rm -f "${wuPIDF}"; for P in $(pgrep -f '[n]anobot.*webui' 2>/dev/null); do [ "$P" != "$$" ] && [ "$P" != "$PPID" ] && kill "$P" 2>/dev/null; done; true`, { pool: false, timeoutMs: 20000 });
         log.push(`✓ Stopped previous Web UI processes`);
+        // MUST return here. `stop` matches none of the launch branches below
+        // (relay-start / start / restart), so without this the handler falls off
+        // the end of the webui-ctl block and returns undefined — a 500 in the
+        // inline path and a rejected live job ("Cannot read properties of
+        // undefined") in the streaming one. `restart` deliberately falls
+        // through so it re-launches after the kill.
+        if (op === 'stop') {
+          return NextResponse.json({
+            success: true, active: false, op, port: wuPort,
+            output: `Nanobot Web UI stopped (port ${wuPort})`,
+            log,
+          });
+        }
       }
       if (op === 'relay-start') {
         // Direct-transfer mode: the user's Local Relay opens the SSH tunnel on

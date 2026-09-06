@@ -326,11 +326,12 @@ test('hermes spawn: private home + per-instance session and kanban state dirs', 
 
 test('hermes: every start path loads the per-instance isolation env', () => {
   const route = readFileSync('src/app/api/agents/hermes/route.js', 'utf8');
-  // Both nohup start paths (gateway restart/start + the install daemon) must
-  // source instance.env, otherwise those instances never get their own ports
-  // or their pinned shared-state paths.
+  // Every nohup start path must source instance.env, otherwise those instances
+  // never get their own ports or their pinned shared-state paths. Three of them:
+  // gateway restart/start, the install daemon, and the Web UI dashboard daemon
+  // (which needs HERMES_HOME to serve the right instance's sessions/config).
   const sources = [...route.matchAll(/\[ -f "\$\{HH\}\/instance\.env" \] && \. "\$\{HH\}\/instance\.env"/g)];
-  assert.equal(sources.length, 2, `expected 2 nohup starts to source instance.env, found ${sources.length}`);
+  assert.equal(sources.length, 3, `expected 3 nohup starts to source instance.env, found ${sources.length}`);
   assert.match(route, /EnvironmentFile=-%h\/\.hermes-%i\/instance\.env/, 'systemd unit must load instance.env');
 });
 

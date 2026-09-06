@@ -2,7 +2,7 @@ import { randomBytes, randomInt } from 'crypto';
 import { checkRateLimit } from '@/lib/serverGuard';
 import { safeEqual } from '@/lib/csrf';
 import { getSupporterStatus } from '@/utils/supporter';
-import { issueRelayToken, persistRelayTokens, sanitizeLabel } from '@/lib/relayTokens';
+import { issueRelayToken, persistRelayTokens, revokeRelayToken, sanitizeLabel } from '@/lib/relayTokens';
 
 /**
  * Relay device pairing — an RFC 8628 style flow so the person installing the
@@ -365,6 +365,12 @@ export async function exchangeEnrollment({ deviceCode, ip = 'unknown' }) {
   }
 
   // Single use: consume before minting so a replay cannot mint twice.
+  //
+  // The delete stays BEFORE the mint on purpose and must not be moved after an
+  // await. There is no suspension point between `delete` and `issueRelayToken`,
+  // so the consume-and-mint is atomic; putting an await in between would leave
+  // the enrollment visible as 'approved' and let a concurrent poll mint a
+  // second token from one code.
   codes.delete(deviceCode);
 
   const { token, expiresAt } = issueRelayToken({
@@ -372,10 +378,24 @@ export async function exchangeEnrollment({ deviceCode, ip = 'unknown' }) {
     email: entry.email,
     scope: entry.scope,
     label: entry.label,
-    pairingId: entry.userCode,
+    pairingId: entry.userCode || 'invite',
   });
 
-  await persistRelayTokens();
+  // Persist, and undo everything if that fails.
+  //
+  // Previously the enrollment was already consumed and the token already live
+  // in memory by the time persistence ran. A persist failure therefore left the
+  // worst combination: the agent got a 500, its retry got 410 because the code
+  // was gone, and a working credential sat in memory that no inventory listed
+  // and no operator could revoke. Restoring the code gives the retry its single
+  // use back; revoking the token removes the unrecorded one.
+  try {
+    await persistRelayTokens();
+  } catch (e) {
+    revokeRelayToken(token);
+    codes.set(deviceCode, entry);
+    throw e;
+  }
 
   return {
     status: 'ok',

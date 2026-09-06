@@ -4,13 +4,15 @@
   "private": true,
   "scripts": {
     "dev": "NODE_OPTIONS='--dns-result-order=ipv4first' node server.js",
-    "build:agent": "npx javascript-obfuscator public/monitor-agent.js --output public/monitor-agent.min.js --compact true --string-array true --target node",
-    "build:relay": "npx javascript-obfuscator public/local-relay.js --output public/local-relay.min.js --compact true --string-array true --target node",
+    "build:agent": "node scripts/build-relay.mjs --target agent",
     "build:all": "npm run build:relay && npm run build:agent && next build",
     "build": "next build",
     "start": "NODE_ENV=production NODE_OPTIONS='--dns-result-order=ipv4first' node server.js",
     "lint": "eslint",
-    "test": "node --import ./tests/_register-hooks.mjs --test \"tests/**/*.test.mjs\""
+    "test": "node --import ./tests/_register-hooks.mjs --test \"tests/**/*.test.mjs\"",
+    "build:relay": "node scripts/build-relay.mjs",
+    "prebuild": "npm run build:relay && npm run build:agent",
+    "predev": "npm run build:relay && npm run build:agent"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1079.0",
@@ -63,6 +65,7 @@
     "@tailwindcss/postcss": "^4",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
+    "javascript-obfuscator": "^5.6.0",
     "puppeteer-core": "^25.8.0",
     "tailwindcss": "^4"
   }

@@ -29,8 +29,15 @@ import path from 'path';
  * surface merely to reveal metadata that the installer does not need first.
  */
 
-/** Which file the installer hands out. Kept in one place so they cannot drift. */
-export const RELAY_FILENAME = 'local-relay.js';
+/**
+ * Which file the installer hands out. Kept in one place so they cannot drift.
+ *
+ * This is the BUILT artifact, not the source, and it must stay that way: the
+ * manifest digest has to describe the bytes /local-relay.js actually serves, or
+ * the verify-before-run step fails for everyone. scripts/build-relay.mjs is
+ * deterministic (fixed seed), so the digest is stable for a given source.
+ */
+export const RELAY_FILENAME = 'local-relay.min.js';
 
 const RELAY_PATH = path.join(process.cwd(), 'public', RELAY_FILENAME);
 
@@ -64,7 +71,9 @@ export async function GET(request) {
       {
         success: true,
         file: RELAY_FILENAME,
-        url: `/${RELAY_FILENAME}`,
+        // The public installer URL. It serves the same bytes as the hashed
+        // artifact — server.js maps /local-relay.js onto local-relay.min.js.
+        url: '/local-relay.js',
         sha256: manifest.sha256,
         bytes: manifest.size,
         verifiedAt: new Date(manifest.mtimeMs).toISOString(),

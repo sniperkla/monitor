@@ -506,33 +506,38 @@ app.prepare().then(async () => {
       // Serve local-relay.js as a public static file — bypass Next.js/auth entirely
       // so unauthenticated curl downloads work (e.g. one-liner installer)
       if (req.url === '/local-relay.js' || req.url.startsWith('/local-relay.js?')) {
-        const minifiedPath = path.join(__dirname, 'public', 'local-relay.min.js');
-        const sourcePath   = path.join(__dirname, 'public', 'local-relay.js');
-        // Prefer the SOURCE, not the minified bundle.
         //
-        // The relay self-updates by re-fetching this URL, so whatever we serve here
-        // becomes what runs on every user's machine. Preferring the .min.js meant a
-        // stale minified bundle (Sep 2) silently won over newer source, and because
-        // that bundle predated the WebUI gateway feature, every relay restart
-        // DOWNGRADED the relay to a build with no `webui:forward` handler — the
-        // gateway tunnel could then never open, no matter how many times the user
-        // clicked "Start Web UI". Took a whole session to spot. Don't repeat it.
+        // ALWAYS the built artifact. NEVER the readable source.
         //
-        // Only use the minified file if the source is missing, or if the minified
-        // file is genuinely NEWER than the source (i.e. freshly rebuilt from it).
-        let scriptPath = sourcePath;
-        try {
-          const haveMin = fs.existsSync(minifiedPath);
-          const haveSrc = fs.existsSync(sourcePath);
-          if (haveMin && (!haveSrc || fs.statSync(minifiedPath).mtimeMs > fs.statSync(sourcePath).mtimeMs)) {
-            scriptPath = minifiedPath;
-          }
-        } catch {
-          scriptPath = sourcePath;
-        }
+        // public/local-relay.js is the source humans edit. public/local-relay.min.js
+        // is what we ship, produced by scripts/build-relay.mjs. Serving the source
+        // here would hand out the very thing the build exists to protect, so there
+        // is deliberately no fallback: if the artifact is missing we fail loudly
+        // (503) instead of quietly serving something else.
+        //
+        // That "fail loudly" rule is the whole fix for the STALE-BUNDLE TRAP this
+        // endpoint used to have. It once fell back to a minified bundle whenever
+        // one existed; a stale copy (Sep 2) then outranked newer source, and
+        // because it predated the WebUI gateway every relay restart DOWNGRADED the
+        // relay to a build with no `webui:forward` handler — the gateway tunnel
+        // could never open. Cost a whole session to spot. A conditional fallback
+        // is how that class of bug gets in, so there isn't one.
+        //
+        // Freshness is enforced by construction instead: every artifact carries
+        // `source-sha256` in its header, and `npm run build:relay -- --check`
+        // fails when it no longer matches the source. Run it in CI.
+        const scriptPath = path.join(__dirname, 'public', 'local-relay.min.js');
         res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
         res.setHeader('Cache-Control', 'no-store, no-cache');
         res.setHeader('X-Content-Type-Options', 'nosniff');
+
+        if (!fs.existsSync(scriptPath)) {
+          res.statusCode = 503;
+          res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+          res.end('Relay artifact missing. Run: npm run build:relay');
+          return;
+        }
+
         const stream = fs.createReadStream(scriptPath);
         stream.on('error', () => { res.statusCode = 404; res.end('Not found'); });
         stream.pipe(res);
@@ -5188,8 +5193,15 @@ fi'`;
       // ── End Monitor Agent WebSocket Handler ────────────────────────────────────
 
       relayWss.on('connection', (ws, req) => {
-        const url    = new URL(req.url, 'http://localhost');
-        const token  = url.searchParams.get('token');
+        // Token from the Authorization header, falling back to ?token=.
+        // A query string is written to access logs, which is exactly where a
+        // credential should not end up. The fallback is only for relays installed
+        // before that change — they cannot be updated in place.
+        const url        = new URL(req.url, 'http://localhost');
+        const authHeader = String(req.headers.authorization || '');
+        const token      = /^Bearer\s+/i.test(authHeader)
+          ? authHeader.replace(/^Bearer\s+/i, '').trim()
+          : url.searchParams.get('token');
         const entry  = global.__relayTokens.get(token);
 
         if (!entry || entry.expiresAt < Date.now()) {

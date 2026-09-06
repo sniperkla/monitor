@@ -351,6 +351,16 @@ async function handleAgentAction(body, session, log = []) {
     const HH = inst ? `$HOME/.hermes-${inst}` : `$HOME/.hermes`;
     const HERMES_ENV = inst ? `export HERMES_HOME=$HOME/.hermes-${inst};` : '';
 
+    // Web UI (dashboard) port.
+    //
+    // `hermes dashboard` serves the bundled Vite/React SPA over plain TCP —
+    // which makes it the ONLY hermes surface a browser can reach, because the
+    // messaging gateway itself listens on a unix socket with no HTTP port at
+    // all (docs/ISOLATION_TESTING.md). A tagged instance therefore gets its own
+    // deterministic port from the shared allocator instead of fighting the
+    // default install for 9119.
+    const WEBUI_PORT = instancePorts('hermes', inst, ['webui'])[0] || 9119;
+
     // ── Per-instance isolation ─────────────────────────────────────────────
     // HERMES_HOME relocates config/.env/memories/logs, but Hermes keeps the
     // kanban board, terminal sandbox, OAuth file and Codex home on SHARED
@@ -818,6 +828,13 @@ fi
 ${procScan(inst)}
 SYSTEMD=0; command -v systemctl >/dev/null 2>&1 && SYSTEMD=1
 echo "SSVC=$SSVC"; echo "USVC=$USVC"; echo "PROC=$PROC"; echo "SYSTEMD=$SYSTEMD"
+echo "===WEBUI==="
+# Liveness of the bundled dashboard (hermes dashboard), NOT the gateway: they
+# are separate processes, and the gateway itself is a unix socket with no HTTP
+# port. 2xx/3xx/4xx = serving; 000 = nothing listening.
+# NOTE: no backticks in this script — it lives inside a JS template literal.
+WU=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "http://127.0.0.1:${WEBUI_PORT}/" 2>/dev/null || true)
+echo "WU_HTTP=$WU"
 echo "===VERSION==="
 [ -n "$BIN" ] && "$BIN" --version 2>/dev/null | tail -1 | cut -c1-40
 echo "===MODEL==="
@@ -861,8 +878,13 @@ echo "$MDL"
 
       const hasHomeDir = section('DIR_EXISTS', 'BINPATH') === '1';
       const remoteBinPath = section('BINPATH', 'CONFIG_B64').split('\n').map(s => s.trim()).filter(Boolean)[0] || '';
-      const runningSection = section('RUNNING', 'VERSION');
+      const runningSection = section('RUNNING', 'WEBUI');
       const running = /SSVC=1|USVC=1|PROC=1/.test(runningSection);
+      // Hermes' bundled dashboard (`hermes dashboard`) — the browser-facing
+      // equivalent of nanobot's WebUI. `webUIActive` is a live HTTP probe, not
+      // a flag, so it only reads true when something is actually serving.
+      const webuiHttp = Number(section('WEBUI', 'VERSION').match(/WU_HTTP=(\d+)/)?.[1] || 0);
+      const webUIActive = webuiHttp >= 200 && webuiHttp < 500;
       const installed = (!!remoteBinPath && hasHomeDir) || running;
       const currentVer = section('VERSION', 'MODEL') || null;
       let model = section('MODEL') || null;
@@ -893,6 +915,16 @@ echo "$MDL"
         binPath: installed ? (remoteBinPath || null) : null,
         service: running ? (/SSVC=1/.test(runningSection) ? 'system' : /USVC=1/.test(runningSection) ? 'user' : /PROC=1/.test(runningSection) ? 'process' : null) : null,
         hasSystemd: /SYSTEMD=1/.test(runningSection),
+        // Drives the "Web UI" quick-launch card in AIAgentsApp. Hermes ships the
+        // dashboard, so this is always true once the agent is installed — what
+        // varies is whether it is currently serving (webUIActive).
+        hasWebUI: installed,
+        webUIPort: WEBUI_PORT,
+        webUIActive,
+        // No bootstrap secret: on a loopback bind hermes sets
+        // __HERMES_AUTH_REQUIRED__=false and injects its own session token into
+        // the served index.html, so "/" is a complete, working entry point.
+        webUIBootstrapPath: '/',
         // Intentionally NOT masked: these fields round-trip through the config
         // editor. Returning masked placeholders ("••••") would make the UI
         // persist them straight back into config.yaml on save and corrupt it.
@@ -1117,6 +1149,194 @@ fi
       const fileM = out.match(/FILE=(.*)/)?.[1]?.trim();
       const dataIdx = out.indexOf('===DATA===');
       return NextResponse.json({ success: true, size: szM ? Number(szM) : 0, file: fileM || null, data: dataIdx >= 0 ? out.slice(dataIdx + 10) : '' });
+    }
+
+    // ── WEB UI (dashboard) control ─────────────────────────────────────────
+    //
+    // Hermes ships a full browser dashboard: `hermes dashboard` serves the
+    // bundled Vite/React SPA (Chat, Sessions, Skills, Cron, Logs, System) on a
+    // TCP port. That is the surface we start/stop/proxy here — it is Hermes'
+    // equivalent of nanobot's WebUI.
+    //
+    // Two traps worth knowing:
+    //   1. `hermes serve` is NOT the same thing. It is the headless JSON-RPC
+    //      backend (for the Desktop app) and answers "/" with
+    //      "web UI disabled — use `hermes dashboard`". Always use `dashboard`.
+    //   2. The FIRST launch compiles the frontend (npm build, ~40s warm, minutes
+    //      cold on a fresh box), so start must poll for readiness rather than
+    //      assume the port is bound the moment the process is spawned.
+    if (action === 'webui-ctl') {
+      const op = ['start', 'stop', 'restart', 'status', 'relay-start'].includes(config.op) ? config.op : 'status';
+      const wuPort = parseInt(config.port, 10) > 0 ? parseInt(config.port, 10) : WEBUI_PORT;
+      const WU_LOG = `${HH}/logs/webui.log`;
+      const WU_PIDF = `${HH}/webui.pid`;
+      // A 2xx/3xx/4xx means something is SERVING — 401/403 just means auth is on.
+      // Only connection-refused (000) means the dashboard is down.
+      const HTTP_PROBE = `HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "http://127.0.0.1:${wuPort}/" 2>/dev/null || true); echo "HTTP_CODE=$HTTP_CODE"`;
+      const probeCode = (stdout) => parseInt((stdout || '').match(/HTTP_CODE=(\d+)/)?.[1] || '0', 10);
+
+      if (op === 'status') {
+        const r = await execCommand(sshConfig, HTTP_PROBE, { pool: false, timeoutMs: 15000 });
+        const code = probeCode(r.stdout);
+        return NextResponse.json({
+          success: true,
+          active: code >= 200 && code < 500,
+          op,
+          port: wuPort,
+          httpCode: code,
+        });
+      }
+
+      if (op === 'stop' || op === 'restart') {
+        log.push(`> Stopping Hermes Web UI on port ${wuPort}...`);
+        // Kill by PORT, never by name: a name-based kill would also take the
+        // messaging gateway (and every other instance's dashboard) down with
+        // it. fuser -k and lsof -ti both target the single listener.
+        await execCommand(sshConfig, `if [ -f "${WU_PIDF}" ]; then kill $(cat "${WU_PIDF}") 2>/dev/null; sleep 1; kill -9 $(cat "${WU_PIDF}") 2>/dev/null; fi; rm -f "${WU_PIDF}"
+if command -v fuser >/dev/null 2>&1; then fuser -k ${wuPort}/tcp 2>/dev/null; fi
+if command -v lsof >/dev/null 2>&1; then kill -9 $(lsof -ti :${wuPort}) 2>/dev/null; fi
+sleep 1
+echo WU_STOPPED`, { pool: false, timeoutMs: 30000 });
+        log.push('✓ Stopped previous Web UI process');
+        if (op === 'stop') {
+          return NextResponse.json({ success: true, active: false, op, port: wuPort, log });
+        }
+      }
+
+      if (op === 'relay-start') {
+        // Direct-transfer mode: the user's Local Relay opens the SSH tunnel on
+        // the user's own machine and serves the dashboard at 127.0.0.1:<port> —
+        // the central server is control-plane only (no data flows through it).
+        if (typeof global.__sendToRelayForUserAny !== 'function') {
+          return NextResponse.json({ success: false, error: 'relay bridge unavailable' }, { status: 503, log });
+        }
+        const monitorOrigin = String(config.monitorOrigin || '');
+        const forwardId = `${connectionId}-${wuPort}`;
+        const forwardMsg = {
+          type: 'webui:forward',
+          forwardId,
+          remotePort: wuPort,
+          // Requested port only — a hint. If a gateway for another connection
+          // already owns it, the relay binds the next free port and reports the
+          // real one via `webui:ready`. Never assume this is the final answer.
+          // 18791 (not nanobot's 18790) so the two never collide on one machine.
+          localPort: 18791,
+          monitorOrigin,
+          // Hermes' dashboard injects its own session token into the served
+          // index.html and disables the auth gate on a loopback bind, so there
+          // is no bootstrap secret to forward (unlike nanobot).
+          bootstrapSecret: '',
+          connection: {
+            host: sshConfig.host, port: sshConfig.port, username: sshConfig.username,
+            password: sshConfig.password, privateKey: sshConfig.privateKey, passphrase: sshConfig.passphrase,
+          },
+        };
+        // Register the waiter BEFORE sending, or the relay's ack can arrive
+        // before we're listening and we'd wait for the full timeout.
+        const ackPromise = typeof global.__waitForWebuiForward === 'function'
+          ? global.__waitForWebuiForward(forwardId, 20000)
+          : Promise.resolve(null);
+        const sent = await (global.__sendToRelayForUserAny([session?.user?.id, session?.user?.dbId, session?.user?.sub], forwardMsg) || Promise.resolve(false));
+        if (!sent) {
+          return NextResponse.json({ success: false, error: 'Local Relay is not connected — start it or use the central proxy' }, { status: 409, log });
+        }
+        const ackedPort = await ackPromise;
+        const localPort = Number(ackedPort) || 18791;
+        log.push(`> [webui] Direct relay requested — dashboard serving at http://127.0.0.1:${localPort}`);
+        return NextResponse.json({
+          success: true, active: true, relay: true, localPort,
+          // True when the relay reported its own port; false means we fell back
+          // to the default (older relay build) and the port may be wrong.
+          portConfirmed: !!ackedPort,
+          log,
+        });
+      }
+
+      // ── op === 'start' | 'restart' ──
+      // Already serving? Nothing to do — report it and let the client open a tab.
+      {
+        const chk = await execCommand(sshConfig, HTTP_PROBE, { pool: false, timeoutMs: 15000 });
+        const code = probeCode(chk.stdout);
+        if (code >= 200 && code < 500) {
+          log.push(`✓ Hermes Web UI is already running and responding on port ${wuPort} (HTTP ${code})`);
+          return NextResponse.json({
+            success: true, active: true, op, port: wuPort,
+            webUIBootstrapPath: '/',
+            output: `Hermes Web UI is already running on port ${wuPort}`,
+            log,
+          });
+        }
+      }
+
+      // Resolve the hermes binary (same search order as `details`).
+      const binR = await execCommand(sshConfig, `
+${inst ? `export HERMES_HOME="$HOME/.hermes-${inst}"` : ''}
+export PATH="${inst ? `$HOME/.hermes-${inst}/hermes-agent/venv/bin:` : ''}$HOME/.local/bin:/usr/local/lib/hermes-agent/venv/bin:$HOME/.hermes/hermes-agent/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+BIN=""
+for p in "${HH}/hermes-agent/venv/bin/hermes" "$HOME/.hermes/hermes-agent/venv/bin/hermes" "$HOME/.local/bin/hermes" "/usr/local/lib/hermes-agent/venv/bin/hermes" "/usr/local/lib/hermes-agent/hermes" "/usr/local/bin/hermes" "/usr/bin/hermes"; do [ -x "$p" ] && BIN="$p" && break; done
+[ -z "$BIN" ] && BIN="$(command -v hermes 2>/dev/null || true)"
+echo "BIN=$BIN"`, { pool: false, timeoutMs: 20000 });
+      const BIN = (binR.stdout || '').match(/BIN=(.*)/)?.[1]?.trim();
+      if (!BIN) {
+        log.push('✗ hermes binary not found on this server');
+        return NextResponse.json({ success: false, error: 'hermes binary not found', port: wuPort, log });
+      }
+      log.push(`> [webui] hermes binary: ${BIN}`);
+
+      // Launch detached, then poll until the port answers.
+      //
+      // The build step is the reason this is a poll loop and not a sleep: a cold
+      // dashboard compiles its own frontend before it ever binds a socket, so
+      // "process alive" and "port open" are separated by minutes, not seconds.
+      const launch = `
+mkdir -p "${HH}/logs"
+> "${WU_LOG}"
+set -a; [ -f "${HH}/instance.env" ] && . "${HH}/instance.env"; [ -f "${HH}/.env" ] && . "${HH}/.env"; set +a
+${inst ? `export HERMES_HOME="$HOME/.hermes-${inst}"` : ''}
+nohup ${sq(BIN)} dashboard --port ${wuPort} --no-open >> "${WU_LOG}" 2>&1 < /dev/null &
+echo $! > "${WU_PIDF}"
+C=0
+for i in $(seq 1 40); do
+  C=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "http://127.0.0.1:${wuPort}/" 2>/dev/null || true)
+  case "$C" in 200|204|301|302|303|307|308|4*) break ;; esac
+  sleep 3
+done
+echo "HTTP_CODE=$C"
+echo "===LOG==="
+tail -n 30 "${WU_LOG}" 2>/dev/null || echo "(no log)"
+`;
+      const r = await execCommand(sshConfig, launch, { pool: false, timeoutMs: 180000 });
+      const out = r.stdout || '';
+      const code = probeCode(out);
+      const logTail = out.includes('===LOG===') ? out.split('===LOG===')[1].trim() : '';
+      if (logTail) for (const l of logTail.split('\n')) log.push(`  ${l}`);
+
+      const active = code >= 200 && code < 500;
+      if (active) {
+        log.push(`✓ Hermes Web UI started on port ${wuPort}`);
+        return NextResponse.json({
+          success: true, active: true, op, port: wuPort,
+          webUIBootstrapPath: '/',
+          output: `Hermes Web UI is running on port ${wuPort}`,
+          log,
+        });
+      }
+      // Not up yet. Distinguish "still compiling the frontend" (recoverable —
+      // the process is doing real work, the user just has to wait) from a hard
+      // failure, because the two need very different advice.
+      const building = /built in|vite|npm|node_modules|compil/i.test(logTail);
+      const errMsg = building
+        ? `Web UI is still building its frontend — it was not serving after ${40 * 3}s. First launch compiles the bundle; click Start again in a minute.`
+        : (logTail.split('\n').filter(l => /error|fail|not built/i.test(l)).pop()
+          || logTail.split('\n').pop()
+          || 'Web UI process exited immediately');
+      log.push(`✗ ${errMsg}`);
+      return NextResponse.json({
+        success: false, active: false, op, port: wuPort,
+        building,
+        error: errMsg,
+        log,
+      });
     }
 
     // ── HEALTH — is the bot actually alive & connected? ─────────────────────
