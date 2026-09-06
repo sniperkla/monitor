@@ -284,6 +284,7 @@ export function RevealScreen({ onDismiss }) {
         active={fieldActive}
         reduced={motionOff}
         density={motionOff ? 0.3 : 0.55}
+        exclude=".console-card,[data-uplink-panel]"
       />
 
       {/* Synthetic nervous system: sparse nodes, dim synapses, occasional

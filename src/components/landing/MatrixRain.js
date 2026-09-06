@@ -18,7 +18,7 @@ import { useEffect, useRef } from 'react';
 
 const GLYPHS = 'アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホ0123456789ABCDEF$#@%&';
 
-function MatrixRain({ fps = 30, active = true, reduced = false, density = 0.55, className, style }) {
+function MatrixRain({ fps = 30, active = true, reduced = false, density = 0.55, exclude = '', className, style }) {
   const canvasRef = useRef(null);
   const colsRef = useRef(null);
 
@@ -77,12 +77,6 @@ function MatrixRain({ fps = 30, active = true, reduced = false, density = 0.55, 
       ctx.globalCompositeOperation = 'source-over';
     };
 
-    const drawGlyph = (c, row, bright) => {
-      ctx.font = `${FS - 2}px ui-monospace, "JetBrains Mono", "Cascadia Mono", monospace`;
-      ctx.fillStyle = bright ? 'rgba(134,239,172,0.85)' : 'rgba(74,222,128,0.4)';
-      ctx.fillText(glyph(), c.x, row * FS);
-    };
-
     const stepCol = (c, dt) => {
       if (c.phase === 'dorm') {
         c.timer -= dt;
@@ -110,7 +104,7 @@ function MatrixRain({ fps = 30, active = true, reduced = false, density = 0.55, 
       for (let r = prev + 1; r <= cur; r++) {
         if (r >= 0 && r <= rows) drawGlyph(c, r, false);
       }
-      if (cur >= 0 && cur <= rows) drawGlyph(c, cur, true);
+      if (cur >= 0 && cur <= rows) drawGlyphAt(c, cur, true);
       if (cur > rows + 4) {
         c.phase = 'fade';
         c.timer = 1.2;
@@ -146,7 +140,33 @@ function MatrixRain({ fps = 30, active = true, reduced = false, density = 0.55, 
     let last = performance.now();
     const minFrame = fps >= 58 ? 0 : 1000 / fps;
 
+    // Glyphs dim to near-zero inside excluded UI rects (uplink panel,
+    // console card) so the rain never fights real text. Rects refresh every
+    // rendered frame (cheap: two selectors).
+    let excludeRects = [];
+    const dimAt = (x, y) => {
+      let f = 1;
+      for (let i = 0; i < excludeRects.length; i++) {
+        const r = excludeRects[i];
+        if (x >= r.left - 6 && x <= r.right + 6 && y >= r.top - 6 && y <= r.bottom + 6) {
+          f = Math.min(f, 0.1);
+        }
+      }
+      return f;
+    };
+    const drawGlyphAt = (c, row, bright) => {
+      const y = row * FS;
+      const f = dimAt(c.x, y);
+      if (f <= 0.02) return;
+      ctx.font = `${FS - 2}px ui-monospace, "JetBrains Mono", "Cascadia Mono", monospace`;
+      ctx.fillStyle = bright ? `rgba(134,239,172,${(0.85 * f).toFixed(3)})` : `rgba(74,222,128,${(0.4 * f).toFixed(3)})`;
+      ctx.fillText(glyph(), c.x, y);
+    };
+
     const frame = (now) => {
+      excludeRects = (exclude ? exclude.split(',') : [])
+        .map((sel) => document.querySelector(sel)?.getBoundingClientRect())
+        .filter(Boolean);
       raf = requestAnimationFrame(frame);
       const raw = now - last;
       if (raw < minFrame) return;
@@ -154,6 +174,10 @@ function MatrixRain({ fps = 30, active = true, reduced = false, density = 0.55, 
       const dt = Math.min(0.1, raw / 1000);
       for (let i = 0; i < cols.length; i++) stepCol(cols[i], dt);
     };
+
+    // Pausing clears the canvas — frozen glyphs behind an open modal would
+    // read as artifacts.
+    if (!active) ctx.clearRect(0, 0, W, H);
 
     const onResize = () => resize();
     window.addEventListener('resize', onResize);
@@ -165,7 +189,7 @@ function MatrixRain({ fps = 30, active = true, reduced = false, density = 0.55, 
       cancelAnimationFrame(raf);
       window.removeEventListener('resize', onResize);
     };
-  }, [fps, active, reduced, density]);
+  }, [fps, active, reduced, density, exclude]);
 
   return <canvas ref={canvasRef} className={className} style={style} aria-hidden="true" />;
 }

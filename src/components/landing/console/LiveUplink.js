@@ -145,7 +145,10 @@ function LiveUplink({ reduced }) {
   }, [reduced]);
 
   return (
-    <div className="fixed top-5 left-5 z-[4] pointer-events-none hidden sm:block w-[min(26rem,38vw)]">
+    <div
+      data-uplink-panel
+      className="fixed top-5 left-5 z-[4] pointer-events-none hidden sm:block w-[min(26rem,38vw)]"
+    >
       <div
         className="px-3 py-2.5 font-mono text-[9px] leading-relaxed border-l border-slate-600/40"
         style={{
