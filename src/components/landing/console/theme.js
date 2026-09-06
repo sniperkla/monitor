@@ -2,18 +2,9 @@
 
 /* Shared constants + one-shot CSS for the landing console. */
 
-import { Terminal, Database, Shield, Server } from 'lucide-react';
-
 const TITLE = 'SSH MONITOR';
 const SUBTITLE = 'Terminal & Server Control Center';
 const SCRAMBLE_GLYPHS = '0123456789ABCDEF';
-
-const CAPABILITIES = [
-  { icon: Terminal, label: 'SSH', color: '#64748b' },
-  { icon: Database, label: 'Data', color: '#64748b' },
-  { icon: Shield, label: 'Vault', color: '#64748b' },
-  { icon: Server, label: 'Deploy', color: '#64748b' },
-];
 
 /* ═══ Per-section background scenes ═══
    Every part of the story puts the hex-network field into its own mood,
@@ -166,4 +157,4 @@ const CONSOLE_CSS = `
 `;
 
 
-export { TITLE, SUBTITLE, SCRAMBLE_GLYPHS, CAPABILITIES, SCENES, CONSOLE_CSS };
+export { TITLE, SUBTITLE, SCRAMBLE_GLYPHS, SCENES, CONSOLE_CSS };

@@ -29,7 +29,7 @@ import NeuralWeb from './NeuralWeb';
 import MatrixRain from './MatrixRain';
 import { CinematicAuthModal } from './CinematicAuthModal';
 import { signInWithPasskey, passkeysSupported } from '@/utils/passkey';
-import { CONSOLE_CSS, SUBTITLE, CAPABILITIES, SCENES } from './console/theme';
+import { CONSOLE_CSS, SUBTITLE, SCENES } from './console/theme';
 import { prefersReducedMotion, useIsTouch, useDocumentVisible } from './story/hooks';
 import { ScrambleTitle } from './console/ScrambleTitle';
 import { LiveUplink } from './console/LiveUplink';
@@ -420,21 +420,6 @@ export function RevealScreen({ onDismiss }) {
               <div className="rise" style={{ animationDelay: '640ms' }}>
                 <AuthActions {...authProps} compact />
               </div>
-
-              <div className="rise mt-6 flex flex-wrap justify-center gap-x-5 gap-y-2" style={{ animationDelay: '760ms' }}>
-                {CAPABILITIES.map((cap) => (
-                  <span key={cap.label} className="flex items-center gap-1.5" title={cap.label}>
-                    <cap.icon size={13} style={{ color: cap.color }} />
-                    <span className="font-mono text-[9px] uppercase tracking-[0.18em] text-slate-500">
-                      {cap.label}
-                    </span>
-                  </span>
-                ))}
-              </div>
-
-              <p className="rise mt-5 text-center text-[9px] sm:text-[10px] text-slate-500 leading-relaxed" style={{ animationDelay: '860ms' }}>
-                Login to sync settings, connections, and vault across devices.
-              </p>
             </div>
           </div>
         </div>
