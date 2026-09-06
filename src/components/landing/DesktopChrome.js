@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Wifi, Battery, Search, Terminal, Activity, Shield, Database, Bot } from 'lucide-react';
+import { Wifi, Battery, Search, Terminal, Activity, Shield, Database, Bot, Command, Rocket } from 'lucide-react';
 
 /* The guest landing backdrop: a pure dark gradient with a faint emerald
    horizon glow — plus the macOS chrome: menu bar on top, dock at the
@@ -12,6 +12,7 @@ const DOCK_APPS = [
   { icon: Activity, label: 'Server Monitor', cmd: '$ watch --live' },
   { icon: Shield, label: 'Vault & Security', cmd: '$ vault --audit' },
   { icon: Database, label: 'Backups', cmd: '$ backup --sync' },
+  { icon: Rocket, label: 'Auto Deploy', cmd: '$ deploy --auto' },
   { icon: Bot, label: 'AI Agents', cmd: '$ agent --spawn' },
 ];
 
@@ -65,13 +66,11 @@ export default function DesktopChrome({ onNavigate }) {
         className="fixed top-0 left-0 right-0 z-[40] h-7 flex items-center justify-between px-3 sm:px-4 bg-black/45 backdrop-blur-xl border-b border-white/8 select-none pointer-events-none"
         aria-hidden="true"
       >
-        <div className="flex items-center gap-3 sm:gap-4 min-w-0">
-          <span className="text-white/85 text-[13px] leading-none"></span>
-          {['Monitor', 'File', 'View', 'Security', 'Help'].map((m) => (
-            <span key={m} className="hidden md:inline text-[11px] font-medium text-white/60">
-              {m}
-            </span>
-          ))}
+        <div className="flex items-center gap-2.5 min-w-0">
+          <Command size={13} className="text-emerald-300/80" />
+          <span className="hidden md:inline text-[11px] font-semibold tracking-wide text-emerald-100/85">
+            SSH Monitor
+          </span>
         </div>
         <div className="flex items-center gap-2.5 sm:gap-3 text-white/60">
           <Wifi size={12} />

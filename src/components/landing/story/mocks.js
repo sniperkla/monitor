@@ -1,6 +1,6 @@
 'use client';
 
-import { Lock, BrickWallShield, Bug, CloudCog, Database, Server } from 'lucide-react';
+import { Lock, BrickWallShield, Bug, CloudCog, Database, Server, Rocket, GitBranch } from 'lucide-react';
 
 /* ── Story section primitives ── */
 function SectionHead({ cmd, index, title, sub }) {
@@ -213,6 +213,42 @@ function BackupMock() {
   );
 }
 
+function DeployMock() {
+  const steps = [
+    { icon: GitBranch, label: 'git push origin main', detail: 'received · 4 files' },
+    { icon: CloudCog, label: 'Build image', detail: 'done · 42s' },
+    { icon: Database, label: 'Migrate database', detail: 'ok · 0 downtime' },
+    { icon: Server, label: 'Rolling update', detail: '3/3 live', v: 100 },
+  ];
+  return (
+    <div className="io mt-9 rounded-xl border border-slate-700/50 bg-slate-950/60 p-4 sm:p-5" data-px="0.045">
+      <div className="space-y-4">
+        {steps.map((st, i) => (
+          <div key={st.label} style={{ '--d': `${i * 110}ms` }}>
+            <div className="flex items-center gap-2.5 mb-1.5">
+              <st.icon size={13} className="text-slate-500" />
+              <span className="text-[11px] font-semibold text-slate-200">{st.label}</span>
+              <span className="ml-auto font-mono text-[9px] text-emerald-400/70">{st.detail}</span>
+            </div>
+            {st.v !== undefined && (
+              <span className="bar-track flex h-1.5 rounded-full bg-slate-800/80 overflow-hidden">
+                <span className="bar-fill" style={{ '--w': `${st.v}%`, background: '#94a3b8', opacity: 0.75 }} />
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
+      <div className="mt-4 pt-3 border-t border-slate-800/80 font-mono text-[10px] text-slate-500">
+        <span className="text-emerald-400/80 mr-1.5">$</span>
+        <span className="css-type" style={{ '--n': '32ch', '--td': '2s', '--sn': 32, '--tdel': '0.4s' }}>
+          autodeploy status --release v2.1.0
+        </span>
+        <span className="caret" style={{ width: '6px', height: '0.9em' }} />
+      </div>
+    </div>
+  );
+}
+
 const AGENTS = [
   { name: 'Hermes Agent', status: 'IDLE', color: '#64748b', logo: '/agents/hermes.png' },
   { name: 'Nanobot', status: 'WATCHING', color: '#4ade80', logo: '/agents/nanobot.svg' },
@@ -268,4 +304,4 @@ function AgentMock() {
 }
 
 
-export { SectionHead, Ghost, FleetMock, MonitorMock, SecurityMock, BackupMock, AgentMock };
+export { SectionHead, Ghost, FleetMock, MonitorMock, SecurityMock, BackupMock, DeployMock, AgentMock };

@@ -26,7 +26,7 @@ import { ScrambleTitle } from './console/ScrambleTitle';
 import { AuthActions, CloserActions } from './console/AuthActions';
 import { Statusline } from './console/Statusline';
 import { useScrollStory } from './story/useScrollStory';
-import { SectionHead, FleetMock, MonitorMock, SecurityMock, BackupMock, AgentMock } from './story/mocks';
+import { SectionHead, FleetMock, MonitorMock, SecurityMock, BackupMock, DeployMock, AgentMock } from './story/mocks';
 
 /* Passkey sign-in is available in-app but not offered on this screen —
    flip to true to restore the "Sign in with Passkey" buttons. */
@@ -418,12 +418,24 @@ export function RevealScreen({ onDismiss }) {
           <BackupMock />
         </section>
 
-        {/* ── 05 · AI agents ── */}
+        {/* ── 05 · Auto deploy ── */}
+        <section data-cmd="$ deploy --auto" data-scene="deploy" className="io story-sec relative mx-auto w-full max-w-3xl px-5 sm:px-8 py-20 sm:py-28">
+          <span className="sweep" aria-hidden="true" />
+          <SectionHead
+            cmd="deploy --auto"
+            index="05"
+            title="Ship without touching a server."
+            sub="Auto Deploy turns a git push into a rolling release — build, migrate, swap and verify health automatically. One click to roll back."
+          />
+          <DeployMock />
+        </section>
+
+        {/* ── 06 · AI agents ── */}
         <section data-cmd="$ agent --spawn" data-scene="agents" className="io story-sec relative mx-auto w-full max-w-3xl px-5 sm:px-8 py-20 sm:py-28">
           <span className="sweep" aria-hidden="true" />
           <SectionHead
             cmd="agent --spawn"
-            index="05"
+            index="06"
             title="AI agents on watch."
             sub="Spawn Hermes, Nanobot, OpenClaw or ZeroClaw on your servers. Agents watch logs, run repairs and report back while you sleep."
           />
