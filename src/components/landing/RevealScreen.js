@@ -303,7 +303,7 @@ export function RevealScreen({ onDismiss }) {
               <span className="flex-1 text-center font-mono text-[9px] sm:text-[10px] text-emerald-300/50 tracking-wider truncate">
                 monitor@orbit — ssh — 80×24
               </span>
-              <span className="font-mono text-[9px] text-emerald-800">ssh:22 · v2</span>
+              <span className="font-mono text-[9px] text-emerald-800">ssh:22</span>
             </div>
 
             <div className="relative z-[1] px-5 sm:px-7 pt-5 pb-6 sm:pb-7">
