@@ -154,9 +154,16 @@ async function claimWithCode(code) {
   try {
     const r = await postJson('/api/relay/device/token', { deviceCode: code });
     if (r.status === 200 && r.data && r.data.token) return r.data.token;
-    throw new Error((r.data && r.data.error) || `Could not claim the install code (HTTP ${r.status}).`);
+    const err = new Error((r.data && r.data.error) || `Could not claim the install code (HTTP ${r.status}).`);
+    // Tag it. The catch below used to string-match `/^Could not claim/`, so a
+    // server message like "This setup code expired." failed the test and got
+    // rewritten into "Could not reach https://… — This setup code expired."
+    // The server answered; nothing failed to reach it. Users chased a phantom
+    // network problem and re-ran an installer that could never succeed.
+    err.fromResponse = true;
+    throw err;
   } catch (e) {
-    if (e && /^Could not claim/.test(e.message || '')) throw e;
+    if (e && e.fromResponse) throw e;
     throw new Error(`Could not reach ${SERVER} — ${e.message}`);
   }
 }
@@ -176,7 +183,22 @@ if (IS_INSTALLING) {
       process.exit(1);
     }
 
-    if (!TOKEN) {
+    // Same defect F8 fixed in the relay, and worse here: TOKEN is seeded from
+    // savedConfig.token, so once an agent had been installed this block never
+    // ran again — no pairing code, and (because saveConfig lives inside it) no
+    // config write either. A --claim code was silently ignored too, which is
+    // the one input that must never be ignored: it binds a specific connection.
+    //
+    // --pair / --claim are explicit requests for new credentials, so they mint
+    // one even when a token is already saved. An explicit --token on the command
+    // line still wins; MONITOR_TOKEN in the environment does not, because it is
+    // ambient config rather than something the user just asked for.
+    const EXPLICIT_TOKEN = getArg('--token');
+    if (!TOKEN || ((IS_PAIR || CLAIM_CODE) && !EXPLICIT_TOKEN)) {
+      if ((IS_PAIR || CLAIM_CODE) && !EXPLICIT_TOKEN && savedConfig.token) {
+        console.log('\n↻ Already paired — replacing the existing token with a new one.');
+        console.log('  The old one stops being used; revoke it in Settings → Agents.');
+      }
       try {
         TOKEN = CLAIM_CODE ? await claimWithCode(CLAIM_CODE) : await pairAndGetToken();
       } catch (e) {

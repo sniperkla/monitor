@@ -3,7 +3,11 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import DeploymentOnboarding, { hasCompletedDeploymentOnboarding, resetDeploymentOnboarding } from '@/components/DeploymentOnboarding';
 import RelayPairingPanel from '@/components/RelayPairingPanel';
-import RelayTrustPanel from '@/components/RelayTrustPanel';
+import RelayTrustPanel, {
+  NPM_PACKAGE,
+  npmInstallCommand,
+  npmUninstallCommand,
+} from '@/components/RelayTrustPanel';
 
 function safeStringify(obj) {
   const seen = new WeakSet();
@@ -15,6 +19,7 @@ function safeStringify(obj) {
     return value;
   });
 }
+
 import {
   Palette, Image as ImageIcon, Monitor, Layout, Bell, Shield, Info,
   Database, CircleCheck, AlertCircle, RefreshCw, Zap, Wifi, WifiOff, Server, Box, Package,
@@ -39,6 +44,42 @@ import ShortcutInput from '@/components/Desktop/ShortcutInput';
 import ThemeSelect from '@/components/common/ThemeSelect';
 
 /* ─── Production-grade reusable UI primitives ─── */
+
+/**
+ * npm vs direct-download switch for the relay installer.
+ *
+ * Rendered in two places (the relay settings card and the installer modal), so
+ * it lives here rather than inline. npm is listed first because it is the only
+ * route where installing runs no code at all — the package ships no lifecycle
+ * scripts, so nothing executes until the user types `local-relay` themselves.
+ */
+function InstallMethodToggle({ method, onChange }) {
+  // Two equally-valid install paths. The modal adds a separate "registry-verified"
+  // callout when npm is selected, so the tabs don't need to take sides here.
+  const options = [
+    { id: 'npm', label: 'Install with npm' },
+    { id: 'script', label: 'One-line installer' },
+  ];
+
+  return (
+    <div className="flex items-center gap-1 p-0.5 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)]">
+      {options.map((o) => (
+        <button
+          key={o.id}
+          type="button"
+          onClick={() => onChange(o.id)}
+          className={`flex-1 px-2 py-1 rounded-md text-[10px] font-bold transition-colors cursor-pointer ${
+            method === o.id
+              ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+              : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)] border border-transparent'
+          }`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 function SettingsCard({ children, className = '', noPad = false }) {
   return (
@@ -297,6 +338,10 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
   // Integrity manifest for the file the user is about to download and run.
   // Null until fetched; the trust panel degrades to facts-without-checksum.
   const [relayRelease, setRelayRelease] = useState(null);
+  // How the user wants to install the relay: 'npm' (registry, no pipe-to-shell)
+  // or 'script' (curl the served file and run it). npm is the default because
+  // it is the one route where nothing executes at install time.
+  const [relayInstallMethod, setRelayInstallMethod] = useState('npm');
   // The relay this browser prefers to route through (saved in localStorage)
   const [preferredRelay, setPreferredRelay] = useState(() =>
     typeof window !== 'undefined' ? (localStorage.getItem('ssh_monitor_preferred_relay') || null) : null
@@ -1537,6 +1582,22 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
     return `rm -f ${targetPath} && curl -fsSL -H 'Cache-Control: no-cache' "${scriptUrl}" -o ${targetPath} && node ${targetPath} --pair --server ${quotePosixArg(server)} && rm -f ${targetPath}`;
   };
 
+  /**
+   * The install/uninstall snippet for whichever method the user picked.
+   *
+   * npm first: the registry verifies tarball integrity, versions are pinnable
+   * and auditable, and the package ships no install lifecycle scripts — so
+   * `npm install` executes nothing. The curl route stays for machines with no
+   * registry access or a locked-down npm mirror.
+   */
+  const getRelayInstallSnippet = () =>
+    relayInstallMethod === 'npm'
+      ? npmInstallCommand({ server: window.location.origin })
+      : getRelayOneLiner('install');
+
+  const getRelayUninstallSnippet = () =>
+    relayInstallMethod === 'npm' ? npmUninstallCommand() : getRelayUninstallSnippet();
+
   const setVaultPreset = (uri) => {
     setVaultUri(uri);
     addNotification({ title: t('settings_ui.relay.toasts.presetApplied'), message: t('settings_ui.relay.toasts.presetMsg'), type: 'info' });
@@ -2409,29 +2470,40 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
 
                     {/* Local Relay Agent — Local Access Gateway */}
                     <div id="relay-agent-section" className="rounded-2xl border overflow-hidden"
-                      style={{ borderColor: relayConnected ? 'rgba(52,211,153,0.25)' : 'var(--border-color)' }}
+                      style={{ borderColor: relayConnected ? 'rgba(52,211,153,0.25)' : relayWaiting ? 'rgba(96,165,250,0.30)' : 'var(--border-color)' }}
                     >
-                      {/* Header */}
-                      <div className={`px-4 py-3 flex items-center gap-3 ${relayConnected ? 'bg-emerald-500/[0.05]' : 'bg-amber-500/[0.04]'}`}>
-                        <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${relayConnected ? 'bg-emerald-500/15' : 'bg-amber-500/10'}`}>
-                          <Network size={15} className={relayConnected ? 'text-emerald-400' : 'text-amber-400'} />
+                      {(() => {
+                        // 3 visible states: ready / waiting (pairing in progress) / not connected.
+                        // "OFFLINE" used to read like an error — it's really just "setup needed".
+                        const relayStatus = relayConnected ? 'ready' : relayWaiting ? 'waiting' : 'offline';
+                        const headerBg    = relayStatus === 'ready' ? 'bg-emerald-500/[0.05]' : relayStatus === 'waiting' ? 'bg-blue-500/[0.05]'   : 'bg-amber-500/[0.04]';
+                        const iconBg      = relayStatus === 'ready' ? 'bg-emerald-500/15'      : relayStatus === 'waiting' ? 'bg-blue-500/15'         : 'bg-amber-500/10';
+                        const iconColor   = relayStatus === 'ready' ? 'text-emerald-400'       : relayStatus === 'waiting' ? 'text-blue-400'          : 'text-amber-400';
+                        const badgeBg     = relayStatus === 'ready' ? 'bg-emerald-500/15 text-emerald-400' : relayStatus === 'waiting' ? 'bg-blue-500/15 text-blue-400' : 'bg-[var(--bg-tertiary)] text-[var(--text-muted)]';
+                        const dotColor    = relayStatus === 'ready' ? 'bg-emerald-400 animate-pulse'      : relayStatus === 'waiting' ? 'bg-blue-400 animate-pulse'     : 'bg-[var(--text-muted)]';
+                        const badgeText   = relayStatus === 'ready' ? 'Ready' : relayStatus === 'waiting' ? 'Awaiting approval' : 'Not connected';
+                        const subtitle    = !isSupporter && !relayConnected
+                          ? t('supporter.relayLockedDesc', 'Supporter feature — unlock Local Relay + TURBO speeds')
+                          : relayStatus === 'ready'
+                          ? 'Relay connected — your local SSH, Docker, and database ports are reachable'
+                          : relayStatus === 'waiting'
+                          ? 'Pairing in progress — approve the code in the install wizard to finish'
+                          : 'Reach SSH, Docker, and database servers running on your own machine';
+                        return (
+                      <div className={`px-4 py-3 flex items-center gap-3 ${headerBg}`}>
+                        <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${iconBg}`}>
+                          <Network size={15} className={iconColor} />
                         </div>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2">
                             <h4 className="text-xs font-bold text-[var(--text-primary)]">SSH Relay</h4>
-                            <span className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider ${
-                              relayConnected ? 'bg-emerald-500/15 text-emerald-400' : 'bg-[var(--bg-tertiary)] text-[var(--text-muted)]'
-                            }`}>
-                              <span className={`w-1.5 h-1.5 rounded-full ${relayConnected ? 'bg-emerald-400 animate-pulse' : 'bg-[var(--text-muted)]'}`} />
-                              {relayConnected ? 'Ready' : 'Offline'}
+                            <span className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider ${badgeBg}`}>
+                              <span className={`w-1.5 h-1.5 rounded-full ${dotColor}`} />
+                              {badgeText}
                             </span>
                           </div>
                           <p className="text-[10px] text-[var(--text-muted)] mt-0.5 truncate">
-                            {!isSupporter && !relayConnected
-                              ? t('supporter.relayLockedDesc', 'Supporter feature — unlock Local Relay + TURBO speeds')
-                              : relayConnected
-                              ? 'Relay agent ready — local databases accessible'
-                              : 'Access local databases from your machine via secure relay'}
+                            {subtitle}
                           </p>
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
@@ -2472,6 +2544,8 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                           )}
                         </div>
                       </div>
+                        );
+                      })()}
 
                       {/* Active relays list */}
                       {relayConnected && relays.length > 0 && (
@@ -2529,14 +2603,19 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                       {/* Install command — no token needed, it pairs itself */}
                       {!relayConnected && (
                         <div className="px-4 py-3 border-t border-[var(--border-color)] space-y-2">
-                          <p className="text-[10px] font-bold text-[var(--text-secondary)]">Run this on your machine:</p>
+                          <div className="flex items-center gap-2">
+                            <p className="flex-1 text-[10px] font-bold text-[var(--text-secondary)]">
+                              {relayWaiting ? 'Finish pairing:' : 'Run this on your machine:'}
+                            </p>
+                          </div>
+                          <InstallMethodToggle method={relayInstallMethod} onChange={setRelayInstallMethod} />
                           <div className="relative">
-                            <code className="block p-2.5 pr-10 bg-slate-950 border border-slate-800 rounded-lg text-[9px] font-mono text-amber-300 break-all leading-relaxed">
-                              {getRelayOneLiner('install')}
+                            <code className="block p-2.5 pr-10 bg-slate-950 border border-slate-800 rounded-lg text-[9px] font-mono text-amber-300 break-all leading-relaxed whitespace-pre-wrap">
+                              {getRelayInstallSnippet()}
                             </code>
                             <button
                               onClick={() => {
-                                navigator.clipboard.writeText(getRelayOneLiner('install'));
+                                navigator.clipboard.writeText(getRelayInstallSnippet());
                                 addNotification({ title: 'Copied!', message: 'Paste in your Terminal and press Enter.', type: 'success' });
                               }}
                               className="absolute right-1.5 top-1.5 p-1.5 hover:bg-white/10 rounded-lg transition-colors"
@@ -2544,6 +2623,11 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                               <Copy size={12} className="text-[var(--text-muted)]" />
                             </button>
                           </div>
+                          {!relayWaiting && (
+                            <p className="text-[10px] text-[var(--text-muted)] leading-relaxed">
+                              It will print a pairing code — paste it back here into Settings → Local Relay to finish.
+                            </p>
+                          )}
                         </div>
                       )}
 
@@ -2552,12 +2636,10 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                         <div className="px-4 py-3 border-t border-[var(--border-color)] bg-[var(--bg-tertiary)]/30">
                           <div className="flex items-start gap-2.5">
                             <Info size={13} className="text-blue-400 shrink-0 mt-0.5" />
-                            <div className="text-[10px] text-[var(--text-muted)] space-y-1">
+                            <div className="text-[10px] text-[var(--text-muted)] space-y-1 leading-relaxed">
                               <p><strong className="text-[var(--text-secondary)]">When do you need this?</strong></p>
-                              <p>• Your SSH/database server runs on <code className="text-amber-300">localhost</code> or <code className="text-amber-300">127.0.0.1</code></p>
-                              <p>• You want to access it from this dashboard (which runs on a different server)</p>
-                              <p className="text-emerald-400/80">✓ Not needed for remote servers (public IP/domain)</p>
-                              <p className="text-emerald-400/80">✓ Not needed if you access the dashboard directly on localhost</p>
+                              <p>• The server you want to manage runs on <strong className="text-[var(--text-secondary)]">your own machine</strong> (localhost or 127.0.0.1).</p>
+                              <p>• This dashboard runs on a different machine than that server.</p>
                             </div>
                           </div>
                         </div>
@@ -4541,10 +4623,25 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                         <div className="w-5 h-5 rounded-full bg-amber-500 flex items-center justify-center shrink-0">
                           <span className="text-[10px] font-bold text-white">1</span>
                         </div>
-                        <p className="text-xs font-bold text-[var(--text-secondary)]">
+                        <p className="text-xs font-bold text-[var(--text-secondary)] flex-1">
                           {detectedOS === 'windows' ? 'Download & run the installer' : 'Copy & paste into your Terminal'}
                         </p>
                       </div>
+
+                      {/* How to get it: the npm registry, or the served script */}
+                      <InstallMethodToggle method={relayInstallMethod} onChange={setRelayInstallMethod} />
+
+                      {relayInstallMethod === 'npm' && (
+                        <div className="flex gap-2 p-2.5 rounded-xl bg-emerald-500/[0.06] border border-emerald-500/15">
+                          <ShieldCheck size={13} className="shrink-0 text-emerald-400 mt-0.5" />
+                          <p className="text-[10px] text-[var(--text-muted)] leading-relaxed">
+                            Installed from the npm registry as <code className="text-amber-300">{NPM_PACKAGE}</code>.
+                            The registry verifies integrity, versions are pinnable, and the package ships no
+                            install scripts — so installing it runs nothing. Nothing happens until you type{' '}
+                            <code className="text-amber-300">local-relay</code> yourself.
+                          </p>
+                        </div>
+                      )}
 
                       {/* Command block */}
                       <div className="relative rounded-xl overflow-hidden border border-slate-700/60">
@@ -4559,7 +4656,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                           </span>
                           <button
                             onClick={() => {
-                              navigator.clipboard.writeText(getRelayOneLiner('install'));
+                              navigator.clipboard.writeText(getRelayInstallSnippet());
                               addNotification({ title: 'Copied!', message: detectedOS === 'windows' ? 'Paste in PowerShell or CMD and press Enter.' : 'Open Terminal, paste and press Enter.', type: 'success' });
                             }}
                             className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/20 text-amber-400 text-[9px] font-bold transition-colors"
@@ -4568,13 +4665,13 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                           </button>
                         </div>
                         <div className="p-3 bg-slate-950 min-h-[56px] flex items-center">
-                          <code className="text-[10px] font-mono text-amber-300 break-all leading-relaxed">{getRelayOneLiner('install')}</code>
+                          <code className="text-[10px] font-mono text-amber-300 break-all leading-relaxed whitespace-pre-wrap">{getRelayInstallSnippet()}</code>
                         </div>
                       </div>
 
                       {/* CTA buttons */}
                       <div className="flex gap-2">
-                        {detectedOS === 'windows' ? (
+                        {relayInstallMethod === 'script' && detectedOS === 'windows' ? (
                           <>
                             <button
                               onClick={() => downloadInstallerScript('install')}
@@ -4584,7 +4681,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                             </button>
                             <button
                               onClick={() => {
-                                navigator.clipboard.writeText(getRelayOneLiner('install'));
+                                navigator.clipboard.writeText(getRelayInstallSnippet());
                                 addNotification({ title: 'Copied!', message: 'Paste in PowerShell or CMD and press Enter.', type: 'success' });
                               }}
                               className="px-3 py-2.5 bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] border border-[var(--border-color)] rounded-xl text-[var(--text-secondary)] text-xs font-bold transition-colors"
@@ -4595,7 +4692,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                         ) : (
                           <button
                             onClick={() => {
-                              navigator.clipboard.writeText(getRelayOneLiner('install'));
+                              navigator.clipboard.writeText(getRelayInstallSnippet());
                               addNotification({ title: 'Copied!', message: 'Open Terminal, paste and press Enter, then enter the code it prints below.', type: 'success' });
                             }}
                             className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-amber-500 hover:bg-amber-600 active:scale-[0.98] rounded-xl text-white font-bold text-xs transition-all shadow-lg shadow-amber-500/20"
@@ -4675,7 +4772,14 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                         <Trash2 size={13} className="shrink-0 text-rose-400 mt-0.5" />
                         <div className="text-[10px] text-[var(--text-muted)] leading-relaxed space-y-0.5">
                           <p className="font-semibold text-rose-300">Remove the relay agent from your machine</p>
-                          <p>Stops the background service, removes the auto-start entry, and deletes <code className="text-amber-300">local-relay.js</code>.</p>
+                          <p>
+                            Stops the background service and removes the auto-start entry, then{' '}
+                            {relayInstallMethod === 'npm' ? (
+                              <>uninstalls the <code className="text-amber-300">{NPM_PACKAGE}</code> package.</>
+                            ) : (
+                              <>deletes <code className="text-amber-300">local-relay.js</code>.</>
+                            )}
+                          </p>
                         </div>
                       </div>
 
@@ -4692,7 +4796,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                           </span>
                           <button
                             onClick={() => {
-                              navigator.clipboard.writeText(getRelayOneLiner('uninstall'));
+                              navigator.clipboard.writeText(getRelayUninstallSnippet());
                               addNotification({ title: 'Copied!', message: detectedOS === 'windows' ? 'Paste in PowerShell or CMD to uninstall.' : 'Paste in Terminal to uninstall the relay.', type: 'info' });
                             }}
                             className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/20 text-rose-400 text-[9px] font-bold transition-colors cursor-pointer"
@@ -4701,33 +4805,37 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                           </button>
                         </div>
                         <div className="p-3 bg-slate-950 min-h-[44px] flex items-center">
-                          <code className="text-[10px] font-mono text-rose-300/90 break-all leading-relaxed">
-                            {getRelayOneLiner('uninstall')}
+                          <code className="text-[10px] font-mono text-rose-300/90 break-all leading-relaxed whitespace-pre-wrap">
+                            {getRelayUninstallSnippet()}
                           </code>
                         </div>
                       </div>
 
                       {/* Action buttons */}
-                      <div className="grid grid-cols-2 gap-2">
+                      <div className={`grid gap-2 ${relayInstallMethod === 'script' ? 'grid-cols-2' : 'grid-cols-1'}`}>
                         <button
                           onClick={() => {
-                            navigator.clipboard.writeText(getRelayOneLiner('uninstall'));
+                            navigator.clipboard.writeText(getRelayUninstallSnippet());
                             addNotification({ title: 'Copied!', message: detectedOS === 'windows' ? 'Paste in PowerShell or CMD to uninstall.' : 'Paste in Terminal to uninstall.', type: 'info' });
                           }}
                           className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/25 text-rose-400 text-[11px] font-bold transition-all cursor-pointer"
                         >
                           <Copy size={11} /> Copy Command
                         </button>
-                        <button
-                          onClick={() => downloadInstallerScript('uninstall')}
-                          className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] border border-[var(--border-color)] text-[var(--text-secondary)] text-[11px] font-bold transition-colors cursor-pointer"
-                        >
-                          <Download size={11} /> {getRelayScriptFilename('uninstall')}
-                        </button>
+                        {/* The .sh/.bat download only makes sense for the
+                            curl route — the npm route has nothing to download. */}
+                        {relayInstallMethod === 'script' && (
+                          <button
+                            onClick={() => downloadInstallerScript('uninstall')}
+                            className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] border border-[var(--border-color)] text-[var(--text-secondary)] text-[11px] font-bold transition-colors cursor-pointer"
+                          >
+                            <Download size={11} /> {getRelayScriptFilename('uninstall')}
+                          </button>
+                        )}
                       </div>
 
                       {/* Alternative install script download (non-windows) */}
-                      {detectedOS !== 'windows' && (
+                      {detectedOS !== 'windows' && relayInstallMethod === 'script' && (
                         <button
                           onClick={() => downloadInstallerScript('install')}
                           disabled={!relayToken}

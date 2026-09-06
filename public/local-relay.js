@@ -43,13 +43,21 @@ function tryRequire(moduleName) {
 }
 
 // -- Try to load ssh2 (optional dependency) --
+//
+// These capability notices are noise when the user only asked for --help, so
+// they are suppressed in that case. (`local-relay --help` used to fall through
+// and start the relay; it now exits, and printing "node-datachannel not found"
+// above the usage text just made the help look broken.)
+const WANTS_HELP = process.argv.includes('--help') || process.argv.includes('-h');
+const say = (...a) => { if (!WANTS_HELP) console.log(...a); };
+
 let ssh2;
 try {
   ssh2 = tryRequire('ssh2');
-  console.log('✅ ssh2 loaded — SSH/SFTP will run locally');
+  say('✅ ssh2 loaded — SSH/SFTP will run locally');
 } catch {
-  console.log('ℹ️  ssh2 not found — install with: npm install ssh2');
-  console.log('   Falling back to TCP relay mode only');
+  say('ℹ️  ssh2 not found — install with: npm install ssh2');
+  say('   Falling back to TCP relay mode only');
 }
 
 // -- Try to load node-datachannel (WebRTC, optional) --
@@ -57,10 +65,10 @@ let ndc = null;
 try {
   ndc = tryRequire('node-datachannel');
   ndc.initLogger('Error');
-  console.log('✅ node-datachannel loaded — WebRTC P2P enabled');
+  say('✅ node-datachannel loaded — WebRTC P2P enabled');
 } catch {
-  console.log('ℹ️  node-datachannel not found — relay will operate in WebSocket-proxy mode');
-  console.log('   For P2P mode: npm install node-datachannel  (in relay directory)');
+  say('ℹ️  node-datachannel not found — relay will operate in WebSocket-proxy mode');
+  say('   For P2P mode: npm install node-datachannel  (in relay directory)');
 }
 
 // crypto is built-in since Node 18
@@ -73,8 +81,14 @@ const activeRtcPeers   = new Map();
 
 // -- Try to load ws --
 let WS;
+// Only the `ws` package can set handshake headers. The WHATWG global WebSocket
+// silently ignores its second argument, so treating the two as interchangeable
+// would make the token disappear from the request and every connect fail with
+// "Invalid or expired token" — with no hint that headers were the cause.
+let WS_CAN_SET_HEADERS = false;
 try {
   WS = tryRequire('ws');
+  WS_CAN_SET_HEADERS = true;
 } catch {
   try {
     WS = globalThis.WebSocket;
@@ -94,6 +108,54 @@ for (let i = 0; i < argv.length; i++) {
     if (nxt && !nxt.startsWith('--')) { args[key] = nxt; i++; }
     else args[key] = true;
   }
+}
+
+// ── Help ──────────────────────────────────────────────────────────────────
+// Without this, `local-relay --help` (and any typo'd flag) fell straight
+// through: the arg parser happily stored `help = true`, ignored it, and the
+// relay started up and dialled the default server. The first thing an npm user
+// types should not silently launch a daemon.
+const KNOWN_FLAGS = ['server', 'token', 'pair', 'uninstall', 'install', 'name', 'label', 'scope', 'help'];
+if (args.help || args.h === true) {
+  console.log(`
+⚡ SSH Monitor — Local Relay
+
+  Installed via npm:  npm install -g ssh-monitor-relay
+
+USAGE
+  local-relay --pair --server <URL>            pair this machine (interactive code)
+  local-relay --server <URL> --token <TOKEN>   run with a token you already have
+  local-relay --uninstall                      remove the background service
+  local-relay --help                           this message
+
+OPTIONS
+  --server <URL>   monitor server, e.g. https://monitor.eaqdragon.com
+  --token <TOKEN>  relay token (normally written by --pair, not passed by hand)
+  --name <NAME>    name this relay reports to the server (default: hostname)
+  --label <LABEL>  human-readable label
+  --scope <SCOPE>  relay | agent
+
+Normally you run exactly one command:
+
+  local-relay --pair --server https://monitor.eaqdragon.com
+
+It prints a short code, you approve it in Settings → Local Relay, and the relay
+installs itself as a background service that starts at login.
+
+Config:   ~/.ssh-monitor-relay.json   (0600)
+Install:  ~/.ssh-monitor-relay/
+Logs:     ~/Library/Logs/ssh-monitor-relay.log   (macOS)
+`);
+  process.exit(0);
+}
+
+const unknown = Object.keys(args).filter(
+  (k) => !KNOWN_FLAGS.includes(k) && !['length', 'map', 'slice'].includes(k)
+);
+if (unknown.length) {
+  console.error(`❌ Unknown flag(s): ${unknown.map((k) => '--' + k).join(', ')}`);
+  console.error('   Run `local-relay --help` for usage.');
+  process.exit(1);
 }
 
 // -- Config persistence --
@@ -212,6 +274,43 @@ const NODE_BIN = process.execPath;
 const SCRIPT = path.resolve(__filename);
 const INSTALLED_SCRIPT = path.join(INSTALL_DIR, 'local-relay.js');
 
+/**
+ * Should this file be deleted once install/uninstall finishes?
+ *
+ * The original rule was "delete the throwaway copy the user curled into
+ * ~/Downloads". That is wrong for an npm install: there, the running file IS
+ * the package's own dist/local-relay.js inside a global node_modules tree, so
+ * deleting it bricks the `local-relay` command after its very first run. The
+ * service keeps working (it runs the copy in ~/.ssh-monitor-relay), so the
+ * breakage is silent and only shows up the next time you type the command.
+ *
+ * Rule: never delete anything inside a node_modules tree, and never delete the
+ * copy the background service actually runs from.
+ */
+function isDisposableScript(p) {
+  const resolved = path.resolve(p);
+  if (resolved === path.resolve(INSTALLED_SCRIPT)) return false;
+
+  // Allowlist, not a blocklist. Deleting your own executable is never
+  // necessary — it is only tidiness for the curl workflow, where the file was
+  // saved into Downloads/Desktop/a temp dir seconds ago. Anything not clearly
+  // a scratch location is kept.
+  //
+  // Blocklists fail here in two ways we hit for real:
+  //   - `npm install -g ./packages` SYMLINKS the package, so __filename's
+  //     realpath has no node_modules segment and a node_modules check misses.
+  //   - running from a source checkout would delete the source of truth.
+  const home = os.homedir();
+  const scratch = [
+    os.tmpdir(),
+    '/tmp',
+    '/private/tmp',
+    path.join(home, 'Downloads'),
+    path.join(home, 'Desktop'),
+  ];
+  return scratch.some((dir) => resolved === dir || resolved.startsWith(dir + path.sep));
+}
+
 if (args.install || args.pair) {
   // Async IIFE: pairing has to await network round trips. connect() is guarded
   // at the bottom of the file so it cannot start underneath this.
@@ -223,7 +322,27 @@ if (args.install || args.pair) {
 
     // Pairing delivers the token out of band, so it never reaches argv, the
     // shell history, or the service definition.
-    if (!TOKEN) {
+    //
+    // `--pair` means "pair me", so it mints a fresh code even when a token is
+    // already saved. This guard used to be just `if (!TOKEN)`, and TOKEN is
+    // seeded from ~/.ssh-monitor-relay.json — so re-running --pair on an
+    // already-paired machine skipped pairing entirely and printed NO code,
+    // only "✅ Relay agent installed as service". Re-pairing is precisely what
+    // you do after a token is revoked, after moving to another server, or
+    // after missing the approval window, so that silent no-op removed the one
+    // command that recovers a broken install. `--uninstall` appeared to fix it
+    // only because it deletes the config file.
+    //
+    // An explicit --token still wins: if you hand us credentials, we use them
+    // and do not go asking for new ones.
+    //
+    // Reusing a saved token remains correct for `--install` without `--pair`,
+    // which means "re-provision the service", not "get new credentials".
+    if (!TOKEN || (args.pair && !args.token)) {
+      if (args.pair && !args.token && savedConfig.token) {
+        console.log('\n↻ Already paired — replacing the existing token with a new one.');
+        console.log('  The old one stops being used; revoke it in Settings → Local Relay.');
+      }
       try {
         TOKEN = await pairAndGetToken({
           client: 'local-relay',
@@ -235,6 +354,15 @@ if (args.install || args.pair) {
       }
     }
 
+    // A token is only valid for the server that minted it. Pointing an install
+    // at a new server while reusing the saved token produces a service that
+    // starts, fails to authenticate, and reports nothing useful — so say so
+    // rather than writing a config that cannot work.
+    if (savedConfig.server && savedConfig.server !== SERVER && TOKEN === savedConfig.token) {
+      console.log(`\n⚠ This token was issued by ${savedConfig.server}, not ${SERVER}.`);
+      console.log('  If it fails to connect, re-run with --pair to get a fresh one.');
+    }
+
     saveConfig({ server: SERVER, token: TOKEN, name: RELAY_NAME });
     ensureInstalledScript();
     if (PLATFORM === 'darwin') installMacOS();
@@ -242,9 +370,9 @@ if (args.install || args.pair) {
     else if (PLATFORM === 'win32') installWindows();
     console.log('✅ Relay agent installed as service');
 
-    // Self-cleanup: remove temporary installer script if running outside INSTALL_DIR
+    // Self-cleanup: remove a throwaway installer copy if we were run from one.
     try {
-      if (path.resolve(SCRIPT) !== path.resolve(INSTALLED_SCRIPT) && fs.existsSync(SCRIPT)) {
+      if (isDisposableScript(SCRIPT) && fs.existsSync(SCRIPT)) {
         fs.unlinkSync(SCRIPT);
       }
     } catch (_) {}
@@ -258,9 +386,9 @@ if (args.install || args.pair) {
   try { fs.unlinkSync(CONFIG_PATH); } catch {}
   console.log('✅ Uninstalled');
 
-  // Self-cleanup temporary script if running outside INSTALL_DIR
+  // Self-cleanup: remove a throwaway copy if we were run from one.
   try {
-    if (path.resolve(SCRIPT) !== path.resolve(INSTALLED_SCRIPT) && fs.existsSync(SCRIPT)) {
+    if (isDisposableScript(SCRIPT) && fs.existsSync(SCRIPT)) {
       fs.unlinkSync(SCRIPT);
     }
   } catch (_) {}
@@ -281,9 +409,21 @@ function ensureInstalledScript() {
     }
     if (PLATFORM !== 'win32') try { fs.chmodSync(INSTALLED_SCRIPT, 0o755); } catch {}
     
-    // Automatically initialize package.json and install ssh2, ws, node-datachannel in the installation folder
+    // Install dependencies into the installation folder.
+    //
+    // Why this is split in two and why both halves are bounded: this used to be
+    // a single `npm install ssh2 ws node-datachannel` with no timeout.
+    // node-datachannel is a NATIVE module and can compile from source, so on a
+    // cold network the installer sat there for minutes with npm's own output
+    // being the only sign of life — the opposite of what a trust-first
+    // installer should feel like. Worse, a hang in the optional package took
+    // the required ones down with it.
+    //
+    //   • ssh2 + ws are required — without ws the relay cannot connect at all.
+    //   • node-datachannel is optional — the relay already falls back to
+    //     WebSocket transport without it, so a timeout here is a warning.
     try {
-      console.log('📦 Installing dependencies (ssh2, ws, node-datachannel) for relay agent service...');
+      console.log('📦 Installing dependencies for the relay service (one-time step)...');
       if (!fs.existsSync(path.join(INSTALL_DIR, 'package.json'))) {
         fs.writeFileSync(path.join(INSTALL_DIR, 'package.json'), JSON.stringify({
           name: 'ssh-monitor-relay-agent',
@@ -294,15 +434,39 @@ function ensureInstalledScript() {
       const npmCmd = PLATFORM === 'win32' ? 'npm.cmd' : 'npm';
       // Use a local cache inside INSTALL_DIR to avoid EACCES errors from root-owned global npm cache
       const localCache = path.join(INSTALL_DIR, '.npm-cache');
-      const result = spawnSync(npmCmd, [
+
+      const install = (pkgs, timeoutMs) => spawnSync(npmCmd, [
         'install', '--no-audit', '--no-fund', '--prefer-offline',
         '--cache', localCache,
-        'ssh2', 'ws', 'node-datachannel'
-      ], { cwd: INSTALL_DIR, stdio: 'inherit' });
-      if (result.status === 0) {
-        console.log('✅ Dependencies installed successfully.');
+        ...pkgs
+      ], { cwd: INSTALL_DIR, stdio: 'inherit', timeout: timeoutMs });
+
+      const CORE_TIMEOUT_MS = 5 * 60 * 1000;
+      const OPTIONAL_TIMEOUT_MS = 3 * 60 * 1000;
+
+      const core = install(['ssh2', 'ws'], CORE_TIMEOUT_MS);
+      if (core.error && core.error.code === 'ETIMEDOUT') {
+        console.warn(`⚠️  Dependency install timed out after ${CORE_TIMEOUT_MS / 1000}s.`);
+        console.warn('   The relay needs ssh2 and ws. Run this once it has network access:');
+        console.warn('   cd ' + INSTALL_DIR + ' && npm install ssh2 ws');
+      } else if (core.status === 0) {
+        console.log('✅ Core dependencies installed (ssh2, ws).');
       } else {
-        console.warn('⚠️  npm install returned non-zero status code. WebRTC P2P fallback to WebSocket mode will be used.');
+        console.warn('⚠️  npm install returned non-zero status code for ssh2/ws.');
+        console.warn('   SSH features may be unavailable until it succeeds.');
+      }
+
+      // Optional, and the only one that can compile from source — so it gets
+      // its own shorter leash and a failure here must not fail the install.
+      console.log('📦 Installing optional WebRTC support (node-datachannel)...');
+      const p2p = install(['node-datachannel'], OPTIONAL_TIMEOUT_MS);
+      if (p2p.error && p2p.error.code === 'ETIMEDOUT') {
+        console.warn(`⚠️  node-datachannel timed out after ${OPTIONAL_TIMEOUT_MS / 1000}s — continuing without WebRTC P2P.`);
+        console.warn('   The relay works over WebSocket. Install it later if you want P2P.');
+      } else if (p2p.status === 0) {
+        console.log('✅ WebRTC P2P support installed.');
+      } else {
+        console.warn('⚠️  node-datachannel could not be installed — continuing without WebRTC P2P.');
       }
     } catch (npmErr) {
       console.warn('⚠️  Could not automatically install dependencies:', npmErr.message);
@@ -348,7 +512,24 @@ function connect() {
     process.exit(1);
   }
 
-  const wsUrl = SERVER.replace(/^http/, 'ws') + `/relay-ws?token=${encodeURIComponent(TOKEN)}`;
+  // The token travels in a handshake header, NOT the query string.
+  //
+  // Pairing exists to keep the token out of argv and shell history, and it
+  // succeeds at that — but a `?token=` URL is routinely written to server
+  // access logs, so the secret ended up persisted in log storage anyway.
+  // A WebSocket client (unlike a browser) can set handshake headers, so send
+  // it as a bearer credential where logs do not record it.
+  //
+  // server.js accepts the header and still falls back to ?token= so relays
+  // installed before this change keep working until they update.
+  //
+  // The same fallback covers the no-`ws`-package case: with the global
+  // WebSocket we cannot set headers at all, so the query string is the only
+  // way to authenticate. Degraded, but better than a relay that cannot connect.
+  const wsBase = SERVER.replace(/^http/, 'ws');
+  const wsUrl = WS_CAN_SET_HEADERS
+    ? wsBase + '/relay-ws'
+    : wsBase + `/relay-ws?token=${encodeURIComponent(TOKEN)}`;
   console.log(`\n🔗 SSH Monitor Enhanced Local Relay`);
   console.log(`   Server: ${SERVER}`);
   console.log(`   SSH2:   ${ssh2 ? 'available' : 'not installed'}`);
@@ -356,7 +537,9 @@ function connect() {
 
   let ws;
   try {
-    ws = new WS(wsUrl);
+    ws = WS_CAN_SET_HEADERS
+      ? new WS(wsUrl, { headers: { authorization: `Bearer ${TOKEN}` } })
+      : new WS(wsUrl);
     activeWs = ws;
   } catch (err) {
     console.error('❌ WebSocket failed:', err.message);
