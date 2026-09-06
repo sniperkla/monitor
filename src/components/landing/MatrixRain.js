@@ -91,6 +91,9 @@ function MatrixRain({ fps = 30, active = true, reduced = false, density = 0.55, 
         fadeStrip(c);
         c.timer -= dt;
         if (c.timer <= 0) {
+          // Hard-clear the strip: the 1.2s fade leaves ~15% ghost glyphs that
+          // would otherwise sit frozen mid-screen for the whole dormant phase.
+          ctx.clearRect(c.x - FS / 2, 0, FS, H);
           c.phase = 'dorm';
           c.timer = rand(1, 5);
         }
@@ -104,7 +107,7 @@ function MatrixRain({ fps = 30, active = true, reduced = false, density = 0.55, 
       for (let r = prev + 1; r <= cur; r++) {
         if (r >= 0 && r <= rows) drawGlyph(c, r, false);
       }
-      if (cur >= 0 && cur <= rows) drawGlyphAt(c, cur, true);
+      if (cur >= 1 && cur <= rows) drawGlyphAt(c, cur, true);
       if (cur > rows + 4) {
         c.phase = 'fade';
         c.timer = 1.2;
