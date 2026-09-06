@@ -13,7 +13,7 @@ function Row({ num, onClick, disabled, children }) {
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className="group w-full flex items-center gap-3 px-3 py-3 min-h-[44px] rounded-md font-mono text-xs cursor-pointer text-emerald-100/85 border-l-2 border-transparent transition-all duration-150 hover:bg-emerald-500/15 hover:border-emerald-400 hover:text-emerald-100 disabled:opacity-50 disabled:cursor-not-allowed text-left"
+      className="group w-full flex items-center justify-center gap-3 px-3 py-3 min-h-[44px] rounded-md font-mono text-xs cursor-pointer text-emerald-100/85 border-l-2 border-transparent transition-all duration-150 hover:bg-emerald-500/15 hover:border-emerald-400 hover:text-emerald-100 disabled:opacity-50 disabled:cursor-not-allowed"
     >
       <span className="text-emerald-500/70 group-hover:text-emerald-300 shrink-0">[{num}]</span>
       {children}
