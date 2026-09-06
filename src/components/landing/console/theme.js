@@ -72,6 +72,11 @@ const CONSOLE_CSS = `
   background: #34d399 !important;
   box-shadow: 0 0 12px rgba(52,211,153,0.85) !important;
 }
+.dock-active {
+  color: #34d399 !important;
+  background: rgba(16,185,129,0.2) !important;
+  border-color: rgba(52,211,153,0.55) !important;
+}
 
 .console-card {
   transform: perspective(1200px) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg))

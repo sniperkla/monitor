@@ -14,6 +14,7 @@ function useScrollStory({ motionOff, heroRef, railRef, storyRailRef, cmdRef }) {
     let px = []; // parallax ghosts + mocks: { node, speed, docCenter }
     let sections = []; // [{ cmd, docTop }]
     let dots = []; // [HTMLElement]
+    let dockBtns = []; // [HTMLElement]
     let queued = false;
     let raf = 0;
     let lastActiveCmd = null;
@@ -33,6 +34,7 @@ function useScrollStory({ motionOff, heroRef, railRef, storyRailRef, cmdRef }) {
         .map((node) => ({ cmd: node.dataset.cmd, docTop: docTop(node) }))
         .sort((a, b) => a.docTop - b.docTop);
       dots = Array.from(root.querySelectorAll('[data-dot]'));
+      dockBtns = Array.from(root.querySelectorAll('[data-dock]'));
       apply();
     };
 
@@ -83,6 +85,14 @@ function useScrollStory({ motionOff, heroRef, railRef, storyRailRef, cmdRef }) {
             const on = bare !== null && dots[i].dataset.dot === bare;
             if (dots[i].classList.contains('dot-active') !== on) {
               dots[i].classList.toggle('dot-active', on);
+            }
+          }
+          for (let i = 0; i < dockBtns.length; i++) {
+            // dock buttons carry the full "$ cmd" (their tooltip text), so
+            // compare against the unstripped cur.
+            const on = bare !== null && dockBtns[i].dataset.dock === cur;
+            if (dockBtns[i].classList.contains('dock-active') !== on) {
+              dockBtns[i].classList.toggle('dock-active', on);
             }
           }
         }

@@ -91,10 +91,11 @@ export default function DesktopChrome({ onNavigate }) {
           <button
             key={a.cmd}
             type="button"
+            data-dock={a.cmd}
             title={a.label}
             aria-label={a.label}
             onClick={() => onNavigate && onNavigate(a.cmd)}
-            className="group relative flex w-9 h-9 sm:w-11 sm:h-11 rounded-xl bg-white/8 border border-white/12 items-center justify-center text-slate-200 transition-transform duration-200 hover:-translate-y-2 hover:scale-110 hover:bg-white/14 cursor-pointer"
+            className="group relative flex w-9 h-9 sm:w-11 sm:h-11 rounded-xl bg-white/8 border border-white/12 items-center justify-center text-slate-200 transition-all duration-300 hover:-translate-y-2 hover:scale-110 hover:bg-white/14 cursor-pointer"
           >
             <a.icon size={18} />
             <span className="absolute -bottom-[5px] left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-white/45" />
