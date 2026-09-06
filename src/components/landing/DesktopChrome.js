@@ -1,19 +1,20 @@
 'use client';
 
-import { Wifi, Battery, Search, Terminal, Folder, Activity, Bot, Settings } from 'lucide-react';
+import { Wifi, Battery, Search, Terminal, Activity, Shield, Database, Bot } from 'lucide-react';
 
 /* The guest landing backdrop: a pure dark gradient with a faint emerald
-   horizon glow — plus the macOS dock. */
+   horizon glow — plus the macOS dock. Dock icons are live: clicking one
+   scrolls to its related story section (via the onNavigate callback). */
 
 const DOCK_APPS = [
-  { icon: Terminal, label: 'Terminal' },
-  { icon: Folder, label: 'Files' },
-  { icon: Activity, label: 'Server Monitor' },
-  { icon: Bot, label: 'AI Agents' },
-  { icon: Settings, label: 'Settings' },
+  { icon: Terminal, label: 'Terminal & SSH', cmd: '$ ssh --fleet' },
+  { icon: Activity, label: 'Server Monitor', cmd: '$ watch --live' },
+  { icon: Shield, label: 'Vault & Security', cmd: '$ vault --audit' },
+  { icon: Database, label: 'Backups', cmd: '$ backup --sync' },
+  { icon: Bot, label: 'AI Agents', cmd: '$ agent --spawn' },
 ];
 
-export default function DesktopChrome() {
+export default function DesktopChrome({ onNavigate }) {
   return (
     <>
       {/* Backdrop: pure dark gradient + faint emerald horizon glow */}
@@ -39,20 +40,25 @@ export default function DesktopChrome() {
         />
       </div>
 
-      {/* macOS dock — sits above the bottom statusline */}
+      {/* macOS dock — interactive: click an icon to jump to its story topic.
+          Sits above the bottom statusline. */}
       <div
-        className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[40] flex items-end gap-2 sm:gap-2.5 px-2.5 sm:px-3 py-2 rounded-2xl bg-black/40 backdrop-blur-xl border border-white/12 shadow-2xl pointer-events-none"
-        aria-hidden="true"
+        className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[40] flex items-end gap-2 sm:gap-2.5 px-2.5 sm:px-3 py-2 rounded-2xl bg-black/40 backdrop-blur-xl border border-white/12 shadow-2xl"
+        role="navigation"
+        aria-label="App topics"
       >
         {DOCK_APPS.map((a) => (
-          <span
-            key={a.label}
+          <button
+            key={a.cmd}
+            type="button"
             title={a.label}
-            className="relative flex w-9 h-9 sm:w-11 sm:h-11 rounded-xl bg-white/8 border border-white/12 items-center justify-center text-slate-200 transition-transform duration-200 hover:-translate-y-2 hover:scale-110"
+            aria-label={a.label}
+            onClick={() => onNavigate && onNavigate(a.cmd)}
+            className="group relative flex w-9 h-9 sm:w-11 sm:h-11 rounded-xl bg-white/8 border border-white/12 items-center justify-center text-slate-200 transition-transform duration-200 hover:-translate-y-2 hover:scale-110 hover:bg-white/14 cursor-pointer"
           >
             <a.icon size={18} />
             <span className="absolute -bottom-[5px] left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-white/45" />
-          </span>
+          </button>
         ))}
       </div>
     </>

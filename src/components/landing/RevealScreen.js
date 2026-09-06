@@ -102,6 +102,14 @@ export function RevealScreen({ onDismiss }) {
     };
   }, [motionOff]);
 
+  const handleDockNavigate = (cmd) => {
+    const root = document.querySelector('[data-scroll-root]');
+    const sec = root && root.querySelector(`section[data-cmd="${cmd}"]`);
+    if (root && sec) {
+      root.scrollTo({ top: sec.getBoundingClientRect().top + root.scrollTop - 60, behavior: 'smooth' });
+    }
+  };
+
   useScrollStory({ motionOff, heroRef, railRef, storyRailRef, cmdRef });
 
   const handlePasskeySignIn = async () => {
@@ -262,7 +270,7 @@ export function RevealScreen({ onDismiss }) {
       <style>{CONSOLE_CSS}</style>
 
       {/* macOS desktop: wallpaper, menu bar, dock */}
-      <DesktopChrome />
+      <DesktopChrome onNavigate={handleDockNavigate} />
 
       {/* Session progress rail (right edge) */}
       <div className="fixed right-3 top-1/2 -translate-y-1/2 z-[5] hidden md:block h-44 w-px bg-white/10 pointer-events-none">
