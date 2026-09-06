@@ -319,9 +319,24 @@ export function createDataStream(canvas, opts = {}) {
 /**
  * React wrapper. Owns the rAF loop, resize handling and a per-frame safety net
  * so one bad frame can never kill the animation.
+ *
+ * `fps` throttles rendering (dt still accumulates across skipped frames, so
+ * motion speed is unchanged — only fill rate drops). `active` pauses the loop
+ * without destroying stream state, so e.g. an open modal or a hidden tab costs
+ * nothing and resumes seamlessly.
  */
-export function DataStreamCanvas({ count = 240, dprCap = 1.25, focal, className, style, onFrame }) {
+export function DataStreamCanvas({
+  count = 240,
+  dprCap = 1.25,
+  focal,
+  className,
+  style,
+  onFrame,
+  fps = 60,
+  active = true,
+}) {
   const canvasRef = useRef(null);
+  const dsRef = useRef(null);
   const onFrameRef = useRef(onFrame);
   useEffect(() => {
     onFrameRef.current = onFrame;
@@ -330,35 +345,44 @@ export function DataStreamCanvas({ count = 240, dprCap = 1.25, focal, className,
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return undefined;
-    const ds = createDataStream(canvas, { count, dprCap, focal });
+    if (!dsRef.current) dsRef.current = createDataStream(canvas, { count, dprCap, focal });
+    const ds = dsRef.current;
     if (!ds) return undefined;
 
     let raf = 0;
     // Wall-clock, not accumulated dt: headless Chrome can tick rAF at a
     // different rate than setTimeout, which makes time-driven sequences race.
     const t0 = Date.now();
+    const minFrame = fps >= 58 ? 0 : 1000 / fps;
     let last = performance.now();
 
     const loop = (now) => {
-      const dt = Math.min(64, now - last);
+      raf = requestAnimationFrame(loop);
+      const raw = now - last;
+      // dt is measured from the last *rendered* frame so throttled playback
+      // keeps the same world-space speed.
+      if (raw < minFrame) return;
       last = now;
+      const dt = Math.min(64, raw);
       try {
         onFrameRef.current?.(ds, dt, Date.now() - t0);
         ds.frame(dt);
       } catch (_) {
         // A single bad frame must never kill the loop.
       }
-      raf = requestAnimationFrame(loop);
     };
-    raf = requestAnimationFrame(loop);
 
     const onResize = () => ds.resize();
     window.addEventListener('resize', onResize);
+    if (active) {
+      last = performance.now();
+      raf = requestAnimationFrame(loop);
+    }
     return () => {
       cancelAnimationFrame(raf);
       window.removeEventListener('resize', onResize);
     };
-  }, [count, dprCap, focal]);
+  }, [count, dprCap, focal, fps, active]);
 
   return <canvas ref={canvasRef} className={className} style={style} aria-hidden="true" />;
 }
@@ -400,11 +424,23 @@ export function useSmoothedPointer(smoothing = 0.07) {
   return current;
 }
 
-/** Applies pointer parallax to a plain div. Larger `depth` = closer to camera. */
-export function ParallaxLayer({ pointerRef, depth = 1, className, style, children }) {
+/**
+ * Applies pointer parallax to a plain div. Larger `depth` = closer to camera.
+ *
+ * `disabled` exists for touch devices and reduced-motion users. Without it the
+ * layer keeps running a rAF loop and, worse, holds a translate that was driven
+ * by a pointer the device does not have — so content sits permanently offset
+ * from centre with no way to bring it back.
+ */
+export function ParallaxLayer({ pointerRef, depth = 1, disabled = false, className, style, children }) {
   const ref = useRef(null);
 
   useEffect(() => {
+    if (disabled) {
+      if (ref.current) ref.current.style.transform = 'translate3d(0, 0, 0)';
+      return undefined;
+    }
+
     let raf = 0;
     const tick = () => {
       const el = ref.current;
@@ -418,7 +454,7 @@ export function ParallaxLayer({ pointerRef, depth = 1, className, style, childre
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [pointerRef, depth]);
+  }, [pointerRef, depth, disabled]);
 
   return (
     <div ref={ref} className={className} style={style}>
