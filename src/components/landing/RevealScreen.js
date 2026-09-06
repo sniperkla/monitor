@@ -295,30 +295,6 @@ export function RevealScreen({ onDismiss }) {
               boxShadow: '0 24px 70px rgba(0,0,0,0.6), inset 0 1px 0 rgba(110,231,183,0.06)',
             }}
           >
-            {/* Etched hardware traces — static circuit art so the console
-                reads as a physical device. Pure SVG, no animation. */}
-            <div className="pointer-events-none absolute inset-0 z-0" aria-hidden="true">
-              <svg className="absolute top-2.5 right-3 w-24 h-20" viewBox="0 0 96 80" fill="none">
-                <path d="M96 6 H64 L54 16 H40" stroke="rgba(52,211,153,0.16)" strokeWidth="1" />
-                <path d="M96 18 H70 L58 30 H48" stroke="rgba(16,185,129,0.12)" strokeWidth="1" />
-                <circle cx="40" cy="16" r="2" stroke="rgba(52,211,153,0.3)" strokeWidth="1" />
-                <circle cx="48" cy="30" r="2" stroke="rgba(16,185,129,0.22)" strokeWidth="1" />
-              </svg>
-              <svg className="absolute bottom-2.5 left-3 w-24 h-20 rotate-180" viewBox="0 0 96 80" fill="none">
-                <path d="M96 6 H64 L54 16 H40" stroke="rgba(52,211,153,0.14)" strokeWidth="1" />
-                <path d="M96 18 H70 L58 30 H48" stroke="rgba(16,185,129,0.11)" strokeWidth="1" />
-                <circle cx="40" cy="16" r="2" stroke="rgba(52,211,153,0.26)" strokeWidth="1" />
-                <circle cx="48" cy="30" r="2" stroke="rgba(16,185,129,0.18)" strokeWidth="1" />
-              </svg>
-            </div>
-
-            {/* CRT scanlines inside the terminal */}
-            <div
-              className="pointer-events-none absolute inset-0 z-[1] opacity-50"
-              aria-hidden="true"
-              style={{ background: 'repeating-linear-gradient(0deg, rgba(0,0,0,0.25) 0 1px, transparent 1px 3px)' }}
-            />
-
             {/* Title bar */}
             <div className="flex items-center gap-2 px-3.5 py-2 border-b border-emerald-900/40 bg-black/40 relative z-[1]">
               <span className="flex gap-1.5" aria-hidden="true">
