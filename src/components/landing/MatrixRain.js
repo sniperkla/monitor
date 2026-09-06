@@ -56,7 +56,9 @@ function MatrixRain({ fps = 30, active = true, reduced = false, density = 0.55, 
         const insideX = x >= r.left && x <= r.right;
         const insideY = y >= r.top && y <= r.bottom;
         if (insideX && insideY) {
-          f = Math.min(f, 0.1);
+          // 3% — perceptually invisible on the dark card, so text areas stay
+          // perfectly clean even where the glass panel is most transparent.
+          f = Math.min(f, 0.03);
           continue;
         }
         const dxIn = Math.max(r.left - x, x - r.right, 0);
