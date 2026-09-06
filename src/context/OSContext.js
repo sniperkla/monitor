@@ -1417,14 +1417,7 @@ export function OSProvider({ children }) {
     const id = Date.now().toString() + Math.random().toString(36).substr(2, 9);
     dispatch({ type: 'ADD_NOTIFICATION', payload: { ...notification, id, timestamp: Date.now() } });
 
-    // Terminal sound
-    if (state.notifications?.terminal) {
-      import('@/utils/sound').then(({ playSuccess, playError, playBell }) => {
-        if (notification.type === 'error') playError();
-        else if (notification.type === 'success') playSuccess();
-        else playBell();
-      }).catch(() => {});
-    }
+    // Terminal sound removed by design — silent product.
 
     // Desktop notification (when tab is in background)
     if (state.notifications?.desktop) {

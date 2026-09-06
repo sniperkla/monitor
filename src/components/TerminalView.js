@@ -1740,13 +1740,7 @@ logstash:
     });
     term.open(terminalRef.current);
 
-    // Terminal bell — play sound if enabled in settings
-    term.onBell(() => {
-      const notif = osState?.notifications;
-      if (notif?.terminal) {
-        import('@/utils/sound').then(({ playBell }) => playBell()).catch(() => {});
-      }
-    });
+    // Terminal bell sound removed by design — silent product.
 
     // Initial fit attempt IMMEDIATELY, before socket connect,
     // to guarantee the backend PTY gets the exact client size on shell boot!
