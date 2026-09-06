@@ -303,7 +303,7 @@ export function RevealScreen({ onDismiss }) {
               <span className="flex-1 text-center font-mono text-[9px] sm:text-[10px] text-emerald-300/50 tracking-wider truncate">
                 monitor@orbit — ssh — 80×24
               </span>
-              <span className="font-mono text-[9px] text-emerald-800">ssh:22</span>
+              <span className="font-mono text-[9px] text-emerald-800">ssh:22 · v2</span>
             </div>
 
             <div className="relative z-[1] px-5 sm:px-7 pt-5 pb-6 sm:pb-7">
@@ -331,10 +331,6 @@ export function RevealScreen({ onDismiss }) {
                 <span className="caret" style={{ animationDelay: '1.35s' }} />
               </div>
 
-              <div
-                className="rise mb-5 h-px bg-slate-500/15"
-                style={{ animationDelay: '560ms' }}
-              />
 
               <div className="rise font-mono text-[9px] uppercase tracking-[0.26em] text-emerald-300/50 mb-2" style={{ animationDelay: '600ms' }}>
                 select auth method:
