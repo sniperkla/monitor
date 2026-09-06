@@ -1,43 +1,16 @@
 'use client';
 
-let audioCtx = null;
+/* Sound removed by design — the product is silent. The beep API is kept as
+   no-ops so notification/bell call sites stay valid; desktop notifications
+   (below) are not sound and still work. */
 
-function getAudioContext() {
-  if (!audioCtx) {
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  }
-  return audioCtx;
-}
+export function playBeep() {}
 
-export function playBeep(frequency = 800, duration = 0.1, volume = 0.15) {
-  try {
-    const ctx = getAudioContext();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.frequency.value = frequency;
-    osc.type = 'sine';
-    gain.gain.setValueAtTime(volume, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
-    osc.start(ctx.currentTime);
-    osc.stop(ctx.currentTime + duration);
-  } catch {}
-}
+export function playSuccess() {}
 
-export function playSuccess() {
-  playBeep(880, 0.08, 0.12);
-  setTimeout(() => playBeep(1100, 0.12, 0.12), 100);
-}
+export function playError() {}
 
-export function playError() {
-  playBeep(300, 0.15, 0.15);
-  setTimeout(() => playBeep(200, 0.2, 0.15), 180);
-}
-
-export function playBell() {
-  playBeep(800, 0.08, 0.1);
-}
+export function playBell() {}
 
 export function showDesktopNotification(title, message, type = 'info') {
   if (typeof window === 'undefined' || !('Notification' in window)) return;

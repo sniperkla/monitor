@@ -16,7 +16,9 @@ import { useOS } from '@/context/OSContext';
 import { useIsMobile } from '@/hooks/useIsMobile';
 
 // Subtle Web Audio synthesizer for micro-haptic feedback
+const SOUND_ENABLED = false; // sound removed by design — silent product
 function playVaultAudio(type = 'click') {
+  if (!SOUND_ENABLED) return;
   if (typeof window === 'undefined') return;
   try {
     const AudioCtx = window.AudioContext || window.webkitAudioContext;

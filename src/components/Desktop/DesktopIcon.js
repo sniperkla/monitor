@@ -422,7 +422,11 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
     return () => window.removeEventListener('fallout-explosion', handleExplosion);
   }, [isFalloutTheme, id, isExploding]);
 
+  // Sound removed by design — silent product. initAudio is the shared
+  // gateway for every gimmick sound (geiger, siren, eject, beeps, explosion).
+  const SOUND_ENABLED = false;
   const initAudio = () => {
+    if (!SOUND_ENABLED) return null;
     if (!audioCtxRef.current || audioCtxRef.current.state === 'closed') {
       const AudioContext = window.AudioContext || window.webkitAudioContext;
       if (AudioContext) {
@@ -436,6 +440,7 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
   };
 
   const playGeigerClick = useCallback(() => {
+    if (!SOUND_ENABLED) return; // sound removed by design — silent product
     const ctx = initAudio();
     if (!ctx) return;
     try {
@@ -467,6 +472,7 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
   const sirenGainRef = useRef(null);
 
   const startSiren = useCallback(() => {
+    if (!SOUND_ENABLED) return; // sound removed by design — silent product
     const ctx = initAudio();
     if (!ctx) return;
     try {
