@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Wifi, Battery, Search, Terminal, Folder, Activity, Bot, Settings } from 'lucide-react';
+import { Wifi, Battery, Search } from 'lucide-react';
 
 /* The guest landing sits on the same macOS-style desktop the app uses:
    wallpaper, menu bar, dock. Static decoration — no interaction, no state
@@ -9,13 +9,6 @@ import { Wifi, Battery, Search, Terminal, Folder, Activity, Bot, Settings } from
 
 const WALLPAPER = 'https://images.unsplash.com/photo-1451187580459-43490279c0fa?q=80&w=2072&auto=format&fit=crop';
 
-const DOCK_APPS = [
-  { icon: Terminal, label: 'Terminal' },
-  { icon: Folder, label: 'Files' },
-  { icon: Activity, label: 'Server Monitor' },
-  { icon: Bot, label: 'AI Agents' },
-  { icon: Settings, label: 'Settings' },
-];
 
 function MenuClock() {
   const [now, setNow] = useState(null);
@@ -82,22 +75,6 @@ export default function DesktopChrome() {
         </div>
       </div>
 
-      {/* Dock */}
-      <div
-        className="fixed bottom-3 left-1/2 -translate-x-1/2 z-[40] flex items-end gap-2 sm:gap-2.5 px-2.5 sm:px-3 py-2 rounded-2xl bg-black/40 backdrop-blur-xl border border-white/12 shadow-2xl pointer-events-none"
-        aria-hidden="true"
-      >
-        {DOCK_APPS.map((a) => (
-          <span
-            key={a.label}
-            title={a.label}
-            className="relative flex w-9 h-9 sm:w-11 sm:h-11 rounded-xl bg-white/8 border border-white/12 items-center justify-center text-slate-200 transition-transform duration-200 hover:-translate-y-2 hover:scale-110"
-          >
-            <a.icon size={18} />
-            <span className="absolute -bottom-[5px] left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-white/45" />
-          </span>
-        ))}
-      </div>
     </>
   );
 }
