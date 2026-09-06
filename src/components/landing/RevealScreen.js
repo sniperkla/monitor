@@ -321,7 +321,7 @@ export function RevealScreen({ onDismiss }) {
                 // itself in `ch` units, which exclude tracking — any
                 // letter-spacing here would clip the last few characters
                 // behind the overflow mask.
-                className="rise mt-2.5 mb-5 flex items-baseline font-mono text-[10px] sm:text-[11px] text-slate-400 min-h-[16px]"
+                className="rise mt-2.5 mb-3 flex items-baseline font-mono text-[10px] sm:text-[11px] text-slate-400 min-h-[16px]"
                 style={{ animationDelay: '480ms' }}
               >
                 <span className="text-emerald-400/80 mr-1.5">&gt;</span>
