@@ -21,7 +21,7 @@ export default function DesktopChrome() {
           className="absolute inset-0"
           style={{
             background:
-              'linear-gradient(180deg, rgba(2,6,12,0.7) 0%, rgba(2,6,12,0.42) 38%, rgba(2,6,12,0.55) 72%, rgba(2,6,12,0.82) 100%)',
+              'linear-gradient(180deg, rgba(2,6,12,0.8) 0%, rgba(2,6,12,0.58) 38%, rgba(2,6,12,0.68) 72%, rgba(2,6,12,0.88) 100%)',
           }}
         />
         {/* Subtle scanline texture keeps the CRT/terminal identity */}
