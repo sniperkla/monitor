@@ -1,39 +1,28 @@
-'use client';
-
 /* ═══════════════════════════════════════════════════════════════════════
-   RevealScreen — a scrollable landing story: "one terminal session"
+   RevealScreen — a scrollable landing story on the app's macOS desktop.
 
-   The page reads as a single SSH session log. The hero is the access
-   console; every section below is another command ($ ssh --fleet,
-   $ watch --live, …) that documents a real part of the app, and the
-   statusline at the bottom follows along as you scroll.
+   The guest lands on the same desktop environment the app uses: wallpaper,
+   menu bar, dock (DesktopChrome). On it floats the sign-in terminal; every
+   section below is another command ($ ssh --fleet, $ watch --live, …)
+   documenting a real part of the app.
 
-   Resource budget (unchanged philosophy):
-   - One rAF loop total: the hex-stream canvas, throttled to 30fps, paused
-     when the tab is hidden or the auth modal is open. It reads a scroll-
-     velocity ref, so the network "wakes" while you scroll — no re-renders.
-   - One passive capture scroll listener, rAF-throttled: writes transforms
-     (parallax ghosts, hero fade, progress rail, statusline text) straight
-     to the DOM. Zero React state while scrolling. It does no work at all
-     when the page is still.
-   - One IntersectionObserver: toggles .in-view once per element; every
-     reveal, bar growth and typed line after that is pure CSS.
-   - Typing, carets, motes, cue bob: CSS keyframes. No WebGL on this page.
+   Resource budget:
+   - One scroll-driven IntersectionObserver + one passive capture scroll
+     listener (rAF-throttled, DOM writes only, no React state while
+     scrolling). Pointer tilt on the card is rAF-throttled pointermove.
+   - Reveals, typed lines, bars, sweeps: pure CSS gated by .in-view.
+   - No WebGL, no rAF loops on this page.
    ═══════════════════════════════════════════════════════════════════════ */
-
 import { signIn } from 'next-auth/react';
 import { useState, useEffect, useRef } from 'react';
 import { AnimatePresence } from 'framer-motion';
 import { Activity } from 'lucide-react';
-import NeuralWeb from './NeuralWeb';
-import MatrixRain from './MatrixRain';
 import { CinematicAuthModal } from './CinematicAuthModal';
 import { signInWithPasskey, passkeysSupported } from '@/utils/passkey';
-import { CONSOLE_CSS, SUBTITLE, SCENES } from './console/theme';
+import { CONSOLE_CSS, SUBTITLE } from './console/theme';
+import DesktopChrome from './DesktopChrome';
 import { prefersReducedMotion, useIsTouch, useDocumentVisible } from './story/hooks';
 import { ScrambleTitle } from './console/ScrambleTitle';
-import { LiveUplink } from './console/LiveUplink';
-import { Statusline } from './console/Statusline';
 import { AuthActions, CloserActions } from './console/AuthActions';
 import { useScrollStory } from './story/useScrollStory';
 import { SectionHead, FleetMock, MonitorMock, SecurityMock, BackupMock, AgentMock } from './story/mocks';
@@ -75,7 +64,6 @@ export function RevealScreen({ onDismiss }) {
   const heroRef = useRef(null);
   const railRef = useRef(null);
   const storyRailRef = useRef(null);
-  const cmdRef = useRef(null);
 
   /* Pointer tilt on the hero card: CSS variables from a rAF-throttled
      pointermove. No idle loop — work happens only while the pointer moves. */
@@ -112,7 +100,7 @@ export function RevealScreen({ onDismiss }) {
     };
   }, [motionOff]);
 
-  useScrollStory({ motionOff, heroRef, railRef, storyRailRef, cmdRef });
+  useScrollStory({ motionOff, heroRef, railRef, storyRailRef });
 
   const handlePasskeySignIn = async () => {
     setPasskeyError(null);
@@ -271,54 +259,8 @@ export function RevealScreen({ onDismiss }) {
     <div className="relative w-full overflow-x-hidden bg-black">
       <style>{CONSOLE_CSS}</style>
 
-      {/* Static light: vignette + horizon glow + faint grid. Painted once. */}
-      <div
-        className="fixed inset-0 z-[1] pointer-events-none"
-        style={{
-          background:
-            'radial-gradient(ellipse 70% 55% at 50% 30%, rgba(2,4,10,0.55) 0%, rgba(2,4,10,0.25) 55%, rgba(2,4,10,0) 80%),' +
-            'radial-gradient(ellipse 45% 26% at 50% 100%, rgba(34,211,238,0.05) 0%, transparent 70%),' +
-            'repeating-linear-gradient(0deg, rgba(148,163,184,0.025) 0 1px, transparent 1px 56px),' +
-            'repeating-linear-gradient(90deg, rgba(148,163,184,0.025) 0 1px, transparent 1px 56px),' +
-            'repeating-linear-gradient(0deg, rgba(0,0,0,0.16) 0 1px, transparent 1px 3px)',
-        }}
-      />
-
-      {/* Matrix rain — the hacker classic. Falls behind the neural web,
-          sleeps with the modal/tab; static columns under reduced motion. */}
-      <MatrixRain
-        className="fixed inset-0 z-[1] block"
-        active={fieldActive}
-        reduced={motionOff}
-        density={motionOff ? 0.3 : 0.55}
-        exclude=".console-card,[data-uplink-panel]"
-      />
-
-      {/* Synthetic nervous system: sparse nodes, dim synapses, occasional
-          pulses — sits above the static light so the scene washes tint it.
-          30fps, sleeps with the modal/tab; one frozen frame under
-          reduced motion. */}
-      <NeuralWeb
-        className="fixed inset-0 z-[1] block"
-        count={motionOff ? 36 : 64}
-        active={fieldActive}
-        reduced={motionOff}
-      />
-
-      {/* Per-section colour washes. Fixed, painted once, crossfaded by the
-          scroll engine via opacity only — compositor work, no repaint. */}
-      <div className="fixed inset-0 z-[1] pointer-events-none" aria-hidden="true">
-        {SCENES.map((scene) => (
-          <div
-            key={scene.name}
-            data-wash={scene.name}
-            className="absolute inset-0"
-            style={{ background: scene.wash, opacity: scene.name === 'hero' ? 1 : 0, transition: 'opacity 1.6s ease' }}
-          />
-        ))}
-      </div>
-
-      <LiveUplink reduced={motionOff} />
+      {/* macOS desktop: wallpaper, menu bar, dock */}
+      <DesktopChrome />
 
       {/* Session progress rail (right edge) */}
       <div className="fixed right-3 top-1/2 -translate-y-1/2 z-[5] hidden md:block h-44 w-px bg-white/10 pointer-events-none">
@@ -344,54 +286,58 @@ export function RevealScreen({ onDismiss }) {
         >
           <div
             ref={cardRef}
-            className="console-card rise relative w-full max-w-md rounded-xl border border-slate-700/60 overflow-hidden"
+            className="console-card rise relative w-full max-w-md rounded-xl border border-emerald-900/50 overflow-hidden font-mono"
             style={{
               animationDelay: '120ms',
-              background: 'rgba(3, 7, 15, 0.72)',
-              backdropFilter: 'blur(14px)',
-              WebkitBackdropFilter: 'blur(14px)',
-              boxShadow: '0 20px 60px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.03)',
+              background: 'rgba(2, 12, 7, 0.9)',
+              backdropFilter: 'blur(10px)',
+              WebkitBackdropFilter: 'blur(10px)',
+              boxShadow: '0 24px 70px rgba(0,0,0,0.6), inset 0 1px 0 rgba(110,231,183,0.06)',
             }}
           >
             {/* Etched hardware traces — static circuit art so the console
                 reads as a physical device. Pure SVG, no animation. */}
             <div className="pointer-events-none absolute inset-0 z-0" aria-hidden="true">
               <svg className="absolute top-2.5 right-3 w-24 h-20" viewBox="0 0 96 80" fill="none">
-                <path d="M96 6 H64 L54 16 H40" stroke="rgba(34,211,238,0.15)" strokeWidth="1" />
-                <path d="M96 18 H70 L58 30 H48" stroke="rgba(129,140,248,0.11)" strokeWidth="1" />
-                <circle cx="40" cy="16" r="2" stroke="rgba(34,211,238,0.3)" strokeWidth="1" />
-                <circle cx="48" cy="30" r="2" stroke="rgba(129,140,248,0.24)" strokeWidth="1" />
+                <path d="M96 6 H64 L54 16 H40" stroke="rgba(52,211,153,0.16)" strokeWidth="1" />
+                <path d="M96 18 H70 L58 30 H48" stroke="rgba(16,185,129,0.12)" strokeWidth="1" />
+                <circle cx="40" cy="16" r="2" stroke="rgba(52,211,153,0.3)" strokeWidth="1" />
+                <circle cx="48" cy="30" r="2" stroke="rgba(16,185,129,0.22)" strokeWidth="1" />
               </svg>
               <svg className="absolute bottom-2.5 left-3 w-24 h-20 rotate-180" viewBox="0 0 96 80" fill="none">
-                <path d="M96 6 H64 L54 16 H40" stroke="rgba(34,211,238,0.13)" strokeWidth="1" />
-                <path d="M96 18 H70 L58 30 H48" stroke="rgba(129,140,248,0.1)" strokeWidth="1" />
-                <circle cx="40" cy="16" r="2" stroke="rgba(34,211,238,0.26)" strokeWidth="1" />
-                <circle cx="48" cy="30" r="2" stroke="rgba(129,140,248,0.2)" strokeWidth="1" />
+                <path d="M96 6 H64 L54 16 H40" stroke="rgba(52,211,153,0.14)" strokeWidth="1" />
+                <path d="M96 18 H70 L58 30 H48" stroke="rgba(16,185,129,0.11)" strokeWidth="1" />
+                <circle cx="40" cy="16" r="2" stroke="rgba(52,211,153,0.26)" strokeWidth="1" />
+                <circle cx="48" cy="30" r="2" stroke="rgba(16,185,129,0.18)" strokeWidth="1" />
               </svg>
             </div>
 
+            {/* CRT scanlines inside the terminal */}
+            <div
+              className="pointer-events-none absolute inset-0 z-[1] opacity-50"
+              aria-hidden="true"
+              style={{ background: 'repeating-linear-gradient(0deg, rgba(0,0,0,0.25) 0 1px, transparent 1px 3px)' }}
+            />
+
             {/* Title bar */}
-            <div className="flex items-center gap-2 px-3.5 py-2 border-b border-slate-700/50 bg-slate-900/60">
+            <div className="flex items-center gap-2 px-3.5 py-2 border-b border-emerald-900/40 bg-black/40 relative z-[1]">
               <span className="flex gap-1.5" aria-hidden="true">
                 <span className="w-2.5 h-2.5 rounded-full bg-[#ff5f57]/80" />
                 <span className="w-2.5 h-2.5 rounded-full bg-[#febc2e]/80" />
                 <span className="w-2.5 h-2.5 rounded-full bg-[#28c840]/80" />
               </span>
-              <span className="flex-1 text-center font-mono text-[9px] sm:text-[10px] text-slate-500 tracking-wider truncate">
-                monitor@orbit — /access
+              <span className="flex-1 text-center font-mono text-[9px] sm:text-[10px] text-emerald-300/50 tracking-wider truncate">
+                monitor@orbit — ssh — 80×24
               </span>
-              <span className="font-mono text-[9px] text-slate-600">ssh:22</span>
+              <span className="font-mono text-[9px] text-emerald-800">ssh:22</span>
             </div>
 
-            <div className="px-5 sm:px-7 pt-6 pb-6 sm:pb-7">
-              <div className="rise flex items-center gap-2 mb-4" style={{ animationDelay: '260ms' }} aria-hidden="true">
-                <span className="relative flex h-1.5 w-1.5">
-                  <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400/60 animate-ping" />
-                  <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                </span>
-                <span className="font-mono text-[8px] sm:text-[9px] uppercase tracking-[0.26em] text-emerald-300/60">
-                  Access gateway online
-                </span>
+            <div className="relative z-[1] px-5 sm:px-7 pt-5 pb-6 sm:pb-7">
+              <div className="rise font-mono text-[11px] text-emerald-300/85" style={{ animationDelay: '260ms' }}>
+                <span className="text-emerald-500/70 mr-1.5">$</span>ssh monitor@orbit
+              </div>
+              <div className="rise mt-1 font-mono text-[11px] text-emerald-200/70" style={{ animationDelay: '340ms' }}>
+                ✓ access gateway online
               </div>
 
               <ScrambleTitle reduced={motionOff} delay={320} />
@@ -416,8 +362,16 @@ export function RevealScreen({ onDismiss }) {
                 style={{ animationDelay: '560ms' }}
               />
 
+              <div className="rise font-mono text-[9px] uppercase tracking-[0.26em] text-emerald-300/50 mb-2" style={{ animationDelay: '600ms' }}>
+                select auth method:
+              </div>
               <div className="rise" style={{ animationDelay: '640ms' }}>
-                <AuthActions {...authProps} compact />
+                <AuthActions {...authProps} />
+              </div>
+
+              <div className="rise mt-5 flex items-center font-mono text-[11px] text-emerald-300/85" style={{ animationDelay: '760ms' }}>
+                <span className="text-emerald-500/70 mr-1.5">$</span>
+                <span className="caret" style={{ animationDelay: '1.5s' }} />
               </div>
             </div>
           </div>
@@ -536,33 +490,6 @@ export function RevealScreen({ onDismiss }) {
           </p>
         </footer>
       </div>
-
-      {/* CSS-only motes drifting in front of everything */}
-      <div className="fixed inset-0 z-[6] pointer-events-none overflow-hidden" aria-hidden="true">
-        {[
-          { left: '8%', size: 5, dur: 26, delay: -4, mx: '6vw', mo: 0.14 },
-          { left: '24%', size: 3, dur: 34, delay: -17, mx: '-4vw', mo: 0.1 },
-          { left: '55%', size: 4, dur: 30, delay: -9, mx: '5vw', mo: 0.12 },
-          { left: '72%', size: 6, dur: 24, delay: -21, mx: '-6vw', mo: 0.15 },
-          { left: '90%', size: 3, dur: 38, delay: -13, mx: '3vw', mo: 0.09 },
-        ].map((m, i) => (
-          <span
-            key={i}
-            className="mote"
-            style={{
-              left: m.left,
-              width: m.size,
-              height: m.size,
-              animationDuration: `${m.dur}s`,
-              animationDelay: `${m.delay}s`,
-              '--mx': m.mx,
-              '--mo': m.mo,
-            }}
-          />
-        ))}
-      </div>
-
-      <Statusline cmdRef={cmdRef} />
 
       {/* ── Cinematic Email & Password Authentication Modal ── */}
       <AnimatePresence>

@@ -6,15 +6,13 @@ import { useEffect } from 'react';
    One capture-phase scroll listener (the scroll root is a fixed div, so
    window listeners never fire), rAF-throttled. Everything is measured in
    content coordinates once and then cheap math per scroll frame. */
-function useScrollStory({ motionOff, heroRef, railRef, storyRailRef, cmdRef }) {
+function useScrollStory({ motionOff, heroRef, railRef, storyRailRef }) {
   useEffect(() => {
     const root = document.querySelector('[data-scroll-root]') || document.scrollingElement;
     if (!root) return undefined;
 
     let px = []; // parallax ghosts + mocks: { node, speed, docCenter }
     let sections = []; // [{ cmd, docTop }]
-    let scenes = []; // [{ name, docTop }]
-    let washes = []; // [HTMLElement]
     let dots = []; // [HTMLElement]
     let queued = false;
     let raf = 0;
@@ -34,10 +32,6 @@ function useScrollStory({ motionOff, heroRef, railRef, storyRailRef, cmdRef }) {
       sections = Array.from(root.querySelectorAll('[data-cmd]'))
         .map((node) => ({ cmd: node.dataset.cmd, docTop: docTop(node) }))
         .sort((a, b) => a.docTop - b.docTop);
-      scenes = Array.from(root.querySelectorAll('[data-scene]'))
-        .map((node) => ({ name: node.dataset.scene, docTop: docTop(node) }))
-        .sort((a, b) => a.docTop - b.docTop);
-      washes = Array.from(root.querySelectorAll('[data-wash]'));
       dots = Array.from(root.querySelectorAll('[data-dot]'));
       apply();
     };
@@ -70,17 +64,13 @@ function useScrollStory({ motionOff, heroRef, railRef, storyRailRef, cmdRef }) {
         railRef.current.style.transform = `scaleY(${Math.min(1, st / max).toFixed(4)})`;
       }
 
-      // The statusline follows the story like a shell prompt would.
-      if (cmdRef.current && sections.length) {
+      // The timeline node of the active section lights up. data-cmd carries
+      // the "$ " prompt but data-dot does not, so normalize before matching.
+      if (sections.length) {
         let cur = null;
         for (let i = 0; i < sections.length; i++) {
           if (sections[i].docTop <= st + vh * 0.55) cur = sections[i].cmd;
         }
-        const next = cur || 'auth: PENDING';
-        if (cmdRef.current.textContent !== next) cmdRef.current.textContent = next;
-
-        // The timeline node of the active section lights up. data-cmd carries
-        // the "$ " prompt but data-dot does not, so normalize before matching.
         if (cur !== lastActiveCmd) {
           lastActiveCmd = cur;
           const bare = cur ? cur.replace(/^\$ /, '') : null;
@@ -102,20 +92,6 @@ function useScrollStory({ motionOff, heroRef, railRef, storyRailRef, cmdRef }) {
         storyRailRef.current.style.transform = `scaleY(${p.toFixed(4)})`;
       }
 
-      // Active scene: publish the name for the canvas, crossfade the washes.
-      if (scenes.length) {
-        let cur = 'hero';
-        for (let i = 0; i < scenes.length; i++) {
-          if (scenes[i].docTop <= st + vh * 0.55) cur = scenes[i].name;
-        }
-        if (!motionOff) {
-          for (let i = 0; i < washes.length; i++) {
-            const w = washes[i];
-            const on = w.dataset.wash === cur ? '1' : '0';
-            if (w.style.opacity !== on) w.style.opacity = on;
-          }
-        }
-      }
     };
 
     const onScroll = () => {
@@ -150,7 +126,7 @@ function useScrollStory({ motionOff, heroRef, railRef, storyRailRef, cmdRef }) {
       io.disconnect();
       cancelAnimationFrame(raf);
     };
-  }, [motionOff, heroRef, railRef, storyRailRef, cmdRef]);
+  }, [motionOff, heroRef, railRef, storyRailRef]);
 }
 
 

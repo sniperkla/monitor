@@ -34,7 +34,7 @@ function ScrambleTitle({ reduced, delay }) {
 
   return (
     <h1
-      className="rise font-mono text-[clamp(1.6rem,6.4vw,2.75rem)] font-extrabold tracking-[0.14em] sm:tracking-[0.2em] text-center uppercase bg-clip-text text-transparent bg-gradient-to-r from-slate-100 to-slate-400"
+      className="rise font-mono text-[clamp(1.6rem,6.4vw,2.75rem)] font-extrabold tracking-[0.14em] sm:tracking-[0.2em] text-center uppercase bg-clip-text text-transparent bg-gradient-to-r from-emerald-50 to-emerald-300"
       style={{ animationDelay: `${delay}ms`, minHeight: '1.3em' }}
     >
       {reduced ? TITLE : text || '\u00A0'}

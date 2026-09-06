@@ -6,52 +6,6 @@ const TITLE = 'SSH MONITOR';
 const SUBTITLE = 'Terminal & Server Control Center';
 const SCRAMBLE_GLYPHS = '0123456789ABCDEF';
 
-/* ═══ Per-section background scenes ═══
-   Every part of the story puts the hex-network field into its own mood,
-   and a faint colour wash crossfades behind the content. The scroll
-   engine publishes the active scene name; the canvas damps its parameters
-   toward that scene every frame, so scrolling between sections melts one
-   atmosphere into the next instead of cutting.
-
-   - hero   calm indigo drift — a quiet network, signed out
-   - fleet  cyan, faster — sessions opening across the fleet
-   - watch  emerald, fast + tunnel glow — metrics streaming through
-   - vault  violet, slow + heavy scanlines — locked down, quiet
-   - backup amber, steady — bulk transfer in flight
-   - agents fuchsia, slightly faster — anomalies being caught
-   - grant  pale sky, settling — access granted */
-const SCENES = [
-  {
-    name: 'hero',
-    wash: 'radial-gradient(ellipse 62% 46% at 50% 34%, rgba(99,102,241,0.09) 0%, transparent 72%)',
-  },
-  {
-    name: 'fleet',
-    wash: 'radial-gradient(ellipse 62% 46% at 50% 40%, rgba(34,211,238,0.08) 0%, transparent 72%)',
-  },
-  {
-    name: 'watch',
-    wash: 'radial-gradient(ellipse 62% 46% at 50% 40%, rgba(52,211,153,0.065) 0%, transparent 72%)',
-  },
-  {
-    name: 'vault',
-    wash: 'radial-gradient(ellipse 62% 46% at 50% 40%, rgba(129,140,248,0.075) 0%, transparent 72%)',
-  },
-  {
-    name: 'backup',
-    wash: 'radial-gradient(ellipse 62% 46% at 50% 40%, rgba(245,158,11,0.05) 0%, transparent 72%)',
-  },
-  {
-    name: 'agents',
-    wash: 'radial-gradient(ellipse 62% 46% at 50% 40%, rgba(232,121,249,0.055) 0%, transparent 72%)',
-  },
-  {
-    name: 'grant',
-    wash: 'radial-gradient(ellipse 62% 46% at 50% 45%, rgba(125,211,252,0.085) 0%, transparent 72%)',
-  },
-];
-
-/* ── One-shot CSS: entrance stagger, caret, CSS typing, motes, IO reveals ── */
 const CONSOLE_CSS = `
 @keyframes riseIn {
   from { opacity: 0; transform: translateY(12px); }
@@ -96,10 +50,6 @@ const CONSOLE_CSS = `
 }
 .in-view .bar-fill { width: var(--w); }
 
-/* Scroll cue bob */
-@keyframes cueBob { 0%, 100% { transform: translateY(0); opacity: 0.9; } 50% { transform: translateY(7px); opacity: 0.35; } }
-.cue-bob { animation: cueBob 1.8s ease-in-out infinite; }
-
 /* Section scan sweep: a one-shot line that passes over a section the first
    time it scrolls into view — the story "reads" each block as you arrive. */
 @keyframes secSweep {
@@ -111,30 +61,16 @@ const CONSOLE_CSS = `
 .sweep {
   position: absolute; left: 0; right: 0; top: -2px; height: 1px;
   opacity: 0; pointer-events: none;
-  background: linear-gradient(90deg, transparent, rgba(34,211,238,0.7) 35%, rgba(129,140,248,0.4) 65%, transparent);
-  box-shadow: 0 0 14px rgba(34,211,238,0.35);
+  background: linear-gradient(90deg, transparent, rgba(52,211,153,0.7) 35%, rgba(16,185,129,0.4) 65%, transparent);
+  box-shadow: 0 0 14px rgba(52,211,153,0.35);
 }
 .in-view > .sweep { animation: secSweep 1.15s cubic-bezier(0.3, 0, 0.4, 1) 0.2s both; }
 
 /* The active story node glows; idle nodes stay dim (transition smooths
    the handoff between sections — a rare repaint on section change only). */
 .dot-active {
-  background: #22d3ee !important;
-  box-shadow: 0 0 12px rgba(34,211,238,0.85) !important;
-}
-
-/* Foreground motes: compositor-only drift, negative delays de-sync them. */
-@keyframes moteDrift {
-  from { transform: translate3d(0, 12vh, 0); opacity: 0; }
-  10%  { opacity: var(--mo); }
-  90%  { opacity: var(--mo); }
-  to   { transform: translate3d(var(--mx), -108vh, 0); opacity: 0; }
-}
-.mote {
-  position: absolute; bottom: -6vh; border-radius: 9999px;
-  background: radial-gradient(circle, rgba(205,232,255,0.9) 0%, rgba(150,195,255,0.15) 50%, transparent 75%);
-  filter: blur(2px);
-  animation: moteDrift linear infinite;
+  background: #34d399 !important;
+  box-shadow: 0 0 12px rgba(52,211,153,0.85) !important;
 }
 
 .console-card {
@@ -149,12 +85,9 @@ const CONSOLE_CSS = `
   .css-type { animation: none !important; width: var(--n) !important; }
   .io { opacity: 1; transform: none; transition: none; }
   .bar-fill { width: var(--w) !important; transition: none; }
-  .cue-bob, .mote { animation: none; }
   .sweep { animation: none !important; opacity: 0 !important; }
-  .mote { opacity: 0; }
   .console-card { transform: none; }
 }
 `;
 
-
-export { TITLE, SUBTITLE, SCRAMBLE_GLYPHS, SCENES, CONSOLE_CSS };
+export { TITLE, SUBTITLE, SCRAMBLE_GLYPHS, CONSOLE_CSS };
