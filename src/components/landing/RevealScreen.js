@@ -38,6 +38,10 @@ import { AuthActions, CloserActions } from './console/AuthActions';
 import { useScrollStory } from './story/useScrollStory';
 import { SectionHead, FleetMock, MonitorMock, SecurityMock, BackupMock, AgentMock } from './story/mocks';
 
+/* Passkey sign-in is available in-app but not offered on this screen —
+   flip to true to restore the "Sign in with Passkey" buttons. */
+const SHOW_PASSKEY = false;
+
 /* ── Main Reveal Screen ── */
 export function RevealScreen({ onDismiss }) {
   const [reduced] = useState(() => prefersReducedMotion());
@@ -250,7 +254,7 @@ export function RevealScreen({ onDismiss }) {
 
   const fieldActive = !showAuthModal && docVisible;
   const authProps = {
-    passkeySupported,
+    passkeySupported: passkeySupported && SHOW_PASSKEY,
     passkeyLoading,
     passkeyError,
     onPasskey: handlePasskeySignIn,
