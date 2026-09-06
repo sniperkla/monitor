@@ -289,9 +289,7 @@ export function RevealScreen({ onDismiss }) {
             className="console-card rise relative w-full max-w-md rounded-xl border border-emerald-900/50 overflow-hidden font-mono"
             style={{
               animationDelay: '120ms',
-              background: 'rgba(2, 12, 7, 0.9)',
-              backdropFilter: 'blur(10px)',
-              WebkitBackdropFilter: 'blur(10px)',
+              background: '#020c07',
               boxShadow: '0 24px 70px rgba(0,0,0,0.6), inset 0 1px 0 rgba(110,231,183,0.06)',
             }}
           >
@@ -429,7 +427,7 @@ export function RevealScreen({ onDismiss }) {
         {/* ═══ Closing CTA ═══ */}
         <section data-cmd="$ access --grant" data-scene="grant" className="io story-sec relative mx-auto w-full max-w-3xl px-5 sm:px-8 pt-10 pb-24 sm:pb-28">
           <span className="sweep" aria-hidden="true" />
-          <div className="io mx-auto w-full max-w-md rounded-xl border border-slate-700/60 overflow-hidden bg-slate-950/70" style={{ backdropFilter: 'blur(14px)', WebkitBackdropFilter: 'blur(14px)' }}>
+          <div className="io mx-auto w-full max-w-md rounded-xl border border-slate-700/60 overflow-hidden bg-[#020c07]">
             <div className="flex items-center gap-2 px-3.5 py-2 border-b border-slate-700/50 bg-slate-900/60">
               <span className="flex gap-1.5" aria-hidden="true">
                 <span className="w-2.5 h-2.5 rounded-full bg-[#ff5f57]/80" />
