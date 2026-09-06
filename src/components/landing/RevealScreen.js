@@ -26,6 +26,7 @@ import { useState, useEffect, useRef } from 'react';
 import { AnimatePresence } from 'framer-motion';
 import { ChevronDown, Activity } from 'lucide-react';
 import NeuralWeb from './NeuralWeb';
+import MatrixRain from './MatrixRain';
 import { CinematicAuthModal } from './CinematicAuthModal';
 import { signInWithPasskey, passkeysSupported } from '@/utils/passkey';
 import { CONSOLE_CSS, SUBTITLE, CAPABILITIES, SCENES } from './console/theme';
@@ -274,6 +275,15 @@ export function RevealScreen({ onDismiss }) {
             'repeating-linear-gradient(90deg, rgba(148,163,184,0.025) 0 1px, transparent 1px 56px),' +
             'repeating-linear-gradient(0deg, rgba(0,0,0,0.16) 0 1px, transparent 1px 3px)',
         }}
+      />
+
+      {/* Matrix rain — the hacker classic. Falls behind the neural web,
+          sleeps with the modal/tab; static columns under reduced motion. */}
+      <MatrixRain
+        className="fixed inset-0 z-[1] block"
+        active={fieldActive}
+        reduced={motionOff}
+        density={motionOff ? 0.3 : 0.55}
       />
 
       {/* Synthetic nervous system: sparse nodes, dim synapses, occasional
