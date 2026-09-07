@@ -16,7 +16,7 @@ import { getCsrfToken, refreshCsrfToken } from '@/utils/csrfClient';
  * So the token never appears in argv, shell history, a downloaded .sh/.bat, or
  * the service definition — and the user never has to look at one.
  */
-export default function RelayPairingPanel({ onApproved, onSupporterRequired }) {
+export default function RelayPairingPanel({ onApproved, onSupporterRequired, compact = false }) {
   const [code, setCode] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [approved, setApproved] = useState(false);
@@ -108,16 +108,18 @@ export default function RelayPairingPanel({ onApproved, onSupporterRequired }) {
 
   /* ── Waiting for the user to type the code ── */
   return (
-    <div className="space-y-3">
-      <div className="flex items-center gap-2">
-        <div className="w-5 h-5 rounded-full bg-amber-500 flex items-center justify-center shrink-0">
-          <span className="text-[10px] font-bold text-white">2</span>
+    <div className="space-y-2.5">
+      {!compact && (
+        <div className="flex items-center gap-2">
+          <div className="w-5 h-5 rounded-full bg-amber-500 flex items-center justify-center shrink-0">
+            <span className="text-[10px] font-bold text-white">2</span>
+          </div>
+          <div className="min-w-0">
+            <p className="text-xs font-bold text-[var(--text-secondary)]">Approve your computer</p>
+            <p className="text-[10px] text-[var(--text-muted)] mt-0.5">Enter the code printed by the install command below</p>
+          </div>
         </div>
-        <div className="min-w-0">
-          <p className="text-xs font-bold text-[var(--text-secondary)]">Approve your computer</p>
-          <p className="text-[10px] text-[var(--text-muted)] mt-0.5">Enter the code printed by the install command below</p>
-        </div>
-      </div>
+      )}
 
       <form onSubmit={handleSubmit} className="space-y-2.5">
         <div className="flex items-center gap-2">
@@ -136,13 +138,13 @@ export default function RelayPairingPanel({ onApproved, onSupporterRequired }) {
               spellCheck={false}
               maxLength={9}
               aria-label="Relay pairing code"
-              className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-slate-950 border border-slate-700/60 text-center font-mono text-sm tracking-[0.3em] text-[var(--text-primary)] placeholder:text-slate-600 placeholder:tracking-[0.3em] focus:outline-none focus:border-amber-500/60 focus:ring-1 focus:ring-amber-500/30 transition-colors"
+              className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-950 border border-slate-700/60 text-center font-mono text-xs tracking-[0.25em] text-[var(--text-primary)] placeholder:text-slate-600 placeholder:tracking-[0.25em] focus:outline-none focus:border-pink-500/60 focus:ring-1 focus:ring-pink-500/30 transition-colors"
             />
           </div>
           <button
             type="submit"
             disabled={submitting || code.replace(/[^A-Za-z0-9]/g, '').length !== 8}
-            className="flex items-center gap-1.5 px-4 py-2.5 bg-amber-500 hover:bg-amber-600 active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed rounded-xl text-white text-xs font-bold transition-all shadow-lg shadow-amber-500/20 shrink-0"
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-gradient-to-r from-pink-500 to-indigo-600 hover:from-pink-400 hover:to-indigo-500 active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed rounded-xl text-white text-xs font-bold transition-all shadow-md shadow-pink-500/20 shrink-0"
           >
             {submitting ? (
               <LoaderCircle size={13} className="animate-spin" />
@@ -168,11 +170,13 @@ export default function RelayPairingPanel({ onApproved, onSupporterRequired }) {
           )}
         </AnimatePresence>
 
-        <p className="text-[10px] text-[var(--text-muted)] leading-relaxed">
-          The code is displayed by the install command and expires in 10 minutes. Approving it links
-          that machine to your account — a token is issued straight to the agent, so you never have
-          to copy one.
-        </p>
+        {!compact && (
+          <p className="text-[10px] text-[var(--text-muted)] leading-relaxed">
+            The code is displayed by the install command and expires in 10 minutes. Approving it links
+            that machine to your account — a token is issued straight to the agent, so you never have
+            to copy one.
+          </p>
+        )}
       </form>
     </div>
   );

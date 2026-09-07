@@ -35,6 +35,17 @@
   fix, also root-absolute `src`/`href` set post-load (property setters,
   `setAttribute`, `insertAdjacentHTML`, `innerHTML`, MutationObserver net) —
   Hermes' router `pushState`s to `/sessions` and moves the document base.
+- **The URL must stay replayable.** It must never be normalised to
+  `location.pathname + location.hash` — that is what produced
+  `400 connectionId required` on every refresh of a chat session. The script
+  rewrites to `ASSET_PREFIX + '/?agent=' + WEBUI_AGENT + location.hash`, and
+  patches `pushState`/`replaceState` (`containInTunnel`) to keep same-origin
+  navigation under the proxy prefix. Bare URLs fall back to the
+  `mp_webui_coords` cookie (7d, httpOnly) for links minted by older builds.
+- That injected script lives INSIDE a JS template literal: a backtick in its
+  comments terminates the literal and 500s the whole route.
+- `remotePath` has `?agent=…` appended by the extraParams loop, so it is never
+  exactly `'/'` for the entry document.
 - Debugging an agent WebUI: reproduce locally (`localhost:3030`) with a
   `next-auth/jwt`-minted session cookie, puppeteer-core + local Chrome, and log
   `pageerror` plus every response >= 400. "Loading nanobot…" / a blank coloured

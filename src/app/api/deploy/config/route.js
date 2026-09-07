@@ -25,6 +25,37 @@ function safeErrorMessage(error) {
   return 'Unable to save deployment configuration.';
 }
 
+const MASK_PLACEHOLDER = '••••••••';
+
+function sanitizeDeployConfig(proj) {
+  if (!proj || typeof proj !== 'object') return proj;
+  const sanitized = { ...proj };
+
+  sanitized.hasSecret = !!(proj.secret && String(proj.secret).trim());
+  sanitized.hasGithubToken = !!(proj.githubToken && String(proj.githubToken).trim());
+  sanitized.hasBitbucketAppPassword = !!(proj.bitbucketAppPassword && String(proj.bitbucketAppPassword).trim());
+  sanitized.hasTelegramBotToken = !!(proj.telegramBotToken && String(proj.telegramBotToken).trim());
+  sanitized.hasAiApiKey = !!(proj.aiApiKey && String(proj.aiApiKey).trim());
+
+  sanitized.secret = '';
+  sanitized.githubToken = '';
+  sanitized.bitbucketAppPassword = '';
+  sanitized.telegramBotToken = '';
+  sanitized.aiApiKey = '';
+
+  if (sanitized.sshConnectionData) {
+    const { password, privateKey, passphrase, ...safeSsh } = sanitized.sshConnectionData;
+    sanitized.sshConnectionData = {
+      ...safeSsh,
+      hasPassword: !!password,
+      hasPrivateKey: !!privateKey,
+      hasPassphrase: !!passphrase
+    };
+  }
+
+  return sanitized;
+}
+
 const defaultConfig = {
   id: 'default',
   name: 'Default Project',
@@ -54,7 +85,12 @@ const defaultConfig = {
   telegramNotification: false,
   telegramBotToken: '',
   telegramChatId: '',
-  webhookToken: ''
+  webhookToken: '',
+  hasSecret: false,
+  hasGithubToken: false,
+  hasBitbucketAppPassword: false,
+  hasTelegramBotToken: false,
+  hasAiApiKey: false
 };
 
 // GET /api/deploy/config?project=id
@@ -128,13 +164,14 @@ export async function GET(request) {
     // If requesting a specific project
     if (projectId && projectId !== 'list') {
       const proj = projects.find(p => p.id === projectId);
+      const targetConfig = proj || { ...defaultConfig, id: projectId, name: `Project ${projectId}` };
       return NextResponse.json({
         success: true,
-        config: proj || { ...defaultConfig, id: projectId, name: `Project ${projectId}` }
+        config: sanitizeDeployConfig(targetConfig)
       });
     }
 
-    return NextResponse.json({ success: true, projects });
+    return NextResponse.json({ success: true, projects: projects.map(sanitizeDeployConfig) });
   } catch (error) {
     logger.error('[deploy/config] GET error:', error.message);
     return NextResponse.json({ success: false, error: safeErrorMessage(error) }, { status: 500 });
@@ -266,13 +303,24 @@ export async function POST(request) {
       }
     }
 
+    // Helper to resolve secret fields:
+    // If incoming value is undefined, empty string (and existing exists), or MASK_PLACEHOLDER, preserve existing value.
+    // To explicitly clear a secret, the client can pass null.
+    const resolveSecretField = (incoming, existing) => {
+      if (incoming === null) return '';
+      if (incoming === undefined || incoming === MASK_PLACEHOLDER || (incoming === '' && existing)) {
+        return existing || '';
+      }
+      return incoming;
+    };
+
     const updatedValue = {
       id: projectId,
       name: body.name || existingValue.name || `Project ${projectId}`,
       webhookToken,
       enabled: typeof body.enabled === 'boolean' ? body.enabled : existingValue.enabled || false,
       branch: body.branch || existingValue.branch || 'main',
-      secret: body.secret !== undefined ? body.secret : existingValue.secret || '',
+      secret: resolveSecretField(body.secret, existingValue.secret),
       targetType: finalTargetType,
       connectionId: finalTargetType === 'ssh' ? finalConnectionId : '',
       deployCommand: body.deployCommand !== undefined ? body.deployCommand : existingValue.deployCommand || '',
@@ -286,7 +334,7 @@ export async function POST(request) {
       aiModel: body.aiModel !== undefined ? body.aiModel : existingValue.aiModel || 'auto',
       aiCustomModel: body.aiCustomModel !== undefined ? body.aiCustomModel : existingValue.aiCustomModel || '',
       aiEndpoint: body.aiEndpoint !== undefined ? body.aiEndpoint : existingValue.aiEndpoint || '',
-      aiApiKey: body.aiApiKey !== undefined ? body.aiApiKey : existingValue.aiApiKey || '',
+      aiApiKey: resolveSecretField(body.aiApiKey, existingValue.aiApiKey),
       deployRunId: body.deployRunId !== undefined ? body.deployRunId : existingValue.deployRunId || null,
       lastDeployedCommitSha: body.lastDeployedCommitSha !== undefined ? body.lastDeployedCommitSha : existingValue.lastDeployedCommitSha || null,
       cancelRequested: body.cancelRequested !== undefined ? body.cancelRequested : existingValue.cancelRequested || false,
@@ -294,26 +342,28 @@ export async function POST(request) {
       githubUser: body.githubUser !== undefined ? body.githubUser : existingValue.githubUser || '',
       githubRepo: body.githubRepo !== undefined ? body.githubRepo : existingValue.githubRepo || '',
       githubToken: (() => {
-        if (body.githubToken !== undefined && body.githubToken) {
+        const resolved = resolveSecretField(body.githubToken, existingValue.githubToken);
+        if (resolved) {
           // Only encrypt if not already encrypted (encrypted values contain ':')
-          const test = decryptWithMetadata(body.githubToken);
-          return test.success ? body.githubToken : encrypt(body.githubToken);
+          const test = decryptWithMetadata(resolved);
+          return test.success ? resolved : encrypt(resolved);
         }
-        return existingValue.githubToken || '';
+        return '';
       })(),
       bitbucketConnected: body.bitbucketConnected !== undefined ? body.bitbucketConnected : existingValue.bitbucketConnected || false,
       bitbucketUser: body.bitbucketUser !== undefined ? body.bitbucketUser : existingValue.bitbucketUser || '',
       bitbucketUsername: body.bitbucketUsername !== undefined ? body.bitbucketUsername : existingValue.bitbucketUsername || '',
-      bitbucketAppPassword: body.bitbucketAppPassword !== undefined ? body.bitbucketAppPassword : existingValue.bitbucketAppPassword || '',
+      bitbucketAppPassword: resolveSecretField(body.bitbucketAppPassword, existingValue.bitbucketAppPassword),
       bitbucketRepo: body.bitbucketRepo !== undefined ? body.bitbucketRepo : existingValue.bitbucketRepo || '',
       telegramNotification: typeof body.telegramNotification === 'boolean' ? body.telegramNotification : existingValue.telegramNotification || false,
       telegramBotToken: (() => {
-        if (body.telegramBotToken !== undefined && body.telegramBotToken) {
+        const resolved = resolveSecretField(body.telegramBotToken, existingValue.telegramBotToken);
+        if (resolved) {
           // Only encrypt if not already encrypted (encrypted values contain ':')
-          const test = decryptWithMetadata(body.telegramBotToken);
-          return test.success ? body.telegramBotToken : encrypt(body.telegramBotToken);
+          const test = decryptWithMetadata(resolved);
+          return test.success ? resolved : encrypt(resolved);
         }
-        return body.telegramBotToken !== undefined ? '' : existingValue.telegramBotToken || '';
+        return '';
       })(),
       telegramChatId: body.telegramChatId !== undefined ? body.telegramChatId : existingValue.telegramChatId || '',
       sshConnectionData: finalSshConnectionData
@@ -334,7 +384,7 @@ export async function POST(request) {
       );
     }
 
-    return NextResponse.json({ success: true, config: updatedValue });
+    return NextResponse.json({ success: true, config: sanitizeDeployConfig(updatedValue) });
   } catch (error) {
     logger.error('[deploy/config] POST error:', error.message);
     return NextResponse.json({ success: false, error: safeErrorMessage(error) }, { status: 500 });

@@ -3488,7 +3488,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                             type="password"
                             value={deployConfig.secret}
                             onChange={(e) => setDeployConfig(p => ({ ...p, secret: e.target.value }))}
-                            placeholder="••••••••••••••"
+                            placeholder={deployConfig.hasSecret ? `•••••••• (${t('common.configured', 'configured')})` : t('deploy.enterSecretPlaceholder', 'Enter secret or leave blank')}
                             className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500 transition-all"
                           />
                         </div>
@@ -3735,13 +3735,13 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                                 type="password"
                                 value={deployConfig.telegramBotToken || ''}
                                 onChange={(e) => setDeployConfig(p => ({ ...p, telegramBotToken: e.target.value }))}
-                                placeholder="e.g. 123456789:ABCdefGhI..."
+                                placeholder={deployConfig.hasTelegramBotToken ? `•••••••• (${t('common.configured', 'configured')})` : 'e.g. 123456789:ABCdefGhI...'}
                                 className="flex-1 bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500"
                               />
                               <button
                                 type="button"
                                 onClick={handleFetchTelegramChats}
-                                disabled={telegramLoadingChats || (!deployConfig.telegramBotToken && !telegramBotInfo)}
+                                disabled={telegramLoadingChats || (!deployConfig.telegramBotToken && !deployConfig.hasTelegramBotToken && !telegramBotInfo)}
                                 className="px-3 py-2 rounded-xl bg-sky-500/10 hover:bg-sky-500/20 border border-sky-500/30 text-sky-400 hover:text-sky-300 text-xs font-semibold flex items-center gap-1.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
                               >
                                 {telegramLoadingChats ? <LoaderCircle size={13} className="animate-spin" /> : <RefreshCw size={13} />}
@@ -3957,7 +3957,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                                   type="password"
                                   value={deployConfig.aiApiKey}
                                   onChange={(e) => setDeployConfig(p => ({ ...p, aiApiKey: e.target.value }))}
-                                  placeholder={t('deploy.aiApiKeyPlaceholder', 'Enter API Key')}
+                                  placeholder={deployConfig.hasAiApiKey ? `•••••••• (${t('common.configured', 'configured')})` : t('deploy.aiApiKeyPlaceholder', 'Enter API Key')}
                                   className="w-full bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:border-indigo-500"
                                 />
                               </div>
@@ -3977,7 +3977,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                       </div>
 
                       {(() => {
-                        const isMissingKey = deployConfig.aiModel === 'manual' && !deployConfig.aiApiKey?.trim();
+                        const isMissingKey = deployConfig.aiModel === 'manual' && !deployConfig.aiApiKey?.trim() && !deployConfig.hasAiApiKey;
                         const isBtnDisabled = isMissingKey || aiAnalyzing || deployLoading;
 
                         return (

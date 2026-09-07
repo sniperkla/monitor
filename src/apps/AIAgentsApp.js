@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Bot, Server as ServerIcon, RefreshCw, Loader2, CheckCircle2, XCircle, AlertCircle, Settings2, Puzzle, Trash2, Play, Square, RotateCw, Plus, ExternalLink, Send, Search, Sparkles, Check, FileText, Copy, Lock, Radio, Zap, Shield, ShieldOff, UserX, Cable, ChevronRight, Flame, Heart, Terminal, ChevronDown, ChevronUp, X, Minus, Maximize2, Minimize2, GripHorizontal, Eye, EyeOff, UserPlus, ArrowUpCircle, DownloadCloud, MonitorSmartphone, ChevronLeft } from 'lucide-react';
+import { Bot, Server as ServerIcon, RefreshCw, Loader2, CheckCircle2, XCircle, AlertCircle, Settings2, Puzzle, Trash2, Play, Square, RotateCw, Plus, ExternalLink, Send, Search, Sparkles, Check, FileText, Copy, Lock, Radio, Zap, Shield, ShieldOff, UserX, Cable, ChevronRight, Flame, Heart, Terminal, ChevronDown, ChevronUp, X, Minus, Maximize2, Minimize2, GripHorizontal, Eye, EyeOff, ArrowUpCircle, DownloadCloud, MonitorSmartphone, ChevronLeft, KeyRound } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 import { useOS } from '@/context/OSContext';
 import { useSupporter } from '@/hooks/useSupporter';
 import SupporterModal from '@/components/common/SupporterModal';
 import HermesAgentWizard from '@/components/HermesAgentWizard';
 import ThemeSelect from '@/components/common/ThemeSelect';
+import RelayPairingPanel from '@/components/RelayPairingPanel';
 import { io } from 'socket.io-client';
 import { createRelayPeer, DC } from '@/lib/webrtc-relay';
 
@@ -161,8 +162,8 @@ function extractWebUISecret(webUIBootstrapPath) {
 }
 
 export default function AIAgentsApp({ apiFetch }) {
-  const { state, connectionsReady, relayInfo } = useApp();
-  const { isSupporter, isAdmin } = useSupporter({ refreshOnFocus: true });
+  const { state, connectionsReady, relayInfo, dispatch } = useApp();
+  const { isSupporter } = useSupporter({ refreshOnFocus: true });
   const { showPrompt } = useOS();
   const [supporterModalOpen, setSupporterModalOpen] = useState(false);
   const doFetch = apiFetch || fetch;
@@ -185,6 +186,45 @@ export default function AIAgentsApp({ apiFetch }) {
   const handleStartWebUIRef = useRef(null);
   const [stoppingWebUI, setStoppingWebUI] = useState(false);
   const stoppingWebUIRef = useRef(false);
+  const [forceBypassRelay, setForceBypassRelay] = useState(false);
+  const [checkingRelay, setCheckingRelay] = useState(true);
+
+  const checkLocalRelay = useCallback(async () => {
+    try {
+      const res = await doFetch('/api/relay/token', { cache: 'no-store' });
+      if (res.ok) {
+        const data = await res.json();
+        const isConnected = !!data.connected;
+        if (dispatch) {
+          dispatch({
+            type: 'SET_RELAY_INFO',
+            payload: { connected: isConnected, relays: data.relays || [], checkDone: true },
+          });
+        }
+        return isConnected;
+      }
+    } catch (_) {}
+    return false;
+  }, [doFetch, dispatch]);
+
+  // Check Local Relay first immediately on open
+  useEffect(() => {
+    let mounted = true;
+    setCheckingRelay(true);
+    checkLocalRelay().finally(() => {
+      if (mounted) setCheckingRelay(false);
+    });
+    return () => { mounted = false; };
+  }, [checkLocalRelay]);
+
+  // Auto-detect polling when relay is not connected
+  useEffect(() => {
+    if (relayInfo?.connected || forceBypassRelay) return;
+    const interval = setInterval(() => {
+      checkLocalRelay();
+    }, 2500);
+    return () => clearInterval(interval);
+  }, [relayInfo?.connected, forceBypassRelay, checkLocalRelay]);
 
   // Listen for 'START_WEBUI' postMessage from the embedded diagnostic screen
   useEffect(() => {
@@ -532,45 +572,6 @@ export default function AIAgentsApp({ apiFetch }) {
     setShowWizard(true);
   };
 
-  // ── Strict mode: provision one dedicated Linux user per friend ──
-  // The friend gets their own account (own .env, own token, own systemd units,
-  // own cgroups) and uses the agent through their OWN SSH connection.
-  const [provisioningUser, setProvisioningUser] = useState(false);
-  const provisionFriendUser = () => {
-    showPrompt('Linux username for your friend (a-z, 0-9, -, _):', (userRaw) => {
-      const username = String(userRaw || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '').replace(/^[^a-z_]+/, '');
-      if (!username) {
-        setNotice({ ok: false, text: 'Invalid username — must contain letters (e.g. somchai)' });
-        return;
-      }
-      // Deferred one tick — see note below re: DesktopModal CLOSE_MODAL race.
-      setTimeout(() => showPrompt(`SSH public key for "${username}" (optional — paste their key to allow key login, leave empty to skip):`, (pubRaw) => {
-        const publicKey = String(pubRaw || '').trim();
-        setProvisioningUser(true);
-        doFetch('/api/agents/provision-user', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({ connectionId: target, username, publicKey }),
-        })
-          .then(r => r.json())
-          .then(r => {
-            if (r?.success) {
-              setNotice({ ok: true, text: `✅ User "${r.username}" is ready on the server (${r.home}, isolated home 700, linger enabled).\n\nNext steps:\n${(r.instructions || []).slice(1).join('\n')}` });
-            } else {
-              setNotice({ ok: false, text: r?.error || 'Provision failed' });
-            }
-          })
-          .catch(e => setNotice({ ok: false, text: `Provision failed: ${e?.message || e}` }))
-          .finally(() => setProvisioningUser(false));
-      }, '', `Provision user "${username}"`), 0);
-      // NOTE: DesktopModal.handleConfirm runs onConfirm() BEFORE closeModal()
-      // — dispatching a new SHOW_MODAL synchronously here gets immediately
-      // clobbered by the trailing CLOSE_MODAL. Deferring one tick lets the
-      // second prompt survive.
-    }, '', 'New user for a friend (strict isolation)');
-  };
-
   useEffect(() => {
     if (connectionsReady && !target && connections.length > 0) {
       setTarget(connections[0]._id);
@@ -588,8 +589,8 @@ export default function AIAgentsApp({ apiFetch }) {
     setTab('overview');
     // Bump the generation so any in-flight fetch for the old agent is discarded.
     loadGenRef.current += 1;
-    if (target) loadDetails();
-  }, [target, agentId, activeInstance]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (target && (relayInfo?.connected || forceBypassRelay)) loadDetails();
+  }, [target, agentId, activeInstance, relayInfo?.connected, forceBypassRelay]); // eslint-disable-line react-hooks/exhaustive-deps
   // When fresh details arrive (e.g. after wizard install), refresh the config draft
   // so the Config tab shows the new values, not the old ones.
   useEffect(() => {
@@ -701,6 +702,13 @@ export default function AIAgentsApp({ apiFetch }) {
   const webUIPort = () => details?.webUIPort || (agent.id === 'hermes' ? 9119 : 8765);
 
   const handleStartWebUI = async () => {
+    if (!relayConnectedRef.current) {
+      setNotice({
+        ok: false,
+        text: 'Local Relay is required to start and use Web UI. Please start Local Relay on your computer first.',
+      });
+      return;
+    }
     if (startingWebUIRef.current) return;
     startingWebUIRef.current = true;
     setStartingWebUI(true);
@@ -784,6 +792,18 @@ export default function AIAgentsApp({ apiFetch }) {
   // up-front and navigate it once the relay has told us which port it bound —
   // waiting to call window.open() until after the await would be blocked.
   const openWebUIInTab = async (overridePath, preopenedTab = null) => {
+    // Require Local Relay: central socket proxy has protocol/chat desync bugs
+    if (!relayConnectedRef.current) {
+      if (preopenedTab && !preopenedTab.closed) {
+        try { preopenedTab.close(); } catch {}
+      }
+      setNotice({
+        ok: false,
+        text: 'Local Relay is required to open Web UI. Please start Local Relay on your computer.',
+      });
+      return;
+    }
+
     const tab = preopenedTab || openBlankWebUITab();
 
     const basePath = (typeof overridePath === 'string' && overridePath)
@@ -800,7 +820,7 @@ export default function AIAgentsApp({ apiFetch }) {
       setNotice({ ok: true, text: `Popup blocked — URL copied to clipboard: ${url}` });
     };
 
-    // 1. Direct transfer via the Local Relay, if it answers.
+    // Direct transfer via Local Relay
     if (WEBUI_START_AGENTS.includes(agentRef.current?.id) && callRef.current) {
       try {
         const rr = await callRef.current('webui-ctl', {
@@ -808,24 +828,23 @@ export default function AIAgentsApp({ apiFetch }) {
         });
         if (rr?.success && rr?.localPort) {
           const candidate = `http://127.0.0.1:${rr.localPort}`;
-          // Probe the gateway root, NOT /__relay_ping. The relay answers the
-          // ping the instant its listener binds — *before* the SSH tunnel to
-          // the agent is usable. Fetching "/" exercises the whole path
-          // (relay → SSH → agent gateway), so an answer here means the tab
-          // will actually get content instead of "refused to connect".
           if (await waitUntilReachable(`${candidate}/`, { attempts: 12, intervalMs: 750 })) {
             navigate(`${candidate}${basePath}`,
-              `Opened in a new tab — direct via your Local Relay (${candidate}).`);
+              `Opened in a new tab — direct via Local Relay (${candidate}).`);
             return;
           }
         }
       } catch { /* relay path is best-effort */ }
     }
 
-    // 2. Fall back to the central same-origin SSH proxy.
-    const proxyPath = buildWebUIProxyUrl(target, webUIPort(), basePath, agentRef.current?.id);
-    const absolute = /^https?:\/\//i.test(proxyPath) ? proxyPath : `${window.location.origin}${proxyPath}`;
-    navigate(absolute, 'Opened in a new tab — via the central SSH proxy (no local relay).');
+    // Tunnel could not be bound — do not fall back to buggy WebSocket proxy
+    if (tab && !tab.closed) {
+      try { tab.close(); } catch {}
+    }
+    setNotice({
+      ok: false,
+      text: 'Could not connect through Local Relay. Please verify Local Relay is running on your computer.',
+    });
   };
 
   const act = async (label, fn) => {
@@ -1522,7 +1541,7 @@ export default function AIAgentsApp({ apiFetch }) {
   };
   const btn = 'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-bold transition cursor-pointer disabled:opacity-40';
 
-  if (!isSupporter && !isAdmin) {
+  if (!isSupporter) {
     return (
       <div className="h-full overflow-y-auto p-4 md:p-8 max-w-4xl mx-auto flex flex-col items-center justify-center min-h-[600px] text-center space-y-6">
         <style>{`select option { background-color: #16162a; color: #fff; }`}</style>
@@ -1608,6 +1627,192 @@ export default function AIAgentsApp({ apiFetch }) {
     );
   }
 
+  // ── 0. Initial Local Relay probe on open ──
+  if (checkingRelay && !relayInfo?.connected && !forceBypassRelay) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center gap-3 animate-in fade-in duration-200">
+        <div className="relative">
+          <div className="absolute -inset-3 bg-pink-500/15 rounded-full blur-xl animate-pulse" />
+          <div className="relative w-12 h-12 rounded-2xl bg-[var(--bg-secondary)] border border-pink-500/30 flex items-center justify-center">
+            <Loader2 size={20} className="text-pink-400 animate-spin" />
+          </div>
+        </div>
+        <div className="text-center">
+          <div className="text-sm font-bold text-white">Checking Local Relay…</div>
+          <div className="text-[11px] text-[var(--text-muted)] mt-0.5">Verifying direct connection on your computer</div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Force Local Relay Setup: Require Local Relay for optimal speed, 0ms direct WebUI, and no SSH polling latency ──
+  if (!relayInfo?.connected && !forceBypassRelay) {
+    const selectedConn = connections.find(c => c._id === target) || connections[0];
+    const serverOrigin = typeof window !== 'undefined' ? window.location.origin : '';
+    const quickCmd = `rm -f ./local-relay.js && curl -fsSL -H 'Cache-Control: no-cache' "${serverOrigin}/local-relay.js" -o ./local-relay.js && node ./local-relay.js --pair --server "${serverOrigin}" && rm -f ./local-relay.js`;
+
+    return (
+      <div className="h-full overflow-y-auto">
+        <style>{`select option { background-color: #16162a; color: #fff; }`}</style>
+        <div className="min-h-full flex flex-col lg:flex-row">
+
+          {/* ── Left: Branding & Feature highlights ── */}
+          <div className="flex-1 flex flex-col justify-center p-6 md:p-8 lg:p-10 space-y-5 lg:max-w-[52%]">
+            {/* Badge + Title */}
+            <div className="space-y-3">
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold bg-pink-500/10 text-pink-300 border border-pink-500/25">
+                <Cable size={11} className="text-pink-400" />
+                Local Relay Required
+              </div>
+              <div>
+                <h2 className="text-xl md:text-2xl font-extrabold tracking-tight text-white leading-tight">
+                  Fast Agent Telemetry
+                  <span className="block bg-gradient-to-r from-pink-400 via-purple-400 to-indigo-400 bg-clip-text text-transparent">
+                    &amp; 0ms WebUI
+                  </span>
+                </h2>
+                <p className="text-[11px] text-[var(--text-muted)] leading-relaxed mt-2 max-w-sm">
+                  Eliminates SSH polling lag and WebSocket proxy bugs. AI Agents communicate directly via Local Relay running on your Mac/PC.
+                </p>
+              </div>
+            </div>
+
+            {/* Feature pillars — horizontal rows */}
+            <div className="space-y-2">
+              {[
+                { icon: <Zap size={13} className="text-pink-400 shrink-0" />, label: '10× Faster Sync', desc: 'Agent state in milliseconds, no SSH subshells.' },
+                { icon: <Radio size={13} className="text-indigo-400 shrink-0" />, label: '0ms WebUI Chat', desc: 'Tokens stream on loopback 127.0.0.1:18791, zero proxy drops.' },
+                { icon: <Shield size={13} className="text-emerald-400 shrink-0" />, label: 'Zero Server Hop', desc: 'Peer-to-peer encrypted tunnel, data never touches central servers.' },
+              ].map(({ icon, label, desc }) => (
+                <div key={label} className="flex items-start gap-2.5 p-2.5 rounded-xl bg-[var(--bg-secondary)]/60 border border-white/5">
+                  <div className="mt-0.5">{icon}</div>
+                  <div>
+                    <div className="text-[11px] font-bold text-white">{label}</div>
+                    <div className="text-[10px] text-[var(--text-muted)] leading-relaxed">{desc}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Target server picker */}
+            {connections.length > 0 && (
+              <div className="flex items-center gap-2 p-2.5 rounded-xl bg-[var(--bg-secondary)] border border-[var(--border-color)]">
+                <ServerIcon size={13} className="text-[var(--text-muted)] shrink-0" />
+                <div className="text-[10px] uppercase font-bold text-[var(--text-muted)] shrink-0">Target</div>
+                <div className="flex-1 min-w-0">
+                  <ThemeSelect
+                    value={target}
+                    onChange={setTarget}
+                    options={connections.map(c => ({ value: c._id, label: `${c.name || c.host}` }))}
+                    size="sm"
+                  />
+                </div>
+              </div>
+            )}
+
+          </div>
+
+          {/* ── Right: Action card ── */}
+          <div className="flex-1 flex flex-col justify-center p-6 md:p-8 lg:p-10 lg:border-l lg:border-[var(--border-color)] border-t border-[var(--border-color)] lg:border-t-0">
+            <div className="max-w-md w-full mx-auto space-y-4">
+              {/* Ambient glow + icon */}
+              <div className="flex items-center gap-3">
+                <div className="relative shrink-0">
+                  <div className="absolute -inset-2 bg-pink-500/20 rounded-full blur-lg animate-pulse" />
+                  <div className="relative w-10 h-10 rounded-xl bg-gradient-to-br from-pink-500/20 via-purple-600/30 to-indigo-600/20 border border-pink-500/40 flex items-center justify-center">
+                    <Cable size={18} className="text-pink-400" />
+                  </div>
+                </div>
+                <div>
+                  <div className="text-sm font-bold text-white">Start Local Relay</div>
+                  <div className="text-[10px] text-[var(--text-muted)]">Run once in your terminal — auto-detected</div>
+                </div>
+              </div>
+
+              {/* Command box */}
+              <div className="rounded-xl bg-black/50 border border-white/10 overflow-hidden">
+                <div className="flex items-center justify-between px-3 py-1.5 border-b border-white/5">
+                  <div className="flex items-center gap-1.5">
+                    <div className="w-2 h-2 rounded-full bg-red-500/70" />
+                    <div className="w-2 h-2 rounded-full bg-amber-500/70" />
+                    <div className="w-2 h-2 rounded-full bg-emerald-500/70" />
+                  </div>
+                  <div className="text-[9px] text-[var(--text-muted)] font-mono">Terminal</div>
+                </div>
+                <div className="p-3 font-mono text-[10px] text-pink-200/80 leading-relaxed break-all select-all">
+                  {quickCmd}
+                </div>
+              </div>
+
+              {/* Copy button */}
+              <button
+                onClick={() => {
+                  navigator.clipboard?.writeText(quickCmd).catch(() => {});
+                  setNotice({ ok: true, text: 'Command copied to clipboard!' });
+                }}
+                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-gradient-to-r from-pink-500 via-purple-600 to-indigo-600 hover:from-pink-400 hover:to-indigo-500 text-white font-bold text-xs shadow-lg shadow-pink-500/20 transition cursor-pointer"
+              >
+                <Copy size={13} /> Copy Command
+              </button>
+
+              {/* Status row */}
+              <div className="flex items-center justify-between px-1">
+                <div className="flex items-center gap-1.5 text-[10px] text-[var(--text-muted)]">
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-pink-400 opacity-75" />
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-pink-500" />
+                  </span>
+                  Waiting… auto-detecting every 2.5s
+                </div>
+                <button
+                  onClick={async () => {
+                    setNotice(null);
+                    const ok = await checkLocalRelay();
+                    setNotice(ok
+                      ? { ok: true,  text: 'Local Relay connected!' }
+                      : { ok: false, text: 'Not detected — make sure local-relay.js is running.' }
+                    );
+                  }}
+                  className="flex items-center gap-1 text-[10px] font-bold text-pink-300 hover:text-pink-200 bg-pink-500/10 hover:bg-pink-500/20 px-2 py-1 rounded-lg border border-pink-500/20 transition cursor-pointer"
+                >
+                  <RefreshCw size={10} /> Check Now
+                </button>
+              </div>
+
+              {/* Approve Pairing Code section */}
+              <div className="p-3 rounded-xl bg-pink-500/5 border border-pink-500/20 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="text-[10px] font-bold text-pink-300 uppercase tracking-wide flex items-center gap-1.5">
+                    <KeyRound size={12} className="text-pink-400" />
+                    Enter Pairing Code
+                  </div>
+                  <span className="text-[9px] text-[var(--text-muted)]">From terminal</span>
+                </div>
+                <RelayPairingPanel
+                  compact
+                  onApproved={async () => {
+                    setNotice({ ok: true, text: 'Relay approved! Connecting...' });
+                    await checkLocalRelay();
+                  }}
+                  onSupporterRequired={() => setSupporterModalOpen(true)}
+                />
+              </div>
+
+              {/* NPM install alternative */}
+              <div className="p-2.5 rounded-xl bg-[var(--bg-secondary)]/50 border border-[var(--border-color)] space-y-1">
+                <div className="text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-wide">Or install globally</div>
+                <div className="font-mono text-[10px] text-[var(--text-primary)] bg-black/30 px-2 py-1 rounded-lg select-all">
+                  npm i -g ssh-monitor-relay &amp;&amp; local-relay --pair --server {serverOrigin}
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    );
+  }
+
   const zcBindCode = (pendingPairings.find(p => p.platform === 'telegram-bind') || {}).code || '';
   // Instances that exist on the server but are not running (default uninstalled,
   // instance homes survived). Shown as a banner on the install card.
@@ -1653,11 +1858,25 @@ export default function AIAgentsApp({ apiFetch }) {
       <div className="rounded-xl border border-[var(--border-color)] bg-[var(--bg-secondary)] p-4">
         <div className="flex items-center justify-between mb-1">
           <label className="text-[10px] uppercase tracking-wider font-bold text-[var(--text-muted)]">Server</label>
-          {relayInfo?.connected && (
-            <span className="flex items-center gap-1 text-[10px] text-pink-300 font-bold bg-pink-500/10 px-2 py-0.5 rounded-full border border-pink-500/20 shadow-[0_0_10px_rgba(236,72,153,0.15)]">
-              <Cable size={10} /> Local Relay Active
-            </span>
-          )}
+          <div className="flex items-center gap-1.5">
+            {relayInfo?.connected ? (
+              <span className="flex items-center gap-1 text-[10px] text-pink-300 font-bold bg-pink-500/10 px-2 py-0.5 rounded-full border border-pink-500/20 shadow-[0_0_10px_rgba(236,72,153,0.15)]" title="Local Relay active: Direct communication with zero server hops">
+                <Cable size={10} className="text-pink-400" /> Local Relay Active
+              </span>
+            ) : (
+              <button
+                onClick={async () => {
+                  const ok = await checkLocalRelay();
+                  if (ok) setNotice({ ok: true, text: 'Local Relay detected and active!' });
+                  else setNotice({ ok: false, text: 'Local Relay is not running on your computer.' });
+                }}
+                className="flex items-center gap-1 text-[10px] text-amber-300/90 font-medium bg-amber-500/10 hover:bg-amber-500/20 px-2 py-0.5 rounded-full border border-amber-500/20 transition cursor-pointer"
+                title="Local Relay is not connected: Click to check connection"
+              >
+                <Radio size={10} className="text-amber-400 animate-pulse" /> Local Relay Inactive · Check
+              </button>
+            )}
+          </div>
         </div>
         <ThemeSelect
           value={target}
@@ -1813,14 +2032,6 @@ export default function AIAgentsApp({ apiFetch }) {
               title={`Spawn another ${agent.name} instance on this server (own data dir, own bot token)`}
             >
               {spawningInstance ? <Loader2 size={11} className="animate-spin" /> : <Plus size={11} />} Spawn instance
-            </button>
-            <button
-              onClick={provisionFriendUser}
-              disabled={!!busyMsg || provisioningUser || !target}
-              className={`${btn} !py-1 !px-2 bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25`}
-              title="Strict isolation: create a dedicated Linux user for a friend — they add their own SSH connection and install the agent inside their own account (own .env, own token, own cgroups)"
-            >
-              {provisioningUser ? <Loader2 size={11} className="animate-spin" /> : <UserPlus size={11} />} User for friend
             </button>
             {activeInstance && (
               <span className="text-[9px] text-[var(--text-muted)]">
@@ -1993,13 +2204,24 @@ export default function AIAgentsApp({ apiFetch }) {
                       <div>
                         {/* No separate status pill — the Start button to the
                             right carries the running/stopped state instead. */}
-                        <div className="font-bold text-white text-xs flex items-center gap-2">
+                        <div className="font-bold text-white text-xs flex items-center gap-2 flex-wrap">
                           <span>Web UI</span>
                           <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-sky-500/20 text-sky-300 border border-sky-500/30">:{details.webUIPort}</span>
+                          {relayInfo?.connected ? (
+                            <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold bg-pink-500/15 text-pink-300 border border-pink-500/30 shadow-[0_0_8px_rgba(236,72,153,0.2)]" title="Direct local tunnel active: chat and UI stream directly with 0ms server latency">
+                              <Cable size={10} className="text-pink-400" /> Local Relay Active (0ms)
+                            </span>
+                          ) : (
+                            <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30" title="Central WebSocket proxy is disabled due to known protocol & chat bugs. Local Relay is required.">
+                              <ShieldOff size={10} className="text-amber-400" /> Local Relay Required
+                            </span>
+                          )}
                         </div>
                         <div className="text-[10px] text-[var(--text-muted)]">
-                          {agent.name} built-in web interface — chat, sessions, skills, cron and logs in your browser. Opens in a real tab, no SSH or manual port-forwarding.
-                          {WEBUI_START_AGENTS.includes(agent.id) && ' Served straight from your Local Relay when it is connected.'}
+                          {agent.name} built-in web interface — chat, sessions, skills, cron and logs in your browser.
+                          {relayInfo?.connected
+                            ? ' ⚡ Direct mode: Served straight from your Local Relay (http://127.0.0.1:18791) with zero server hops.'
+                            : ' ⚠️ Local Relay required: Central WebSocket proxy is disabled to eliminate chat bugs. Run Local Relay on your computer to open Web UI directly.'}
                         </div>
                       </div>
                     </div>
@@ -2050,10 +2272,18 @@ export default function AIAgentsApp({ apiFetch }) {
                       )}
                       <button
                         onClick={() => openWebUIInTab()}
-                        className="px-3 py-1.5 rounded-xl bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 hover:text-sky-200 font-bold text-xs flex items-center gap-1.5 border border-sky-500/30 transition cursor-pointer"
-                        title="Open in a new browser tab (direct via your Local Relay when it's connected)"
+                        className={`px-3 py-1.5 rounded-xl font-bold text-xs flex items-center gap-1.5 border transition cursor-pointer ${
+                          relayInfo?.connected
+                            ? 'bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 hover:text-sky-200 border-sky-500/30'
+                            : 'bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 hover:text-amber-200 border-amber-500/30'
+                        }`}
+                        title={relayInfo?.connected ? "Open directly via Local Relay (http://127.0.0.1:18791)" : "Local Relay is required for Web UI"}
                       >
-                        <ExternalLink size={12} /> Open in New Tab
+                        {relayInfo?.connected ? (
+                          <><ExternalLink size={12} /> Open in New Tab</>
+                        ) : (
+                          <><Cable size={12} /> Local Relay Required</>
+                        )}
                       </button>
                     </div>
                   </div>

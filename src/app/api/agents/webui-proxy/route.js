@@ -728,7 +728,11 @@ async function handleProxy(request) {
       // loopback URL (config endpoints, bootstrap URLs). Pull those back
       // through the proxy so the app can never navigate out of the tunnel.
       let text = body.toString('utf8');
-      const rewritten = rewriteAbsoluteSelfUrls(text, proxyBase, port);
+      const rewritten = rewriteRootAssetRefs(
+        rewriteAbsoluteSelfUrls(text, proxyBase, port),
+        connectionId,
+        port
+      );
       if (rewritten !== text) {
         body = Buffer.from(rewritten, 'utf8');
         outHeaders['content-length'] = String(body.length);

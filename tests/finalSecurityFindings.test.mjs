@@ -49,6 +49,23 @@ test('deploy config sanitizes duplicate-key errors', () => {
   assert.ok(!deploy.includes('error: error.message'), 'raw error message must not reach clients');
 });
 
+test('GET /api/deploy/config withholds secret fields and returns sanitized indicators', () => {
+  assert.ok(deploy.includes('sanitizeDeployConfig'));
+  assert.match(deploy, /sanitized\.hasSecret\s*=\s*!!/);
+  assert.match(deploy, /sanitized\.hasGithubToken\s*=\s*!!/);
+  assert.match(deploy, /sanitized\.hasBitbucketAppPassword\s*=\s*!!/);
+  assert.match(deploy, /sanitized\.hasTelegramBotToken\s*=\s*!!/);
+  assert.match(deploy, /sanitized\.hasAiApiKey\s*=\s*!!/);
+  assert.match(deploy, /sanitized\.secret = ''/);
+  assert.match(deploy, /sanitized\.githubToken = ''/);
+  assert.match(deploy, /sanitized\.aiApiKey = ''/);
+  assert.match(deploy, /hasPassword:\s*!!password/);
+  assert.match(deploy, /hasPrivateKey:\s*!!privateKey/);
+  assert.match(deploy, /hasPassphrase:\s*!!passphrase/);
+  assert.ok(deploy.includes('sanitizeDeployConfig(targetConfig)'));
+  assert.ok(deploy.includes('projects.map(sanitizeDeployConfig)'));
+});
+
 test('GET /api/connections/[id] withholds secret fields and returns sanitized indicators', () => {
   const connDetail = readSrc('src/app/api/connections/[id]/route.js');
   assert.match(connDetail, /hasPassword:\s*!!connection\.password/);
