@@ -9,9 +9,14 @@
  * same-origin state-changing request — including calls made by third-party
  * libraries.
  *
- * The token is read from the cookie on every request instead of being cached
- * in JS memory, so silent server-side rotation (e.g. after login/logout, when
- * the token is re-bound to a different user) can never desync the client.
+ * The cookie itself is HttpOnly (an audit requirement), so the token is
+ * obtained from the /api/csrf response body and cached in module memory.
+ * The cookie still participates in the double-submit check — the browser
+ * attaches it automatically — but JS never needs to read it. Server-side
+ * rotation (login/logout re-binds the token to a different user) desyncs this
+ * cache; the shim detects the 403 rejection below, refetches /api/csrf and
+ * retries once, so rotation costs one extra roundtrip, never a user-visible
+ * failure.
  */
 
 import { CSRF_COOKIE, CSRF_HEADER } from '@/lib/csrfConstants';
@@ -20,6 +25,12 @@ const UNSAFE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 let installed = false;
 let bootstrapPromise = null;
+
+// Token cache. The CSRF cookie is HttpOnly (JS cannot read it), so the token
+// arrives via the /api/csrf response body and lives here. getCsrfToken()
+// keeps the document.cookie fallback as defense-in-depth in case the server
+// ever serves a JS-readable cookie (e.g. an older deployment mid-rollout).
+let cachedToken = null;
 
 function readCookie(name) {
   if (typeof document === 'undefined') return null;
@@ -38,9 +49,9 @@ function readCookie(name) {
   return null;
 }
 
-/** Current token from the cookie, or null if not minted yet. */
+/** Current token: memory cache first, then the cookie if it is JS-readable. */
 export function getCsrfToken() {
-  return readCookie(CSRF_COOKIE);
+  return cachedToken || readCookie(CSRF_COOKIE);
 }
 
 /** Force-mint a fresh token (used when the server rejects ours). */
@@ -48,7 +59,13 @@ export function refreshCsrfToken() {
   if (bootstrapPromise) return bootstrapPromise;
   bootstrapPromise = fetch('/api/csrf', { credentials: 'include', cache: 'no-store' })
     .then((r) => (r.ok ? r.json() : null))
-    .then((data) => (data && data.csrfToken ? data.csrfToken : readCookie(CSRF_COOKIE)))
+    .then((data) => {
+      if (data && data.csrfToken) {
+        cachedToken = data.csrfToken;
+        return cachedToken;
+      }
+      return readCookie(CSRF_COOKIE);
+    })
     .catch(() => null)
     .finally(() => {
       bootstrapPromise = null;

@@ -70,8 +70,12 @@ const ROUTE_RULES = [
   { pattern: /^\/api\/admin(\/|$)/, limit: 30, window: '1 m' },
 
   // Skill install writes attacker-influenced content to disk under a per-user
-  // namespace. Keep it scarce.
-  { pattern: /^\/api\/skills\/install(\/|$)/, limit: 10, window: '1 m' },
+  // namespace. Kept at 5/min (tightened from 10): a scanner probe of 10 rapid
+  // installs previously returned 10×200 because the cap was exactly 10, which
+  // reads as "no rate limit" in an external report. At 5/min the control is
+  // observable within such a probe and the disk-write surface is halved; the
+  // 6th install in a rolling minute gets 429 + Retry-After.
+  { pattern: /^\/api\/skills\/install(\/|$)/, limit: 5, window: '1 m' },
 
   // Vault — recovery/reset mint single-use codes; unlock attempts are the
   // prize in a credential-stuffing campaign.

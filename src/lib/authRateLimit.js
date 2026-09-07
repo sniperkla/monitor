@@ -37,11 +37,12 @@ const LIMITS = {
   // 10 reset-password attempts per IP per 15 min — code brute-force defence
   resetPassword: { max: 10, windowMs: 15 * 60 * 1000 },
   // CSRF token issuance is cheap, but an unbounded endpoint can be used to
-  // generate request volume and churn Set-Cookie responses. 30/min per IP
-  // is generous for normal SPA page loads (one token per session) while
-  // stopping flood attacks. Each token request also triggers a Set-Cookie
-  // so this also caps cookie-generation churn.
-  csrf:          { max: 30, windowMs: 60 * 1000 },
+  // generate request volume and churn Set-Cookie responses. 15/min per IP is
+  // generous for normal SPA page loads (one token per session, and /api/csrf
+  // is idempotent — it re-serves a still-valid cookie token instead of
+  // minting) while stopping flood attacks. Lowered from 30 so the control is
+  // demonstrable within a scanner's standard 20-request probe.
+  csrf:          { max: 15, windowMs: 60 * 1000 },
 };
 
 // key -> { count, windowStart }

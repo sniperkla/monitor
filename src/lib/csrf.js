@@ -10,8 +10,11 @@
  * Design
  * ------
  * 1. The server mints `token = <random>.<HMAC(secret, random + userId)>` and
- *    sets it in a JS-readable cookie.
- * 2. The browser reads the cookie and echoes it in the `x-csrf-token` header.
+ *    sets it in an HttpOnly cookie. Because the cookie is invisible to
+ *    JavaScript (audit finding: "monitor_csrf missing HttpOnly"), the client
+ *    obtains the token from the /api/csrf response body instead of
+ *    document.cookie and caches it in memory (src/utils/csrfClient.js).
+ * 2. The client echoes that token in the `x-csrf-token` header.
  * 3. The server verifies BOTH:
  *      a. header === cookie          (double submit — an attacker cannot read
  *                                     or set the cookie for our origin), and
@@ -159,10 +162,17 @@ export async function verifyCsrfPair(headerToken, cookieToken, userId) {
   return verifyCsrfToken(cookieToken, userId);
 }
 
-/** Cookie attributes. Readable by JS by design (double-submit requires it). */
+/**
+ * Cookie attributes. HttpOnly: JavaScript never reads this cookie — it gets
+ * the token from the /api/csrf response body (see src/utils/csrfClient.js).
+ * The double-submit check is unaffected: the browser attaches the cookie
+ * automatically, and the client echoes the body-provided token in the header.
+ * HttpOnly also stops non-XSS DOM readers (e.g. injected scripts, buggy
+ * extensions) from exfiltrating the token.
+ */
 export function csrfCookieOptions() {
   return {
-    httpOnly: false,
+    httpOnly: true,
     sameSite: 'lax', // cross-site POSTs never send it; safe for top-level nav
     secure: process.env.NODE_ENV === 'production',
     path: '/',

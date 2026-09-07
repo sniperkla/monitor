@@ -155,7 +155,14 @@ function buildCsp(nonce) {
   return [
     "default-src 'self'",
     scriptSrc,
-    // 'unsafe-inline' is unavoidable here — see the style-src note above.
+    // 'unsafe-inline' here is an ACCEPTED RISK (security audit 2026-09, finding
+    // "CSP style-src 'unsafe-inline'"): the UI's CSS-in-JS renders dozens of
+    // runtime <style> blocks with no static identities, so nonces/hashes can't
+    // cover them and removing the token breaks all styling. script-src does NOT
+    // rely on it — scripts are nonce-gated (browsers ignore 'unsafe-inline' for
+    // scripts once a nonce is present). Remediation path if this must close:
+    // migrate CSS-in-JS to build-time extracted stylesheets, then drop the
+    // token. Until then this is a documented, deliberate exception.
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://fonts.gstatic.com",
     "img-src 'self' data: blob: https://lh3.googleusercontent.com https://images.unsplash.com https://ui-avatars.com https://avatars.githubusercontent.com",
     "font-src 'self' data: https://fonts.gstatic.com",

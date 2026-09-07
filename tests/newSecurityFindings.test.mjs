@@ -18,11 +18,34 @@ test('CSRF design is an intentional double-submit token, not a forged token', ()
   assert.ok(csrf.includes('header === cookie'), 'double-submit equality is documented');
   assert.ok(csrf.includes('HMAC(secret'), 'token is signed');
   assert.ok(csrf.includes('userId'), 'token is user-bound');
-  assert.ok(csrf.includes('httpOnly: false'), 'browser-readable cookie is intentional for this design');
+  assert.match(csrf, /httpOnly:\s*true/, 'cookie is HttpOnly — audit finding "monitor_csrf missing HttpOnly"');
   // The black-box claim that document.cookie alone is sufficient is false: the
   // token is valid only when the attacker can also induce a same-origin header,
   // and the HMAC is checked against the authenticated user.
   assert.ok(csrf.includes('return verifyCsrfToken(cookieToken, userId)'));
+});
+
+test('CSRF cookie is HttpOnly and the client gets the token from the body', () => {
+  const client = readSrc('src/utils/csrfClient.js');
+  assert.match(csrf, /httpOnly:\s*true/, 'csrfCookieOptions must set httpOnly: true');
+  assert.match(client, /let cachedToken = null/, 'client caches the body-provided token');
+  assert.match(client, /data\.csrfToken/, 'token comes from the /api/csrf response body');
+  assert.ok(client.includes('readCookie(CSRF_COOKIE)'), 'cookie kept as fallback');
+});
+
+test('/api/csrf bootstrap is rate limited and idempotent', () => {
+  const route = readSrc('src/app/api/csrf/route.js');
+  assert.match(route, /checkRateLimit\('csrf'/, 'unauthenticated bootstrap must be rate limited');
+  assert.match(route, /verifyCsrfToken\(existing, userId\)/,
+    'a still-valid cookie token must be re-served, not rotated (multi-tab churn)');
+  assert.match(route, /status: 429/, 'over-limit requests are rejected');
+});
+
+test('skills/install cap is 5/min (scanner previously read the 10-cap as "no limit")', async () => {
+  const { ruleForPath } = await import('../src/lib/ratelimit.js');
+  const rule = ruleForPath('/api/skills/install');
+  assert.equal(rule.limit, 5);
+  assert.equal(rule.window, '1 m');
 });
 
 test('SkillsMP search now requires an authenticated session', () => {

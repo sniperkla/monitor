@@ -33,7 +33,7 @@ import { join } from 'node:path';
 const ROOT = new URL('../src/', import.meta.url).pathname;
 const LIB = readFileSync(new URL('../src/lib/authRateLimit.js', import.meta.url), 'utf8');
 
-/** Keys declared in the LIMITS map, e.g. `csrf: { max: 30, ... }`. */
+/** Keys declared in the LIMITS map, e.g. `csrf: { max: 15, ... }`. */
 function configuredActions() {
   const block = LIB.match(/const\s+LIMITS\s*=\s*\{([\s\S]*?)\n\};/);
   assert.ok(block, 'could not locate the LIMITS map in src/lib/authRateLimit.js');
