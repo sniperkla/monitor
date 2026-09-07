@@ -73,7 +73,10 @@ try {
   say('✅ node-datachannel loaded — WebRTC P2P enabled');
 } catch {
   say('ℹ️  node-datachannel not found — relay will operate in WebSocket-proxy mode');
-  say('   For P2P mode: npm install node-datachannel  (in relay directory)');
+  say('   Everything works over WebSocket; P2P is an optional optimization.');
+  say('   For P2P mode (desktop): npm config set allow-scripts=node-datachannel --location=user');
+  say('                           then: npm install -g node-datachannel');
+  say('   (Termux/Android: skip this — no prebuilt binary, source build usually fails.)');
 }
 
 // crypto is built-in since Node 18
@@ -120,7 +123,7 @@ for (let i = 0; i < argv.length; i++) {
 // through: the arg parser happily stored `help = true`, ignored it, and the
 // relay started up and dialled the default server. The first thing an npm user
 // types should not silently launch a daemon.
-const KNOWN_FLAGS = ['server', 'token', 'pair', 'uninstall', 'install', 'name', 'label', 'scope', 'help'];
+const KNOWN_FLAGS = ['server', 'token', 'pair', 'uninstall', 'install', 'name', 'label', 'scope', 'claim', 'help'];
 if (args.help || args.h === true) {
   console.log(`
 ⚡ SSH Monitor — Local Relay
@@ -129,6 +132,9 @@ if (args.help || args.h === true) {
 
 USAGE
   local-relay --pair --server <URL>            pair this machine (interactive code)
+  local-relay --pair --server <URL> --claim <CODE>
+                                               pair with a pre-authorized claim
+                                               code (QR transfer) — no typing
   local-relay --server <URL> --token <TOKEN>   run with a token you already have
   local-relay --uninstall                      remove the background service
   local-relay --help                           this message
@@ -136,6 +142,7 @@ USAGE
 OPTIONS
   --server <URL>   monitor server, e.g. https://monitor.eaqdragon.com
   --token <TOKEN>  relay token (normally written by --pair, not passed by hand)
+  --claim <CODE>   pre-authorized install code from the web app (QR transfer)
   --name <NAME>    name this relay reports to the server (default: hostname)
   --label <LABEL>  human-readable label
   --scope <SCOPE>  relay | agent
@@ -209,6 +216,28 @@ async function pairAndGetToken({ client, scope }) {
     return { status: res.status, data };
   };
 
+  // -- Pre-authorized claim (QR transfer path) --
+  // A claim code is minted by the web app (POST /api/relay/device/invite) for a
+  // signed-in user and arrives pre-approved — no user code, no waiting. It is
+  // exchanged here in one shot. Single-use and short-lived by design: if the
+  // QR/photo leaks, the code is either already spent or expired.
+  if (args.claim && typeof args.claim === 'string') {
+    let r;
+    try {
+      r = await post('/api/relay/device/token', { deviceCode: args.claim.trim() });
+    } catch (e) {
+      throw new Error(`Could not reach ${base} — ${e.message}`);
+    }
+    if (r.status === 200 && r.data && r.data.token) {
+      console.log('✅ Claim accepted — installing.');
+      return r.data.token;
+    }
+    if (r.status === 410) {
+      throw new Error((r.data && r.data.error) || 'Claim code expired — generate a new QR code.');
+    }
+    throw new Error((r.data && r.data.error) || `Claim failed (HTTP ${r.status}).`);
+  }
+
   let init;
   try {
     init = await post('/api/relay/device/code', {
@@ -270,7 +299,7 @@ async function pairAndGetToken({ client, scope }) {
 const savedConfig = loadConfig();
 let SERVER = args.server || savedConfig.server || process.env.RELAY_SERVER || '';
 let TOKEN  = args.token  || savedConfig.token  || process.env.RELAY_TOKEN  || '';
-const RELAY_VERSION = '1.0.13';
+const RELAY_VERSION = '1.0.15';
 const RELAY_NAME = args.name || savedConfig.name || os.hostname();
 
 // -- Install/uninstall handling (unchanged from original) --
@@ -490,6 +519,8 @@ function ensureInstalledScript() {
         console.log('✅ WebRTC P2P support installed.');
       } else {
         console.warn('⚠️  node-datachannel could not be installed — continuing without WebRTC P2P.');
+        console.warn('   npm may have blocked its install script. To allow it:');
+        console.warn('   npm config set allow-scripts=node-datachannel --location=user');
       }
     } catch (npmErr) {
       console.warn('⚠️  Could not automatically install dependencies:', npmErr.message);

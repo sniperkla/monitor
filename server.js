@@ -5215,6 +5215,17 @@ fi'`;
         // mutates the live entry.
         try { entry.lastUsed = Date.now(); } catch (_) {}
 
+        // Soft-deactivated (paused) device: token is still valid, but the
+        // dashboard asked it to wait. Close with 4006 — the relay treats any
+        // non-4000 close as transient and keeps retrying, so clearing the
+        // suspension (PATCH resume) lets the device walk back in on its own.
+        if (entry.suspendedAt) {
+          try { ws.send(JSON.stringify({ type: 'error', code: 'SUSPENDED', message: 'Relay paused from the dashboard. Resume it in Settings → Local Relay.' })); } catch (_) {}
+          try { ws.close(4006, 'Relay paused'); } catch (_) {}
+          console.log(`🔗 [Relay] Paused device ${entry.email || entry.userId} rejected (4006)`);
+          return;
+        }
+
         // Supporter gate — Local Relay is a supporter feature. Checked on every
         // (re)connect so revoked/expired supporters' auto-restarting agents get 4003.
         isRelaySupporter(entry)

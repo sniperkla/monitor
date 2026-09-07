@@ -198,6 +198,17 @@ service are not granted. No warranty of any kind.
 
 ## Version note
 
+- **1.0.15** — clearer hints when the optional WebRTC module is missing: new
+  npm releases gate native-module install scripts behind an allowlist
+  (`allow-scripts`), so `node-datachannel` is silently skipped (it is an
+  optional dependency and its failure is invisible). The startup notice and
+  the installer warnings now explain the allowScripts fix and note that
+  Termux/Android should stay on WebSocket mode. Also adds `--claim <CODE>`
+  support (from 1.0.14) and reports version 1.0.15 to the monitor.
+- **1.0.14** — adds `--claim <CODE>`: one-shot device-claim codes minted by
+  the monitor let a new device pair without typing an approval code.
+- **1.0.13 / 1.0.12** — same content as 1.0.11; re-published while npm's
+  registry was digesting the stuck-staging backlog (all eventually landed).
 - **1.0.11** — same fix as 1.0.9/1.0.10. Publishing hit npm's stuck-staging
   failure again: 1.0.9, 1.0.10 and 1.0.11 were all accepted and staged
   (re-publishing returns E409 "Cannot publish over previously staged

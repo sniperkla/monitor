@@ -41,7 +41,7 @@ import {
   LoaderCircle, Trash2, Lock, Unlock, Key, Mail, Code, Sun, Moon, Cpu,
   Search, Terminal, Network, Download, Copy, X, CheckCheck, Sparkles,
   GitBranch, GitCommit, ChevronDown, Settings, Send, Music, ChevronRight, LogOut, Check,
-  RotateCcw, Menu, Coffee, CircleHelp, ShieldCheck
+  RotateCcw, Menu, Coffee, CircleHelp, ShieldCheck, Smartphone, Plus
 } from 'lucide-react';
 import { useOS } from '@/context/OSContext';
 import { useApp } from '@/context/AppContext';
@@ -362,6 +362,12 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
   const [preferredRelay, setPreferredRelay] = useState(() =>
     typeof window !== 'undefined' ? (localStorage.getItem('ssh_monitor_preferred_relay') || null) : null
   );
+  // Two-step confirm for per-relay deactivate (relayId pending confirmation)
+  const [confirmRevoke, setConfirmRevoke] = useState(null);
+  const [suspendedTokens, setSuspendedTokens] = useState([]);
+  // QR transfer: pre-authorized claim code minted lazily when the QR panel is
+  // opened (single-use + short-lived, so we only burn one when actually used).
+
 
   const [sshMode, setSshMode] = useState(() =>
     typeof window !== 'undefined' ? (localStorage.getItem('ssh_monitor_ssh_mode') || 'server') : 'server'
@@ -1286,6 +1292,9 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
           setRelayConnected(data.connected);
           const fetchedRelays = data.relays || [];
           setRelays(fetchedRelays);
+          // Tokens parked via soft-deactivate — shown under "Paused" with a
+          // Resume action; the device keeps retrying until it is resumed.
+          setSuspendedTokens((data.tokens || []).filter(t => t.suspended));
 
           // Auto-switch SSH mode to server when no relay is connected
           // Skip on first poll if mode was 'local' — give relay agent time to reconnect
@@ -1491,6 +1500,53 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
     }
   };
 
+  // Soft-deactivate: token stays valid, the device's service keeps retrying,
+  // and Resume lets it walk straight back in. Hard revoke (DELETE) is offered
+  // on the paused list for devices that should never come back.
+  const handleSuspendRelay = async (tokenId, label) => {
+    try {
+      const res = await fetch('/api/relay/token', {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'suspend', tokenId }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setRelays(prev => prev.filter(r => r.tokenId !== tokenId));
+        setSuspendedTokens(prev => {
+          if (prev.some(t => t.tokenId === tokenId)) return prev;
+          return [...prev, { tokenId, label: label || null, suspended: true }];
+        });
+        addNotification({ title: 'Relay Paused', message: 'Device paused — it will reconnect automatically when you resume it.', type: 'info' });
+      } else {
+        addNotification({ title: 'Error', message: data.error || 'Failed to pause relay', type: 'error' });
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleResumeRelay = async (tokenId) => {
+    try {
+      const res = await fetch('/api/relay/token', {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'resume', tokenId }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setSuspendedTokens(prev => prev.filter(t => t.tokenId !== tokenId));
+        addNotification({ title: 'Relay Resumed', message: 'Device reactivated — it will reconnect within a few seconds.', type: 'success' });
+      } else {
+        addNotification({ title: 'Error', message: data.error || 'Failed to resume relay', type: 'error' });
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   const handleRevokeAllRelays = async () => {
     try {
       await fetch('/api/relay/token', { method: 'DELETE', credentials: 'include' });
@@ -1610,6 +1666,17 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
     relayInstallMethod === 'npm'
       ? npmInstallCommand({ server: window.location.origin })
       : getRelayOneLiner('install');
+
+  // Termux variant of the npm install flow — Android phones have no systemd /
+  // launchd, but the relay still runs fine as a foreground process under a
+  // wake-lock. Package name matches npmInstallCommand's NPM_PACKAGE.
+  const termuxInstallSnippet = () =>
+    [
+      'pkg install nodejs-lts -y',
+      `npm install -g ssh-monitor-relay`,
+      `local-relay --pair --server ${window.location.origin}`,
+      'termux-wake-lock',
+    ].join('\n');
 
   const getRelayUninstallSnippet = () =>
     relayInstallMethod === 'npm' ? npmUninstallCommand() : getRelayOneLiner('uninstall');
@@ -2605,16 +2672,100 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                                   type="button"
                                   onClick={async (e) => {
                                     e.stopPropagation();
-                                    await handleDisconnectRelay(r.relayId, r.relayName);
+                                    // Soft-deactivate: token stays valid and the
+                                    // device's service keeps retrying — Resume
+                                    // brings it back with no re-pairing. (Hard
+                                    // revoke lives on the paused list.)
+                                    if (confirmRevoke !== (r.relayId || r.relayName)) {
+                                      setConfirmRevoke(r.relayId || r.relayName);
+                                      setTimeout(() => setConfirmRevoke((c) => (c === (r.relayId || r.relayName) ? null : c)), 3500);
+                                      return;
+                                    }
+                                    setConfirmRevoke(null);
+                                    if (r.tokenId) {
+                                      await handleSuspendRelay(r.tokenId, relayLabel);
+                                    } else {
+                                      // Legacy relay without a tokenId — only the
+                                      // hard path is available for it.
+                                      await handleDisconnectRelay(r.relayId, r.relayName);
+                                    }
                                   }}
-                                  className="p-1 rounded hover:bg-red-500/20 text-[var(--text-muted)] hover:text-red-400 transition-colors shrink-0 cursor-pointer"
-                                  title={`Disconnect ${relayLabel}`}
+                                  className={`p-1 rounded transition-colors shrink-0 cursor-pointer font-bold ${
+                                    confirmRevoke === (r.relayId || r.relayName)
+                                      ? 'px-1.5 text-[9px] bg-amber-500/25 text-amber-300 hover:bg-amber-500/40'
+                                      : 'hover:bg-amber-500/20 text-[var(--text-muted)] hover:text-amber-400'
+                                  }`}
+                                  title={confirmRevoke === (r.relayId || r.relayName) ? 'Click again to pause' : `Pause ${relayLabel} — device waits until you resume it (no re-pairing needed)`}
                                 >
-                                  <X size={10} />
+                                  {confirmRevoke === (r.relayId || r.relayName) ? 'Pause?' : <X size={10} />}
                                 </button>
                               </div>
                             );
                           })}
+                          {/* Add another device — same wizard, fresh pairing
+                              code. existingRelayIds snapshot makes the wizard
+                              greet the NEW relay when it connects instead of
+                              treating an already-connected one as success. */}
+                          <button
+                            onClick={() => {
+                              setExistingRelayIds(new Set(relays.map(r => r.relayId || r.relayName)));
+                              setRelayWizardStep(2);
+                              setRelayInstallSuccess(false);
+                              setRelayModalOpen(true);
+                            }}
+                            className="w-full mt-2 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-[10px] font-bold transition-all border border-dashed border-[var(--border-color)] text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:border-amber-500/40 hover:bg-amber-500/[0.06]"
+                            title="Pair another computer or phone (Android/Termux) with this account"
+                          >
+                            <Plus size={11} /> Add another device
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Paused devices — soft-deactivated, resumable */}
+                      {suspendedTokens.length > 0 && (
+                        <div className="px-4 py-3 border-t border-[var(--border-color)] space-y-1.5">
+                          <p className="text-[10px] text-[var(--text-muted)] mb-1 flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full bg-amber-500/60 shrink-0" />
+                            <span className="opacity-70">Paused — these devices are waiting and will reconnect automatically when resumed</span>
+                          </p>
+                          {suspendedTokens.map(t => (
+                            <div key={t.tokenId} className="w-full flex items-center gap-2.5 text-[11px] px-2.5 py-1.5 rounded-lg bg-amber-500/[0.06] border border-amber-500/20 text-[var(--text-secondary)]">
+                              <span className="w-2 h-2 rounded-full bg-amber-500/50 shrink-0" />
+                              <span className="font-mono flex-1 text-left truncate" title={t.label || t.tokenId}>{t.label || `device …${t.tokenId.slice(-4)}`}</span>
+                              <button
+                                type="button"
+                                onClick={() => handleResumeRelay(t.tokenId)}
+                                className="px-2 py-0.5 rounded-md text-[9px] font-bold uppercase tracking-wider bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/25 transition-colors shrink-0 cursor-pointer"
+                                title="Reactivate — the device reconnects within seconds, no re-pairing"
+                              >
+                                Resume
+                              </button>
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  if (confirmRevoke !== t.tokenId) {
+                                    setConfirmRevoke(t.tokenId);
+                                    setTimeout(() => setConfirmRevoke((c) => (c === t.tokenId ? null : c)), 3500);
+                                    return;
+                                  }
+                                  setConfirmRevoke(null);
+                                  try {
+                                    await fetch(`/api/relay/token?tokenId=${encodeURIComponent(t.tokenId)}`, { method: 'DELETE', credentials: 'include' });
+                                    setSuspendedTokens(prev => prev.filter(x => x.tokenId !== t.tokenId));
+                                    addNotification({ title: 'Relay Revoked', message: 'Device token revoked — it must be re-paired to connect again.', type: 'info' });
+                                  } catch (e) { console.error(e); }
+                                }}
+                                className={`p-1 rounded transition-colors shrink-0 cursor-pointer font-bold ${
+                                  confirmRevoke === t.tokenId
+                                    ? 'px-1.5 text-[9px] bg-red-500/25 text-red-300 hover:bg-red-500/40'
+                                    : 'hover:bg-red-500/20 text-[var(--text-muted)] hover:text-red-400'
+                                }`}
+                                title={confirmRevoke === t.tokenId ? 'Click again to revoke permanently' : `Revoke ${t.label || 'device'} permanently — the device must re-pair`}
+                              >
+                                {confirmRevoke === t.tokenId ? 'Revoke?' : <X size={10} />}
+                              </button>
+                            </div>
+                          ))}
                         </div>
                       )}
 
@@ -4726,6 +4877,42 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                           </button>
                         )}
                       </div>
+
+                      {/* Android / Termux — the same npm flow works on a phone.
+                          Folded by default so the desktop flow stays primary. */}
+                      <details className="group rounded-xl border border-[var(--border-color)] bg-[var(--bg-tertiary)]/40 overflow-hidden">
+                        <summary className="flex items-center gap-2 px-3 py-2 cursor-pointer select-none list-none">
+                          <Smartphone size={13} className="text-[var(--text-muted)] shrink-0" />
+                          <span className="text-[11px] font-bold text-[var(--text-secondary)]">Using an Android phone? (Termux)</span>
+                          <ChevronDown size={12} className="ml-auto text-[var(--text-muted)] transition-transform group-open:rotate-180" />
+                        </summary>
+                        <div className="px-3 pb-3 space-y-2">
+                          <p className="text-[10px] text-[var(--text-muted)] leading-relaxed">
+                            Install <strong className="text-[var(--text-secondary)]">Termux</strong> (from F-Droid, not Play Store), then run the same install command inside Termux:
+                          </p>
+                          <div className="relative rounded-lg overflow-hidden border border-slate-700/60">
+                            <div className="flex items-center px-2.5 py-1 bg-slate-900/80 border-b border-slate-700/40">
+                              <span className="text-[9px] text-slate-500 font-mono flex-1">Termux</span>
+                              <button
+                                onClick={() => {
+                                  navigator.clipboard.writeText(termuxInstallSnippet());
+                                  addNotification({ title: 'Copied!', message: 'Paste in Termux and press Enter.', type: 'success' });
+                                }}
+                                className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/20 text-amber-400 text-[9px] font-bold transition-colors"
+                              >
+                                <Copy size={9} /> Copy
+                              </button>
+                            </div>
+                            <div className="p-2.5 bg-slate-950">
+                              <code className="text-[10px] font-mono text-amber-300 break-all leading-relaxed whitespace-pre-wrap">{termuxInstallSnippet()}</code>
+                            </div>
+                          </div>
+                          <p className="text-[10px] text-[var(--text-muted)] leading-relaxed">
+                            Run <code className="text-amber-300">termux-wake-lock</code> (included above) so Android does not sleep the relay, and approve the pairing code it prints below — same as on a computer. Give the phone relay a unique name with <code className="text-amber-300">--name MyPhone</code> if you add more than one.
+                          </p>
+                        </div>
+                      </details>
+
                     </div>
 
                     {/* Step 2 — approve the code printed by the computer's terminal */}

@@ -1,7 +1,7 @@
 import { getToken } from 'next-auth/jwt';
 import { getSupporterStatus, supporterRequiredResponse } from '@/utils/supporter';
 import { checkRateLimit } from '@/lib/serverGuard';
-import { tokensToRevoke } from '@/lib/relayRevoke';
+import { tokensToRevoke, resolveRevokeTarget } from '@/lib/relayRevoke';
 import { issueRelayToken, persistRelayTokens, sanitizeLabel } from '@/lib/relayTokens';
 import connectDB from '@/lib/mongodb';
 import User from '@/models/User';
@@ -71,6 +71,98 @@ export async function POST(request) {
 }
 
 /**
+ * PATCH /api/relay/token — soft-deactivate (pause) or resume a relay.
+ *
+ * Body: { action: 'suspend' | 'resume', relayId?: string, tokenId?: string }
+ *
+ * A pause is NOT a revocation: the token stays valid and the device's
+ * background service keeps retrying on its normal backoff, so resuming from
+ * the dashboard lets it walk straight back in — no re-pairing, no reinstall.
+ * The server enforces the pause on every reconnect attempt (close code 4006),
+ * which the relay treats like any transient drop and retries.
+ *
+ * Hard deactivation (token revoked, device must re-pair) remains DELETE.
+ */
+export async function PATCH(request) {
+  try {
+    const token = await getToken({ req: request, secret: process.env.NEXTAUTH_SECRET });
+    if (!token?.sub) {
+      return Response.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const userId = token.sub;
+
+    const body = await request.json().catch(() => ({}));
+    const suspend = body.action === 'suspend';
+    if (!suspend && body.action !== 'resume') {
+      return Response.json({ error: 'action must be "suspend" or "resume"' }, { status: 400 });
+    }
+
+    global.__relayTokens = global.__relayTokens || new Map();
+    const userRelays = global.__activeRelays?.get(userId);
+
+    // Same targeting rules as revocation: a relay row id resolves to the token
+    // behind it; an explicit tokenId targets that credential only. Never sweep.
+    const { targetTokenId } = resolveRevokeTarget({
+      tokenId: body.tokenId || null,
+      relayId: body.relayId || null,
+      userRelays,
+    });
+    if (!targetTokenId) {
+      return Response.json({ error: 'Relay not found' }, { status: 404 });
+    }
+
+    let matched = 0;
+    for (const [t, entry] of global.__relayTokens.entries()) {
+      if (entry.userId !== userId) continue;
+      if (entry.tokenId !== targetTokenId && t.slice(0, 8) !== targetTokenId) continue;
+      if (suspend) entry.suspendedAt = Date.now();
+      else delete entry.suspendedAt;
+      matched++;
+    }
+    if (!matched) {
+      return Response.json({ error: 'Relay not found' }, { status: 404 });
+    }
+
+    if (suspend && userRelays instanceof Map) {
+      // Stamp the device name onto the credential so the paused list can show
+      // which device is parked (token entries otherwise may carry no label).
+      let deviceName = null;
+      for (const [, relay] of userRelays.entries()) {
+        if (relay.tokenId && relay.tokenId === targetTokenId) {
+          deviceName = relay.relayName || null;
+          break;
+        }
+      }
+      if (deviceName) {
+        for (const [, entry] of global.__relayTokens.entries()) {
+          if (entry.tokenId === targetTokenId && !entry.label) entry.label = deviceName;
+        }
+      }
+      // Kick the live connection with 4006 (not 4000 — that code makes the
+      // relay exit; 4006 keeps its retry loop alive so a later resume is
+      // picked up automatically). Tear down the per-relay forwarders too.
+      for (const [key, relay] of userRelays.entries()) {
+        if (relay.tokenId && relay.tokenId !== targetTokenId) continue;
+        try {
+          if (relay.ws?.readyState === 1) {
+            relay.ws.send(JSON.stringify({ type: 'disconnect', reason: 'Relay paused — resume it in Settings → Local Relay' }));
+            try { relay.ws.close(4006, 'Relay paused'); } catch {}
+          }
+        } catch {}
+        try { relay.netServer?.close(); } catch {}
+        userRelays.delete(key);
+      }
+      if (userRelays.size === 0) global.__activeRelays.delete(userId);
+    }
+
+    await persistRelayTokens();
+    return Response.json({ success: true, action: body.action });
+  } catch (err) {
+    return Response.json({ error: err.message }, { status: 500 });
+  }
+}
+
+/**
  * GET /api/relay/token — check if relay is currently connected
  */
 export async function GET(request) {
@@ -122,6 +214,7 @@ export async function GET(request) {
         issuedAt: e.issuedAt ? new Date(e.issuedAt).toISOString() : null,
         lastUsed: e.lastUsed ? new Date(e.lastUsed).toISOString() : null,
         expiresAt: new Date(e.expiresAt).toISOString(),
+        suspended: !!e.suspendedAt,
       });
     }
     tokens.sort((a, b) => String(b.issuedAt || '').localeCompare(String(a.issuedAt || '')));
@@ -136,6 +229,9 @@ export async function GET(request) {
           capabilities: relay.capabilities || { ssh: false, sftp: false, docker: false },
           version: relay.version || null,
           relayName: relay.relayName || relayId,
+          // Lets the dashboard pause/resume the exact credential behind
+          // this relay row without guessing by name.
+          tokenId: relay.tokenId || null,
         });
       }
       return Response.json({ success: true, connected: relays.length > 0, relays, supporter, tokens });
