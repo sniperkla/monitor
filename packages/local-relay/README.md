@@ -198,6 +198,14 @@ service are not granted. No warranty of any kind.
 
 ## Version note
 
+- **1.0.11** — same fix as 1.0.9/1.0.10. Publishing hit npm's stuck-staging
+  failure again: 1.0.9, 1.0.10 and 1.0.11 were all accepted and staged
+  (re-publishing returns E409 "Cannot publish over previously staged
+  version") but none materialized on the registry for 30+ minutes while
+  status.npmjs.org showed all systems operational. Precedent in this repo:
+  1.0.2 eventually materialized; 1.0.5/1.0.6 never did and their numbers were
+  skipped. The tarball content is correct — sha256 0a75d98c…, byte-identical
+  to the deterministic build from this source tree.
 - **1.0.10** — same fix as 1.0.9 (which was staged by npm but never
   materialized on the registry — the #9889 failure mode seen before with
   1.0.2; a re-publish correctly returned E409, so the number was abandoned).
