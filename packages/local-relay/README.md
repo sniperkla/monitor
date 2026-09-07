@@ -198,7 +198,10 @@ service are not granted. No warranty of any kind.
 
 ## Version note
 
-- **1.0.9** — the relay now verifies the Web UI gateway END-TO-END (loopback
+- **1.0.10** — same fix as 1.0.9 (which was staged by npm but never
+  materialized on the registry — the #9889 failure mode seen before with
+  1.0.2; a re-publish correctly returned E409, so the number was abandoned).
+  The relay now verifies the Web UI gateway END-TO-END (loopback
   request through the local listener → SSH tunnel → agent dashboard) before it
   acks the port to the monitor. The monitor no longer probes reachability from
   the browser at all: on production the page's CSP `connect-src` excludes
