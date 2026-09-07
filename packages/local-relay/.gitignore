@@ -1,0 +1,3 @@
+# Generated at pack time by scripts/prepack.mjs from ../../public/local-relay.js.
+# Never commit it — public/local-relay.js is the only source of truth.
+dist/

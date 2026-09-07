@@ -1,0 +1,56 @@
+LICENSE — ssh-monitor-relay
+
+Copyright (c) 2026. All rights reserved.
+
+PRIVATE, NON-PUBLIC SOURCE.
+
+The source of this package is published to the npm registry solely as a
+distribution and integrity mechanism for end users of SSH Monitor. Publication
+on a public registry is NOT a grant of open-source rights, and no open-source
+license (MIT, Apache, GPL or otherwise) applies to this software.
+
+GRANT
+
+Subject to these terms, you are granted a personal, non-exclusive,
+non-transferable, revocable licence to install and execute this package, in
+unmodified form, for the sole purpose of connecting your own machine to an SSH
+Monitor instance that you are authorised to use.
+
+RESTRICTIONS
+
+You may not:
+  1. redistribute, mirror, sublicense, sell or rent this package or any
+     derivative of it;
+  2. modify, decompile or create derivative works, except as strictly necessary
+     to audit the code you are about to run;
+  3. remove or alter this notice, the package name, or any copyright header;
+  4. incorporate this package, in whole or in part, into any product, service
+     or model-training corpus;
+  5. use it to access any system you are not authorised to access.
+
+REVERSE ENGINEERING
+
+The distributed form of this package is a build, not readable source. It is
+compressed deliberately. Deterrence of unauthorised reuse is provided by this
+licence, by the registry integrity hash, and by law — and it is reinforced by
+not shipping the implementation in a form that can be lifted with a text
+editor.
+
+Nothing in this section restricts your right to inspect what runs on your own
+machine, and nothing in it narrows clause 2 above: you may decompile or
+disassemble this package in order to satisfy yourself about it. What you may
+not do is use what you learn to build, ship, or train anything. Inspection for
+your own assurance is permitted; reuse is not.
+
+NO WARRANTY
+
+THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+This licence terminates automatically upon any breach of the restrictions
+above.

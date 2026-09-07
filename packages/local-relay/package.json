@@ -1,0 +1,55 @@
+{
+  "name": "ssh-monitor-relay",
+  "version": "1.0.5",
+  "description": "Local relay agent for SSH Monitor. Tunnels SSH, SFTP, databases and agent web UIs from your machine to your server without opening inbound ports.",
+  "keywords": [
+    "ssh",
+    "relay",
+    "tunnel",
+    "sftp",
+    "monitor",
+    "port-forward"
+  ],
+  "homepage": "https://monitor.eaqdragon.com",
+  "license": "SEE LICENSE IN LICENSE",
+  "private": false,
+  "bin": {
+    "local-relay": "bin/local-relay.js"
+  },
+  "main": "dist/local-relay.js",
+  "files": [
+    "bin/",
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "prepack": "node scripts/prepack.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.21.3"
+  },
+  "optionalDependencies": {
+    "ssh2": "^1.17.0",
+    "node-datachannel": ">=0.33.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "//": [
+    "SECURITY NOTE — this package deliberately ships NO install lifecycle",
+    "scripts (no preinstall / install / postinstall). That is the whole point",
+    "of publishing on npm instead of telling users to pipe a download into",
+    "node: an npm package with no lifecycle scripts cannot execute anything at",
+    "install time. Nothing runs until the user explicitly types `local-relay`.",
+    "",
+    "prepack runs on the PUBLISHER's machine only, never on the consumer's.",
+    "It copies ../../public/local-relay.min.js into dist/ so the published",
+    "bytes are byte-identical to the file the server serves at /local-relay.js",
+    "— one artifact, everywhere. That file is a BUILD (scripts/build-relay.mjs),",
+    "not the readable source; prepack refuses to run if it is stale."
+  ]
+}
