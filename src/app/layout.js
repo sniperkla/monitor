@@ -62,6 +62,14 @@ export default function RootLayout({ children }) {
           href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Share+Tech+Mono&family=VT323&family=Rajdhani:wght@300;400;500;600;700&display=swap"
           rel="stylesheet"
         />
+        {/* Mobile performance mode: tag <html> before first paint so the
+            reduced-effects CSS (globals.css .mobile-perf) never flashes the
+            full-animation version on phones. Mirrors detectMobileDevice(). */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var u=navigator.userAgent||'';var iPad=/Macintosh/i.test(u)&&navigator.maxTouchPoints>1;if(/Android|iPhone|iPod|iPad|Mobile|Silk|Kindle/i.test(u)||iPad){document.documentElement.classList.add('mobile-perf');}}catch(e){}})();`,
+          }}
+        />
       </head>
       <body className="antialiased">
         <Providers>

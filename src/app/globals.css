@@ -2700,6 +2700,54 @@ body {
   }
 }
 
+/* ── Mobile performance mode ─────────────────────────────────────────────────
+ * Phones/tablets get a reduced-effects profile: the desktop's blur layers,
+ * glows and infinite animations are the heaviest GPU/CPU consumers and make
+ * the UI laggy on mid-range devices. The class is applied by <html> on
+ * mobile devices (useIsMobileDevice → page.client) and every rule here
+ * neutralises one class of expensive effect while keeping the layout intact.
+ */
+html.mobile-perf .animate-spin,
+html.mobile-perf .animate-pulse,
+html.mobile-perf .animate-ping,
+html.mobile-perf .animate-bounce,
+html.mobile-perf .animate-spin-slow,
+html.mobile-perf [class*="animate-"] {
+  animation: none !important;
+}
+
+/* backdrop-filter is by far the most expensive effect on mobile GPUs —
+   replace frosted glass with a near-opaque fill so text stays readable */
+html.mobile-perf .backdrop-blur,
+html.mobile-perf .backdrop-blur-sm,
+html.mobile-perf .backdrop-blur-md,
+html.mobile-perf .backdrop-blur-lg,
+html.mobile-perf .backdrop-blur-xl,
+html.mobile-perf [class*="backdrop-blur"] {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  background-color: rgb(10 14 26 / 0.92) !important;
+}
+
+/* Large decorative blur ellipses (glow orbs) — hide entirely */
+html.mobile-perf .blur-2xl,
+html.mobile-perf .blur-3xl,
+html.mobile-perf [class*="blur-3xl"],
+html.mobile-perf [class*="blur-2xl"] {
+  display: none !important;
+}
+
+/* Inline style backdrop-filter (framer-modal glass panes) */
+html.mobile-perf [style*="backdrop-filter"] {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* drop-shadow filters on large surfaces */
+html.mobile-perf [style*="drop-shadow"] {
+  filter: none !important;
+}
+
 /* Landscape phones: shorter taskbar so apps keep vertical space */
 @media (max-width: 926px) and (orientation: landscape) and (max-height: 500px) {
   :root { --taskbar-size: 40px; }

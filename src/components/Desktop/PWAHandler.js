@@ -4,26 +4,45 @@ import { useEffect, useState } from 'react';
 import { useOS } from '@/context/OSContext';
 import { useSession } from 'next-auth/react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Download, X, Monitor, Zap, Shield, Smartphone } from 'lucide-react';
+import { Download, X, Monitor, Zap, Shield, Smartphone, Share } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+
+function detectMobileOS() {
+  if (typeof window === 'undefined' || !navigator.userAgent) return null;
+  const ua = navigator.userAgent;
+  const isIpadOs = /Macintosh/i.test(ua) && navigator.maxTouchPoints > 1;
+  if (/iPad|iPhone|iPod/i.test(ua) || isIpadOs) return 'ios';
+  if (/Android|Mobile|Silk|Kindle/i.test(ua)) return 'android';
+  return null;
+}
 
 export default function PWAHandler() {
   const { state, setDeferredPrompt } = useOS();
   const { data: session } = useSession();
   const { t } = useTranslation();
   const [showModal, setShowModal] = useState(false);
+  // 'android' → native beforeinstallprompt flow, 'ios' → manual instructions
+  const [mobileOS, setMobileOS] = useState(null);
 
   useEffect(() => {
+    const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
+    const hasDismissed = sessionStorage.getItem('pwa_modal_dismissed');
+    const os = detectMobileOS();
+    setMobileOS(os);
+
+    // Force-install nudge for mobile users: on phones/tablets we don't wait
+    // for beforeinstallprompt (iOS never fires it) — show our own guidance
+    // shortly after login. Desktop keeps the old opt-in behaviour.
+    if (os && !isStandalone && !hasDismissed) {
+      const timer = setTimeout(() => setShowModal(true), 3000);
+      return () => clearTimeout(timer);
+    }
+
     const handleBeforeInstallPrompt = (e) => {
       // Prevent the mini-infobar from appearing on mobile
       e.preventDefault();
       // Stash the event so it can be triggered later.
       setDeferredPrompt(e);
-      
-      // Only show modal if user is logged in and hasn't seen it this session
-      // and is not already in standalone mode
-      const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
-      const hasDismissed = sessionStorage.getItem('pwa_modal_dismissed');
 
       if (session && !isStandalone && !hasDismissed) {
         // Delay slightly for better UX
@@ -55,7 +74,12 @@ export default function PWAHandler() {
     sessionStorage.setItem('pwa_modal_dismissed', 'true');
   };
 
-  if (!showModal || !state.deferredPrompt) return null;
+  if (!showModal) return null;
+  // Desktop: unchanged behaviour — only show when the browser offered install.
+  // Mobile: we show our own guidance (iOS has no programmatic install API).
+  if (!mobileOS && !state.deferredPrompt) return null;
+
+  const isIos = mobileOS === 'ios';
 
   return (
     <AnimatePresence>
@@ -93,10 +117,27 @@ export default function PWAHandler() {
 
             <h2 className="text-2xl font-bold text-[var(--text-primary)] mb-2">Install SSH Monitor</h2>
             <p className="text-[var(--text-secondary)] mb-8 text-sm leading-relaxed">
-              Experience the monitor with a native look and feel. Faster loading, full-screen mode, and no browser distraction.
+              {isIos
+                ? 'Add the monitor to your home screen for a native, full-screen experience — no browser bars, faster launch.'
+                : 'Experience the monitor with a native look and feel. Faster loading, full-screen mode, and no browser distraction.'}
             </p>
 
-            <div className="grid grid-cols-2 gap-4 w-full mb-8 text-left">
+            {isIos ? (
+              /* iOS has no programmatic install API — walk the user through it */
+              <div className="w-full space-y-3 mb-8 text-left">
+                {[
+                  { icon: <Share size={18} className="text-blue-400 shrink-0" />, text: 'Tap the Share button in Safari\u2019s toolbar' },
+                  { icon: <Download size={18} className="text-emerald-400 shrink-0" />, text: 'Scroll and tap \u201cAdd to Home Screen\u201d' },
+                  { icon: <Smartphone size={18} className="text-purple-400 shrink-0" />, text: 'Tap Add — launch it like a native app' },
+                ].map(({ icon, text }, i) => (
+                  <div key={i} className="flex items-center gap-3 p-4 rounded-2xl bg-white/5 border border-white/5">
+                    {icon}
+                    <span className="text-[12px] font-medium text-[var(--text-secondary)] leading-tight">{text}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-4 w-full mb-8 text-left">
               <div className="p-4 rounded-2xl bg-white/5 border border-white/5 flex items-center gap-3">
                 <Shield size={18} className="text-emerald-400 shrink-0" />
                 <span className="text-[11px] font-medium text-[var(--text-secondary)] leading-tight">Secure & Isolated Environment</span>
@@ -114,15 +155,18 @@ export default function PWAHandler() {
                 <span className="text-[11px] font-medium text-[var(--text-secondary)] leading-tight">Native Desktop Window</span>
               </div>
             </div>
+            )}
 
-            <button
-              onClick={handleInstall}
-              className="w-full bg-indigo-500 hover:bg-indigo-400 text-white font-bold py-4 rounded-2xl shadow-lg shadow-indigo-500/20 transition-all flex items-center justify-center gap-2 group"
-            >
-              <span>Install Now</span>
-              <Download size={18} className="group-hover:translate-y-0.5 transition-transform" />
-            </button>
-            
+            {!isIos && (
+              <button
+                onClick={handleInstall}
+                className="w-full bg-indigo-500 hover:bg-indigo-400 text-white font-bold py-4 rounded-2xl shadow-lg shadow-indigo-500/20 transition-all flex items-center justify-center gap-2 group"
+              >
+                <span>Install Now</span>
+                <Download size={18} className="group-hover:translate-y-0.5 transition-transform" />
+              </button>
+            )}
+
             <button 
               onClick={handleDismiss}
               className="mt-4 text-xs font-bold text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors uppercase tracking-widest"
