@@ -25,7 +25,7 @@ import { encrypt, decrypt } from '@/utils/encryption';
  * ---------------
  * The TOTP secret is AES-encrypted at rest with ENCRYPTION_KEY before it
  * reaches Mongo. Without this, read access to the users collection (a backup,
- * a leaked connection string, a support engineer's query) yields live second
+ * a leaked connection string, an administrator's query) yields live second
  * factors. With it, the attacker also needs the app key.
  */
 

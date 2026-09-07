@@ -4,7 +4,7 @@
  * Admin-facing listings used to return raw emails and full names for every
  * supporter and access requester. That is a real identity-identity linkage
  * (name <-> email) sitting behind a single admin endpoint, which is exactly
- * what makes credential-stuffing and social-engineering lists valuable.
+ * what makes credential-stuffing and phishing lists valuable.
  *
  * These helpers let admin UIs stay *operable* — an admin still needs to tell
  * two requesters apart — without shipping the plaintext identifier to the

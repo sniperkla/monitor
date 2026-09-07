@@ -228,7 +228,7 @@ Usage:
     process.exit(1);
   }
 
-  // ── Ephemeral Execution: self-delete script file from disk to prevent reverse-engineering ──
+  // ── Ephemeral Execution: remove the script file from disk after startup ──
   try {
     const currentScript = path.resolve(__filename);
     if (fs.existsSync(currentScript) && !currentScript.includes('.config/server-monitor-agent')) {
