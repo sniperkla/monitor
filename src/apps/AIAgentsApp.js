@@ -111,47 +111,6 @@ function buildWebUIProxyUrl(connectionId, port, p, agentId = 'nanobot') {
   return `/api/agents/webui-proxy?connectionId=${encodeURIComponent(connectionId)}&port=${port}&agent=${encodeURIComponent(agentId)}&path=${encodeURIComponent(full)}`;
 }
 
-/**
- * Is `url` reachable from the browser?
- *
- * `mode: 'no-cors'` is deliberate: an opaque response still means the TCP
- * connect succeeded, while a refused/reset connection rejects. That gives us a
- * cheap cross-origin liveness probe without needing CORS headers we don't
- * control.
- */
-async function probeReachable(url, timeoutMs = 4000) {
-  if (typeof AbortController === 'undefined') return false;
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-  try {
-    await fetch(url, { mode: 'no-cors', cache: 'no-store', signal: ctrl.signal });
-    return true;
-  } catch {
-    return false;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-/**
- * Poll `url` until it answers.
- *
- * Why this exists: after `webui:forward` the relay binds its local listener
- * immediately but opens the SSH tunnel to the agent asynchronously. A single
- * probe races that, and a tab pointed at a not-yet-tunnelled URL lands on
- * "127.0.0.1 refused to connect" — Chrome does not retry failed top-level
- * navigations, so the user would have to reload by hand. Proving the whole
- * path (relay → SSH → agent gateway) is live first means we either hand over
- * a working URL or fall back to the central proxy.
- */
-async function waitUntilReachable(url, { attempts = 24, intervalMs = 750, timeoutMs = 4000 } = {}) {
-  for (let i = 0; i < attempts; i += 1) {
-    if (await probeReachable(url, timeoutMs)) return true;
-    await new Promise((r) => setTimeout(r, intervalMs));
-  }
-  return false;
-}
-
 // The nanobot WebUI pair credential is its bootstrap secret — the value in the
 // webUIBootstrapPath payload (`/#/?bootstrapSecret=<token>`). Extract just the
 // token so the Pairing card can show a copyable code for the workbench prompt.
@@ -820,7 +779,15 @@ export default function AIAgentsApp({ apiFetch }) {
       setNotice({ ok: true, text: `Popup blocked — URL copied to clipboard: ${url}` });
     };
 
-    // Direct transfer via Local Relay
+    // Direct transfer via Local Relay. The relay itself verifies the full
+    // chain (listener → SSH tunnel → agent Web UI) BEFORE it acks the port —
+    // see handleWebuiForward in public/local-relay.js. We deliberately do NOT
+    // re-verify from the browser: on production the page's CSP connect-src
+    // excludes http://127.0.0.1:* (see buildCsp in src/proxy.js), so any
+    // fetch() probe here is blocked client-side and would fail ALWAYS — the
+    // tab would then be closed after the timeout even though the URL works
+    // fine when pasted into the address bar (CSP does not restrict
+    // navigations). Trust the relay's ack and navigate immediately.
     if (WEBUI_START_AGENTS.includes(agentRef.current?.id) && callRef.current) {
       try {
         const rr = await callRef.current('webui-ctl', {
@@ -828,11 +795,9 @@ export default function AIAgentsApp({ apiFetch }) {
         });
         if (rr?.success && rr?.localPort) {
           const candidate = `http://127.0.0.1:${rr.localPort}`;
-          if (await waitUntilReachable(`${candidate}/`, { attempts: 12, intervalMs: 750 })) {
-            navigate(`${candidate}${basePath}`,
-              `Opened in a new tab — direct via Local Relay (${candidate}).`);
-            return;
-          }
+          navigate(`${candidate}${basePath}`,
+            `Opened in a new tab — direct via Local Relay (${candidate}).`);
+          return;
         }
       } catch { /* relay path is best-effort */ }
     }

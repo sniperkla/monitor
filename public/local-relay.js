@@ -265,7 +265,7 @@ async function pairAndGetToken({ client, scope }) {
 const savedConfig = loadConfig();
 let SERVER = args.server || savedConfig.server || process.env.RELAY_SERVER || '';
 let TOKEN  = args.token  || savedConfig.token  || process.env.RELAY_TOKEN  || '';
-const RELAY_VERSION = '1.0.8';
+const RELAY_VERSION = '1.0.9';
 const RELAY_NAME = args.name || savedConfig.name || os.hostname();
 
 // -- Install/uninstall handling (unchanged from original) --
@@ -822,6 +822,40 @@ async function handleWebuiForward(msg) {
     tryListen();
   });
   webuiGateways.set(forwardId, gw);
+  // End-to-end verification BEFORE acking. The monitor navigates a browser
+  // tab the moment we report the port, so "listening" is not enough — the
+  // SSH tunnel to the agent must already carry traffic. The browser cannot
+  // verify this itself (its fetch() to 127.0.0.1 is blocked on production by
+  // the app's CSP connect-src and by Private Network Access), so the relay
+  // probes its own loopback listener instead. A request to '/' exercises the
+  // FULL chain: local listener → gateway handler → SSH forwardOut → agent
+  // Web UI. Any 2xx/3xx/4xx proves the agent is serving (401/403 = auth on,
+  // still alive); only a transport failure counts as not-ready.
+  try {
+    const PROBE_ROUNDS = 6;
+    const PROBE_WAIT_MS = 1000;
+    let verified = false;
+    for (let i = 0; i < PROBE_ROUNDS && !verified; i += 1) {
+      if (i > 0) await new Promise((r) => setTimeout(r, PROBE_WAIT_MS));
+      verified = await new Promise((resolve) => {
+        let settled = false;
+        const done = (v) => { if (!settled) { settled = true; resolve(v); } };
+        const rq = http.get({ host: '127.0.0.1', port: gw.port, path: '/', timeout: 4000 }, (rs) => {
+          rs.resume();
+          done(!!rs.statusCode && rs.statusCode < 500);
+        });
+        rq.on('error', () => done(false));
+        rq.on('timeout', () => { try { rq.destroy(); } catch {} done(false); });
+      });
+    }
+    if (verified) {
+      console.log(`✅ [Relay WebUI] end-to-end check passed → http://127.0.0.1:${gw.port} reaches the agent`);
+    } else {
+      // Non-fatal: ack anyway. The tab will surface the real error (or the
+      // gateway may simply have been slow); silence here would hang the monitor.
+      console.log(`⚠️ [Relay WebUI] end-to-end check inconclusive after ${PROBE_ROUNDS} attempts — acking anyway`);
+    }
+  } catch (_) { /* verification is best-effort; never block the ack */ }
   console.log(`🌐 [Relay WebUI] gateway live at http://127.0.0.1:${gw.port} (direct transfer, no central middleman)`);
   // Report the port we ACTUALLY bound. The monitor asks for 18790, but if a
   // gateway for another connection already holds it we silently walk up to

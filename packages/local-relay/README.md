@@ -198,6 +198,14 @@ service are not granted. No warranty of any kind.
 
 ## Version note
 
+- **1.0.9** — the relay now verifies the Web UI gateway END-TO-END (loopback
+  request through the local listener → SSH tunnel → agent dashboard) before it
+  acks the port to the monitor. The monitor no longer probes reachability from
+  the browser at all: on production the page's CSP `connect-src` excludes
+  `http://127.0.0.1:*`, so a browser-side fetch probe is always blocked and the
+  Web UI tab was closed ("loading then disappears") even though the URL worked
+  when pasted. The tab is now navigated as soon as the relay confirms the full
+  chain is live.
 - **1.0.8** — Web UI fix (same bytes as 1.0.7 with a bumped version stamp):
   the gateway now answers Chrome's Private Network Access preflight
   (`Access-Control-Allow-Private-Network: true`). Without it, any Web UI tab
