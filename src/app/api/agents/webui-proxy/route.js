@@ -425,6 +425,18 @@ function rewriteHtml(html, proxyBase, currentPath, port, connectionId, agentId =
  * SSH tunnel and the BROWSER dials localhost:<port> on the visitor's machine
  * ("localhost refused to connect").
  */
+function rewriteRootAssetRefs(text, connectionId, port) {
+  const prefix = assetPathPrefix(connectionId, port);
+  // Hermes' Vite preload map stores lazy chunks as `assets/foo.js` and later
+  // turns them into root-relative URLs. Once the BrowserRouter moves from the
+  // entry page to /chat or /skills, those URLs escape the keyed tunnel and hit
+  // the monitor origin as /assets/foo.js. Carry the prefix into the bundle
+  // itself so dynamic imports remain tunneled too.
+  return String(text)
+    .replace(/(["'`])\/assets\//g, (_m, quote) => `${quote}${prefix}/assets/`)
+    .replace(/(["'`])assets\//g, (_m, quote) => `${quote}${prefix}/assets/`);
+}
+
 function rewriteAbsoluteSelfUrls(text, proxyBase, port) {
   const re = new RegExp(
     '(https?:\\/\\/)(?:localhost|127\\.0\\.0\\.1|0\\.0\\.0\\.0|\\[::1\\])(?::' + port + ')?((?:\\/)[^\\s"\'`<>\\\\)\\]]*)?',
@@ -692,6 +704,13 @@ async function handleProxy(request) {
       let html = body.toString('utf8');
       html = rewriteAbsoluteSelfUrls(html, proxyBase, port);
       html = rewriteHtml(html, proxyBase, remotePath, port, connectionId, agentId);
+      // Hermes' BrowserRouter must strip the keyed proxy prefix before route
+      // matching; otherwise every navigation sees `/m/<cid>/<port>/chat` and
+      // redirects back to `/sessions`.
+      html = html.replace(
+        /window\.__HERMES_BASE_PATH__\s*=\s*(['"])[^'"\\]*\1/g,
+        (_match) => `window.__HERMES_BASE_PATH__=${JSON.stringify(assetPathPrefix(connectionId, port))}`
+      );
       body = Buffer.from(html, 'utf8');
       outHeaders['content-length'] = String(body.length);
     } else if (contentType.includes('text/css')) {
@@ -746,4 +765,6 @@ async function handleProxy(request) {
     );
   }
 }
+
+
 

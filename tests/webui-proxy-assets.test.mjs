@@ -57,6 +57,11 @@ test('the catch-all route reads the coordinates back out of the path', () => {
   assert.match(catchAll, /\/\^\\d\+\$\/\.test\(segments\[2\]\)/);
 });
 
+test('Vite lazy assets stay under the keyed tunnel', () => {
+  assert.match(proxy, /rewriteRootAssetRefs/);
+  assert.ok(proxy.includes('assets/'));
+});
+
 test('the address bar keeps the tunnel coordinates after the query is hidden', () => {
   // The proxy used to hide its own query params with
   //   replaceState(null, '', location.pathname + location.hash)
