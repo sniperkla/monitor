@@ -19,7 +19,17 @@ export const dynamic = 'force-dynamic';
 function detectPm() {
   return `if command -v apt-get >/dev/null 2>&1; then echo apt-get; ` +
     `elif command -v dnf >/dev/null 2>&1; then echo dnf; ` +
-    `elif command -v yum >/dev/null 2>&1; then echo yum; else echo none; fi`;
+    `elif command -v yum >/dev/null 2>&1; then echo yum; ` +
+    `elif command -v apk >/dev/null 2>&1; then echo apk; ` +
+    `elif command -v pacman >/dev/null 2>&1; then echo pacman; ` +
+    `elif command -v zypper >/dev/null 2>&1; then echo zypper; ` +
+    `else echo none; fi`;
+}
+
+/** Wazuh ships official packages for apt/dnf/yum only (no apk/pacman builds). */
+function wazuhPmGuard() {
+  return `if [ "$PM" = "apk" ] || [ "$PM" = "pacman" ]; then ` +
+    `echo '== FAILED: Wazuh provides official packages for Debian/Ubuntu (apt) and RHEL-family (dnf/yum) only — this distro is not supported for Wazuh =='; exit 0; fi; `;
 }
 
 const STATUS_CMDS = {
@@ -252,6 +262,9 @@ export async function POST(request) {
           `apt-get) DEBIAN_FRONTEND=noninteractive $SUDO apt-get purge -y 'clamav*' 'libclamav*' 'clamd*' >>"$ULOG" 2>&1 || true; $SUDO apt-get autoremove -y >>"$ULOG" 2>&1 || true ;; ` +
           `dnf) $SUDO dnf remove -y 'clamav*' 'clamd*' >>"$ULOG" 2>&1 || true ;; ` +
           `yum) $SUDO yum remove -y 'clamav*' 'clamd*' >>"$ULOG" 2>&1 || true ;; ` +
+          `apk) $SUDO apk del clamav >>"$ULOG" 2>&1 || true ;; ` +
+          `pacman) $SUDO pacman -Rns --noconfirm clamav >>"$ULOG" 2>&1 || true ;; ` +
+          `zypper) $SUDO zypper --non-interactive remove 'clamav*' >>"$ULOG" 2>&1 || true ;; ` +
           `*) echo "no-known-package-manager" >>"$ULOG" ;; esac; }; ` +
           `(clamscan --version >/dev/null 2>&1 || clamdscan --version >/dev/null 2>&1) && { echo STILL_PRESENT >> "$ULOG"; } || { echo REMOVED >> "$ULOG"; } ; ` +
           `tail -c 600 "$ULOG"`;
@@ -273,7 +286,10 @@ export async function POST(request) {
           `{ $SUDO systemctl disable --now "$PKG" 2>/dev/null; case "$PM" in ` +
           `apt-get) DEBIAN_FRONTEND=noninteractive $SUDO apt-get purge -y "$PKG" >>"$ULOG" 2>&1 || true; $SUDO apt-get autoremove -y >>"$ULOG" 2>&1 || true ;; ` +
           `dnf) $SUDO dnf remove -y "$PKG" >>"$ULOG" 2>&1 || true ;; ` +
-          `yum) $SUDO yum remove -y "$PKG" >>"$ULOG" 2>&1 || true ;; esac; $SUDO rm -rf /var/ossec; }; ` +
+          `yum) $SUDO yum remove -y "$PKG" >>"$ULOG" 2>&1 || true ;; ` +
+          `apk) $SUDO apk del "$PKG" >>"$ULOG" 2>&1 || true ;; ` +
+          `pacman) $SUDO pacman -Rns --noconfirm "$PKG" >>"$ULOG" 2>&1 || true ;; ` +
+          `zypper) $SUDO zypper --non-interactive remove "$PKG" >>"$ULOG" 2>&1 || true ;; esac; $SUDO rm -rf /var/ossec; }; ` +
           `((rpm -q "$PKG" >/dev/null 2>&1 || dpkg -s "$PKG" >/dev/null 2>&1)) && { echo STILL_PRESENT >> "$ULOG"; } || { echo REMOVED >> "$ULOG"; } ; ` +
           `tail -c 600 "$ULOG"`;
       }
@@ -325,6 +341,9 @@ export async function POST(request) {
         `  apt-get) DEBIAN_FRONTEND=noninteractive $SUDO apt-get install -y clamav clamav-daemon ;; ` +
         `  dnf) $SUDO dnf install -y clamav clamav-update ;; ` +
         `  yum) $SUDO yum install -y clamav clamav-update ;; ` +
+        `  apk) $SUDO apk add clamav ;; ` +
+        `  pacman) $SUDO pacman -Sy --noconfirm --needed clamav ;; ` +
+        `  zypper) $SUDO zypper --non-interactive install clamav ;; ` +
         `esac; ` +
         `($SUDO freshclam --quiet 2>/dev/null || $SUDO /usr/bin/freshclam --quiet 2>/dev/null); ` +
         `clamscan --version 2>/dev/null | head -n 1; ` +
@@ -347,6 +366,7 @@ export async function POST(request) {
       inner =
         preflight('https://packages.wazuh.com/4.x/') +
         `LOG=/var/tmp/.monitor-wazuh-install.log; : > "$LOG"; ` +
+        wazuhPmGuard() +
         `{ ` +
         `if [ -x /var/ossec/bin/wazuh-control ]; then ` +
         `  echo '== Wazuh agent already installed =='; ` +
@@ -391,6 +411,7 @@ export async function POST(request) {
       inner =
         preflight('https://packages.wazuh.com/4.x/') +
         `LOG=/var/tmp/.monitor-wazuh-manager-install.log; : > "$LOG"; ` +
+        wazuhPmGuard() +
         // Wazuh manager needs ~1.5GB+ RAM — on smaller VPSes dpkg/service start
         // fails with cryptic "package not installed / unit not found" errors.
         // Detect up-front and fail with a clear, human reason.

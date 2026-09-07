@@ -107,7 +107,10 @@ export default function TmuxApp({ initialConnection, windowId }) {
     socketRef.current.on('ssh:connected', () => {
       setTimeout(() => {
         if (!socketRef.current) return;
-        const installCheck = `if ! command -v tmux &>/dev/null; then if command -v apt-get &>/dev/null; then sudo apt-get update && sudo apt-get install -y tmux -qq; elif command -v yum &>/dev/null; then sudo yum install -y tmux -q; elif command -v apk &>/dev/null; then sudo apk add tmux -q; fi; fi`;
+        // Multi-distro chain — mirrors the agent installers: apt → dnf → yum →
+        // apk → pacman → zypper, with an explicit message if no package
+        // manager matched instead of silently doing nothing.
+        const installCheck = `if ! command -v tmux &>/dev/null; then if command -v apt-get &>/dev/null; then sudo apt-get update && sudo apt-get install -y tmux -qq; elif command -v dnf &>/dev/null; then sudo dnf install -y tmux -q; elif command -v yum &>/dev/null; then sudo yum install -y tmux -q; elif command -v apk &>/dev/null; then sudo apk add tmux -q; elif command -v pacman &>/dev/null; then sudo pacman -Sy --noconfirm tmux; elif command -v zypper &>/dev/null; then sudo zypper --non-interactive install tmux; else echo 'No supported package manager found (apt/dnf/yum/apk/pacman/zypper) - install tmux manually'; fi; fi`;
         const formatString = '#{session_name}|#{session_windows}|#{session_attached}|#{session_activity}|#{?pane_current_command,#{pane_current_command},bash}';
         const setupEcho = `${installCheck}; echo "${formatString}" > /tmp/.web_tmux_fmt && echo "${SENTINEL_START}" && tmux list-sessions -F "$(cat /tmp/.web_tmux_fmt)" 2>/dev/null; echo "${SENTINEL_END}"\r`;
         socketRef.current.emit('ssh:input', setupEcho);
@@ -209,7 +212,7 @@ export default function TmuxApp({ initialConnection, windowId }) {
   const handleInstallTmux = () => {
     if (!socketRef.current) return;
     setIsInstalling(true);
-    const cmd = `if command -v apt-get &>/dev/null; then sudo apt-get update && sudo apt-get install -y tmux; elif command -v yum &>/dev/null; then sudo yum install -y tmux; elif command -v apk &>/dev/null; then sudo apk add tmux; fi\r`;
+    const cmd = `if command -v apt-get &>/dev/null; then sudo apt-get update && sudo apt-get install -y tmux; elif command -v dnf &>/dev/null; then sudo dnf install -y tmux; elif command -v yum &>/dev/null; then sudo yum install -y tmux; elif command -v apk &>/dev/null; then sudo apk add tmux; elif command -v pacman &>/dev/null; then sudo pacman -Sy --noconfirm tmux; elif command -v zypper &>/dev/null; then sudo zypper --non-interactive install tmux; else echo 'No supported package manager found (apt/dnf/yum/apk/pacman/zypper) - install tmux manually'; fi\r`;
     socketRef.current.emit('ssh:input', cmd);
     setTimeout(() => {
         setIsInstalling(false);
