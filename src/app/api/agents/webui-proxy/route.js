@@ -25,6 +25,34 @@ import net from 'net';
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
+// Marker segment for "path-keyed" asset URLs — see assetPathPrefix().
+const ASSET_KEY = 'm';
+
+/**
+ * Base path for proxied sub-resources (JS chunks, CSS, images).
+ *
+ * The tunnel coordinates live HERE, in the path — never in the query string.
+ * A bundler resolves a module's relative imports against `import.meta.url`,
+ * and RFC 3986 relative resolution DROPS the base URL's query. With
+ * `?connectionId=..&port=..` on the entry module, every lazily-imported chunk
+ * therefore resolved to `/api/agents/webui-proxy/assets/<chunk>.js` with no
+ * query at all → the proxy answered "400 connectionId required" → the module
+ * graph never completed → the app sat on its static boot splash forever
+ * ("Loading nanobot…", or a blank green screen for Hermes).
+ *
+ * Keying the path keeps the coordinates attached across any number of relative
+ * hops, and also means the <link rel="modulepreload"> URL and the dynamic
+ * import URL are byte-identical, so the browser dedupes them.
+ */
+function assetPathPrefix(connectionId, port) {
+  return `/api/agents/webui-proxy/${ASSET_KEY}/${encodeURIComponent(String(connectionId))}/${encodeURIComponent(String(port))}`;
+}
+
+/** Percent-encode a path for safe use as real URL path segments. */
+function encodeProxyPath(p) {
+  return String(p).split('/').map(encodeURIComponent).join('/');
+}
+
 /**
  * Open an SSH-forwarded TCP socket to `remoteHost:remotePort` on the server
  * described by `sshConfig`.
@@ -129,6 +157,7 @@ function rewriteHtml(html, proxyBase, currentPath, port, connectionId) {
 <script>
 (function() {
   var PROXY_BASE = ${JSON.stringify(proxyBase)};
+  var ASSET_PREFIX = ${JSON.stringify(assetPathPrefix(connectionId, port))};
   var CURRENT_FOLDER = ${JSON.stringify(folder)};
   var TUNNELED_PORT = ${JSON.stringify(String(port))};
   var TUNNEL_ID = ${JSON.stringify(String(connectionId || ''))};
@@ -219,6 +248,101 @@ function rewriteHtml(html, proxyBase, currentPath, port, connectionId) {
   // app — some apps parse the query string for their own settings and would
   // otherwise misread values like port=8765 and build URLs against it.
   try { if (location.search) history.replaceState(null, '', location.pathname + location.hash); } catch(e) {}
+
+  // Sub-resources the app injects AFTER load (Vite modulepreload links, lazy
+  // <script> tags, images, plugin bundles) are resolved against the DOCUMENT
+  // base. A hosted router that pushState()s to a bare path — Hermes goes to
+  // "/sessions" — moves that base off the proxy, so a root-absolute
+  // "/assets/SessionsPage-*.js" escapes the SSH tunnel and 404s on the monitor
+  // origin. Anything root-absolute here can only be meant for the tunneled app,
+  // so rewrite it on the way in.
+  var TUNNEL_PREFIX = '/api/agents/webui-proxy';
+  function fixSubresource(u) {
+    if (!u || typeof u !== 'string') return u;
+    if (u.indexOf('//') === 0 || u.indexOf('data:') === 0 || u.indexOf('blob:') === 0 ||
+        u.indexOf('javascript:') === 0 || /^[a-z][a-z0-9+.-]*:/i.test(u)) return u;
+    if (u.indexOf(TUNNEL_PREFIX) === 0) return u;
+    // A document that has escaped the proxy base makes even a relative URL
+    // resolve against the wrong root, so anchor those at "/" too.
+    var p = u.charAt(0) === '/' ? u : ('/' + u.replace(/^\\.\\//, ''));
+    return ASSET_PREFIX + p;
+  }
+  // Same rewrite for markup injected as a STRING — insertAdjacentHTML /
+  // innerHTML build elements through the HTML parser, which never touches the
+  // attribute setters patched below.
+  function fixMarkup(markup) {
+    if (!markup || typeof markup !== 'string') return markup;
+    if (markup.indexOf('=') < 0) return markup;
+    return markup.replace(/(src|href)=(["'])\\/(?!\\/)([^"']*)\\2/gi, function(m, attr, q, path) {
+      if (path.indexOf(TUNNEL_PREFIX.slice(1)) === 0) return m;
+      return attr + '=' + q + ASSET_PREFIX + '/' + path + q;
+    });
+  }
+  var origSetAttribute = Element.prototype.setAttribute;
+  Element.prototype.setAttribute = function(name, value) {
+    if ((name === 'src' || name === 'href' || name === 'data') && typeof value === 'string') {
+      value = fixSubresource(value);
+    }
+    return origSetAttribute.call(this, name, value);
+  };
+  var origInsertAdjacent = Element.prototype.insertAdjacentHTML;
+  if (origInsertAdjacent) {
+    Element.prototype.insertAdjacentHTML = function(pos, html) {
+      return origInsertAdjacent.call(this, pos, fixMarkup(html));
+    };
+  }
+  var innerDesc = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML');
+  if (innerDesc && innerDesc.set) {
+    Object.defineProperty(Element.prototype, 'innerHTML', {
+      configurable: true, enumerable: innerDesc.enumerable, get: innerDesc.get,
+      set: function(v) { innerDesc.set.call(this, typeof v === 'string' ? fixMarkup(v) : v); }
+    });
+  }
+  // Safety net: anything that still slips through with a bare root-absolute
+  // URL gets rewritten as soon as it lands in the document.
+  try {
+    function fixNodeAttr(el, name) {
+      if (!el || !el.getAttribute) return;
+      var v = el.getAttribute(name);
+      if (!v) return;
+      var n = fixSubresource(v);
+      if (n !== v) el.setAttribute(name, n);
+    }
+    new MutationObserver(function(records) {
+      for (var i = 0; i < records.length; i++) {
+        var rec = records[i];
+        if (rec.type === 'attributes') { fixNodeAttr(rec.target, rec.attributeName); continue; }
+        var added = rec.addedNodes || [];
+        for (var j = 0; j < added.length; j++) {
+          var n = added[j];
+          if (!n || n.nodeType !== 1) continue;
+          fixNodeAttr(n, 'src'); fixNodeAttr(n, 'href'); fixNodeAttr(n, 'data');
+          if (n.querySelectorAll) {
+            var kids = n.querySelectorAll('[src],[href]');
+            for (var k = 0; k < kids.length; k++) { fixNodeAttr(kids[k], 'src'); fixNodeAttr(kids[k], 'href'); }
+          }
+        }
+      }
+    }).observe(document.documentElement || document, {
+      childList: true, subtree: true, attributes: true, attributeFilter: ['src', 'href', 'data']
+    });
+  } catch(e) {}
+  [['HTMLScriptElement','src'],['HTMLLinkElement','href'],['HTMLImageElement','src'],
+   ['HTMLIFrameElement','src'],['HTMLSourceElement','src'],['HTMLVideoElement','src'],
+   ['HTMLAudioElement','src'],['HTMLEmbedElement','src'],['HTMLObjectElement','data']
+  ].forEach(function(pair) {
+    var Ctor = window[pair[0]];
+    if (!Ctor || !Ctor.prototype) return;
+    var prop = pair[1];
+    var desc = Object.getOwnPropertyDescriptor(Ctor.prototype, prop);
+    if (!desc || !desc.set) return;
+    Object.defineProperty(Ctor.prototype, prop, {
+      configurable: true,
+      enumerable: desc.enumerable,
+      get: desc.get,
+      set: function(v) { desc.set.call(this, typeof v === 'string' ? fixSubresource(v) : v); }
+    });
+  });
 })();
 </script>
 `;
@@ -236,19 +360,17 @@ function rewriteHtml(html, proxyBase, currentPath, port, connectionId) {
     res = scriptTag + res;
   }
 
-  // Rewrite absolute src, href, action attributes to PATH-STYLE proxy URLs
-  // (/api/agents/webui-proxy/assets/x.js?connectionId=..&port=..) — handled by
-  // the [...path] catch-all route. Path-style matters: Vite resolves lazy
-  // chunks relative to import.meta.url (the module's directory), so the module
-  // URL must live under /api/agents/webui-proxy/ for relative chunk URLs to
-  // resolve into the catch-all instead of 404ing.
-  const pathProxyBase = `/api/agents/webui-proxy`;
+  // Rewrite absolute src, href, action attributes to path-keyed proxy URLs
+  // (/api/agents/webui-proxy/m/<cid>/<port>/assets/x.js) — handled by the
+  // [...path] catch-all route. See assetPathPrefix() for why the coordinates
+  // are carried in the path rather than the query.
+  const pathProxyBase = assetPathPrefix(connectionId, port);
   res = res.replace(/(src|href|action)=(["'])\/((?!\/)[^"']*)(["'])/gi,
-    (_, attr, q, path, q2) => `${attr}=${q}${pathProxyBase}/${path}?connectionId=${encodeURIComponent(connectionId)}&port=${port}${q2}`);
+    (_, attr, q, path, q2) => `${attr}=${q}${pathProxyBase}${encodeProxyPath('/' + path)}${q2}`);
 
   // Rewrite url('/...') in style blocks
   res = res.replace(/url\((["']?)\/((?!\/)[^)]*?)(["']?)\)/gi,
-    (_, q, path, q2) => `url(${q}${proxyBase}${encodeURIComponent('/' + path)}${q2})`);
+    (_, q, path, q2) => `url(${q}${pathProxyBase}${encodeProxyPath('/' + path)}${q2})`);
 
   return res;
 }
@@ -277,11 +399,10 @@ export async function GET(request) {
 export async function POST(request) {
   return handleProxy(request);
 }
-// Re-exported for the catch-all path-style route ([...path]/route.js) which
-// serves the same proxy under /api/agents/webui-proxy/<remote-path> so that
-// the hosted SPA's relative chunk URLs (Vite import.meta.url resolution)
-// resolve correctly.
-export { handleProxy };
+// Re-exported for the catch-all path route ([...path]/route.js) which serves
+// the same proxy under /api/agents/webui-proxy/... so that the hosted SPA's
+// relative chunk URLs (Vite import.meta.url resolution) resolve correctly.
+export { handleProxy, ASSET_KEY, assetPathPrefix };
 
 async function handleProxy(request) {
   try {
@@ -502,7 +623,7 @@ async function handleProxy(request) {
     } else if (contentType.includes('text/css')) {
       let css = body.toString('utf8');
       css = css.replace(/url\((["']?)\/((?!\/)[^)]*?)(["']?)\)/gi,
-        (_, q, path, q2) => `url(${q}${proxyBase}${encodeURIComponent('/' + path)}${q2})`);
+        (_, q, path, q2) => `url(${q}${assetPathPrefix(connectionId, port)}${encodeProxyPath('/' + path)}${q2})`);
       body = Buffer.from(css, 'utf8');
       outHeaders['content-length'] = String(body.length);
     } else if (

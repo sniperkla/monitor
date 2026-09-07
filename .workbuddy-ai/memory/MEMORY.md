@@ -24,6 +24,22 @@
 - Agent setup uses a one-time `--claim` code. Keep the target wording explicit: “Run this on the target server.”
 - `WEBUI_START_AGENTS=['nanobot','hermes']`; nanobot 8765, Hermes 9119.
 
+## WebUI proxy (`/api/agents/webui-proxy`)
+- **Tunnel coordinates go in the PATH, never the query**: sub-resources are
+  rewritten to `/api/agents/webui-proxy/m/<connectionId>/<port>/<remote-path>`.
+  A bundler resolves relative imports against `import.meta.url`, and RFC 3986
+  relative resolution drops the base URL's query — `?connectionId=&port=` on the
+  entry module makes every lazy chunk 400 and the SPA never leaves its boot
+  splash. See `tests/webui-proxy-assets.test.mjs`.
+- The injected `<head>` script patches fetch/XHR/WebSocket and, since the escape
+  fix, also root-absolute `src`/`href` set post-load (property setters,
+  `setAttribute`, `insertAdjacentHTML`, `innerHTML`, MutationObserver net) —
+  Hermes' router `pushState`s to `/sessions` and moves the document base.
+- Debugging an agent WebUI: reproduce locally (`localhost:3030`) with a
+  `next-auth/jwt`-minted session cookie, puppeteer-core + local Chrome, and log
+  `pageerror` plus every response >= 400. "Loading nanobot…" / a blank coloured
+  screen is the SPA's static `#root` fallback = JS never executed.
+
 ## Distribution
 - `packages/local-relay/` publishes npm `ssh-monitor-relay`; `prepack.mjs` copies the built artifact into `dist/`. Published 1.0.4 hash: `ae6c768f...`, 196,100 bytes. Trusted Publishing remains to be registered; then revoke the bypass-2FA token.
 - `scripts/relay-install-audit.mjs` audits the artifact and source behaviour; re-pin bytes/hash when artifact changes.
