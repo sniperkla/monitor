@@ -1638,7 +1638,7 @@ export default function AIAgentsApp({ apiFetch }) {
                   </span>
                 </h2>
                 <p className="text-[11px] text-[var(--text-muted)] leading-relaxed mt-2 max-w-sm">
-                  Eliminates SSH polling lag and WebSocket proxy bugs. AI Agents communicate directly via Local Relay running on your Mac/PC.
+                  A small helper app on your computer connects your AI Agents directly to your servers — for faster updates and a smoother Web UI, with your data staying between you and your servers.
                 </p>
               </div>
             </div>
@@ -1646,9 +1646,9 @@ export default function AIAgentsApp({ apiFetch }) {
             {/* Feature pillars — horizontal rows */}
             <div className="space-y-2">
               {[
-                { icon: <Zap size={13} className="text-pink-400 shrink-0" />, label: '10× Faster Sync', desc: 'Agent state in milliseconds, no SSH subshells.' },
-                { icon: <Radio size={13} className="text-indigo-400 shrink-0" />, label: '0ms WebUI Chat', desc: 'Tokens stream on loopback 127.0.0.1:18791, zero proxy drops.' },
-                { icon: <Shield size={13} className="text-emerald-400 shrink-0" />, label: 'Zero Server Hop', desc: 'Peer-to-peer encrypted tunnel, data never touches central servers.' },
+                { icon: <Zap size={13} className="text-pink-400 shrink-0" />, label: '10× Faster Sync', desc: 'Agent status updates arrive almost instantly.' },
+                { icon: <Radio size={13} className="text-indigo-400 shrink-0" />, label: 'Instant Web UI', desc: 'Chat responds in real time, right on your computer.' },
+                { icon: <Shield size={13} className="text-emerald-400 shrink-0" />, label: 'Private by Design', desc: 'Encrypted direct connection — your data never touches our servers.' },
               ].map(({ icon, label, desc }) => (
                 <div key={label} className="flex items-start gap-2.5 p-2.5 rounded-xl bg-[var(--bg-secondary)]/60 border border-white/5">
                   <div className="mt-0.5">{icon}</div>
@@ -1659,22 +1659,6 @@ export default function AIAgentsApp({ apiFetch }) {
                 </div>
               ))}
             </div>
-
-            {/* Target server picker */}
-            {connections.length > 0 && (
-              <div className="flex items-center gap-2 p-2.5 rounded-xl bg-[var(--bg-secondary)] border border-[var(--border-color)]">
-                <ServerIcon size={13} className="text-[var(--text-muted)] shrink-0" />
-                <div className="text-[10px] uppercase font-bold text-[var(--text-muted)] shrink-0">Target</div>
-                <div className="flex-1 min-w-0">
-                  <ThemeSelect
-                    value={target}
-                    onChange={setTarget}
-                    options={connections.map(c => ({ value: c._id, label: `${c.name || c.host}` }))}
-                    size="sm"
-                  />
-                </div>
-              </div>
-            )}
 
           </div>
 

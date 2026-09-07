@@ -3,7 +3,7 @@ import {
   SquareTerminal, KeyRound, Settings, Database, FolderOpen, PanelsTopLeft, ScrollText,
   Globe, StickyNote, BookOpenCheck, BrickWallShield, HardDriveDownload,
   Workflow, CloudCog, ShieldCheck,
-  Gauge, Leaf, Bug, History, Container,
+  Gauge, Leaf, Bug, History, Container, Bot,
 } from 'lucide-react';
 
 // ── Canonical id resolution ──────────────────────────────────────────────────
@@ -11,6 +11,7 @@ import {
 // its own design (previously "docker-logs" collapsed into "docker" and
 // "server-monitor"/"server-backup" shared one icon).
 const ID_MAP = {
+  'ai-agents': 'agents',
   'firewall-blocklist': 'firewall',
   'virus-scanner': 'virus',
   'server-monitor': 'monitor',
@@ -48,6 +49,7 @@ const DARK_TOKENS = {
   auto:      { from: '#dc2626', to: '#450a0a', accent: '#fca5a5' },
   virus:     { from: '#365314', to: '#0c1206', accent: '#a3e635' },
   activity:  { from: '#a16207', to: '#3f2d05', accent: '#facc15' },
+  agents:    { from: '#c026d3', to: '#4c1d95', accent: '#e879f9' },
 };
 
 const LIGHT_TOKENS = {
@@ -69,6 +71,7 @@ const LIGHT_TOKENS = {
   auto:      { from: '#fee2e2', to: '#fecaca', accent: '#991b1b', glyph: '#991b1b' },
   virus:     { from: '#ecfccb', to: '#d9f99d', accent: '#4d7c0f', glyph: '#3f6212' },
   activity:  { from: '#fef9c3', to: '#fef08a', accent: '#854d0e', glyph: '#713f12' },
+  agents:    { from: '#f5d0fe', to: '#e9d5ff', accent: '#7e22ce', glyph: '#7e22ce' },
 };
 
 const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "glass", isDesktop = false }) => {
@@ -213,6 +216,16 @@ const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "g
             <div className="absolute rounded-full border" style={{ width: '62%', height: '62%', top: '19%', left: '19%', borderColor: `${accent}28` }} />
           </div>
         );
+      case 'agents':
+        // Neural spark — three synapse nodes with a live top-node pulse
+        return (
+          <div className="absolute inset-0 pointer-events-none overflow-hidden">
+            <div className="absolute top-[14%] left-1/2 -translate-x-1/2 w-[9%] aspect-square rounded-full animate-ping" style={{ backgroundColor: accent, opacity: 0.45 }} />
+            <div className="absolute top-[17%] left-1/2 -translate-x-1/2 w-[7%] aspect-square rounded-full" style={{ backgroundColor: accent, boxShadow: `0 0 4px ${accent}80` }} />
+            <div className="absolute bottom-[15%] left-[20%] w-[9%] aspect-square rounded-full" style={{ backgroundColor: `${accent}55` }} />
+            <div className="absolute bottom-[15%] right-[20%] w-[9%] aspect-square rounded-full" style={{ backgroundColor: `${accent}55` }} />
+          </div>
+        );
       case 'activity':
         // Mini bar-chart timeline — last bar pulses (live log feed)
         return (
@@ -269,6 +282,7 @@ const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "g
           auto:      { primary: '#ff5500', glow: 'rgba(255,85,0,0.35)', accent: '#ff7733' },
           virus:     { primary: '#a3e635', glow: 'rgba(163,230,53,0.4)', accent: '#bef264' },
           activity:  { primary: '#facc15', glow: 'rgba(250,204,21,0.35)', accent: '#fde047' },
+          agents:    { primary: '#e879f9', glow: 'rgba(232,121,249,0.35)', accent: '#f0abfc' },
         };
         const pal = falloutPalette[iconId] || falloutPalette.terminal;
 
@@ -276,6 +290,13 @@ const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "g
           switch (iconId) {
             case 'terminal':
               return <div className="absolute bottom-[7px] right-[8px] w-[3px] h-[8px] animate-pulse pointer-events-none" style={{ backgroundColor: pal.primary, boxShadow: `0 0 3px ${pal.glow}` }} />;
+            case 'agents':
+              // Blinking synapse node — CRT "thinking" indicator
+              return (
+                <div className="absolute top-[6px] right-[6px] pointer-events-none">
+                  <div className="w-[4px] h-[4px] rounded-full animate-pulse" style={{ backgroundColor: pal.primary, boxShadow: `0 0 4px ${pal.glow}` }} />
+                </div>
+              );
             case 'ssh':
               return (
                 <div className="absolute top-[6px] left-[6px] pointer-events-none">
@@ -451,6 +472,7 @@ const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "g
           auto:      { primary: '#ff0055', secondary: '#00ffff', glow: 'rgba(255,0,85,0.3)' },
           virus:     { primary: '#39ff14', secondary: '#ccff00', glow: 'rgba(57,255,20,0.35)' },
           activity:  { primary: '#ffd700', secondary: '#00e5ff', glow: 'rgba(255,215,0,0.3)' },
+          agents:    { primary: '#b026ff', secondary: '#00ff9f', glow: 'rgba(176,38,255,0.3)' },
         };
         const cp = cpPalette[iconId] || cpPalette.terminal;
         const cpClip = 'polygon(0 12%, 12% 0, 100% 0, 100% 88%, 88% 100%, 0 100%)';
@@ -462,6 +484,15 @@ const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "g
                 <div className="absolute inset-0 pointer-events-none overflow-hidden">
                   {[15,35,55,75,88].map((x, i) => (
                     <div key={i} className="absolute w-[2px] rounded-full animate-pulse" style={{ left: `${x}%`, top: `${10 + i * 12}%`, height: `${6 + i * 2}px`, backgroundColor: `${cp.primary}${30 + i * 8}`, animationDelay: `${i * 0.2}s` }} />
+                  ))}
+                </div>
+              );
+            case 'agents':
+              // Firing synapses — staggered neon nodes
+              return (
+                <div className="absolute inset-0 pointer-events-none overflow-hidden">
+                  {[{ x: 28, y: 42 }, { x: 58, y: 66 }, { x: 78, y: 30 }].map((p, i) => (
+                    <div key={i} className="absolute w-[3px] h-[3px] rounded-full animate-pulse" style={{ left: `${p.x}%`, top: `${p.y}%`, backgroundColor: i % 2 ? cp.secondary : cp.primary, boxShadow: `0 0 6px ${cp.glow}`, animationDelay: `${i * 0.35}s` }} />
                   ))}
                 </div>
               );
@@ -651,6 +682,7 @@ const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "g
           auto:      { primary: '#ff2d96', secondary: '#ffb800', glow: 'rgba(255,45,150,0.35)' },
           virus:     { primary: '#a3e635', secondary: '#ff2d96', glow: 'rgba(163,230,53,0.4)' },
           activity:  { primary: '#ffd700', secondary: '#0affcd', glow: 'rgba(255,215,0,0.35)' },
+          agents:    { primary: '#d946ef', secondary: '#0affcd', glow: 'rgba(217,70,239,0.35)' },
         };
         const sw = swPalette[iconId] || swPalette.terminal;
 
@@ -662,6 +694,15 @@ const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "g
                   {[20, 40, 60, 80].map((y, i) => (
                     <div key={i} className="absolute h-[1px] animate-pulse" style={{ top: `${y}%`, left: 0, width: `${50 + i * 12}%`, background: `linear-gradient(90deg, transparent, ${sw.primary}${40 + i * 10})`, animationDelay: `${i * 0.3}s` }} />
                   ))}
+                </div>
+              );
+            case 'agents':
+              // Neon synapse triangle
+              return (
+                <div className="absolute inset-0 pointer-events-none">
+                  <div className="absolute top-[18%] left-1/2 -translate-x-1/2 w-[5px] h-[5px] rounded-full animate-pulse" style={{ backgroundColor: sw.primary, boxShadow: `0 0 8px ${sw.glow}` }} />
+                  <div className="absolute bottom-[18%] left-[26%] w-[4px] h-[4px] rounded-full" style={{ backgroundColor: sw.secondary, boxShadow: '0 0 5px rgba(10,255,205,0.5)' }} />
+                  <div className="absolute bottom-[18%] right-[26%] w-[4px] h-[4px] rounded-full" style={{ backgroundColor: sw.secondary, boxShadow: '0 0 5px rgba(10,255,205,0.5)' }} />
                 </div>
               );
             case 'ssh':
@@ -853,21 +894,21 @@ const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "g
         tmux: '#7b68ee', settings: '#ff4444', wiki: '#00bfff', notepad: '#ff8c00',
         logs: '#ff1493', mongo: '#00ff66', rclone: '#bf5fff', monitor: '#00fef0',
         backup: '#c0ff00', database: '#ff7b00', firewall: '#00ff88', auto: '#ff0055',
-        virus: '#39ff14', activity: '#ffd700',
+        virus: '#39ff14', activity: '#ffd700', agents: '#b026ff',
       },
       fallout: {
         terminal:  '#18e12c', ssh: '#00e5ff', docker: '#ff9f1c', files: '#ffd166',
         tmux: '#06d6a0', settings: '#ef476f', wiki: '#118ab2', notepad: '#fca311',
         logs: '#e63946', mongo: '#10b981', rclone: '#8b5cf6', monitor: '#38bdf8',
         backup: '#a3e635', database: '#f97316', firewall: '#22c55e', auto: '#ff5500',
-        virus: '#a3e635', activity: '#facc15',
+        virus: '#a3e635', activity: '#facc15', agents: '#e879f9',
       },
       synthwave: {
         terminal:  '#ff2d96', ssh: '#bf5fff', docker: '#0affcd', files: '#ffb800',
         tmux: '#ff2d96', settings: '#bf5fff', wiki: '#0affcd', notepad: '#ffb800',
         logs: '#ff2d96', mongo: '#0affcd', rclone: '#bf5fff', monitor: '#0affcd',
         backup: '#ffb800', database: '#ff2d96', firewall: '#0affcd', auto: '#ff2d96',
-        virus: '#a3e635', activity: '#ffd700',
+        virus: '#a3e635', activity: '#ffd700', agents: '#d946ef',
       },
     };
 
@@ -922,6 +963,8 @@ const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "g
             return <IconComponent size={iconSize} style={rawStyle} strokeWidth={2} />;
         case 'auto':
             return <IconComponent size={iconSize} style={rawStyle} strokeWidth={2} />;
+        case 'agents':
+            return <IconComponent size={iconSize} style={rawStyle} strokeWidth={2} />;
         default:
             return <IconComponent size={iconSize} style={{ color }} />;
     }
@@ -949,6 +992,7 @@ const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "g
     auto: Workflow,
     virus: Bug,
     activity: History,
+    agents: Bot,
   }[iconId] || Globe;
 
   return (

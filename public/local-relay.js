@@ -28,6 +28,11 @@ const net  = require('net');
 const { spawnSync, exec } = require('child_process');
 
 const PLATFORM = os.platform();
+/** Termux reports os.platform() as 'android' — detect the real environment. */
+function isTermux() {
+  return PLATFORM === 'android' ||
+    /com\.termux/i.test(String(process.env.PREFIX || process.env.TERMUX_VERSION || ''));
+}
 const INSTALL_DIR = PLATFORM === 'win32'
   ? path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'SSH Monitor Relay')
   : path.join(os.homedir(), '.ssh-monitor-relay');
@@ -265,7 +270,7 @@ async function pairAndGetToken({ client, scope }) {
 const savedConfig = loadConfig();
 let SERVER = args.server || savedConfig.server || process.env.RELAY_SERVER || '';
 let TOKEN  = args.token  || savedConfig.token  || process.env.RELAY_TOKEN  || '';
-const RELAY_VERSION = '1.0.12';
+const RELAY_VERSION = '1.0.13';
 const RELAY_NAME = args.name || savedConfig.name || os.hostname();
 
 // -- Install/uninstall handling (unchanged from original) --
@@ -366,6 +371,23 @@ if (args.install || args.pair) {
 
     saveConfig({ server: SERVER, token: TOKEN, name: RELAY_NAME });
     ensureInstalledScript();
+    if (PLATFORM === 'android' || isTermux()) {
+      // Termux: os.platform() reports 'android', there is no launchd/systemd,
+      // and exiting here would leave NOTHING running — the relay paired, saved
+      // its token, and died before ever opening the WebSocket, so the dashboard
+      // showed "Local Relay not detected" forever. Start it in this process
+      // instead; the bottom-of-file guard does not run because this branch
+      // connects explicitly.
+      console.log('✅ Paired — Termux detected (no system service available).');
+      console.log(`   The relay is now running in this terminal.`);
+      console.log(`   Start it again later with:  node ${INSTALLED_SCRIPT}`);
+      console.log('   Keep it alive in the background with:  termux-wake-lock');
+      console.log('   (and consider tmux, or the termux-services add-on, so it');
+      console.log('    survives closing the session).');
+      try { spawnSync('termux-wake-lock', { stdio: 'ignore' }); } catch (_) {}
+      connect();
+      return;
+    }
     if (PLATFORM === 'darwin') installMacOS();
     else if (PLATFORM === 'linux') installLinux();
     else if (PLATFORM === 'win32') installWindows();
