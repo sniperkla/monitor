@@ -22,7 +22,7 @@ import { useApp } from '@/context/AppContext';
 import TerminalApp from '@/apps/TerminalApp';
 import FilesApp from '@/apps/FilesApp';
 import FileManager from '@/components/FileManager';
-import { AnimatePresence, motion } from 'framer-motion';
+import { AnimatePresence, motion, MotionConfig } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
 import WikiChatWindow from './WikiChatWindow';
 import PWAHandler from './PWAHandler';
@@ -255,6 +255,35 @@ export default function DesktopEnvironment({ bootPhase }) {
   }, [showPreview, currentDesktopId, windowsByDesktop, keyboardShortcuts, toggleMinimize, switchToPrevDesktop, switchToNextDesktop]);
 
   const prevShowPreview = useRef(showPreview);
+  // ── Mobile: kill pull-to-refresh & whole-page swipe scrolling ──────────────
+  // CSS `overscroll-behavior-y: none` handles modern browsers, but older iOS
+  // Safari ignores it. This guard cancels touchmove events that start outside
+  // any scrollable pane (windows, dropdowns, chat panes mark themselves with
+  // data-scrollable or are detected via the closest scrollable ancestor), so
+  // an accidental swipe on the desktop wallpaper can never refresh the page.
+  useEffect(() => {
+    if (!isMobile) return;
+    const isInsideScrollable = (target) => {
+      let el = target instanceof Element ? target : null;
+      while (el && el !== document.body) {
+        if (el.closest?.('[data-scrollable="true"]')) return true;
+        const style = window.getComputedStyle(el);
+        const oy = style.overflowY;
+        if ((oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight + 1) return true;
+        el = el.parentElement;
+      }
+      return false;
+    };
+    const guard = (e) => {
+      // Multi-touch (pinch) and touches inside scroll panes pass through.
+      if (e.touches.length > 1) return;
+      if (isInsideScrollable(e.target)) return;
+      e.preventDefault();
+    };
+    document.addEventListener('touchmove', guard, { passive: false });
+    return () => document.removeEventListener('touchmove', guard);
+  }, [isMobile]);
+
   useEffect(() => {
     if (!showPreview && prevShowPreview.current) {
       setHideDesktopContent(false);
@@ -729,6 +758,7 @@ export default function DesktopEnvironment({ bootPhase }) {
   };
 
   return (
+    <MotionConfig reducedMotion={isMobile ? 'always' : 'never'}>
     <>
     <div 
       onContextMenu={handleContextMenu}
@@ -1116,6 +1146,7 @@ export default function DesktopEnvironment({ bootPhase }) {
     </div>
     <div id="portal-root" style={{ position: 'fixed', zIndex: 999999, inset: 0, pointerEvents: 'none' }} />
     </>
+    </MotionConfig>
   );
 }
 

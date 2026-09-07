@@ -975,8 +975,20 @@ function SystemClock({ vertical }) {
 
   useEffect(() => {
     setMounted(true);
-    const timer = setInterval(() => setTime(new Date()), 1000);
-    return () => clearInterval(timer);
+    // Display only shows HH:MM — ticking every second re-rendered the taskbar
+    // 60× more than needed (measurable CPU drain on mobile). Align to the next
+    // minute boundary instead, so the clock changes exactly when it must.
+    let timer;
+    const scheduleNext = () => {
+      const now = new Date();
+      const toNextMinute = (60 - now.getSeconds()) * 1000 - now.getMilliseconds() + 50;
+      timer = setTimeout(() => {
+        setTime(new Date());
+        scheduleNext();
+      }, toNextMinute);
+    };
+    scheduleNext();
+    return () => clearTimeout(timer);
   }, []);
 
   if (!mounted) return null;

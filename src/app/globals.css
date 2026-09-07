@@ -2656,6 +2656,17 @@ body {
     overscroll-behavior-x: none;
   }
 
+  /* Kill pull-to-refresh & whole-page swipe scrolling: the desktop is a
+     fixed-viewport OS metaphor — the page itself never scrolls, all
+     scrolling happens inside window panes. Paired with the JS touchmove
+     guard in DesktopEnvironment for browsers that ignore this. */
+  html, body {
+    overscroll-behavior-y: none;
+    overflow-y: hidden;
+    height: 100%;
+    touch-action: pan-x pan-y pinch-zoom;
+  }
+
   /* Maximized windows truly fill the viewport on phones */
   .window-container.maximized,
   .react-rnd.window-maximized {
