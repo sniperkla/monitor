@@ -148,7 +148,7 @@ function httpOverSocket(socket, remotePort, reqPath, reqMethod, reqHeaders, reqB
  * Rewrite URLs in HTML so that relative paths and AJAX/fetch calls continue
  * to go through this proxy endpoint rather than hitting the real domain.
  */
-function rewriteHtml(html, proxyBase, currentPath, port, connectionId) {
+function rewriteHtml(html, proxyBase, currentPath, port, connectionId, agentId = 'nanobot') {
   // Folder for relative resolution (e.g. /app/ -> /app/, /index.html -> /)
   const folder = currentPath.substring(0, currentPath.lastIndexOf('/') + 1) || '/';
 
@@ -161,6 +161,7 @@ function rewriteHtml(html, proxyBase, currentPath, port, connectionId) {
   var CURRENT_FOLDER = ${JSON.stringify(folder)};
   var TUNNELED_PORT = ${JSON.stringify(String(port))};
   var TUNNEL_ID = ${JSON.stringify(String(connectionId || ''))};
+  var WEBUI_AGENT = ${JSON.stringify(String(agentId || 'nanobot'))};
   function proxyWsUrl(p) {
     // Dedicated WS path (no Next.js route behind it): if the WS URL pointed at
     // /api/agents/webui-proxy, Next's upgradeHandler would treat the upgrade as
@@ -247,7 +248,24 @@ function rewriteHtml(html, proxyBase, currentPath, port, connectionId) {
   // Hide the proxy's own query params (connectionId/port/path) from the hosted
   // app — some apps parse the query string for their own settings and would
   // otherwise misread values like port=8765 and build URLs against it.
-  try { if (location.search) history.replaceState(null, '', location.pathname + location.hash); } catch(e) {}
+  //
+  // They must not simply be dropped, though: the hosted SPA normalises the
+  // address bar to location.pathname + location.hash, so a bare
+  // /api/agents/webui-proxy#/chat/<id> is what the user ends up with once
+  // they open a session — and what a reload, a new tab, or a bookmark then
+  // requests. Without the tunnel coordinates that answer is
+  // "connectionId required", so the session link only ever worked once.
+  // Move them into the path instead (the form the catch-all route already
+  // understands), which keeps the query clean AND the link replayable.
+  try {
+    if (location.search) {
+      history.replaceState(
+        null,
+        '',
+        ASSET_PREFIX + '/?agent=' + encodeURIComponent(WEBUI_AGENT) + location.hash
+      );
+    }
+  } catch(e) {}
 
   // Sub-resources the app injects AFTER load (Vite modulepreload links, lazy
   // <script> tags, images, plugin bundles) are resolved against the DOCUMENT
@@ -278,6 +296,30 @@ function rewriteHtml(html, proxyBase, currentPath, port, connectionId) {
       return attr + '=' + q + ASSET_PREFIX + '/' + path + q;
     });
   }
+  // A hosted router that pushState()s to a bare path — Hermes jumps straight to
+  // "/sessions" — walks the document right out of the tunnel. The address bar
+  // then reads http://monitor/sessions: a reload asks monitor for a route it
+  // does not have, and the tunnel coordinates are gone for good. Keep every
+  // same-origin navigation inside the proxy so the URL stays replayable.
+  var origPushState = history.pushState.bind(history);
+  var origReplaceState = history.replaceState.bind(history);
+  function containInTunnel(u) {
+    if (u == null) return u;
+    try {
+      var resolved = new URL(String(u), location.href);
+      if (resolved.origin !== location.origin) return u;
+      if (resolved.pathname.indexOf(TUNNEL_PREFIX) === 0) return u;
+      var q = resolved.search || ('?agent=' + encodeURIComponent(WEBUI_AGENT));
+      return ASSET_PREFIX + resolved.pathname + q + resolved.hash;
+    } catch (e) { return u; }
+  }
+  history.pushState = function(state, title, url) {
+    return arguments.length > 2 ? origPushState(state, title, containInTunnel(url)) : origPushState(state, title);
+  };
+  history.replaceState = function(state, title, url) {
+    return arguments.length > 2 ? origReplaceState(state, title, containInTunnel(url)) : origReplaceState(state, title);
+  };
+
   var origSetAttribute = Element.prototype.setAttribute;
   Element.prototype.setAttribute = function(name, value) {
     if ((name === 'src' || name === 'href' || name === 'data') && typeof value === 'string') {
@@ -391,6 +433,28 @@ function rewriteAbsoluteSelfUrls(text, proxyBase, port) {
   return text.replace(re, (_m, _scheme, path) => proxyBase + encodeURIComponent(path || '/'));
 }
 
+// ─── coordinate memory ───────────────────────────────────────────────────────
+
+// The hosted SPA normalises the address bar and drops the proxy's query string,
+// so links minted before the path-keyed form existed are bare
+// `/api/agents/webui-proxy#/chat/<id>`: no coordinates, and nothing in the URL
+// to recover them from. Remember the last tunnel this browser actually used so
+// a refresh of one of those links still opens instead of 400-ing. It is only
+// ever a hint — every lookup below is still scoped to the session's own
+// connections, so the worst case is landing on a different server you own.
+const COORD_COOKIE = 'mp_webui_coords';
+
+function readCoordCookie(request) {
+  const raw = request.headers.get('cookie') || '';
+  const hit = raw.split(';').map((c) => c.trim()).find((c) => c.startsWith(COORD_COOKIE + '='));
+  if (!hit) return null;
+  const [connectionId, portStr, agentId] = decodeURIComponent(hit.slice(COORD_COOKIE.length + 1)).split('~');
+  const port = parseInt(portStr, 10);
+  if (!/^[A-Za-z0-9_-]{6,64}$/.test(connectionId || '')) return null;
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
+  return { connectionId, port, agentId: (agentId || 'nanobot').replace(/[^a-z0-9_-]/gi, '') };
+}
+
 // ─── route handler ───────────────────────────────────────────────────────────
 
 export async function GET(request) {
@@ -410,18 +474,28 @@ async function handleProxy(request) {
     if (!session) return new NextResponse('Unauthorized', { status: 401 });
 
     const { searchParams } = new URL(request.url);
-    const connectionId = searchParams.get('connectionId');
-    const port         = parseInt(searchParams.get('port') || '8765', 10);
+    let connectionId = searchParams.get('connectionId');
+    let port         = searchParams.has('port') ? parseInt(searchParams.get('port'), 10) : 8765;
     let remotePath     = searchParams.get('path') || '/';
     // Which agent owns this Web UI. The "service not running" rescue screen
     // below has to call that agent's `webui-ctl` to start it, and different
     // agents ship different UIs (nanobot's webui vs Hermes' dashboard).
-    const agentId      = (searchParams.get('agent') || 'nanobot').replace(/[^a-z0-9_-]/gi, '');
+    let agentId      = (searchParams.get('agent') || 'nanobot').replace(/[^a-z0-9_-]/gi, '');
     // Strip hash fragment from remote HTTP request (fragments are client-side only per RFC 7230)
     if (remotePath.includes('#')) {
       remotePath = remotePath.split('#')[0] || '/';
     }
 
+    if (!connectionId) {
+      // Bare URL — the hosted app already rewrote the address bar and threw the
+      // coordinates away. Fall back to the last tunnel this browser used.
+      const remembered = readCoordCookie(request);
+      if (remembered) {
+        connectionId = remembered.connectionId;
+        port = remembered.port;
+        agentId = remembered.agentId;
+      }
+    }
     if (!connectionId) return new NextResponse('connectionId required', { status: 400 });
     if (!port || port < 1 || port > 65535) return new NextResponse('invalid port', { status: 400 });
 
@@ -617,7 +691,7 @@ async function handleProxy(request) {
     if (contentType.includes('text/html')) {
       let html = body.toString('utf8');
       html = rewriteAbsoluteSelfUrls(html, proxyBase, port);
-      html = rewriteHtml(html, proxyBase, remotePath, port, connectionId);
+      html = rewriteHtml(html, proxyBase, remotePath, port, connectionId, agentId);
       body = Buffer.from(html, 'utf8');
       outHeaders['content-length'] = String(body.length);
     } else if (contentType.includes('text/css')) {
@@ -644,10 +718,24 @@ async function handleProxy(request) {
 
     try { tunnel.conn.end(); } catch {}
 
-    return new NextResponse(body, {
+    const response = new NextResponse(body, {
       status: resp.status,
       headers: outHeaders,
     });
+    // Only documents need to seed the fallback: they are the responses a user
+    // can meaningfully refresh or bookmark.
+    if (contentType.includes('text/html')) {
+      response.cookies.set({
+        name: COORD_COOKIE,
+        value: `${connectionId}~${port}~${agentId}`,
+        path: '/api/agents/webui-proxy',
+        maxAge: 60 * 60 * 24 * 7,
+        httpOnly: true,
+        sameSite: 'lax',
+        secure: new URL(request.url).protocol === 'https:',
+      });
+    }
+    return response;
   } catch (e) {
     console.error('[webui-proxy] error:', e);
     return new NextResponse(
@@ -658,3 +746,4 @@ async function handleProxy(request) {
     );
   }
 }
+

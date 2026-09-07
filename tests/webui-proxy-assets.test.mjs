@@ -57,6 +57,42 @@ test('the catch-all route reads the coordinates back out of the path', () => {
   assert.match(catchAll, /\/\^\\d\+\$\/\.test\(segments\[2\]\)/);
 });
 
+test('the address bar keeps the tunnel coordinates after the query is hidden', () => {
+  // The proxy used to hide its own query params with
+  //   replaceState(null, '', location.pathname + location.hash)
+  // which threw the coordinates away. The hosted SPA then normalises the bar
+  // to pathname + hash, so every session link the user could copy, refresh or
+  // bookmark was a bare /api/agents/webui-proxy#/chat/<id> — and that answers
+  // "400 connectionId required". The coordinates have to move into the PATH,
+  // not evaporate.
+  assert.doesNotMatch(proxy, /history\.replaceState\(null, '', location\.pathname \+ location\.hash\)/);
+  assert.match(proxy, /ASSET_PREFIX \+ '\/\?agent=' \+ encodeURIComponent\(WEBUI_AGENT\) \+ location\.hash/);
+});
+
+test('client-side navigation is kept inside the tunnel', () => {
+  // Hermes pushState()s to a bare "/sessions" on load. Unpatched, the document
+  // walks out of the proxy: a reload asks monitor for a route it does not have
+  // and the tunnel coordinates are gone for good.
+  assert.match(proxy, /history\.pushState = function/);
+  assert.match(proxy, /history\.replaceState = function/);
+  assert.match(proxy, /function containInTunnel/);
+  // Already-tunnelled URLs must be returned untouched, or /m/<cid>/<port>
+  // gets doubled up on every hash-only navigation.
+  assert.match(proxy, /resolved\.pathname\.indexOf\(TUNNEL_PREFIX\) === 0\) return u;/);
+});
+
+test('a stripped URL falls back to the last tunnel this browser used', () => {
+  // Links minted before the path-keyed form exist in the wild (address bars,
+  // bookmarks). Recover them instead of 400-ing.
+  assert.match(proxy, /const COORD_COOKIE = 'mp_webui_coords'/);
+  assert.match(proxy, /function readCoordCookie/);
+  assert.match(proxy, /if \(!connectionId\) \{/);
+  // The cookie is only a hint: the port must still be validated, and the
+  // connection is still resolved through the session-scoped repository.
+  assert.match(proxy, /port < 1 \|\| port > 65535\) return null/);
+  assert.match(proxy, /response\.cookies\.set/);
+});
+
 test('sub-resources injected after load are pulled back into the tunnel', () => {
   // A hosted router that pushState()s to a bare path (Hermes goes to
   // "/sessions") moves the document base off the proxy, so a root-absolute
