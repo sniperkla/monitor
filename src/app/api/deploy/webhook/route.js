@@ -36,6 +36,34 @@ function checkTriggerRateLimit(projectId) {
 }
 
 // Verify webhook signature using HMAC-SHA256
+// ── Secret redaction for deploy logs ──────────────────────────────────────────
+// Deploy output is stored in the DB (and shown in the UI), shipped to the AI
+// error analyzer, and excerpted into Telegram notifications. Any of those
+// sinks can capture secrets that appear in command output — most commonly a
+// git auth failure echoing the remote URL with the embedded app password
+// (`fatal: ... 'https://user:APP-PASSWORD@bitbucket.org/...'`) or a user
+// deploy script printing a connection string. Redact at every boundary; the
+// raw stream is never persisted or forwarded anywhere.
+const REDACTION_PATTERNS = [
+  // URLs with embedded credentials (any scheme): keep user, mask the password
+  { re: /\b([a-z][a-z0-9+.-]*:\/\/)([^\s\/:@]+):([^\s\/@]+)@/gi, sub: '$1$2:•••@' },
+  // Git credential-store entries: https://user:pass@host (written by deploys)
+  { re: /^(https?:\/\/)([^\s:]+):([^\s@]+)(@)/gm, sub: '$1$2:•••$4' },
+  // Known token prefixes (GitHub, GitLab, Slack, AWS, OpenAI-style)
+  { re: /\b(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{15,}|xox[bpae]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|sk-[A-Za-z0-9_-]{20,})\b/g, sub: '•••REDACTED•••' },
+  // Authorization headers (Basic/Bearer) — includes the b64 extraHeader we set
+  { re: /\b(Authorization:\s*(?:Basic|Bearer)\s+)[^\s"']+/gi, sub: '$1•••' },
+  // Explicit key/value secrets in output (password=, secret=, token=, api_key=)
+  { re: /\b((?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key)[\s]*[=:]\s*["']?)([^\s"';]{4,})/gi, sub: '$1•••' },
+];
+function redactSecrets(text) {
+  if (!text || typeof text !== 'string') return text;
+  let out = text;
+  for (const { re, sub } of REDACTION_PATTERNS) out = out.replace(re, sub);
+  return out;
+}
+
+// Verify webhook signature using HMAC-SHA256
 // Supports both GitHub (x-hub-signature-256) and Bitbucket (x-hub-signature) headers
 function verifySignature(bodyText, secret, signatureHeader) {
   if (!signatureHeader) return false;
@@ -306,6 +334,12 @@ CRITICAL FORMAT RULES:
 export async function sendTelegramNotification(config, status, extra = {}) {
   if (!config.telegramNotification || !config.telegramBotToken || !config.telegramChatId) {
     return;
+  }
+
+  // The log text feeds both the AI extractor and the Telegram excerpt —
+  // redact once here so no credential leaves the server via this path.
+  if (extra && extra.logText) {
+    extra = { ...extra, logText: redactSecrets(extra.logText) };
   }
 
   let botToken;
@@ -634,6 +668,10 @@ export async function runDeployment(config, runMeta = {}) {
     }
     const isTerminal = status === 'success' || status === 'failed';
     const maxAttempts = isTerminal ? 3 : 1;
+    // Redact before the log is persisted — the stored lastDeployLog is what
+    // the UI renders and what later flows read back, so this is the choke
+    // point for everything downstream.
+    finalLog = redactSecrets(finalLog);
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
@@ -1135,6 +1173,8 @@ export async function runDeployment(config, runMeta = {}) {
           scriptLines.push(`  elif command -v yum >/dev/null 2>&1; then sudo yum install -y git 2>&1 || true`);
           scriptLines.push(`  elif command -v apt-get >/dev/null 2>&1; then sudo apt-get install -y git 2>&1 || true`);
           scriptLines.push(`  elif command -v apk >/dev/null 2>&1; then sudo apk add --no-cache git 2>&1 || true`);
+          scriptLines.push(`  elif command -v pacman >/dev/null 2>&1; then sudo pacman -Sy --noconfirm git 2>&1 || true`);
+          scriptLines.push(`  elif command -v zypper >/dev/null 2>&1; then sudo zypper --non-interactive install git 2>&1 || true`);
           scriptLines.push(`  fi`);
           scriptLines.push(`  command -v git >/dev/null 2>&1 && echo "[deploy] git installed successfully." || echo "[deploy] WARNING: git install failed — fetch/checkout will be skipped."`);
           scriptLines.push(`fi`);
@@ -1235,6 +1275,10 @@ if ! command -v git >/dev/null 2>&1; then
     sudo apt-get install -y git 2>&1 || true
   elif command -v apk >/dev/null 2>&1; then
     sudo apk add --no-cache git 2>&1 || true
+  elif command -v pacman >/dev/null 2>&1; then
+    sudo pacman -Sy --noconfirm git 2>&1 || true
+  elif command -v zypper >/dev/null 2>&1; then
+    sudo zypper --non-interactive install git 2>&1 || true
   else
     echo "[deploy] WARNING: No package manager found — cannot auto-install git. Skipping git commands."
     git() { echo "[deploy] WARNING: git not installed — skipping: git $*"; return 0; }
