@@ -1,6 +1,6 @@
 {
   "name": "ssh-monitor-relay",
-  "version": "1.0.11",
+  "version": "1.0.12",
   "description": "Local relay agent for SSH Monitor. Tunnels SSH, SFTP, databases and agent web UIs from your machine to your server without opening inbound ports.",
   "keywords": [
     "ssh",
