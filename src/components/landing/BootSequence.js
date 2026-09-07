@@ -8,6 +8,7 @@ import { useSession } from 'next-auth/react';
 import { LegacyBanner } from './LegacyBanner';
 import { useViewportSize } from '@/hooks/useViewportSize';
 import { RefreshCw, ShieldAlert, Zap } from 'lucide-react';
+import { detectMobileDevice } from '@/hooks/useIsMobileDevice';
 
 //
 // Design note — this screen used to be a cockpit HUD: four stage cards with
@@ -376,6 +377,7 @@ function LightPassThrough({ active, containerRef }) {
 
   useEffect(() => {
     if (!active) return;
+    if (detectMobileDevice() || (typeof window !== 'undefined' && window.innerWidth < 768)) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');

@@ -96,6 +96,15 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
   const { state: osState, focusWindow, closeWindow, toggleMinimize, toggleMaximize, snapWindow, updateWindowPosition } = useOS();
   const { glassmorphism, glassIntensity, taskbarPosition, windowLayout } = osState;
   const { snapSide } = osState.windows.find(w => w.id === id) || {};
+
+  // Mobile performance optimization:
+  // On phones/tablets, all windows are fullscreen. Only the top/active window is visible.
+  // Inactive background windows are set to display: 'none' to save mobile GPU/CPU/RAM.
+  const isTopWindow = osState.activeWindowId
+    ? osState.activeWindowId === id
+    : (!isMinimized && (!osState.windows?.length || osState.windows.filter(w => !w.isMinimized).sort((a,b) => (b.zIndex || 0) - (a.zIndex || 0))[0]?.id === id));
+  const isHiddenOnMobile = isMobile && !isTopWindow;
+  const isEffectivelyHidden = isMinimized || desktopHidden || isHiddenOnMobile;
   
   const rndRef = useRef(null);
   const [snapPreview, setSnapPreview] = useState(null);
@@ -483,6 +492,88 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
 
   // In preview mode we keep minimized windows mounted (but hidden) so the PreviewWindow
   // can clone the DOM and show live previews.
+
+  // ─── Mobile: render full-viewport fixed window (no Rnd) ────────────────────
+  if (isMobile) {
+    const isHidden = isEffectivelyHidden || isMinimized;
+    return (
+      <motion.div
+        key={id}
+        data-window-id={id}
+        initial={{ opacity: 0 }}
+        animate={{ opacity: isHidden ? 0 : 1 }}
+        exit={{ opacity: 0 }}
+        transition={{ duration: 0.15 }}
+        onPointerDown={() => focusWindow(id)}
+        className="window-container fixed flex flex-col overflow-hidden rounded-none border-0"
+        style={{
+          zIndex: isHidden ? -1 : zIndex,
+          pointerEvents: isHidden ? 'none' : 'auto',
+          top: 0,
+          left: 0,
+          width: '100vw',
+          height: 'calc(100dvh - var(--taskbar-size, 56px))',
+          background: 'rgb(10 14 26 / 0.99)',
+          backdropFilter: 'none',
+          WebkitBackdropFilter: 'none',
+          willChange: 'opacity',
+        }}
+      >
+        {/* Mobile Title Bar */}
+        <div
+          className="title-bar flex items-center border-b border-[var(--border-color)] shrink-0"
+          style={{
+            height: 48,
+            background: 'rgb(15 20 35 / 1)',
+            paddingTop: 'env(safe-area-inset-top, 0px)',
+            position: 'relative',
+            zIndex: 60,
+          }}
+        >
+          {/* Close button — big touch target */}
+          <button
+            type="button"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => closeWindow(id)}
+            className="nodrag flex items-center justify-center shrink-0"
+            aria-label="Close"
+            style={{ width: 52, height: 48, color: '#ff5f57' }}
+          >
+            <X size={20} />
+          </button>
+
+          {/* Title */}
+          <div className="flex-1 flex items-center justify-center gap-2 pointer-events-none select-none overflow-hidden px-2">
+            {Icon && <Icon size={14} className="text-[var(--text-secondary)] shrink-0" />}
+            <span className="text-xs font-semibold text-[var(--text-secondary)] truncate">{title}</span>
+          </div>
+
+          {/* Minimize button — big touch target */}
+          <button
+            type="button"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => toggleMinimize(id)}
+            className="nodrag flex items-center justify-center shrink-0"
+            aria-label="Minimize"
+            style={{ width: 52, height: 48, color: 'var(--text-muted)' }}
+          >
+            <Minus size={18} />
+          </button>
+        </div>
+
+        {/* Window Content */}
+        <div
+          className="flex-1 min-h-0 min-w-0 overflow-x-hidden overflow-y-auto relative select-text"
+          style={{ WebkitOverflowScrolling: 'touch' }}
+          data-scrollable
+        >
+          {component}
+        </div>
+      </motion.div>
+    );
+  }
+
+  // ─── Desktop: full Rnd-based floating window ────────────────────────────────
   return (
     <>
       {/* Snap preview overlay */}
@@ -527,14 +618,8 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
         onResizeStop={handleResizeStop}
         style={{
           zIndex,
-          display: 'flex',
-          ...(desktopHidden
-            ? {
-                opacity: 0,
-                pointerEvents: 'none',
-              }
-            : null),
-          ...(isMinimized
+          display: isEffectivelyHidden && !previewMode ? 'none' : 'flex',
+          ...(isEffectivelyHidden && previewMode
             ? {
                 opacity: 0,
                 pointerEvents: 'none',
@@ -567,25 +652,24 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
         ) : ''}
       >
         <motion.div
-          initial={isMobile ? { opacity: 0 } : { opacity: 0, scale: 0.95 }}
-          animate={isMobile ? { opacity: 1 } : { opacity: 1, scale: 1 }}
-          exit={isMobile ? { opacity: 0 } : { opacity: 0, scale: 0.95 }}
-          transition={isMobile ? { duration: 0.15 } : { duration: 0.2 }}
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          exit={{ opacity: 0, scale: 0.95 }}
+          transition={{ duration: 0.2 }}
           data-window-id={id}
-          className={`window-container flex flex-col w-full h-full overflow-hidden ${isMobile ? '' : 'shadow-2xl'} transition-all duration-200 ${isSnappedOrMax ? 'rounded-none border-0' : 'rounded-lg border'}`}
+          className={`window-container flex flex-col w-full h-full overflow-hidden shadow-2xl transition-all duration-200 ${isSnappedOrMax ? 'rounded-none border-0' : 'rounded-lg border'}`}
           style={{
             position: 'relative',
             zIndex: 2,
-            background: (glassmorphism && windowState.appType === 'terminal') 
-              ? 'transparent' 
+            background: (glassmorphism && windowState.appType === 'terminal')
+              ? 'transparent'
               : (glassmorphism ? 'var(--window-bg)' : 'var(--bg-primary)'),
-            backdropFilter: !isMobile && glassmorphism ? `blur(${glassIntensity ?? 20}px)` : 'none',
+            backdropFilter: glassmorphism ? `blur(${glassIntensity ?? 20}px)` : 'none',
             borderColor: 'var(--border-color)',
           }}
           onPointerDown={() => focusWindow(id)}
         >
-          {/* Title Bar — transparent in glass mode so the blurred window
-              background shows through; opaque gradient when glassmorphism is off */}
+          {/* Title Bar */}
           <div
             className={`title-bar h-10 flex items-center ${glassmorphism ? '' : 'bg-gradient-to-b from-[var(--bg-secondary)] to-[var(--bg-tertiary)]'} border-b border-[var(--border-color)] ${windowLayout === 'mac' ? 'px-3 justify-between' : 'flex-row-reverse justify-between'}`}
             style={{ position: 'relative', zIndex: 60 }}
@@ -600,24 +684,13 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
             />
 
             <div style={{ position: 'relative', zIndex: 70 }}>
-              {!isMobile && (
-                <WindowControls
-                  onClose={(e) => { e?.stopPropagation?.(); closeWindow(id); }}
-                  onMinimize={(e) => { e?.stopPropagation?.(); toggleMinimize(id); }}
-                  onMaximize={(e) => { e?.stopPropagation?.(); toggleMaximize(id); }}
-                  isMaximized={isMaximized}
-                  layout={windowLayout}
-                />
-              )}
-              {isMobile && (
-                <WindowControls
-                  onClose={(e) => { e?.stopPropagation?.(); closeWindow(id); }}
-                  onMinimize={(e) => { e?.stopPropagation?.(); toggleMinimize(id); }}
-                  onMaximize={(e) => { e?.stopPropagation?.(); toggleMaximize(id); }}
-                  isMaximized={isMaximized}
-                  layout={windowLayout}
-                />
-              )}
+              <WindowControls
+                onClose={(e) => { e?.stopPropagation?.(); closeWindow(id); }}
+                onMinimize={(e) => { e?.stopPropagation?.(); toggleMinimize(id); }}
+                onMaximize={(e) => { e?.stopPropagation?.(); toggleMaximize(id); }}
+                isMaximized={isMaximized}
+                layout={windowLayout}
+              />
             </div>
 
             <div className={`flex items-center gap-2 text-xs font-medium text-[var(--text-secondary)] pointer-events-none select-none relative z-10 ${windowLayout === 'mac' ? 'flex-1 justify-center' : 'px-4'}`}>
@@ -637,3 +710,4 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
     </>
   );
 }
+

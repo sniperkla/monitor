@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import {
-  Search, Bot, Terminal, Settings, Monitor, StickyNote, Book, Folder,
+  Search, BrainCircuit, Terminal, Settings, Monitor, StickyNote, Book, Folder,
   ArrowRight, Command, CornerDownLeft, ChevronUp, ChevronDown,
   Hash, FileText, Server, Globe, Database, Shield, Layers, X, GitBranch, CloudSync, Rocket, CloudCog, ShieldCheck, BrickWallShield
 } from 'lucide-react';
@@ -11,6 +11,7 @@ import { useOS } from '@/context/OSContext';
 import { useApp } from '@/context/AppContext';
 import { useTranslation } from 'react-i18next';
 import MacOSModalWindow from '@/components/MacOSModalWindow';
+import { useIsMobile } from '@/hooks/useIsMobile';
 import dynamic from 'next/dynamic';
 
 import SSHApp from '@/apps/SSHApp';
@@ -50,7 +51,7 @@ const SYSTEM_APPS = [
   { id: 'rclone', titleKey: null, fallback: 'Rclone Sync', icon: CloudCog, component: <RcloneApp />, category: 'app', initialWidth: 1100, initialHeight: 720 },
   { id: 'server-backup', titleKey: null, fallback: 'Server Backup', icon: ShieldCheck, component: <ServerBackupApp />, category: 'app', initialWidth: 1200, initialHeight: 780 },
   { id: 'firewall-blocklist', titleKey: null, fallback: 'Firewall Blocklist', icon: BrickWallShield, component: <FirewallBlocklistApp />, category: 'app', initialWidth: 1180, initialHeight: 780 },
-  { id: 'ai-agents', titleKey: null, fallback: 'AI Agents', icon: Bot, component: <AIAgentsApp />, category: 'app', initialWidth: 1100, initialHeight: 760 },
+  { id: 'ai-agents', titleKey: null, fallback: 'AI Agents', icon: BrainCircuit, component: <AIAgentsApp />, category: 'app', initialWidth: 1100, initialHeight: 760 },
   { id: 'settings', titleKey: 'common.settings', fallback: 'Settings', icon: Settings, component: <SettingsApp />, category: 'app', initialWidth: 700, initialHeight: 500 },
 ];
 
@@ -66,6 +67,7 @@ const CATEGORY_ICONS = {
 };
 
 export default function SpotlightSearch() {
+  const isMobile = useIsMobile();
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -78,6 +80,13 @@ export default function SpotlightSearch() {
   const { openWindow, closeWindow, state: osState } = useOS();
   const { apiFetch } = useApp();
   const { t } = useTranslation();
+
+  // Listen for custom open-spotlight event
+  useEffect(() => {
+    const handleOpen = () => setIsOpen(true);
+    window.addEventListener('open-spotlight', handleOpen);
+    return () => window.removeEventListener('open-spotlight', handleOpen);
+  }, []);
 
   // Dynamic keyboard shortcut to toggle
   useEffect(() => {
@@ -272,16 +281,17 @@ export default function SpotlightSearch() {
       icon={null}
       onClose={() => setIsOpen(false)}
       zIndexClassName="z-[20000]"
-      draggable={true}
-      resizable={true}
-      defaultWidth={640}
-      defaultHeight={480}
-      minWidth={500}
-      minHeight={300}
+      draggable={!isMobile}
+      resizable={!isMobile}
+      defaultWidth={isMobile ? undefined : 640}
+      defaultHeight={isMobile ? undefined : 480}
+      minWidth={isMobile ? 280 : 500}
+      minHeight={isMobile ? 200 : 300}
       contentClassName="p-0"
       closeOnOverlayClick
-      overlayClassName="bg-transparent"
-      containerClassName="items-start pt-[18vh]"
+      overlayClassName={isMobile ? "bg-black/60 backdrop-blur-none" : "bg-transparent"}
+      containerClassName={isMobile ? "items-start pt-6 px-3" : "items-start pt-[18vh]"}
+      maxWidthClassName={isMobile ? "w-[94vw] max-w-lg" : "max-w-xl"}
       windowClassName="shadow-2xl"
       enableMinimize={false}
       enableMaximize={false}
@@ -289,7 +299,7 @@ export default function SpotlightSearch() {
     >
       <div>
         {/* Search Input */}
-        <div className="modal-drag-handle flex items-center gap-3 px-5 py-4 border-b border-[var(--border-color)]">
+        <div className="modal-drag-handle flex items-center gap-3 px-4 sm:px-5 py-3.5 sm:py-4 border-b border-[var(--border-color)]">
           <Search size={20} className="text-[var(--accent-indigo)] shrink-0" />
           <input
             ref={inputRef}
@@ -298,7 +308,7 @@ export default function SpotlightSearch() {
             onChange={(e) => { setQuery(e.target.value); setSelectedIndex(0); }}
             onKeyDown={handleKeyDown}
             placeholder="Search apps, guides, commands..."
-            className="flex-1 bg-transparent text-base text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none font-medium"
+            className="flex-1 bg-transparent text-sm sm:text-base text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none font-medium"
             autoComplete="off"
             spellCheck="false"
           />
@@ -310,9 +320,18 @@ export default function SpotlightSearch() {
               <X size={14} />
             </button>
           )}
-          <div className="flex items-center gap-1 text-[var(--text-muted)]/70 text-[10px] font-mono shrink-0">
-            <kbd className="px-1.5 py-0.5 rounded bg-[var(--bg-tertiary)]/50 border border-[var(--border-color)] text-[10px]">esc</kbd>
-          </div>
+          {isMobile ? (
+            <button
+              onClick={() => setIsOpen(false)}
+              className="px-2 py-1 text-xs font-semibold text-[var(--accent-indigo)] hover:text-white transition-colors"
+            >
+              Cancel
+            </button>
+          ) : (
+            <div className="flex items-center gap-1 text-[var(--text-muted)]/70 text-[10px] font-mono shrink-0">
+              <kbd className="px-1.5 py-0.5 rounded bg-[var(--bg-tertiary)]/50 border border-[var(--border-color)] text-[10px]">esc</kbd>
+            </div>
+          )}
         </div>
 
         {/* Results */}

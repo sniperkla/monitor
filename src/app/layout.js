@@ -36,17 +36,18 @@ export const metadata = {
   manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
-    statusBarStyle: "default",
+    statusBarStyle: "black-translucent",
     title: "SSH Monitor",
   },
 };
 
 export const viewport = {
-  themeColor: "#0f172a",
+  themeColor: "#0a0e1a",
   width: "device-width",
   initialScale: 1,
   maximumScale: 1,
   userScalable: false,
+  viewportFit: "cover",
 };
 
 import { Providers } from '@/components/Providers';
@@ -67,7 +68,7 @@ export default function RootLayout({ children }) {
             full-animation version on phones. Mirrors detectMobileDevice(). */}
         <script
           dangerouslySetInnerHTML={{
-            __html: `(function(){try{var u=navigator.userAgent||'';var iPad=/Macintosh/i.test(u)&&navigator.maxTouchPoints>1;if(/Android|iPhone|iPod|iPad|Mobile|Silk|Kindle/i.test(u)||iPad){document.documentElement.classList.add('mobile-perf');}}catch(e){}})();`,
+            __html: `(function(){try{var u=navigator.userAgent||'';var iPad=/Macintosh/i.test(u)&&navigator.maxTouchPoints>1;var isTouch=('ontouchstart' in window)||navigator.maxTouchPoints>0;if(/Android|iPhone|iPod|iPad|Mobile|Silk|Kindle/i.test(u)||iPad||(isTouch&&window.innerWidth<=768)){document.documentElement.classList.add('mobile-perf');}}catch(e){}})();`,
           }}
         />
       </head>

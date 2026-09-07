@@ -3,9 +3,10 @@
   "short_name": "Webtop",
   "description": "Professional SSH terminal manager and server monitoring environment.",
   "start_url": "/",
-  "display": "fullscreen",
-  "background_color": "#0f172a",
-  "theme_color": "#0f172a",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0a0e1a",
+  "theme_color": "#0a0e1a",
   "icons": [
     {
       "src": "/icon.svg",

@@ -117,17 +117,37 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
     : state.theme === 'cyberpunk' ? 'cpunk'
       : gm ? 'nuke' : null;
 
-  const handleDoubleClick = () => {
-    if (isMobile) {
-      const mobileW = Math.round(window.innerWidth * 0.7);
-      const mobileH = Math.round(window.innerHeight * 0.6);
-      openWindow(id, title, component, Icon, { initialWidth: mobileW, initialHeight: mobileH });
-    } else {
-      openWindow(id, title, component, Icon, { initialWidth, initialHeight });
+  const handleOpen = () => {
+    openWindow(id, title, component, Icon, { initialWidth, initialHeight });
+  };
+
+  const touchStartRef = useRef({ x: 0, y: 0, time: 0 });
+  const handleTouchStart = (e) => {
+    if (!isMobile) return;
+    touchStartRef.current = {
+      x: e.touches[0].clientX,
+      y: e.touches[0].clientY,
+      time: Date.now(),
+    };
+  };
+
+  const handleTouchEnd = (e) => {
+    if (!isMobile) return;
+    const touch = e.changedTouches[0];
+    if (!touch) return;
+    const dx = Math.abs(touch.clientX - touchStartRef.current.x);
+    const dy = Math.abs(touch.clientY - touchStartRef.current.y);
+    const dt = Date.now() - touchStartRef.current.time;
+    // Tap without scroll gesture
+    if (dx < 12 && dy < 12 && dt < 500) {
+      handleOpen();
     }
   };
 
   const getSizes = () => {
+    if (isMobile) {
+      return { container: 'w-20', icon: 38, iconBox: 'w-14 h-14', text: 'text-[11px]' };
+    }
     switch (iconSize) {
       case 'small': return { container: 'w-20', icon: 36, iconBox: 'w-12 h-12', text: 'text-xs' };
       case 'large': return { container: 'w-32', icon: 52, iconBox: 'w-20 h-20', text: 'text-base' };
@@ -828,7 +848,7 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
   }, [contextMenu]);
 
   const handleMouseEnter = useCallback(() => {
-    if (!isFalloutTheme || isExploding || isReforming) return;
+    if (isMobile || !isFalloutTheme || isExploding || isReforming) return;
     
     // Don't trigger the apocalyptic audio instantly. Give the user a 1-second grace period 
     // so they can double-click or swipe past icons without annoyance.
@@ -974,6 +994,7 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
 
   // Generate explosion particles & effects
   const renderExplosion = () => {
+    if (isMobile) return null;
     if (!isExploding) return null;
 
     // Main debris particles — 40 chunks flying outward (Optimized from 120)
@@ -1396,13 +1417,14 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
         ${isExploding ? 'z-50' : ''}
       `}
       data-icon-id={id}
-      onDoubleClick={handleDoubleClick}
-      onPointerDown={isMobile ? () => handleDoubleClick() : handlePointerDown}
-      onClick={isMobile ? () => handleDoubleClick() : undefined}
-      onDragOver={handleDragOver}
-      onDrop={handleDrop}
-      onMouseEnter={handleMouseEnter}
-      onMouseLeave={handleMouseLeave}
+      onDoubleClick={!isMobile ? handleOpen : undefined}
+      onPointerDown={!isMobile ? handlePointerDown : undefined}
+      onTouchStart={isMobile ? handleTouchStart : undefined}
+      onTouchEnd={isMobile ? handleTouchEnd : undefined}
+      onDragOver={!isMobile ? handleDragOver : undefined}
+      onDrop={!isMobile ? handleDrop : undefined}
+      onMouseEnter={!isMobile ? handleMouseEnter : undefined}
+      onMouseLeave={!isMobile ? handleMouseLeave : undefined}
       onContextMenu={handleContextMenu}
       tabIndex={0}
       style={{ 

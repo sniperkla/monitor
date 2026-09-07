@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Bot, Server as ServerIcon, RefreshCw, Loader2, CheckCircle2, XCircle, AlertCircle, Settings2, Puzzle, Trash2, Play, Square, RotateCw, Plus, ExternalLink, Send, Search, Sparkles, Check, FileText, Copy, Lock, Radio, Zap, Shield, ShieldOff, UserX, Cable, ChevronRight, Flame, Heart, Terminal, ChevronDown, ChevronUp, X, Minus, Maximize2, Minimize2, GripHorizontal, Eye, EyeOff, ArrowUpCircle, DownloadCloud, MonitorSmartphone, ChevronLeft, KeyRound } from 'lucide-react';
+import { BrainCircuit, Server as ServerIcon, RefreshCw, Loader2, CheckCircle2, XCircle, AlertCircle, Settings2, Puzzle, Trash2, Play, Square, RotateCw, Plus, ExternalLink, Send, Search, Sparkles, Check, FileText, Copy, Lock, Radio, Zap, Shield, ShieldOff, UserX, Cable, ChevronRight, Flame, Heart, Terminal, ChevronDown, ChevronUp, X, Minus, Maximize2, Minimize2, GripHorizontal, Eye, EyeOff, ArrowUpCircle, DownloadCloud, MonitorSmartphone, ChevronLeft, KeyRound } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 import { useOS } from '@/context/OSContext';
 import { useSupporter } from '@/hooks/useSupporter';
@@ -1545,7 +1545,7 @@ export default function AIAgentsApp({ apiFetch }) {
 
           <div className="p-4 rounded-xl bg-[var(--bg-secondary)]/80 border border-indigo-500/15 hover:border-indigo-500/30 transition space-y-1.5">
             <div className="flex items-center gap-2 text-indigo-400 font-bold text-xs">
-              <Bot size={15} /> 4 AI Agent Engines
+              <BrainCircuit size={15} /> 4 AI Agent Engines
             </div>
             <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">
               1-click cross-distro deployment for Hermes, OpenClaw, Nanobot &amp; ZeroClaw on Ubuntu, Debian, Rocky, Fedora, Arch &amp; OpenSUSE.
@@ -1780,20 +1780,20 @@ export default function AIAgentsApp({ apiFetch }) {
     return [...users];
   })();
   return (
-    <div className="h-full overflow-y-auto p-4 md:p-6 max-w-4xl mx-auto space-y-4">
+    <div className="h-full overflow-y-auto p-2.5 sm:p-4 md:p-6 max-w-4xl mx-auto space-y-4 select-text">
       <style>{`select option { background-color: #16162a; color: #fff; }`}</style>
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex items-center gap-2.5">
           {agent.logo
             ? <img src={agent.logo} alt="" className="w-6 h-6 rounded object-contain" />
-            : <Bot size={22} className="text-[var(--accent-indigo)]" />}
+            : <BrainCircuit size={22} className="text-[var(--accent-indigo)]" />}
           <div>
             <h1 className="text-base font-bold">AI Agents</h1>
             <p className="text-[11px] text-[var(--text-muted)]">Install & manage autonomous agents on your servers</p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
           <button onClick={toggleLiveLogs} title={liveLogs ? 'Live action logs: ON (click to disable)' : 'Live action logs: OFF (click to enable)'}
             className={`${btn} ${liveLogs ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-white/5 border border-[var(--border-color)] text-[var(--text-muted)] hover:text-white'}`}>
             <span className={`inline-block w-1.5 h-1.5 rounded-full ${liveLogs ? 'bg-emerald-400 animate-pulse' : 'bg-[var(--text-muted)]'}`} /> Live logs {liveLogs ? 'on' : 'off'}
@@ -1848,7 +1848,7 @@ export default function AIAgentsApp({ apiFetch }) {
               {a.logo ? (
                 <img src={a.logo} alt="" className="mt-0.5 w-4 h-4 shrink-0 rounded object-contain bg-black/20 p-px" />
               ) : (
-                <Bot size={16} className={`mt-0.5 shrink-0 ${agentId === a.id ? 'text-indigo-400' : 'text-[var(--text-muted)]'}`} />
+                <BrainCircuit size={16} className={`mt-0.5 shrink-0 ${agentId === a.id ? 'text-indigo-400' : 'text-[var(--text-muted)]'}`} />
               )}
               <span className="min-w-0">
                 <span className="block text-xs font-bold">{a.name} <span className="text-[9px] font-normal text-[var(--text-muted)]">by {a.by}</span></span>
@@ -1878,7 +1878,7 @@ export default function AIAgentsApp({ apiFetch }) {
         <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/10 p-5 text-center">
           {agent.logo
             ? <img src={agent.logo} alt="" className="w-8 h-8 mx-auto mb-2 rounded object-contain" />
-            : <Bot size={26} className="mx-auto mb-2 text-indigo-400" />}
+            : <BrainCircuit size={26} className="mx-auto mb-2 text-indigo-400" />}
           <p className="text-sm font-bold mb-1">No default agent installed on this server</p>
           <p className="text-[11px] text-[var(--text-muted)] mb-4">Install {agent.name} with one click — chat with it from Telegram, LINE, Discord &amp; more.</p>
           {stoppedInstanceTags.length > 0 && (
@@ -2014,7 +2014,7 @@ export default function AIAgentsApp({ apiFetch }) {
             </div>
           )}
 
-          <div className="flex gap-1 px-3 pt-3 bg-black/10 overflow-x-auto">
+          <div className="flex gap-1 px-3 pt-3 bg-black/10 overflow-x-auto scrollbar-hide shrink-0" style={{ WebkitOverflowScrolling: 'touch' }}>
             {[
               ['overview', 'Overview'],
               ['skills', `Skills (${(details.skills || []).length})`],
@@ -2023,7 +2023,7 @@ export default function AIAgentsApp({ apiFetch }) {
               ['env', `Env (${(details.envKeys || []).length})`],
               ['logs', 'Logs (live)'],
             ].map(([id, label]) => (
-              <button key={id} onClick={() => setTab(id)} className={`px-3 py-1.5 rounded-t-lg text-[11px] font-bold transition cursor-pointer whitespace-nowrap ${tab === id ? 'bg-[var(--bg-secondary)] text-[var(--accent-indigo)] border-t border-x border-[var(--border-color)]' : 'text-[var(--text-muted)] hover:text-white'}`}>
+              <button key={id} onClick={() => setTab(id)} className={`shrink-0 px-3 py-2 sm:py-1.5 rounded-t-lg text-[11px] font-bold transition cursor-pointer whitespace-nowrap active:opacity-80 ${tab === id ? 'bg-[var(--bg-secondary)] text-[var(--accent-indigo)] border-t border-x border-[var(--border-color)]' : 'text-[var(--text-muted)] hover:text-white'}`}>
                 {label}
               </button>
             ))}

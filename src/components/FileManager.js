@@ -25,6 +25,7 @@ import {
 import { useOS } from '@/context/OSContext';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 import MacOSModalWindow from '@/components/MacOSModalWindow';
 import ThemeSelect from '@/components/common/ThemeSelect';
@@ -93,6 +94,7 @@ export default function FileManager({
   onSplit,
   onPathChange
 }) {
+  const isMobile = useIsMobile();
   const { t } = useTranslation();
   const { state: appState, dispatch: appDispatch, apiFetch } = useApp();
   useEffect(() => {
@@ -3483,11 +3485,11 @@ export default function FileManager({
 
   const PREVIEW_MAX_SIZE = 5 * 1024 * 1024; // 5MB limit for preview
 
-  const handlePreview = () => {
-    if (!contextMenu.file || !socket) return;
-    if (contextMenu.file.longname.startsWith('d')) return;
+  const handlePreview = (targetFile = null) => {
+    const file = targetFile || contextMenu.file;
+    if (!file || !socket) return;
+    if (file.longname?.startsWith('d')) return;
 
-    const file = contextMenu.file;
     const previewType = getFilePreviewType(file.filename);
     const path = file.absPath || (currentPath === '.' ? file.filename : `${currentPath}/${file.filename}`);
 
@@ -3526,7 +3528,9 @@ export default function FileManager({
       socket.on('sftp:file_base64', handler);
       socket.emit('sftp:readFileBase64', path);
     }
-    setContextMenu({ ...contextMenu, visible: false });
+    if (contextMenu?.visible) {
+      setContextMenu({ ...contextMenu, visible: false });
+    }
   };
 
   const getMimeType = (filename) => {
@@ -4893,7 +4897,7 @@ export default function FileManager({
 
       {/* Explorer Area */}
       <div 
-        className={`flex-1 overflow-y-auto p-6 pb-20 custom-scrollbar relative transition-colors ${isDragging ? 'bg-blue-600/10' : ''}`} 
+        className={`flex-1 overflow-y-auto p-3 sm:p-6 pb-24 custom-scrollbar relative transition-colors ${isDragging ? 'bg-blue-600/10' : ''}`} 
         onClick={() => { setContextMenu({ ...contextMenu, visible: false }); setSelectedFiles(new Set()); setLastSelectedFile(null); }}
         onContextMenu={(e) => handleContextMenu(e, null)}
         onDragOver={handleDragOver}
@@ -4999,7 +5003,7 @@ export default function FileManager({
             </div>
           ) : (
           <div className={viewMode === 'grid' 
-            ? "grid grid-cols-2 @3xl:grid-cols-4 @4xl:grid-cols-6 gap-4"
+            ? "grid grid-cols-2 @3xl:grid-cols-4 @4xl:grid-cols-6 gap-3 sm:gap-4"
             : "flex flex-col gap-1"
           }>
             {filteredFiles.map(file => {
@@ -5037,8 +5041,21 @@ export default function FileManager({
                       }
                       setSelectedFiles(newSelected);
                     } else {
-                      setSelectedFiles(new Set([file.filename]));
-                      setLastSelectedFile(file.filename);
+                      if (isMobile) {
+                        if (isDir) {
+                          setSelectedFiles(new Set());
+                          setLastSelectedFile(null);
+                          handleFolderClick(file.filename);
+                        } else if (selectedFiles.has(file.filename)) {
+                          handlePreview(file);
+                        } else {
+                          setSelectedFiles(new Set([file.filename]));
+                          setLastSelectedFile(file.filename);
+                        }
+                      } else {
+                        setSelectedFiles(new Set([file.filename]));
+                        setLastSelectedFile(file.filename);
+                      }
                     }
                   }}
                   onDragStart={(e) => {
@@ -5085,43 +5102,7 @@ export default function FileManager({
                       setLastSelectedFile(null);
                       handleFolderClick(file.filename);
                     } else {
-                      // Open preview for files
-                      const previewType = getFilePreviewType(file.filename);
-                      const path = file.absPath || (currentPath === '.' ? file.filename : `${currentPath}/${file.filename}`);
-
-                      // Check file size for non-text files
-                      if (previewType !== 'text' && file.attrs?.size > PREVIEW_MAX_SIZE) {
-                        addNotification({
-                          title: 'File Too Large',
-                          message: `${file.filename} (${formatSize(file.attrs.size)}) is too large to preview. Maximum is 5MB.`,
-                          type: 'warning',
-                        });
-                        return;
-                      }
-
-                      setPreview({ visible: true, file, content: '', loading: true, type: previewType });
-
-                      if (previewType === 'text') {
-                        const handler = (data) => {
-                          if (data.path === path) {
-                            socket.off('sftp:file_content', handler);
-                            setPreview(prev => ({ ...prev, content: data.content, loading: false }));
-                          }
-                        };
-                        socket.on('sftp:file_content', handler);
-                        socket.emit('sftp:readFile', path);
-                      } else {
-                        const handler = (data) => {
-                          if (data.path === path) {
-                            socket.off('sftp:file_base64', handler);
-                            const mime = getMimeType(file.filename);
-                            const dataUrl = `data:${mime};base64,${data.content}`;
-                            setPreview(prev => ({ ...prev, content: dataUrl, loading: false }));
-                          }
-                        };
-                        socket.on('sftp:file_base64', handler);
-                        socket.emit('sftp:readFileBase64', path);
-                      }
+                      handlePreview(file);
                     }
                   }}
                   onContextMenu={(e) => {
@@ -5129,7 +5110,7 @@ export default function FileManager({
                   }}
                   className={viewMode === 'grid'
                     ? `group flex flex-col items-center p-3 rounded-xl border transition-all ${file._searchResult ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'} ${deletingFiles.has(file.filename) ? 'opacity-50 pointer-events-none' : ''} ${selectedFiles.has(file.filename) ? 'bg-blue-600/20 border-blue-500 shadow-md shadow-blue-500/10' : 'hover:bg-[var(--border-color)] border-transparent hover:border-[var(--border-hover)]'}`
-                    : `flex items-center gap-3 p-2 rounded-lg group transition-all ${file._searchResult ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'} ${deletingFiles.has(file.filename) ? 'opacity-50 pointer-events-none' : ''} ${selectedFiles.has(file.filename) ? 'bg-blue-600/20 border border-blue-500 shadow-inner' : 'hover:bg-[var(--border-color)] border border-transparent'}`
+                    : `flex items-center gap-3 p-2.5 sm:p-2 min-h-[44px] sm:min-h-0 rounded-lg group transition-all ${file._searchResult ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'} ${deletingFiles.has(file.filename) ? 'opacity-50 pointer-events-none' : ''} ${selectedFiles.has(file.filename) ? 'bg-blue-600/20 border border-blue-500 shadow-inner' : 'hover:bg-[var(--border-color)] border border-transparent'}`
                   }
                 >
                   <div className={viewMode === 'grid'

@@ -3,7 +3,7 @@ import {
   SquareTerminal, KeyRound, Settings, Database, FolderOpen, PanelsTopLeft, ScrollText,
   Globe, StickyNote, BookOpenCheck, BrickWallShield, HardDriveDownload,
   Workflow, CloudCog, ShieldCheck,
-  Gauge, Leaf, Bug, History, Container, Bot,
+  Gauge, Leaf, Bug, History, Container, BrainCircuit,
 } from 'lucide-react';
 
 // ── Canonical id resolution ──────────────────────────────────────────────────
@@ -992,7 +992,7 @@ const AppIcon = ({ id, size = 32, className = "", theme = "dark", iconStyle = "g
     auto: Workflow,
     virus: Bug,
     activity: History,
-    agents: Bot,
+    agents: BrainCircuit,
   }[iconId] || Globe;
 
   return (

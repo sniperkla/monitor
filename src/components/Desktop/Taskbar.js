@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useOS } from '@/context/OSContext';
-import { Bot, Terminal, Settings, LayoutGrid, Monitor, Wifi, Volume2, Search, Power, User, X, StickyNote, Book, Layers, Columns, StickyNote as NoteIcon, BookOpen, FolderClosed, Cpu, Clock, ChevronLeft, ChevronRight, Grid3x3, Keyboard, Server, Rocket, MonitorPlay, Database, CloudCog, ShieldCheck, Activity, BrickWallShield, History } from 'lucide-react';
+import { BrainCircuit, Terminal, Settings, LayoutGrid, Monitor, Wifi, Volume2, Search, Power, User, X, StickyNote, Book, Layers, Columns, StickyNote as NoteIcon, BookOpen, FolderClosed, Cpu, Clock, ChevronLeft, ChevronRight, Grid3x3, Keyboard, Server, Rocket, MonitorPlay, Database, CloudCog, ShieldCheck, Activity, BrickWallShield, History } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import SSHApp from '@/apps/SSHApp';
 import SettingsApp from '@/apps/SettingsApp';
@@ -155,13 +155,192 @@ export default function Taskbar() {
     { id: 'rclone', title: 'Rclone Sync', icon: CloudCog, component: <RcloneApp />, initialWidth: 1100, initialHeight: 720 },
     { id: 'server-backup', title: 'Server Backup', icon: ShieldCheck, component: <ServerBackupApp />, initialWidth: 1200, initialHeight: 780 },
     { id: 'server-monitor', title: 'Server Monitor', icon: Activity, component: <ServerMonitorApp />, initialWidth: 1300, initialHeight: 800 },
-    { id: 'ai-agents', title: 'AI Agents', icon: Bot, component: <AIAgentsApp />, initialWidth: 1100, initialHeight: 760 },
+    { id: 'ai-agents', title: 'AI Agents', icon: BrainCircuit, component: <AIAgentsApp />, initialWidth: 1100, initialHeight: 760 },
     { id: 'firewall-blocklist', title: 'Firewall Blocklist', icon: BrickWallShield, component: <FirewallBlocklistApp />, initialWidth: 1180, initialHeight: 780 },
     { id: 'activity', title: 'Activity', icon: History, component: <ActivityApp />, initialWidth: 900, initialHeight: 640 },
     { id: 'settings', title: t('apps.settings'), icon: Settings, component: <SettingsApp />, initialWidth: 700, initialHeight: 500 },
     { id: 'notepad', title: t('apps.notepad'), icon: StickyNote, component: <NotepadApp />, initialWidth: 800, initialHeight: 600 },
     { id: 'wiki', title: t('apps.resourceHub'), icon: Book, component: <WikiApp />, initialWidth: 1100, initialHeight: 700 },
   ];
+
+  // ─── Mobile: slim bottom dock ───────────────────────────────────────────────
+  if (isMobile) {
+    const runningWindows = (windowsByDesktop[currentDesktopId] || windows)
+      .filter((win, idx, arr) => arr.findIndex(w => w.id === win.id) === idx);
+
+    return (
+      <>
+        {/* Dock */}
+        <div
+          className="taskbar fixed bottom-0 left-0 w-full z-[10000] flex flex-row items-center gap-2 border-t border-[var(--border-color)]"
+          style={{
+            height: 'calc(56px + env(safe-area-inset-bottom, 0px))',
+            paddingBottom: 'env(safe-area-inset-bottom, 0px)',
+            background: 'rgb(10 14 26 / 0.98)',
+            backdropFilter: 'none',
+          }}
+        >
+          {/* Launcher / start menu */}
+          <div className="relative flex items-center shrink-0" ref={startMenuRef}>
+            <button
+              onClick={() => setStartMenuOpen(prev => !prev)}
+              className="flex items-center justify-center rounded-2xl border border-[var(--accent-indigo)]/40 bg-[var(--bg-selected)] active:scale-90 transition-transform"
+              style={{ width: 44, height: 44, marginLeft: 8 }}
+              aria-label="Open launcher"
+            >
+              <LayoutGrid size={20} className="text-[var(--text-selected)]" />
+            </button>
+
+            {/* Start menu popup (re-used) */}
+            <AnimatePresence>
+              {startMenuOpen && (
+                <motion.div
+                  initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                  className="absolute bottom-full left-0 mb-2 w-[92vw] max-w-sm rounded-2xl overflow-hidden border border-[var(--border-color)] shadow-2xl"
+                  style={{ background: 'var(--bg-primary)', zIndex: 10002 }}
+                >
+                  {/* Header */}
+                  <div className="p-3 flex items-center justify-between border-b border-[var(--border-color)] bg-[var(--bg-tertiary)]/30">
+                    <div className="flex items-center gap-2">
+                      {session ? (
+                        <>
+                          <img
+                            src={session.user.image || `https://ui-avatars.com/api/?name=${encodeURIComponent(session.user.name)}&background=6366f1&color=fff`}
+                            className="w-7 h-7 rounded-full border border-[var(--border-color)] object-cover"
+                            alt="Avatar"
+                          />
+                          <div className="min-w-0">
+                            <span className="block text-xs font-semibold text-[var(--text-primary)] truncate">{session.user.name}</span>
+                            <span className="block text-[10px] text-[var(--text-muted)] truncate">{session.user.email}</span>
+                          </div>
+                        </>
+                      ) : (
+                        <span className="text-sm font-semibold text-[var(--text-primary)]">{t('common.guestUser')}</span>
+                      )}
+                    </div>
+                    <button
+                      onClick={async () => {
+                        if (session) {
+                          try { await saveSettings(); } catch(e) {}
+                          sessionStorage.removeItem('_vault_uri');
+                          sessionStorage.removeItem('_vault_tunnel');
+                          await signOut({ redirect: false });
+                        }
+                        window.location.href = '/';
+                      }}
+                      className="p-2 rounded-lg hover:bg-[var(--bg-tertiary)] text-[var(--text-muted)] hover:text-red-500 transition-colors"
+                    >
+                      <Power size={16} />
+                    </button>
+                  </div>
+
+                  {/* Search bar */}
+                  <div className="px-3 pt-3 pb-1">
+                    <button
+                      onClick={() => {
+                        setStartMenuOpen(false);
+                        window.dispatchEvent(new CustomEvent('open-spotlight'));
+                      }}
+                      className="w-full flex items-center gap-2 bg-[var(--bg-tertiary)]/60 border border-[var(--border-color)] rounded-xl py-2 px-3 text-xs text-[var(--text-muted)] active:bg-[var(--bg-tertiary)] transition-colors"
+                    >
+                      <Search size={14} className="text-[var(--accent-indigo)]" />
+                      <span className="flex-1 text-left">{t('desktop.taskbar.search') || 'Search apps & guides...'}</span>
+                    </button>
+                  </div>
+
+                  {/* App grid */}
+                  <div className="p-3 grid grid-cols-4 gap-2 max-h-[50dvh] overflow-y-auto">
+                    {apps.map(app => {
+                      const AppIconComp = app.icon;
+                      return (
+                        <button
+                          key={app.id}
+                          onClick={() => {
+                            openWindow({ id: app.id, title: app.title, component: app.component, appType: app.id });
+                            setStartMenuOpen(false);
+                          }}
+                          className="flex flex-col items-center gap-1 p-2 rounded-xl active:bg-[var(--bg-tertiary)] transition-colors"
+                        >
+                          <AppIcon id={app.id} size={28} theme={state.theme} iconStyle={state.iconStyle} />
+                          <span className="text-[9px] text-[var(--text-muted)] text-center leading-tight truncate w-full">{app.title}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+
+          {/* Divider */}
+          <div className="w-px h-7 bg-[var(--border-color)] shrink-0" />
+
+          {/* Running windows scroll strip */}
+          <div className="flex-1 flex flex-row items-center gap-2 overflow-x-auto overflow-y-hidden" style={{ WebkitOverflowScrolling: 'touch' }}>
+            {runningWindows.map(win => {
+              const isActive = activeWindowId === win.id && !win.isMinimized;
+              return (
+                <button
+                  key={win.id}
+                  onClick={() => win.isMinimized ? toggleMinimize(win.id) : focusWindow(win.id)}
+                  onContextMenu={(e) => { e.preventDefault(); closeWindow(win.id); }}
+                  className={`flex items-center gap-1.5 px-2.5 rounded-2xl border shrink-0 transition-all ${
+                    isActive
+                      ? 'border-[var(--accent-emerald)]/60 bg-[var(--accent-emerald)]/15'
+                      : win.isMinimized
+                        ? 'border-[var(--border-color)] bg-[var(--bg-tertiary)]/40 opacity-50'
+                        : 'border-[var(--border-color)] bg-[var(--bg-tertiary)]'
+                  }`}
+                  style={{ height: 36 }}
+                >
+                  <AppIcon id={win.id.split('-')[0]} size={16} theme={state.theme} iconStyle={state.iconStyle} />
+                  <span className={`text-[11px] font-medium truncate max-w-[72px] ${isActive ? 'text-[var(--accent-emerald)]' : 'text-[var(--text-secondary)]'}`}>
+                    {win.title}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Clock */}
+          <div className="shrink-0 pr-3">
+            <SystemClock vertical={false} />
+          </div>
+        </div>
+
+        {/* Context menus portal */}
+        {createPortal(
+          <AnimatePresence>
+            {contextMenu && (
+              <motion.div
+                ref={contextMenuRef}
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                transition={{ duration: 0.12 }}
+                className="fixed z-[100000] w-44 backdrop-blur-xl border border-[var(--border-color)] rounded-xl shadow-2xl p-1.5 overflow-hidden"
+                style={{ background: 'var(--window-bg)', ...contextMenu }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                {contextMenu.windowId && (
+                  <>
+                    <button onClick={() => { focusWindow(contextMenu.windowId); setContextMenu(null); }} className="w-full text-left px-3 py-2.5 text-xs text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] rounded-lg">Bring to front</button>
+                    <button onClick={() => { toggleMinimize(contextMenu.windowId); setContextMenu(null); }} className="w-full text-left px-3 py-2.5 text-xs text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] rounded-lg">{windows.find(w => w.id === contextMenu.windowId)?.isMinimized ? 'Restore' : 'Minimize'}</button>
+                    <div className="h-px bg-[var(--border-color)] my-1 mx-2" />
+                    <button onClick={() => { closeWindow(contextMenu.windowId); setContextMenu(null); }} className="w-full text-left px-3 py-2.5 text-xs text-red-400 hover:bg-red-500/10 rounded-lg">Close</button>
+                  </>
+                )}
+              </motion.div>
+            )}
+          </AnimatePresence>,
+          document.body
+        )}
+      </>
+    );
+  }
+  // ─────────────────────────────────────────────────────────────────────────────
 
   const isVertical = taskbarPosition === 'left' || taskbarPosition === 'right';
   const isHorizontal = taskbarPosition === 'top' || taskbarPosition === 'bottom';
@@ -275,15 +454,15 @@ export default function Taskbar() {
         }}
       >
         <div
-          className={`flex ${isVertical ? 'flex-col py-3 px-1 w-full h-full' : 'flex-row px-3 py-2 w-full h-full'} items-center gap-2 rounded-none border-0 bg-[var(--bg-secondary)] shadow-2xl backdrop-blur-xl ${
+          className={`flex ${isVertical ? 'flex-col py-3 px-1 w-full h-full' : 'flex-row px-3 py-2 w-full h-full'} items-center gap-2 rounded-none border-0 bg-[var(--bg-secondary)] ${isMobile ? '' : 'shadow-2xl backdrop-blur-xl'} ${
             isVertical 
               ? (taskbarPosition === 'left' ? 'border-r border-[var(--border-color)]' : 'border-l border-[var(--border-color)]')
               : (taskbarPosition === 'top' ? 'border-b border-[var(--border-color)]' : 'border-t border-[var(--border-color)]')
           }`}
           style={{
-            background: glassmorphism ? 'var(--taskbar-bg)' : 'var(--bg-primary)',
-            backdropFilter: glassmorphism ? 'blur(var(--glass-blur, 18px))' : 'none',
-            boxShadow: '0 0 30px var(--shadow-strong)'
+            background: (isMobile || !glassmorphism) ? 'var(--taskbar-bg, #0f172a)' : 'var(--taskbar-bg)',
+            backdropFilter: (!isMobile && glassmorphism) ? 'blur(var(--glass-blur, 18px))' : 'none',
+            boxShadow: isMobile ? 'none' : '0 0 30px var(--shadow-strong)'
           }}
         >
         <div className={`flex ${isVertical ? 'flex-col' : 'flex-row'} items-center gap-2 relative`} ref={startMenuRef}>
@@ -368,7 +547,7 @@ export default function Taskbar() {
                   <button
                     onClick={() => {
                       setStartMenuOpen(false);
-                      // Dispatch keyboard event to open Spotlight
+                      window.dispatchEvent(new CustomEvent('open-spotlight'));
                       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', code: 'KeyK', metaKey: true, bubbles: true }));
                     }}
                     className="w-full flex items-center gap-2 bg-[var(--bg-tertiary)]/40 border border-[var(--border-color)] rounded-lg py-2.5 px-3 text-xs text-[var(--text-muted)] hover:border-[var(--accent-indigo)]/50 hover:bg-[var(--bg-tertiary)]/60 transition-all group"

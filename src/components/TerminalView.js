@@ -23,6 +23,7 @@ import {
 import FilesApp from '@/apps/FilesApp';
 import { diff_match_patch } from 'diff-match-patch';
 import { buildSkillsBlock } from '@/utils/promptSafety';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 let Terminal, FitAddon, WebLinksAddon;
 
@@ -205,7 +206,57 @@ const DYNAMIC_BLOCKER_RECOVERY = {
 };
 // ─────────────────────────────────────────────────────────────────────────────
 
+const MOBILE_TERMINAL_KEYS = [
+  { label: 'ESC', seq: '\x1b', highlight: 'indigo' },
+  { label: 'TAB', seq: '\t', highlight: 'indigo' },
+  { label: 'CTRL+C', seq: '\x03', highlight: 'rose' },
+  { label: 'CTRL+D', seq: '\x04' },
+  { label: 'CTRL+Z', seq: '\x1a' },
+  { label: '↑', seq: '\x1b[A', highlight: 'emerald' },
+  { label: '↓', seq: '\x1b[B', highlight: 'emerald' },
+  { label: '←', seq: '\x1b[D' },
+  { label: '→', seq: '\x1b[C' },
+  { label: '|', seq: '|' },
+  { label: '/', seq: '/' },
+  { label: '-', seq: '-' },
+  { label: '~', seq: '~' },
+  { label: ':', seq: ':' },
+];
+
+function MobileTerminalToolbar({ onSendKey }) {
+  return (
+    <div
+      className="flex items-center gap-1.5 px-2 py-1.5 bg-slate-950/95 border-t border-[var(--border-color)] overflow-x-auto scrollbar-hide shrink-0 select-none z-30"
+      style={{ WebkitOverflowScrolling: 'touch', touchAction: 'pan-x' }}
+    >
+      {MOBILE_TERMINAL_KEYS.map((k) => (
+        <button
+          key={k.label}
+          type="button"
+          onPointerDown={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onSendKey(k.seq);
+          }}
+          className={`shrink-0 h-9 min-w-[40px] px-2.5 rounded-lg font-mono text-xs font-bold transition-all active:scale-90 border flex items-center justify-center ${
+            k.highlight === 'indigo'
+              ? 'bg-indigo-500/25 border-indigo-500/50 text-indigo-200 active:bg-indigo-500/40'
+              : k.highlight === 'rose'
+              ? 'bg-rose-500/25 border-rose-500/50 text-rose-200 active:bg-rose-500/40'
+              : k.highlight === 'emerald'
+              ? 'bg-emerald-500/25 border-emerald-500/50 text-emerald-200 active:bg-emerald-500/40'
+              : 'bg-white/5 border-white/10 text-slate-300 active:bg-white/15'
+          }`}
+        >
+          {k.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export default function TerminalView({ connectionId, connectionName, host, color, onClose, connection, isStandalone, initialCommand }) {
+  const isMobile = useIsMobile();
   const { state: appState, dispatch, apiFetch } = useApp();
   const { state: osState, setSshAiHistory, setSshAiPrefs, openWindow } = useOS();
   const { vaultStatus } = useVault();
@@ -7371,7 +7422,7 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
       )}
 
       {/* Terminal body */}
-      <div className="flex-1 relative bg-transparent min-h-0 overflow-hidden group/term">
+      <div className="flex-1 relative bg-transparent min-h-0 overflow-hidden group/term flex flex-col">
 
 
         {/* Top-Right Floating Controls (Auto toggle + Latency Badge) */}
@@ -7412,7 +7463,7 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
 
 
         <div
-          className="h-full w-full p-1" // Padding moved here to avoid breaking FitAddon
+          className="flex-1 min-h-0 w-full p-1" // Padding moved here to avoid breaking FitAddon
           onDragOver={(e) => {
             e.preventDefault();
             e.stopPropagation();
@@ -7449,6 +7500,16 @@ If this is a deployment task, switch task mode to 'deploy' instead of 'code'.`
             style={{ fontFamily: osState?.terminalSettings?.activePreset === 'retro' ? 'VT323, monospace' : 'inherit' }}
           />
         </div>
+
+        {/* Mobile Keyboard Accessory Bar */}
+        {isMobile && (
+          <MobileTerminalToolbar
+            onSendKey={(seq) => {
+              sendSshInput(seq);
+              termInstanceRef.current?.focus();
+            }}
+          />
+        )}
 
         {/* Floating Path Autocomplete Dropdown (positioned cleanly above/below user typing cursor) */}
         {pathAutocomplete.active && pathAutocomplete.results.length > 0 && (

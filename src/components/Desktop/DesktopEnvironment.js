@@ -9,7 +9,7 @@ import SSHApp from '@/apps/SSHApp';
 import SettingsApp from '@/apps/SettingsApp';
 import { Terminal, Settings, FolderClosed, Monitor, RefreshCw, Plus, FolderPlus,
   Image as ImageIcon, Layout, Grid, List, AlignLeft, SortAsc, Server, BrickWallShield, ShieldAlert,
-  ChevronRight, Type, Calendar, HardDrive, Palette, MonitorCog, Globe, Maximize, Minimize, Database, Check, MonitorPlay, GitBranch, CloudSync, Rocket, CloudCog, ShieldCheck, Activity, History, Bot
+  ChevronRight, Type, Calendar, HardDrive, Palette, MonitorCog, Globe, Maximize, Minimize, Database, Check, MonitorPlay, GitBranch, CloudSync, Rocket, CloudCog, ShieldCheck, Activity, History, BrainCircuit
 } from 'lucide-react';
 import AIAgentsApp from '@/apps/AIAgentsApp';
 import NotificationCenter from '@/components/Desktop/NotificationCenter';
@@ -263,25 +263,45 @@ export default function DesktopEnvironment({ bootPhase }) {
   // an accidental swipe on the desktop wallpaper can never refresh the page.
   useEffect(() => {
     if (!isMobile) return;
-    const isInsideScrollable = (target) => {
-      let el = target instanceof Element ? target : null;
-      while (el && el !== document.body) {
-        if (el.closest?.('[data-scrollable="true"]')) return true;
-        const style = window.getComputedStyle(el);
-        const oy = style.overflowY;
-        if ((oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight + 1) return true;
-        el = el.parentElement;
-      }
-      return false;
+
+    // Modern browsers support native `overscroll-behavior-y: none` (declared in globals.css),
+    // which handles pull-to-refresh without blocking JavaScript touch listeners.
+    const nativeOverscrollSupported = typeof window !== 'undefined' && window.CSS && CSS.supports && CSS.supports('overscroll-behavior-y', 'none');
+    if (nativeOverscrollSupported) {
+      return;
+    }
+
+    // Fallback guard for older engines: use fast DOM hierarchy checks (no getComputedStyle reflow loops)
+    let scroller = null;
+    let startX = 0;
+    let startY = 0;
+    const findScroller = (target) => {
+      if (!(target instanceof Element)) return null;
+      return target.closest('[data-scrollable], [data-window-id], .desktop-layer, .overflow-y-auto, .overflow-y-scroll, textarea, input, pre, code');
+    };
+    const handleTouchStart = (e) => {
+      if (e.touches.length !== 1) { scroller = null; return; }
+      scroller = findScroller(e.target);
+      startX = e.touches[0].clientX;
+      startY = e.touches[0].clientY;
     };
     const guard = (e) => {
-      // Multi-touch (pinch) and touches inside scroll panes pass through.
-      if (e.touches.length > 1) return;
-      if (isInsideScrollable(e.target)) return;
-      e.preventDefault();
+      if (e.touches.length > 1) { scroller = null; return; }
+      if (!scroller) { e.preventDefault(); return; }
+      const dy = e.touches[0].clientY - startY;
+      const dx = e.touches[0].clientX - startX;
+      if (Math.abs(dy) < Math.abs(dx)) return;
+      if (dy > 0 && scroller.scrollTop <= 0) { e.preventDefault(); return; }
+      if (dy < 0 && scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 1) {
+        e.preventDefault();
+      }
     };
+    document.addEventListener('touchstart', handleTouchStart, { passive: true });
     document.addEventListener('touchmove', guard, { passive: false });
-    return () => document.removeEventListener('touchmove', guard);
+    return () => {
+      document.removeEventListener('touchstart', handleTouchStart);
+      document.removeEventListener('touchmove', guard);
+    };
   }, [isMobile]);
 
   useEffect(() => {
@@ -370,7 +390,7 @@ export default function DesktopEnvironment({ bootPhase }) {
     { id: 'rclone', title: 'Rclone Sync', icon: CloudCog, component: <RcloneApp />, type: 'app', initialWidth: 1100, initialHeight: 720 },
     { id: 'server-backup', title: 'Server Backup', icon: ShieldCheck, component: <ServerBackupApp />, type: 'app', initialWidth: 1200, initialHeight: 780 },
     { id: 'server-monitor', title: 'Server Monitor', icon: Activity, component: <ServerMonitorApp />, type: 'app', initialWidth: 1300, initialHeight: 800 },
-    { id: 'ai-agents', title: 'AI Agents', icon: Bot, component: <AIAgentsApp />, type: 'app', initialWidth: 1100, initialHeight: 760 },
+    { id: 'ai-agents', title: 'AI Agents', icon: BrainCircuit, component: <AIAgentsApp />, type: 'app', initialWidth: 1100, initialHeight: 760 },
     { id: 'firewall-blocklist', title: 'Firewall Blocklist', icon: BrickWallShield, component: <FirewallBlocklistApp />, type: 'app', initialWidth: 1180, initialHeight: 780 },
     { id: 'virus-scanner', title: 'Virus Scanner', icon: ShieldAlert, component: <VirusScannerApp />, type: 'app', initialWidth: 980, initialHeight: 700 },
     { id: 'activity', title: 'Activity', icon: History, component: <ActivityApp />, type: 'app', initialWidth: 900, initialHeight: 640 },
@@ -773,7 +793,7 @@ export default function DesktopEnvironment({ bootPhase }) {
         backgroundImage: `url("${osState.wallpaper}")`,
         fontFamily: "'Inter', sans-serif",
         transition: 'background-image 0.5s ease, filter 0.3s ease',
-        filter: `brightness(${osState.brightness}%)`,
+        filter: (osState.brightness && osState.brightness !== 100) ? `brightness(${osState.brightness}%)` : 'none',
         ...(osState.uiScale && osState.uiScale !== 100 ? {
           transform: `scale(${osState.uiScale / 100})`,
           transformOrigin: '0 0',
@@ -799,7 +819,14 @@ export default function DesktopEnvironment({ bootPhase }) {
 
 
       {/* Desktop Icons */}
-      <div className={`absolute inset-0 pointer-events-none ${getDesktopPadding()} ${isRefreshing ? 'opacity-0' : 'opacity-100'} z-[1] overflow-y-auto no-scrollbar`}>
+      <div 
+        data-scrollable="true"
+        className={`absolute inset-0 ${getDesktopPadding()} ${isRefreshing ? 'opacity-0' : 'opacity-100'} z-[1] overflow-y-auto no-scrollbar`}
+        style={{
+          WebkitOverflowScrolling: 'touch',
+          overscrollBehaviorY: 'contain',
+        }}
+      >
         <div 
           className={`desktop-layer relative w-full ${isMobile ? 'h-auto min-h-full pt-10 px-4 grid grid-cols-4 sm:grid-cols-6 gap-y-8 gap-x-2 content-start' : 'h-full'} pointer-events-auto`}
           onContextMenu={handleContextMenu}
@@ -1061,7 +1088,7 @@ export default function DesktopEnvironment({ bootPhase }) {
       <MasterPasswordModal isBooted={bootPhase === 'desktop'} />
       <PWAHandler />
       <SpotlightSearch />
-      <PreviewWindow isOpen={showPreview} onClose={() => setShowPreview(false)} />
+      {!isMobile && <PreviewWindow isOpen={showPreview} onClose={() => setShowPreview(false)} />}
 
       {/* Notifications */}
       <NotificationCenter />

@@ -47,6 +47,8 @@ class DesktopErrorBoundary extends Component {
   }
 }
 
+import { detectMobileDevice } from '@/hooks/useIsMobileDevice';
+
 // Boot phases for logged-in users: preflight → desktop
 // Guests keep the existing landing flow
 
@@ -57,16 +59,25 @@ export default function Home() {
   // Guest landing flow
   const shouldShowLanding = status !== 'loading' && !session && !dismissed;
 
-  // Logged-in boot flow
-  const [flowPhase, setFlowPhase] = useState('preflight'); // 'preflight' | 'desktop'
+  // Logged-in boot flow: on mobile phone or standalone PWA, initialize directly to 'desktop'
+  // for instant app launch without running the 15-second canvas starfield.
+  const [flowPhase, setFlowPhase] = useState(() => {
+    if (typeof window === 'undefined') return 'desktop';
+    const isStandalone = window.matchMedia?.('(display-mode: standalone)')?.matches || window.navigator.standalone === true;
+    const isMobile = detectMobileDevice() || window.innerWidth < 768;
+    return (isStandalone || isMobile) ? 'desktop' : 'preflight';
+  });
 
   // --- Render ---
 
-  // Session still loading — show boot screen as placeholder
+  // Session still loading — show lightweight clean loader
   if (status === 'loading') {
     return (
-      <div className="fixed inset-0 z-[100000] overflow-hidden bg-black">
-        <BootSequence onComplete={() => {}} onSkip={() => {}} />
+      <div className="fixed inset-0 z-[100000] overflow-hidden bg-[#0a0e1a] flex items-center justify-center">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-8 h-8 rounded-full border-2 border-indigo-500/30 border-t-indigo-500 animate-spin" />
+          <span className="text-xs font-mono text-slate-400 tracking-wider">CONNECTING...</span>
+        </div>
       </div>
     );
   }

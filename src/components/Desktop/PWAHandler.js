@@ -87,18 +87,22 @@ export default function PWAHandler() {
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
-        className="fixed inset-0 z-[60000] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+        className={`fixed inset-0 z-[60000] flex items-center justify-center p-4 bg-black/75 ${mobileOS ? '' : 'backdrop-blur-sm'}`}
       >
         <motion.div
           initial={{ scale: 0.9, y: 20 }}
           animate={{ scale: 1, y: 0 }}
           exit={{ scale: 0.9, y: 20 }}
-          className="relative w-full max-w-md bg-[var(--window-bg)] border border-[var(--border-color)] rounded-3xl shadow-2xl p-8 overflow-hidden"
-          style={{ backdropFilter: 'blur(var(--glass-blur, 24px))' }}
+          className="relative w-full max-w-md bg-[var(--window-bg)] border border-[var(--border-color)] rounded-3xl shadow-2xl p-6 sm:p-8 overflow-hidden"
+          style={{ backdropFilter: mobileOS ? 'none' : 'blur(var(--glass-blur, 24px))' }}
         >
-          {/* Decorative background elements */}
-          <div className="absolute -top-24 -right-24 w-48 h-48 bg-indigo-500/10 rounded-full blur-3xl" />
-          <div className="absolute -bottom-24 -left-24 w-48 h-48 bg-emerald-500/10 rounded-full blur-3xl" />
+          {/* Decorative background elements (desktop only) */}
+          {!mobileOS && (
+            <>
+              <div className="absolute -top-24 -right-24 w-48 h-48 bg-indigo-500/10 rounded-full blur-3xl" />
+              <div className="absolute -bottom-24 -left-24 w-48 h-48 bg-emerald-500/10 rounded-full blur-3xl" />
+            </>
+          )}
 
           <button 
             onClick={handleDismiss}
@@ -109,7 +113,7 @@ export default function PWAHandler() {
 
           <div className="flex flex-col items-center text-center">
             <div className="relative mb-6">
-              <div className="absolute inset-0 bg-indigo-500/20 blur-xl rounded-full animate-pulse" />
+              {!mobileOS && <div className="absolute inset-0 bg-indigo-500/20 blur-xl rounded-full animate-pulse" />}
               <div className="relative w-20 h-20 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-2xl flex items-center justify-center shadow-lg">
                 <Download size={40} className="text-white" />
               </div>
