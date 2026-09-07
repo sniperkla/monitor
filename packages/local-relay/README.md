@@ -198,6 +198,18 @@ service are not granted. No warranty of any kind.
 
 ## Version note
 
+- **1.0.8** — Web UI fix (same bytes as 1.0.7 with a bumped version stamp):
+  the gateway now answers Chrome's Private Network Access preflight
+  (`Access-Control-Allow-Private-Network: true`). Without it, any Web UI tab
+  opened from the production monitor (a public https site) was silently
+  blocked by Chrome and hung on "Opening Web UI…", while pasting
+  `http://127.0.0.1:<port>` into the address bar worked. Existing relays must
+  update to open Web UI tabs normally again.
+- **1.0.7** — the same Web UI fix. Publishing was rocky: `npm publish` exited
+  0 but the version took several minutes to appear on the registry, and the
+  `latest` dist-tag did not move from 1.0.4 — it had to be set by hand with
+  `npm dist-tag add ssh-monitor-relay@1.0.8 latest`. (Not the same failure as
+  1.0.2: the version did eventually land, so no number was wasted.)
 - **1.0.4** — `local-relay --pair` now always shows a pairing code. Previously
   it was skipped whenever a token was already saved, so re-pairing (after a
   revoke, after moving to another server, or after the approval window

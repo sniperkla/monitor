@@ -265,7 +265,7 @@ async function pairAndGetToken({ client, scope }) {
 const savedConfig = loadConfig();
 let SERVER = args.server || savedConfig.server || process.env.RELAY_SERVER || '';
 let TOKEN  = args.token  || savedConfig.token  || process.env.RELAY_TOKEN  || '';
-const RELAY_VERSION = '1.0.4';
+const RELAY_VERSION = '1.0.8';
 const RELAY_NAME = args.name || savedConfig.name || os.hostname();
 
 // -- Install/uninstall handling (unchanged from original) --
@@ -838,8 +838,32 @@ async function handleWebuiForward(msg) {
 }
 
 async function handleWebuiHttp(gw, req, res) {
+  // ── Private Network Access preflight (MUST be answered here) ──
+  // The hosted monitor is a PUBLIC https site, while this gateway runs on the
+  // user's LOCAL device. Every app-initiated request or tab navigation from
+  // the monitor to http://127.0.0.1:<port> makes Chrome send a CORS preflight
+  // that must carry `Access-Control-Allow-Private-Network: true`. Forwarding
+  // OPTIONS to the agent gateway can never add that header, so Chrome silently
+  // blocks the navigation and the opened Web UI tab hangs on "Opening Web
+  // UI…". (Pasting the URL into the address bar has no initiator website, so
+  // it skips the check — which is why paste-in-browser always worked.)
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204, {
+      'access-control-allow-origin': req.headers.origin || '*',
+      'access-control-allow-methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
+      'access-control-allow-headers': req.headers['access-control-request-headers'] || '*',
+      'access-control-allow-private-network': 'true',
+      'access-control-max-age': '86400',
+    });
+    res.end();
+    return;
+  }
   if (req.url === '/__relay_ping') {
-    res.writeHead(200, { 'content-type': 'text/plain', 'access-control-allow-origin': '*' });
+    res.writeHead(200, {
+      'content-type': 'text/plain',
+      'access-control-allow-origin': '*',
+      'access-control-allow-private-network': 'true',
+    });
     res.end('pong');
     return;
   }
@@ -912,6 +936,11 @@ async function handleWebuiHttp(gw, req, res) {
         delete h['x-frame-options']; delete h['content-security-policy'];
         h['cross-origin-resource-policy'] = 'cross-origin';
         h['cache-control'] = 'no-store, max-age=0';
+        // Mirror the preflight answer on real responses too: the monitor page
+        // (public https) is the initiator for every request it triggers, so
+        // Chrome's Private Network Access check applies to all of them.
+        h['access-control-allow-origin'] = req.headers.origin || '*';
+        h['access-control-allow-private-network'] = 'true';
         // A rewrite changed the body length — content-length must match or
         // clients truncate the body (JSON parse errors / clipped scripts).
         delete h['transfer-encoding'];
