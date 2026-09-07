@@ -147,6 +147,7 @@ export default function AIAgentsApp({ apiFetch }) {
   const stoppingWebUIRef = useRef(false);
   const [forceBypassRelay, setForceBypassRelay] = useState(false);
   const [checkingRelay, setCheckingRelay] = useState(true);
+  const [credsExpanded, setCredsExpanded] = useState(false);
 
   const checkLocalRelay = useCallback(async () => {
     try {
@@ -2104,12 +2105,33 @@ export default function AIAgentsApp({ apiFetch }) {
                   ))}
                 </div>
                 <div>
-                  <div className="text-[9px] uppercase tracking-wider font-bold text-[var(--text-muted)] mb-1.5">Configured credentials ({(details.envKeys || []).length})</div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {(details.envKeys || []).map(k => <span key={k} className="px-2 py-0.5 rounded-md bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-[10px] font-mono">{k}</span>)}
-                    {(details.envKeys || []).length === 0 && <span className="text-[10px] text-[var(--text-muted)]">none yet — use the install wizard to add API keys / messenger tokens</span>}
-                  </div>
+                  <button
+                    onClick={() => setCredsExpanded(v => !v)}
+                    className="w-full flex items-center justify-between gap-2 group mb-1"
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[9px] uppercase tracking-wider font-bold text-[var(--text-muted)]">
+                        Configured credentials
+                      </span>
+                      <span className="px-1.5 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/25 text-emerald-300 text-[9px] font-bold">
+                        {(details.envKeys || []).length}
+                      </span>
+                    </div>
+                    <span className="text-[var(--text-muted)] group-hover:text-white transition">
+                      {credsExpanded ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+                    </span>
+                  </button>
+                  {credsExpanded && (
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      {(details.envKeys || []).map(k => <span key={k} className="px-2 py-0.5 rounded-md bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-[10px] font-mono">{k}</span>)}
+                      {(details.envKeys || []).length === 0 && <span className="text-[10px] text-[var(--text-muted)]">none yet — use the install wizard to add API keys / messenger tokens</span>}
+                    </div>
+                  )}
+                  {!credsExpanded && (details.envKeys || []).length === 0 && (
+                    <span className="text-[10px] text-[var(--text-muted)]">none yet — use the install wizard to add API keys / messenger tokens</span>
+                  )}
                 </div>
+
                 {/* ── Maintenance row — settings, watchdog, uninstall (kept near the top for clarity) ── */}
                 <div className="rounded-xl border border-[var(--border-color)] bg-black/20 p-2.5 flex items-center gap-2 flex-wrap">
                   <label className="flex items-center gap-1.5 text-[10px] text-[var(--text-muted)] cursor-pointer select-none" title="Watches the gateway process and restarts it automatically if it crashes">
