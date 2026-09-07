@@ -134,6 +134,7 @@ export async function GET(request) {
           connected: true,
           localPort: relay.localPort,
           capabilities: relay.capabilities || { ssh: false, sftp: false, docker: false },
+          version: relay.version || null,
           relayName: relay.relayName || relayId,
         });
       }
@@ -144,7 +145,7 @@ export async function GET(request) {
     return Response.json({
       success: true,
       connected: !!relay,
-      relays: relay ? [{ relayId: relay.relayName || 'default', connected: true, localPort: relay.localPort, capabilities: relay.capabilities || { ssh: false, sftp: false, docker: false }, relayName: relay.relayName || 'default' }] : [],
+      relays: relay ? [{ relayId: relay.relayName || 'default', connected: true, localPort: relay.localPort, capabilities: relay.capabilities || { ssh: false, sftp: false, docker: false }, version: relay.version || null, relayName: relay.relayName || 'default' }] : [],
       supporter,
       tokens,
     });

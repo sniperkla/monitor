@@ -43,6 +43,29 @@ const RELAY_PATH = path.join(process.cwd(), 'public', RELAY_FILENAME);
 
 /** Cache the digest. The file changes only on deploy. */
 let cache = null; // { mtimeMs, size, sha256, etag }
+let latestPackageCache = { version: null, checkedAt: 0 };
+const PACKAGE_NAME = 'ssh-monitor-relay';
+const PACKAGE_CHECK_TTL_MS = 10 * 60 * 1000;
+
+async function readLatestPackageVersion() {
+  if (latestPackageCache.version && Date.now() - latestPackageCache.checkedAt < PACKAGE_CHECK_TTL_MS) {
+    return latestPackageCache.version;
+  }
+  try {
+    const response = await fetch(`https://registry.npmjs.org/${PACKAGE_NAME}/latest`, {
+      signal: AbortSignal.timeout(3000),
+      headers: { accept: 'application/json' },
+    });
+    if (!response.ok) return latestPackageCache.version;
+    const data = await response.json();
+    if (typeof data.version === 'string' && /^\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?$/.test(data.version)) {
+      latestPackageCache = { version: data.version, checkedAt: Date.now() };
+    }
+  } catch (_) {
+    // npm availability must never block the relay installer or status page.
+  }
+  return latestPackageCache.version;
+}
 
 async function readManifest() {
   const stat = await fs.stat(RELAY_PATH);
@@ -61,6 +84,7 @@ async function readManifest() {
 export async function GET(request) {
   try {
     const manifest = await readManifest();
+    const latestVersion = await readLatestPackageVersion();
 
     // Browser caches the manifest; a deploy changes the file and the ETag.
     if (request.headers.get('if-none-match') === manifest.etag) {
@@ -71,6 +95,8 @@ export async function GET(request) {
       {
         success: true,
         file: RELAY_FILENAME,
+        package: PACKAGE_NAME,
+        latestVersion,
         // The public installer URL. It serves the same bytes as the hashed
         // artifact — server.js maps /local-relay.js onto local-relay.min.js.
         url: '/local-relay.js',
@@ -89,7 +115,7 @@ export async function GET(request) {
     );
   } catch (err) {
     return Response.json(
-      { success: false, error: 'Relay release manifest is unavailable.' },
+      { success: false, error: 'Relay release manifest is unavailable.', latestVersion: latestPackageCache.version },
       { status: 404 }
     );
   }

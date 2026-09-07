@@ -189,3 +189,18 @@ test('the relay warns when a saved token is used against a different server', ()
   assert.match(relay, /re-run with --pair to get a fresh one/,
     'the warning must name the recovery command');
 });
+
+test('connected relays report their version for update notices', () => {
+  const relay = readSrc('public/local-relay.js');
+  const server = readSrc('server.js');
+  const route = readSrc('src/app/api/relay/token/route.js');
+  const release = readSrc('src/app/api/relay/release/route.js');
+  const settingsApp = readSrc('src/apps/SettingsApp.js');
+  assert.match(relay, /const RELAY_VERSION = '[0-9]+\.[0-9]+\.[0-9]+'/);
+  assert.match(relay, /type: 'init', relayName: RELAY_NAME, version: RELAY_VERSION/);
+  assert.match(server, /r\.version = typeof msg\.version === 'string'/);
+  assert.match(route, /version: relay\.version \|\| null/);
+  assert.match(release, /registry\.npmjs\.org\/\$\{PACKAGE_NAME\}\/latest/);
+  assert.match(release, /latestVersion/);
+  assert.match(settingsApp, /isRelayVersionOlder\(relay\.version, relayRelease\?\.latestVersion\)/);
+});

@@ -113,9 +113,10 @@ export default function RelayPairingPanel({ onApproved, onSupporterRequired }) {
         <div className="w-5 h-5 rounded-full bg-amber-500 flex items-center justify-center shrink-0">
           <span className="text-[10px] font-bold text-white">2</span>
         </div>
-        <p className="text-xs font-bold text-[var(--text-secondary)]">
-          Approve the code shown in your terminal
-        </p>
+        <div className="min-w-0">
+          <p className="text-xs font-bold text-[var(--text-secondary)]">Approve your computer</p>
+          <p className="text-[10px] text-[var(--text-muted)] mt-0.5">Enter the code printed by the install command below</p>
+        </div>
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-2.5">

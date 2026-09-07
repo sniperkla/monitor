@@ -5397,6 +5397,7 @@ fi'`;
                   r.targetHost = msg.targetHost || 'localhost';
                   r.targetPort = Number(msg.targetPort) || 27017;
                   r.capabilities = msg.capabilities || { ssh: false, sftp: false, docker: false };
+                  r.version = typeof msg.version === 'string' ? msg.version.slice(0, 32) : null;
                   r.ws = ws;
                   if (msg.relayName && msg.relayName !== ws.__relayId) {
                     // Close duplicate if one already exists with this name

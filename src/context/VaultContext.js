@@ -6,6 +6,16 @@ import { encryptWithPassword, decryptWithPassword, hashPassword } from '@/utils/
 
 const VaultContext = createContext();
 
+function clearVaultSessionStorage() {
+  if (typeof window === 'undefined') return;
+  try {
+    sessionStorage.removeItem('_vault_uri');
+    sessionStorage.removeItem('_vault_tunnel');
+    sessionStorage.removeItem('_vault_pwd');
+    sessionStorage.removeItem('_vault_pwd_ts');
+  } catch (_) {}
+}
+
 /**
  * VaultProvider manages the zero-knowledge vault lifecycle:
  * 
@@ -34,8 +44,7 @@ export function VaultProvider({ children }) {
   useEffect(() => {
     const currentUserId = session?.user?.id || session?.user?.email || null;
     if (prevUserIdRef.current !== null && prevUserIdRef.current !== currentUserId) {
-      sessionStorage.removeItem('_vault_uri');
-      sessionStorage.removeItem('_vault_tunnel');
+      clearVaultSessionStorage();
       setDecryptedUri('');
       setDecryptedTunnel(null);
       setVaultData(null);
@@ -337,7 +346,7 @@ export function VaultProvider({ children }) {
       // Reset local state
       setDecryptedUri('');
       setVaultData(null);
-      sessionStorage.removeItem('_vault_uri');
+      clearVaultSessionStorage();
       setVaultStatus('setup');
     }
 
@@ -350,8 +359,7 @@ export function VaultProvider({ children }) {
   const lockVault = useCallback(() => {
     setDecryptedUri('');
     setDecryptedTunnel(null);
-    sessionStorage.removeItem('_vault_uri');
-    sessionStorage.removeItem('_vault_tunnel');
+    clearVaultSessionStorage();
     masterPwdRef.current = null; // Clear cached sync key
     setIsDismissed(false); // Reset dismissal so MasterPasswordModal pops up immediately
     setVaultStatus('locked');
@@ -369,7 +377,7 @@ export function VaultProvider({ children }) {
       }
       setDecryptedUri('');
       setVaultData(null);
-      sessionStorage.removeItem('_vault_uri');
+      clearVaultSessionStorage();
       masterPwdRef.current = null; // Clear cached sync key
       setVaultStatus('setup');
     } catch (err) {

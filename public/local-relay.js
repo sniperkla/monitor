@@ -265,6 +265,7 @@ async function pairAndGetToken({ client, scope }) {
 const savedConfig = loadConfig();
 let SERVER = args.server || savedConfig.server || process.env.RELAY_SERVER || '';
 let TOKEN  = args.token  || savedConfig.token  || process.env.RELAY_TOKEN  || '';
+const RELAY_VERSION = '1.0.4';
 const RELAY_NAME = args.name || savedConfig.name || os.hostname();
 
 // -- Install/uninstall handling (unchanged from original) --
@@ -563,7 +564,7 @@ function connect() {
     switch (msg.type) {
       // ── TCP relay ──
       case 'ready':
-        ws.send(JSON.stringify({ type: 'init', relayName: RELAY_NAME, capabilities: { ssh: !!ssh2, sftp: !!ssh2, docker: true, ai: true } }));
+        ws.send(JSON.stringify({ type: 'init', relayName: RELAY_NAME, version: RELAY_VERSION, capabilities: { ssh: !!ssh2, sftp: !!ssh2, docker: true, ai: true } }));
         console.log(`\n✅ Relay ready! Name: ${RELAY_NAME}, Capabilities: SSH=${!!ssh2}, SFTP=${!!ssh2}, Docker=true, AI=true`);
         startDiscoveryServer(RELAY_NAME);
         break;

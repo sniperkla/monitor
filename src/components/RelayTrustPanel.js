@@ -271,7 +271,7 @@ export default function RelayTrustPanel({ server, detectedOS = 'macos', release 
                 </p>
                 <CodeRow
                   value={npmInstallCommand({ server })}
-                  hint="No pipe-to-shell. The registry checks integrity, you get real versions and `npm audit`, and the package ships no install scripts — so installing it runs nothing. Nothing happens until you type `local-relay` yourself."
+                  hint="After install, npm puts the package on your computer. You will see dist/local-relay.js — a bundled, obfuscated build, not readable source. You can inspect or hash it before running local-relay. npm install itself runs no install script."
                 >
                   {npmInstallCommand({ server })}
                 </CodeRow>

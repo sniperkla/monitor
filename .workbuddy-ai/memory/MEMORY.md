@@ -1,64 +1,34 @@
-# Project memory — monitor (Next.js 16 + socket.io SSH/server monitoring)
+# Project memory — monitor
 
 ## Environment
-- Dev `npm run dev` → **3030**; prod https://monitor.eaqdragon.com. The server doesn't die with the wrapper —
-  kill the child by PID from `lsof -nP -iTCP:3030 -sTCP:LISTEN`.
-- `NEXT_DIST_DIR=/tmp/<fresh> npx next build` works; it fails only when it must *delete* an existing tree
-  (safe-delete shim, >50 files). **EXIT=1 at "Finalizing page optimization" is that shim.** Output lands in
-  `./tmp/<name>` — clean with `mv`, never `rm -rf`.
-- `npm test` is a real regression net (370 passing, 2026-09-06). Lint baseline **9 errors / 261 warnings**,
-  all Parsing errors in `scratch/*.mjs`, none in `src/`. Per-file lint baseline is 0 errors.
-- Headless Chrome: use `http://localhost:3030` (bare IP → 403 on chunks → no hydration) and a normal UA
-  (default headless UA is 403'd by `isAiBot()`, `src/proxy.js:48`). App dirs starting `_` are private.
+- Stack: Next.js 16 + custom `server.js` + socket.io; dev port **3030**; prod `https://monitor.eaqdragon.com`.
+- Next build works into a fresh `NEXT_DIST_DIR`; the safe-delete shim fails when cleaning an existing tree. Build output can land in `./tmp/<name>`; move it out, never recursively delete it.
+- Browser verification: use `http://localhost:3030` (not bare IP) and a normal Chrome UA. Headless default UA is blocked by `src/proxy.js`.
+- Tests: `npm test`; per-file eslint should have 0 errors. Project-wide lint has known pre-existing scratch parsing errors.
 
 ## Architecture
-- `FileManager.js` owns the only socket pool (`_fmSocketPool`, TTL 6000ms); handlers must be listed in
-  `FM_SOCKET_EVENTS` and guarded by `disposedRef`.
-- Server emits `ssh:closed` from `sshClient.on('close')` — every client `ssh:disconnect` echoes. Socket.IO
-  serializes `{message: undefined}` to `{}`; tolerate empty payloads.
-- Connections owned by `session.user.id`, but **relay registrations key on JWT `sub`**. Rate limiting is
-  central (`src/proxy.js` → `src/lib/ratelimit.js`), keyed on userId.
+- `FileManager.js` owns the only socket pool; new handlers must be listed in `FM_SOCKET_EVENTS` and guarded by `disposedRef`.
+- Relay registrations are keyed by JWT `sub`; connections are owned by `session.user.id`.
+- `server.js` accepts Local Relay at `/relay-ws` and Monitor Agent at `/agent-ws`.
 
-## Local Relay (`public/local-relay.js` → `~/.ssh-monitor-relay/`, launchd `com.ssh-monitor.relay`)
-- **SHIPPED AS A BUILD.** `scripts/build-relay.mjs` (seeded, deterministic) turns `public/local-relay.js` into
-  `public/local-relay.min.js` (gitignored). `server.js` serves **only** the artifact — a missing artifact is a
-  503, never a fallback. Artifact header carries `source-sha256`. `npm run build:relay -- --check` exits 2 on
-  stale/non-deterministic. Build+check MUST share `buildArtifact()` or `--check` false-alarms.
-  `prebuild`/`predev`/CI build it; `prepack` refuses a stale artifact.
-- **Never trust localPort 18790/18791** — hint only; relay acks the real port via
-  `{type:'webui:ready',forwardId,localPort}`.
-- `handleWebuiHttp()` must never strip `authorization` (nanobot `Bearer nbwt_…`); it may strip `cookie`.
-  The tunnel is memory-only — restart drops it, so re-run `loadDetails()` after any mutation. Prod needs
-  `CSP_ALLOW_LOCAL_RELAY=1`.
-- Self-cleanup deletes its own file unless the path is in the **scratch allowlist** (`/tmp`, `~/Downloads`,
-  `~/Desktop`) — `isDisposableScript()`. So never run the relay from inside the repo.
-- Token goes in `authorization: Bearer` on /relay-ws (server prefers header, accepts `?token=`).
-  **`globalThis.WebSocket` silently ignores the 2nd arg**, hence `WS_CAN_SET_HEADERS`.
-- The relay does **not** self-update. So `npm update -g` does not refresh the running service — users must
-  re-run `local-relay --pair`.
+## Local Relay
+- Source: `public/local-relay.js`; built artifact: `public/local-relay.min.js`; installed copy: `~/.ssh-monitor-relay/`; macOS service: `com.ssh-monitor.relay`.
+- `scripts/build-relay.mjs` is seeded/deterministic and stamps `source-sha256`; `--check` detects drift. `prebuild`, `predev`, CI, and npm `prepack` build/check artifacts. The server serves only the artifact and returns 503 if missing; never falls back to readable source.
+- Token uses `Authorization: Bearer` on `/relay-ws`; `?token=` is legacy fallback. WHATWG `globalThis.WebSocket` ignores extra headers, so use the header-capable WebSocket path.
+- Relay does not self-update; rerun `local-relay --pair` after upgrading npm. Pairing code is single-use and expires in 10 minutes; successful exchange persists the long-lived token to MongoDB with rollback on persistence failure.
+- WebUI relay ports are hints only; use the `webui:ready` acknowledgement. Preserve WebUI `authorization` headers; cookie may be stripped. Production WebUI relay needs `CSP_ALLOW_LOCAL_RELAY=1`.
 
-## Agent Web UIs
-- **nanobot** 8765 → relay localPort **18790**, bootstrap secret. **Hermes** 9119 → **18791**, no secret.
-  `hermes dashboard` is the UI, `hermes serve` the headless JSON-RPC. First launch compiles the frontend — poll
-  (40×3s), don't sleep. Kill by **port**.
-- `WEBUI_START_AGENTS=['nanobot','hermes']` gates Start; Stop gated on `details.webUIActive`.
-- **Backticks inside shell snippets in JS template literals silently terminate the string.**
+## Monitor Agent / Server-side install
+- `public/monitor-agent.js` → `public/monitor-agent.min.js`; installed on a remote target by `AgentSetupWizard.js` / `/api/server-monitor/agent`; connects outbound to `/agent-ws` and can run as `server-monitor-agent.service`.
+- This is distinct from Local Relay: **Server Monitor Agent** runs on the remote target; **Desktop Relay** runs on the user’s own computer; **Direct Server Connection** installs nothing.
+- Agent setup uses a one-time `--claim` code. Keep the target wording explicit: “Run this on the target server.”
+- `WEBUI_START_AGENTS=['nanobot','hermes']`; nanobot 8765, Hermes 9119.
 
 ## Distribution
-- `packages/local-relay/` → npm `ssh-monitor-relay` (bin `local-relay`); `prepack.mjs` copies the **artifact**
-  into `dist/`. Publish needs a granular token with **bypass 2FA ticked** — `--otp` never works
-  (`auth-type=web` keychain sessions aren't OTP-eligible). OIDC Trusted Publishing is chicken-and-egg.
-- **Do not conclude a publish failed from an early `npm view`** — the packument lags ~20 min and the tarball
-  404s. Verify by curling the tarball and hashing `package/dist/local-relay.js`.
-- `scripts/relay-install-audit.mjs` — read-only installer auditor. Subject is the **artifact**; behavioural
-  greps read the source beside it. **Re-pin `PINNED.sha256` + `bytes` whenever the artifact changes.**
-- Installer UI: `relayInstallMethod` state defaults to **'npm'**; both the relay modal and the settings card
-  render `<InstallMethodToggle>`. An option buried in a collapsed disclosure is an option nobody finds.
-- Pairing audit `docs/RELAY_PAIRING_AUDIT_2026-09-06.md`, F1–F7 — **all applied**. Its §5 no-obfuscation
-  recommendation was **reversed by the owner the same day**; kept in the doc with the reasoning.
+- `packages/local-relay/` publishes npm `ssh-monitor-relay`; `prepack.mjs` copies the built artifact into `dist/`. Published 1.0.4 hash: `ae6c768f...`, 196,100 bytes. Trusted Publishing remains to be registered; then revoke the bypass-2FA token.
+- `scripts/relay-install-audit.mjs` audits the artifact and source behaviour; re-pin bytes/hash when artifact changes.
+- Installer UI uses `relayInstallMethod` (`npm` default) and shared `InstallMethodToggle` in both card and modal.
 
-## Security
-See `SECURITY_ROADMAP_A_TO_A_PLUS.md` / `THREAT_MODEL.md`. Already done — do NOT re-fix: rate limiting, CSP,
-RBAC, audit logging, API-key scoping, vault crypto, WebAuthn clone detection. Don't make `monitor_csrf`
-HttpOnly. Only live gap: OAuth PKCE off (`checks:['pkce','state']`).
-Open: register the npm Trusted Publisher then **revoke the bypass-2FA token**; dead `relay-v1.0.1` tag.
+## Security / open work
+- See `SECURITY_ROADMAP_A_TO_A_PLUS.md` and `THREAT_MODEL.md`; do not re-fix completed rate limiting, CSP, RBAC, vault crypto, WebAuthn clone detection, or audit logging.
+- Open: OAuth PKCE; npm Trusted Publisher; dead `relay-v1.0.1` tag; relay `--update`; redundant npm dependency install.

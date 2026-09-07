@@ -1,0 +1,89 @@
+# Publish the Local Relay to npm as `ssh-monitor-relay`.
+#
+# Uses npm Trusted Publishing (OIDC) — no long-lived NPM_TOKEN anywhere.
+# GitHub mints a short-lived identity token per run; npm exchanges it for a
+# publish credential. This also signs the package with provenance, so the
+# registry records which workflow and commit produced it.
+#
+# CHICKEN-AND-EGG: npm only lets you attach a trusted publisher to a package
+# that ALREADY EXISTS on the registry. So v1.0.0 must be published manually
+# (token or OTP from a laptop); this workflow takes over from v1.0.1 onward.
+#
+# One-time setup (outside this repo), after 1.0.0 is live:
+#   1. npmjs.com → Packages → ssh-monitor-relay → Settings → Trusted publishing
+#   2. Fill in:  owner = sniperkla   repository = monitor
+#                workflow filename = publish-relay.yml   environment = (blank)
+#   3. "Allowed actions": permit direct `npm publish`. Configs created after
+#      2026-09-03 default to `npm stage publish` only.
+#   4. npm does NOT validate these on save — errors only surface at publish.
+#
+# Keep `id-token: write` — without it OIDC fails with a 403 that looks
+# confusingly like the 2FA one you get publishing from a laptop.
+#
+# Provenance requires a PUBLIC repository. If sniperkla/monitor is private,
+# drop --provenance rather than leave a silently-unsigned publish.
+
+name: Publish Local Relay
+
+on:
+  push:
+    tags:
+      - 'relay-v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Pack only, do not publish'
+        type: boolean
+        default: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # required for npm Trusted Publishing (OIDC)
+    steps:
+      - uses: actions/checkout@v4
+
+      # npm CLI >= 11.5.1 and Node >= 22.14.0 are required for OIDC publishing.
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
+
+      # The artifact is gitignored — it does not exist in a fresh checkout and
+      # has to be built here. `javascript-obfuscator` is a root devDependency;
+      # installing just it keeps this job off Next's dependency tree.
+      - name: Build both artifacts
+        run: |
+          npm install --no-save javascript-obfuscator
+          npm run build:relay -- --force
+          npm run build:agent -- --force
+
+      # Two different failures, caught separately:
+      #   --check  → the artifact is stale or non-deterministic. Because the
+      #              build is seeded, this rebuilds from source and compares
+      #              bytes, so a hand-edited artifact fails here too.
+      #   audit    → the served bytes no longer match PINNED.sha256, i.e. the
+      #              source moved and nobody re-pinned it.
+      - name: Verify the published bytes match the served source
+        run: |
+          npm run build:relay -- --check
+          npm run build:agent -- --check
+
+      - name: Audit the installer before shipping it
+        working-directory: packages/local-relay
+        run: node ../../scripts/relay-install-audit.mjs
+
+      - name: Pack (inspect before trusting it)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        working-directory: packages/local-relay
+        run: npm pack --dry-run
+
+      - name: Publish
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
+        working-directory: packages/local-relay
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: '' # intentionally empty — OIDC supplies the credential

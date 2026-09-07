@@ -9,6 +9,21 @@ import RelayTrustPanel, {
   npmUninstallCommand,
 } from '@/components/RelayTrustPanel';
 
+function parseRelayVersion(value) {
+  const match = String(value || '').match(/^(\d+)\.(\d+)\.(\d+)/);
+  return match ? match.slice(1).map(Number) : null;
+}
+
+function isRelayVersionOlder(installed, latest) {
+  const a = parseRelayVersion(installed);
+  const b = parseRelayVersion(latest);
+  if (!a || !b) return false;
+  for (let i = 0; i < 3; i += 1) {
+    if (a[i] !== b[i]) return a[i] < b[i];
+  }
+  return false;
+}
+
 function safeStringify(obj) {
   const seen = new WeakSet();
   return JSON.stringify(obj, (key, value) => {
@@ -338,6 +353,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
   // Integrity manifest for the file the user is about to download and run.
   // Null until fetched; the trust panel degrades to facts-without-checksum.
   const [relayRelease, setRelayRelease] = useState(null);
+  const [relayUpdateDismissed, setRelayUpdateDismissed] = useState(false);
   // How the user wants to install the relay: 'npm' (registry, no pipe-to-shell)
   // or 'script' (curl the served file and run it). npm is the default because
   // it is the one route where nothing executes at install time.
@@ -1346,7 +1362,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
   // run. Fetched on open so the trust panel can show a checksum the user can
   // verify themselves. Failure is non-fatal: the panel just omits the digest.
   useEffect(() => {
-    if (!relayModalOpen || relayRelease) return undefined;
+    if (!session || relayRelease) return undefined;
     let cancelled = false;
     (async () => {
       try {
@@ -1364,7 +1380,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
     return () => {
       cancelled = true;
     };
-  }, [relayModalOpen, relayRelease]);
+  }, [session, relayRelease]);
 
   // Relay wizard bookkeeping on open/close.
   //
@@ -1596,7 +1612,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
       : getRelayOneLiner('install');
 
   const getRelayUninstallSnippet = () =>
-    relayInstallMethod === 'npm' ? npmUninstallCommand() : getRelayUninstallSnippet();
+    relayInstallMethod === 'npm' ? npmUninstallCommand() : getRelayOneLiner('uninstall');
 
   const setVaultPreset = (uri) => {
     setVaultUri(uri);
@@ -2496,7 +2512,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                         </div>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2">
-                            <h4 className="text-xs font-bold text-[var(--text-primary)]">SSH Relay</h4>
+                            <h4 className="text-xs font-bold text-[var(--text-primary)]">Desktop Relay</h4>
                             <span className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider ${badgeBg}`}>
                               <span className={`w-1.5 h-1.5 rounded-full ${dotColor}`} />
                               {badgeText}
@@ -2529,23 +2545,25 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                                   <X size={10} /> Revoke All
                                 </button>
                               )}
-                              <button
-                                onClick={() => {
-                                  setExistingRelayIds(new Set(relays.map(r => r.relayId || r.relayName)));
-                                  setRelayWizardStep(2);
-                                  setRelayInstallSuccess(false);
-                                  setRelayModalOpen(true);
-                                }}
-                                className="px-3 py-1.5 rounded-xl text-[11px] font-bold transition-all flex items-center gap-1.5 bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] text-[var(--text-secondary)]"
-                              >
-                                <Settings size={11} /> Install Guide
-                              </button>
                             </>
                           )}
                         </div>
                       </div>
                         );
                       })()}
+
+                      {relayConnected && !relayUpdateDismissed && relays.some((relay) => isRelayVersionOlder(relay.version, relayRelease?.latestVersion)) && (
+                        <div className="px-4 py-2.5 border-t border-blue-500/20 bg-blue-500/[0.06] flex items-start gap-2.5">
+                          <RefreshCw size={13} className="text-blue-400 shrink-0 mt-0.5" />
+                          <div className="min-w-0 flex-1">
+                            <p className="text-[10px] font-bold text-blue-300">Desktop Relay update available</p>
+                            <p className="text-[10px] text-[var(--text-muted)] mt-0.5 leading-relaxed">
+                              A newer version ({relayRelease.latestVersion}) is available. Update with <code className="text-blue-300">npm install -g ssh-monitor-relay</code>, then run <code className="text-blue-300">local-relay --install</code>.
+                            </p>
+                          </div>
+                          <button type="button" onClick={() => setRelayUpdateDismissed(true)} className="text-[10px] text-[var(--text-muted)] hover:text-[var(--text-primary)] shrink-0">Dismiss</button>
+                        </div>
+                      )}
 
                       {/* Active relays list */}
                       {relayConnected && relays.length > 0 && (
@@ -2600,34 +2618,35 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                         </div>
                       )}
 
-                      {/* Install command — no token needed, it pairs itself */}
+                      {/* Entry point — keep install details and the pairing code inside the guide. */}
                       {!relayConnected && (
-                        <div className="px-4 py-3 border-t border-[var(--border-color)] space-y-2">
-                          <div className="flex items-center gap-2">
-                            <p className="flex-1 text-[10px] font-bold text-[var(--text-secondary)]">
-                              {relayWaiting ? 'Finish pairing:' : 'Run this on your machine:'}
-                            </p>
-                          </div>
-                          <InstallMethodToggle method={relayInstallMethod} onChange={setRelayInstallMethod} />
-                          <div className="relative">
-                            <code className="block p-2.5 pr-10 bg-slate-950 border border-slate-800 rounded-lg text-[9px] font-mono text-amber-300 break-all leading-relaxed whitespace-pre-wrap">
-                              {getRelayInstallSnippet()}
-                            </code>
+                        <div className="px-4 py-3 border-t border-[var(--border-color)]">
+                          <div className={`flex items-start gap-3 p-3 rounded-xl border ${relayWaiting ? 'bg-blue-500/[0.06] border-blue-500/20' : 'bg-amber-500/[0.05] border-amber-500/15'}`}>
+                            <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${relayWaiting ? 'bg-blue-500/15 text-blue-400' : 'bg-amber-500/15 text-amber-400'}`}>
+                              {relayWaiting ? <LoaderCircle size={14} className="animate-spin" /> : <Monitor size={14} />}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className="text-[11px] font-bold text-[var(--text-primary)]">
+                                {relayWaiting ? 'Finish setting up your Desktop Relay' : 'Connect services from this computer'}
+                              </p>
+                              <p className="text-[10px] text-[var(--text-muted)] mt-0.5 leading-relaxed">
+                                {relayWaiting
+                                  ? 'The install guide is waiting for the pairing code from your terminal.'
+                                  : 'Install the small relay once to reach SSH, Docker, and databases running on localhost.'}
+                              </p>
+                            </div>
                             <button
                               onClick={() => {
-                                navigator.clipboard.writeText(getRelayInstallSnippet());
-                                addNotification({ title: 'Copied!', message: 'Paste in your Terminal and press Enter.', type: 'success' });
+                                setExistingRelayIds(new Set(relays.map(r => r.relayId || r.relayName)));
+                                setRelayWizardStep(2);
+                                setRelayInstallSuccess(false);
+                                setRelayModalOpen(true);
                               }}
-                              className="absolute right-1.5 top-1.5 p-1.5 hover:bg-white/10 rounded-lg transition-colors"
+                              className={`shrink-0 px-3 py-2 rounded-lg text-[10px] font-bold transition-all ${relayWaiting ? 'bg-blue-500 hover:bg-blue-600 text-white shadow-md shadow-blue-500/20' : 'bg-amber-500 hover:bg-amber-600 text-white shadow-md shadow-amber-500/20'}`}
                             >
-                              <Copy size={12} className="text-[var(--text-muted)]" />
+                              {relayWaiting ? 'Open guide' : 'Install guide'} <ChevronRight size={11} className="inline ml-1" />
                             </button>
                           </div>
-                          {!relayWaiting && (
-                            <p className="text-[10px] text-[var(--text-muted)] leading-relaxed">
-                              It will print a pairing code — paste it back here into Settings → Local Relay to finish.
-                            </p>
-                          )}
                         </div>
                       )}
 
@@ -4544,8 +4563,8 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                   <Network size={16} className="text-amber-400" />
                 </div>
                 <div className="flex-1">
-                  <h3 className="text-sm font-bold text-[var(--text-primary)]">Local Relay Agent</h3>
-                  <p className="text-[10px] text-[var(--text-muted)] mt-0.5">Connect to databases & SSH on <code className="text-amber-300">localhost</code></p>
+                  <h3 className="text-sm font-bold text-[var(--text-primary)]">Desktop Relay</h3>
+                  <p className="text-[10px] text-[var(--text-muted)] mt-0.5">Install on your computer to reach SSH, Docker, and databases on <code className="text-amber-300">localhost</code></p>
                 </div>
                 <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full border uppercase tracking-wider ${osMeta[detectedOS].badge}`}>
                   {osMeta[detectedOS].label}
@@ -4599,13 +4618,13 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                     <div className="flex gap-3 p-3.5 rounded-xl bg-blue-500/[0.06] border border-blue-500/15">
                       <Info size={14} className="shrink-0 text-blue-400 mt-0.5" />
                       <div className="text-[11px] text-[var(--text-muted)] leading-relaxed space-y-1.5">
-                        <p className="font-semibold text-[var(--text-secondary)]">What is the Relay Agent?</p>
-                        <p>A background service you run on <strong className="text-[var(--text-primary)]">your own computer</strong>. It dials out to this dashboard so the dashboard can reach services on <code className="text-amber-300">localhost</code>.</p>
+                        <p className="font-semibold text-[var(--text-secondary)]">What is the Desktop Relay?</p>
+                        <p>A background service installed on <strong className="text-[var(--text-primary)]">your computer</strong>. It dials out to this dashboard so the dashboard can reach services on <code className="text-amber-300">localhost</code>.</p>
                         <div className="flex flex-col gap-1 pt-1">
                           <span className="text-emerald-400/90">✓ Only needed for localhost/127.0.0.1 — remote servers don&apos;t need it</span>
                           <span className="text-emerald-400/90">✓ No sudo, no root — installs as a user-level service</span>
                           <span className="text-emerald-400/90">✓ Listens on 127.0.0.1 only — no port exposed to your network</span>
-                          <span className="text-blue-400/80">✓ Install on your desktop machine, not the server</span>
+                          <span className="text-blue-400/80">✓ Install on your computer, not the remote SSH server</span>
                         </div>
                       </div>
                     </div>
@@ -4623,9 +4642,12 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                         <div className="w-5 h-5 rounded-full bg-amber-500 flex items-center justify-center shrink-0">
                           <span className="text-[10px] font-bold text-white">1</span>
                         </div>
-                        <p className="text-xs font-bold text-[var(--text-secondary)] flex-1">
-                          {detectedOS === 'windows' ? 'Download & run the installer' : 'Copy & paste into your Terminal'}
-                        </p>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-bold text-[var(--text-secondary)]">
+                            {detectedOS === 'windows' ? 'Install on your computer' : 'Run on your computer'}
+                          </p>
+                          <p className="text-[10px] text-[var(--text-muted)] mt-0.5">This is your desktop or laptop — not the remote SSH server.</p>
+                        </div>
                       </div>
 
                       {/* How to get it: the npm registry, or the served script */}
@@ -4635,10 +4657,13 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                         <div className="flex gap-2 p-2.5 rounded-xl bg-emerald-500/[0.06] border border-emerald-500/15">
                           <ShieldCheck size={13} className="shrink-0 text-emerald-400 mt-0.5" />
                           <p className="text-[10px] text-[var(--text-muted)] leading-relaxed">
-                            Installed from the npm registry as <code className="text-amber-300">{NPM_PACKAGE}</code>.
-                            The registry verifies integrity, versions are pinnable, and the package ships no
-                            install scripts — so installing it runs nothing. Nothing happens until you type{' '}
-                            <code className="text-amber-300">local-relay</code> yourself.
+                            npm places <code className="text-amber-300">{NPM_PACKAGE}</code> on your computer as a
+                            package you can inspect before running. The file you will see is{' '}
+                            <code className="text-amber-300">dist/local-relay.js</code>: a bundled, obfuscated build,
+                            <strong className="text-[var(--text-secondary)]"> not the readable source code</strong>.
+                            You can inspect or hash that file yourself. <code className="text-amber-300">npm install</code>{' '}
+                            only copies the package — no install script runs; the relay starts only when you type{' '}
+                            <code className="text-amber-300">local-relay</code>.
                           </p>
                         </div>
                       )}
@@ -4703,7 +4728,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                       </div>
                     </div>
 
-                    {/* Step 2 — approve the code printed in the terminal */}
+                    {/* Step 2 — approve the code printed by the computer's terminal */}
                     <RelayPairingPanel
                       onApproved={() => {
                         // Start watching for the relay to appear; the existing
