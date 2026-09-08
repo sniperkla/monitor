@@ -2406,28 +2406,30 @@ export default function ServerMonitorApp() {
           </div>
         </div>
         
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto mt-1 sm:mt-0">
           {/* Server selector */}
-          <CustomSelect
-            value={selectedConnection || ''}
-            onChange={(val) => setSelectedConnection(val)}
-            placeholder="Select Server"
-            className="w-44"
-            options={[
-              { value: '', label: 'Select Server' },
-              ...connections.map(conn => ({
-                value: conn._id,
-                label: conn.label || `${conn.username}@${conn.host}`
-              }))
-            ]}
-          />
+          <div className="flex-1 sm:flex-initial min-w-[130px] sm:w-44">
+            <CustomSelect
+              value={selectedConnection || ''}
+              onChange={(val) => setSelectedConnection(val)}
+              placeholder="Select Server"
+              className="w-full"
+              options={[
+                { value: '', label: 'Select Server' },
+                ...connections.map(conn => ({
+                  value: conn._id,
+                  label: conn.label || `${conn.username}@${conn.host}`
+                }))
+              ]}
+            />
+          </div>
 
           {/* Polling Interval selector */}
-          <div className={!autoRefresh ? 'opacity-50 pointer-events-none' : ''}>
+          <div className={`flex-1 sm:flex-initial min-w-[130px] sm:w-44 ${!autoRefresh ? 'opacity-50 pointer-events-none' : ''}`}>
             <CustomSelect
               value={String(refreshInterval)}
               onChange={(val) => setRefreshInterval(Number(val))}
-              className="w-44"
+              className="w-full"
               options={(() => {
                 const agentActive = isSocketStreaming || isP2PStreaming;
                 const agentMsg = 'Install Monitor Agent to unlock this interval';
@@ -2446,7 +2448,7 @@ export default function ServerMonitorApp() {
           {/* Auto-refresh toggle */}
           <button
             onClick={() => setAutoRefresh(!autoRefresh)}
-            className={`p-1.5 rounded-lg border text-xs flex items-center gap-1.5 transition-colors ${
+            className={`p-1.5 rounded-lg border text-xs flex items-center gap-1.5 transition-colors shrink-0 ${
               autoRefresh 
                 ? 'bg-indigo-600/20 text-indigo-400 border-indigo-500/30 hover:bg-indigo-600/30' 
                 : 'bg-[var(--bg-tertiary)] text-[var(--text-muted)] border-[var(--border-color)] hover:text-[var(--text-primary)]'
@@ -2483,7 +2485,7 @@ export default function ServerMonitorApp() {
             return (
               <button
                 onClick={() => setShowAgentWizard(true)}
-                className={`px-2.5 py-1.5 border rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors shadow-sm cursor-pointer ${
+                className={`px-2.5 py-1.5 border rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors shadow-sm cursor-pointer shrink-0 ${
                   isLive
                     ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/20'
                     : agentRunning
@@ -2521,7 +2523,7 @@ export default function ServerMonitorApp() {
           {/* Agents & Notifications (Hermes) */}
           <button
             onClick={() => setShowHermesWizard(true)}
-            className="px-2.5 py-1.5 border border-[var(--border-color)] rounded-lg text-xs font-medium flex items-center gap-1.5 bg-[var(--bg-tertiary)] hover:bg-[var(--bg-card-hover)] transition-colors shadow-sm cursor-pointer"
+            className="px-2.5 py-1.5 border border-[var(--border-color)] rounded-lg text-xs font-medium flex items-center gap-1.5 bg-[var(--bg-tertiary)] hover:bg-[var(--bg-card-hover)] transition-colors shadow-sm cursor-pointer shrink-0"
             title="Install notification agents (Telegram / LINE / Discord / Slack / webhook)"
           >
             <BellRing size={13} className="text-[var(--accent-indigo)]" />
@@ -2535,7 +2537,7 @@ export default function ServerMonitorApp() {
               if (activeTab === 'apps') fetchApps(true);
             }}
             disabled={loading || appsLoading}
-            className="p-1.5 bg-[var(--bg-tertiary)] hover:bg-[var(--bg-card-hover)] border border-[var(--border-color)] rounded-lg transition-colors disabled:opacity-50"
+            className="p-1.5 bg-[var(--bg-tertiary)] hover:bg-[var(--bg-card-hover)] border border-[var(--border-color)] rounded-lg transition-colors disabled:opacity-50 shrink-0"
             title="Refresh now"
           >
             <RefreshCw size={14} className={loading || appsLoading ? 'animate-spin text-[var(--accent-indigo)]' : ''} />
@@ -2544,8 +2546,8 @@ export default function ServerMonitorApp() {
       </div>
 
       {/* Tabs */}
-      <div className="flex items-center justify-between px-4 py-1.5 border-b border-[var(--border-color)] bg-[var(--bg-secondary)] text-xs">
-        <div className="flex gap-1">
+      <div className="flex items-center justify-between px-3 sm:px-4 py-1.5 border-b border-[var(--border-color)] bg-[var(--bg-secondary)] text-xs overflow-hidden">
+        <div className="flex gap-1 overflow-x-auto no-scrollbar py-0.5">
           {[
             { id: 'overview', label: 'Overview', icon: Activity },
             { id: 'history', label: 'History', icon: TrendingUp },
@@ -2555,7 +2557,7 @@ export default function ServerMonitorApp() {
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md font-medium transition-colors ${
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md font-medium transition-colors shrink-0 ${
                 activeTab === tab.id
                   ? 'bg-[var(--accent-indigo)] text-white shadow-sm'
                   : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]'
@@ -2573,9 +2575,9 @@ export default function ServerMonitorApp() {
         </div>
 
         {activeTab === 'apps' && (
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
             {currentAppsTimestamp && (
-              <span className="text-[11px] text-[var(--text-muted)]">
+              <span className="text-[11px] text-[var(--text-muted)] hidden sm:inline">
                 Updated {new Date(currentAppsTimestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
               </span>
             )}
@@ -2592,7 +2594,7 @@ export default function ServerMonitorApp() {
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto p-4">
+      <div className="flex-1 overflow-y-auto p-2.5 sm:p-4">
         {error && (
           <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg flex items-start gap-3">
             <AlertCircle className="text-red-400 shrink-0 mt-0.5" size={18} />

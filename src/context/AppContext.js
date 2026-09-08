@@ -16,7 +16,7 @@ const initialState = {
   activeFileManagers: [], // { id, connectionId, connectionName }
   selectedConnection: null,
   isLoading: false,
-  sidebarOpen: true,
+  sidebarOpen: typeof window !== 'undefined' ? window.innerWidth >= 768 : true,
   view: 'dashboard', // 'dashboard' | 'terminal' | 'files' | 'settings'
   storageMode: 'db', // 'db', 'localstorage', 'manual'
   clipboard: null, // { file, action: 'copy' | 'cut', sourcePath, connectionId }

@@ -348,50 +348,50 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
       initial="hidden"
       animate="visible"
       variants={containerVariants}
-      className="@container h-full overflow-y-auto p-4 pb-16 @4xl:p-6 custom-scrollbar"
+      className="@container h-full overflow-y-auto p-3 sm:p-4 pb-16 @4xl:p-6 custom-scrollbar"
     >
       {/* Header */}
       <div className="flex flex-col @3xl:flex-row @3xl:items-center justify-between mb-5 gap-3">
         <div>
           <motion.h1 
             variants={itemVariants}
-            className="text-3xl font-extrabold tracking-tight text-[var(--text-primary)] uppercase"
+            className="text-2xl sm:text-3xl font-extrabold tracking-tight text-[var(--text-primary)] uppercase"
           >
             {t('ssh.dashboard_ui.systemOverview')}
           </motion.h1>
           <motion.p 
             variants={itemVariants}
-            className="text-[var(--text-muted)] mt-1 flex items-center gap-2"
+            className="text-[var(--text-muted)] mt-1 flex items-center gap-2 text-xs sm:text-sm"
           >
             <Activity size={14} className="text-emerald-500" />
             {t('ssh.dashboard_ui.monitoring')} {stats.total} {t('ssh.dashboard_ui.nodesAcross')}
           </motion.p>
         </div>
-        <motion.div variants={itemVariants} className="flex gap-3 flex-wrap">
+        <motion.div variants={itemVariants} className="flex gap-2 sm:gap-3 flex-wrap">
           <button
-            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[var(--bg-card)] border border-[var(--border-color)] text-[var(--text-secondary)] hover:bg-[var(--bg-card-hover)] transition-all active:scale-95"
+            className="flex items-center gap-2 px-3 sm:px-4 py-2 rounded-xl bg-[var(--bg-card)] border border-[var(--border-color)] text-[var(--text-secondary)] hover:bg-[var(--bg-card-hover)] transition-all active:scale-95"
             onClick={handleRefreshAll}
             disabled={refreshing}
           >
-            <RefreshCw size={16} className={refreshing ? 'animate-spin' : ''} />
-            <span className="text-sm font-medium">{refreshing ? t('ssh.dashboard_ui.syncing') : t('ssh.dashboard_ui.refreshStatus')}</span>
+            <RefreshCw size={15} className={refreshing ? 'animate-spin' : ''} />
+            <span className="text-xs sm:text-sm font-medium">{refreshing ? t('ssh.dashboard_ui.syncing') : t('ssh.dashboard_ui.refreshStatus')}</span>
           </button>
 
           {/* Export button */}
           <div className="relative">
             <button
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl border transition-all active:scale-95 text-sm font-medium ${
+              className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 rounded-xl border transition-all active:scale-95 text-xs sm:text-sm font-medium ${
                 showExportPanel
                   ? 'bg-[var(--bg-selected)] border-[var(--accent-indigo)]/50 text-[var(--text-selected)]'
                   : 'bg-[var(--bg-card)] border-[var(--border-color)] text-[var(--text-secondary)] hover:bg-[var(--bg-card-hover)]'
               }`}
               onClick={() => { setShowExportPanel(p => !p); setShowImportPanel(false); }}
             >
-              <Download size={16} />
+              <Download size={15} />
               <span>Export</span>
             </button>
             {showExportPanel && (
-              <div className="absolute right-0 top-full mt-2 w-64 p-3 rounded-xl border shadow-xl z-50" style={{ background: 'var(--bg-card)', borderColor: 'var(--border-color)' }}>
+              <div className="absolute right-0 top-full mt-2 w-64 max-w-[calc(100vw-32px)] p-3 rounded-xl border shadow-xl z-50" style={{ background: 'var(--bg-card)', borderColor: 'var(--border-color)' }}>
                 <p className="text-[11px] text-[var(--text-muted)] mb-1">Credentials are encrypted with this password.</p>
                 <p className="text-[11px] text-amber-400 mb-2">⚠ Required — you&apos;ll need it to import.</p>
                 <div className="relative mb-2">
@@ -425,18 +425,18 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
           {/* Import button */}
           <div className="relative">
             <button
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl border transition-all active:scale-95 text-sm font-medium ${
+              className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 rounded-xl border transition-all active:scale-95 text-xs sm:text-sm font-medium ${
                 showImportPanel
                   ? 'bg-[var(--bg-selected)] border-[var(--accent-indigo)]/50 text-[var(--text-selected)]'
                   : 'bg-[var(--bg-card)] border-[var(--border-color)] text-[var(--text-secondary)] hover:bg-[var(--bg-card-hover)]'
               }`}
               onClick={() => { setShowExportPanel(false); importFileRef.current?.click(); }}
             >
-              <Upload size={16} />
+              <Upload size={15} />
               <span>Import</span>
             </button>
             {showImportPanel && importData && (
-              <div className="absolute right-0 top-full mt-2 w-64 p-3 rounded-xl border shadow-xl z-50" style={{ background: 'var(--bg-card)', borderColor: 'var(--border-color)' }}>
+              <div className="absolute right-0 top-full mt-2 w-64 max-w-[calc(100vw-32px)] p-3 rounded-xl border shadow-xl z-50" style={{ background: 'var(--bg-card)', borderColor: 'var(--border-color)' }}>
                 <p className="text-[11px] font-medium text-[var(--accent-indigo)] mb-1">{importData.connections.length} connections found</p>
                 <p className="text-[11px] text-[var(--text-muted)] mb-1">Enter the password used when exporting.</p>
                 <p className="text-[11px] text-amber-400 mb-2">⚠ Required to decrypt credentials.</p>
@@ -545,7 +545,7 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
       )}
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-1 @xl:grid-cols-2 @4xl:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 @4xl:grid-cols-4 gap-2.5 sm:gap-4 mb-5 sm:mb-6">
         <StatCard 
           icon={Server} 
           label={t('ssh.dashboard_ui.totalNodes')} 
@@ -860,23 +860,24 @@ function StatCard({ icon: Icon, label, value, color, subValue }) {
         visible: { scale: 1, opacity: 1 }
       }}
       whileHover={{ y: -4 }}
-      className={`relative overflow-hidden p-4 rounded-2xl bg-[var(--bg-tertiary)]/20 border ${theme.border} ${theme.shadow} backdrop-blur-md group`}
+      className={`relative overflow-hidden p-3 sm:p-4 rounded-xl sm:rounded-2xl bg-[var(--bg-tertiary)]/20 border ${theme.border} ${theme.shadow} backdrop-blur-md group`}
     >
       <div className="absolute top-0 right-0 p-1 opacity-0 group-hover:opacity-100 transition-opacity">
          <div className={`w-2 h-2 rounded-full ${theme.icon.replace('text-', 'bg-')}`} />
       </div>
-      <div className="flex items-start justify-between mb-4">
-        <div className={`w-12 h-12 rounded-2xl ${theme.bg} flex items-center justify-center transition-transform group-hover:scale-110 duration-500`}>
-          <Icon size={24} className={theme.icon} />
+      <div className="flex items-start justify-between mb-2 sm:mb-4">
+        <div className={`w-8 h-8 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl ${theme.bg} flex items-center justify-center transition-transform group-hover:scale-110 duration-500 shrink-0`}>
+          <Icon size={18} className={`${theme.icon} sm:hidden`} />
+          <Icon size={24} className={`${theme.icon} hidden sm:block`} />
         </div>
-        <div className="text-right">
-          <span className="text-xs font-bold uppercase tracking-wider text-[var(--text-muted)]">{label}</span>
-          <div className="text-3xl font-black text-[var(--text-primary)] mt-0.5 tracking-tight">{value}</div>
+        <div className="text-right min-w-0">
+          <span className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-[var(--text-muted)] block truncate">{label}</span>
+          <div className="text-xl sm:text-3xl font-black text-[var(--text-primary)] mt-0.5 tracking-tight">{value}</div>
         </div>
       </div>
-      <div className="text-xs text-[var(--text-muted)] font-medium flex items-center gap-1.5 opacity-80">
-         <TrendingUp size={12} className={theme.icon} />
-         {subValue}
+      <div className="text-[10px] sm:text-xs text-[var(--text-muted)] font-medium flex items-center gap-1.5 opacity-80 truncate">
+         <TrendingUp size={11} className={`${theme.icon} shrink-0`} />
+         <span className="truncate">{subValue}</span>
       </div>
     </motion.div>
   );

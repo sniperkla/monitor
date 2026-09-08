@@ -63,12 +63,12 @@ function StatCard({ icon: Icon, label, value, color = 'sky', sub }) {
     violet: 'bg-violet-500/5 border-violet-500/15 text-violet-400',
   };
   return (
-    <div className={`flex-1 min-w-[120px] border rounded-xl p-3 flex items-center gap-3 ${colors[color]}`}>
-      <div className="opacity-60"><Icon size={18} /></div>
+    <div className={`flex-1 min-w-[75px] sm:min-w-[120px] border rounded-xl p-2 sm:p-3 flex items-center gap-2 sm:gap-3 ${colors[color]}`}>
+      <div className="opacity-60 shrink-0"><Icon size={16} className="sm:hidden" /><Icon size={18} className="hidden sm:block" /></div>
       <div className="min-w-0">
-        <p className="text-[9px] uppercase font-bold opacity-60 tracking-wider">{label}</p>
-        <p className="text-lg font-bold leading-tight">{value}</p>
-        {sub && <p className="text-[9px] opacity-50">{sub}</p>}
+        <p className="text-[9px] uppercase font-bold opacity-60 tracking-wider truncate">{label}</p>
+        <p className="text-base sm:text-lg font-bold leading-tight">{value}</p>
+        {sub && <p className="text-[9px] opacity-50 truncate">{sub}</p>}
       </div>
     </div>
   );
@@ -1601,13 +1601,13 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
   return (
     <div className="@container flex flex-col h-full min-h-0 bg-transparent text-[var(--text-primary)] overflow-hidden">
         {/* ── Toolbar ── */}
-        <div className="flex items-center justify-between bg-[var(--bg-secondary)] border-b border-[var(--border-color)] px-2 @xl:px-4 h-12 shrink-0 gap-2">
+        <div className="flex flex-wrap items-center justify-between bg-[var(--bg-secondary)] border-b border-[var(--border-color)] px-2.5 sm:px-4 py-1.5 min-h-12 shrink-0 gap-2">
             <div className="flex items-center gap-2 @xl:gap-4 min-w-0 flex-1 overflow-hidden">
                 <span className="text-xs @xl:text-sm font-bold flex items-center gap-2 shrink-0">
                     <Box size={14} className="text-sky-400" />
                     <span className="truncate max-w-[80px] @xl:max-w-none">{selectedConnection.name}</span>
                 </span>
-                <div className="toolbar-tabs flex items-center gap-0.5 bg-black/20 p-0.5 rounded-lg min-w-0 max-w-full overflow-x-auto no-scrollbar">
+                <div className="toolbar-tabs flex items-center gap-0.5 bg-black/20 p-0.5 rounded-lg min-w-0 max-w-full overflow-x-auto no-scrollbar shrink-0">
                     {tabs.map(tab => (
                       <button 
                         key={tab.id}
@@ -1627,18 +1627,18 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                     ))}
                 </div>
             </div>
-            <div className="flex items-center gap-1 @xl:gap-3 shrink-0">
+            <div className="flex items-center gap-1 @xl:gap-3 shrink-0 ml-auto">
                 <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium ${typeof window !== 'undefined' && localStorage.getItem('ssh_monitor_ssh_mode') === 'local' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-blue-500/15 text-blue-400'}`}>
                   {typeof window !== 'undefined' && localStorage.getItem('ssh_monitor_ssh_mode') === 'local' ? '⚡ Local' : '☁ Server'}
                 </span>
                 {/* Export/Import Buttons like SSH Manager */}
-                <div className="flex items-center gap-1.5 bg-black/20 p-0.5 rounded-lg mr-2">
+                <div className="flex items-center gap-1.5 bg-black/20 p-0.5 rounded-lg mr-1 sm:mr-2">
                   <button 
                     onClick={() => importFileRef.current?.click()}
                     className="px-2 py-1 text-[10px] font-bold rounded-md text-[var(--text-muted)] hover:text-white hover:bg-white/5 transition-all flex items-center gap-1"
                     title="Import Project Metadata"
                   >
-                    <Upload size={12} /> IMPORT
+                    <Upload size={12} /> <span className="hidden sm:inline">IMPORT</span>
                   </button>
                   <input ref={importFileRef} type="file" accept=".json" className="hidden" onChange={handleImportFileChange} />
                   <div className="w-px h-4 bg-white/10" />
@@ -1662,7 +1662,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                     className="px-2 py-1 text-[10px] font-bold rounded-md text-rose-400 hover:text-white hover:bg-rose-500/20 transition-all flex items-center gap-1"
                     title="Docker System Prune - Free disk space"
                   >
-                    <Trash2 size={12} /> PRUNE
+                    <Trash2 size={12} /> <span className="hidden sm:inline">PRUNE</span>
                   </button>
                 </div>
                 <button
@@ -1688,7 +1688,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
         </div>
 
         {/* ── Content ── */}
-        <div className="flex-1 overflow-y-auto p-6 scrollbar-hide">
+        <div className="flex-1 overflow-y-auto p-3 sm:p-6 scrollbar-hide">
             {!isDockerInstalled ? (
                 <div className="text-center py-20">
                     <TriangleAlert size={48} className="text-rose-500 mx-auto mb-4" />
@@ -1705,17 +1705,17 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                 <>
                     {/* ── CONTAINERS TAB ── */}
                     {activeTab === 'containers' && (
-                        <div className="flex flex-col gap-5">
+                        <div className="flex flex-col gap-4 sm:gap-5">
                             {/* Stats row */}
-                            <div className="flex gap-3 flex-wrap">
+                            <div className="grid grid-cols-3 gap-2 sm:flex sm:gap-3">
                                 <StatCard icon={Box} label="Total" value={containers.length} color="sky" />
                                 <StatCard icon={Activity} label="Running" value={runningCount} color="emerald" />
                                 <StatCard icon={Square} label="Stopped" value={stoppedCount} color="rose" />
                             </div>
 
                             {/* Filter and Action bar */}
-                            <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-2 overflow-x-auto scrollbar-hide shrink-0 pb-1 max-w-[70%]">
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                                <div className="flex items-center gap-2 overflow-x-auto scrollbar-hide pb-1 w-full sm:max-w-[65%] shrink-0">
                                     {['all', 'running', 'stopped', ...uniqueStacks].map(f => {
                                       const isActive = containerFilter === f;
                                       const isStack = f.startsWith('stack:');
@@ -1740,7 +1740,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                       );
                                     })}
                                 </div>
-                                <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap shrink-0">
                                 {stoppedCount > 0 && (
                                   <button
                                     onClick={handleWakeAllUp}

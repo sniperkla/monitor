@@ -9,6 +9,7 @@ import ThemeSelect from '@/components/common/ThemeSelect';
 import RelayPairingPanel from '@/components/RelayPairingPanel';
 import { io } from 'socket.io-client';
 import { createRelayPeer, DC } from '@/lib/webrtc-relay';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 /**
  * AIAgentsApp — dedicated app for installing and managing AI agents on servers.
@@ -121,11 +122,12 @@ function extractWebUISecret(webUIBootstrapPath) {
 }
 
 export default function AIAgentsApp({ apiFetch }) {
-  const { state, connectionsReady, relayInfo, dispatch } = useApp();
+  const { state, connectionsReady, relayInfo, dispatch, apiFetch: contextApiFetch } = useApp();
+  const isMobile = useIsMobile();
   const { isSupporter } = useSupporter({ refreshOnFocus: true });
   const { showPrompt } = useOS();
   const [supporterModalOpen, setSupporterModalOpen] = useState(false);
-  const doFetch = apiFetch || fetch;
+  const doFetch = apiFetch || contextApiFetch || fetch;
   const connections = useMemo(
     () => (state?.connections || []).filter(c => c.type !== 'database'),
     [state?.connections]
@@ -146,7 +148,8 @@ export default function AIAgentsApp({ apiFetch }) {
   const [stoppingWebUI, setStoppingWebUI] = useState(false);
   const stoppingWebUIRef = useRef(false);
   const [forceBypassRelay, setForceBypassRelay] = useState(false);
-  const [checkingRelay, setCheckingRelay] = useState(true);
+  const effectiveBypass = forceBypassRelay || isMobile;
+  const [checkingRelay, setCheckingRelay] = useState(!isMobile);
   const [credsExpanded, setCredsExpanded] = useState(false);
 
   const checkLocalRelay = useCallback(async () => {
@@ -177,14 +180,14 @@ export default function AIAgentsApp({ apiFetch }) {
     return () => { mounted = false; };
   }, [checkLocalRelay]);
 
-  // Auto-detect polling when relay is not connected
+  // Auto-detect polling when relay is not connected (disabled when bypassed on desktop)
   useEffect(() => {
-    if (relayInfo?.connected || forceBypassRelay) return;
+    if (relayInfo?.connected || effectiveBypass) return;
     const interval = setInterval(() => {
       checkLocalRelay();
     }, 2500);
     return () => clearInterval(interval);
-  }, [relayInfo?.connected, forceBypassRelay, checkLocalRelay]);
+  }, [relayInfo?.connected, effectiveBypass, checkLocalRelay]);
 
   // Listen for 'START_WEBUI' postMessage from the embedded diagnostic screen
   useEffect(() => {
@@ -549,8 +552,8 @@ export default function AIAgentsApp({ apiFetch }) {
     setTab('overview');
     // Bump the generation so any in-flight fetch for the old agent is discarded.
     loadGenRef.current += 1;
-    if (target && (relayInfo?.connected || forceBypassRelay)) loadDetails();
-  }, [target, agentId, activeInstance, relayInfo?.connected, forceBypassRelay]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (target && (relayInfo?.connected || effectiveBypass)) loadDetails();
+  }, [target, agentId, activeInstance, relayInfo?.connected, effectiveBypass]); // eslint-disable-line react-hooks/exhaustive-deps
   // When fresh details arrive (e.g. after wizard install), refresh the config draft
   // so the Config tab shows the new values, not the old ones.
   useEffect(() => {
@@ -1256,7 +1259,7 @@ export default function AIAgentsApp({ apiFetch }) {
     // ── HTTP snapshot (one-shot, used as initial seed or error fallback) ──
     const fetchSnapshot = async () => {
       try {
-        const res = await fetch(agentRef.current.api, {
+        const res = await doFetch(agentRef.current.api, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
@@ -1594,7 +1597,7 @@ export default function AIAgentsApp({ apiFetch }) {
   }
 
   // ── 0. Initial Local Relay probe on open ──
-  if (checkingRelay && !relayInfo?.connected && !forceBypassRelay) {
+  if (checkingRelay && !relayInfo?.connected && !effectiveBypass) {
     return (
       <div className="h-full flex flex-col items-center justify-center gap-3 animate-in fade-in duration-200">
         <div className="relative">
@@ -1612,7 +1615,7 @@ export default function AIAgentsApp({ apiFetch }) {
   }
 
   // ── Force Local Relay Setup: Require Local Relay for optimal speed, 0ms direct WebUI, and no SSH polling latency ──
-  if (!relayInfo?.connected && !forceBypassRelay) {
+  if (!relayInfo?.connected && !effectiveBypass) {
     const selectedConn = connections.find(c => c._id === target) || connections[0];
     const serverOrigin = typeof window !== 'undefined' ? window.location.origin : '';
     const quickCmd = `rm -f ./local-relay.js && curl -fsSL -H 'Cache-Control: no-cache' "${serverOrigin}/local-relay.js" -o ./local-relay.js && node ./local-relay.js --pair --server "${serverOrigin}" && rm -f ./local-relay.js`;
@@ -1755,6 +1758,24 @@ export default function AIAgentsApp({ apiFetch }) {
                   npm i -g ssh-monitor-relay &amp;&amp; local-relay --pair --server {serverOrigin}
                 </div>
               </div>
+
+              {/* Direct SSH Bypass Button */}
+              <div className="pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setForceBypassRelay(true);
+                    if (target) loadDetails();
+                  }}
+                  className="w-full flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-white/5 hover:bg-white/10 text-xs text-[var(--text-muted)] hover:text-white font-medium border border-[var(--border-color)] transition cursor-pointer"
+                >
+                  <ServerIcon size={12} />
+                  Continue with Direct SSH (Skip Local Relay)
+                </button>
+                <div className="text-[9px] text-[var(--text-muted)] text-center mt-1">
+                  Works directly over SSH without installing local-relay on this computer
+                </div>
+              </div>
             </div>
           </div>
 
@@ -1813,12 +1834,20 @@ export default function AIAgentsApp({ apiFetch }) {
               <span className="flex items-center gap-1 text-[10px] text-pink-300 font-bold bg-pink-500/10 px-2 py-0.5 rounded-full border border-pink-500/20 shadow-[0_0_10px_rgba(236,72,153,0.15)]" title="Local Relay active: Direct communication with zero server hops">
                 <Cable size={10} className="text-pink-400" /> Local Relay Active
               </span>
+            ) : isMobile ? (
+              <span className="flex items-center gap-1 text-[10px] text-indigo-300 font-medium bg-indigo-500/10 px-2.5 py-0.5 rounded-full border border-indigo-500/20" title="Mobile Direct Mode: Connected directly to server via SSH">
+                <Zap size={10} className="text-indigo-400" /> Direct SSH Mode
+              </span>
+            ) : forceBypassRelay ? (
+              <span className="flex items-center gap-1 text-[10px] text-indigo-300 font-medium bg-indigo-500/10 px-2 py-0.5 rounded-full border border-indigo-500/20" title="Direct SSH Mode active">
+                <Zap size={10} className="text-indigo-400" /> Direct SSH Mode
+              </span>
             ) : (
               <button
                 onClick={async () => {
                   const ok = await checkLocalRelay();
                   if (ok) setNotice({ ok: true, text: 'Local Relay detected and active!' });
-                  else setNotice({ ok: false, text: 'Local Relay is not running on your computer.' });
+                  else setNotice({ ok: false, text: 'Local Relay is not running or connected.' });
                 }}
                 className="flex items-center gap-1 text-[10px] text-amber-300/90 font-medium bg-amber-500/10 hover:bg-amber-500/20 px-2 py-0.5 rounded-full border border-amber-500/20 transition cursor-pointer"
                 title="Local Relay is not connected: Click to check connection"
@@ -2482,7 +2511,7 @@ export default function AIAgentsApp({ apiFetch }) {
                     <button
                       onClick={async () => {
                         try {
-                          const res = await fetch(agent.api, {
+                          const res = await doFetch(agent.api, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             credentials: 'include',

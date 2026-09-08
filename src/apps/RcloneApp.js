@@ -1455,108 +1455,112 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
     <div className="@container flex flex-col h-full min-h-0 bg-[var(--bg-primary)] text-[var(--text-primary)] font-sans overflow-hidden">
 
       {/* ── Top Bar ── */}
-      <div className="shrink-0 px-4 py-2.5 border-b border-[var(--border-color)] bg-[var(--bg-secondary)] flex items-center gap-3">
-        <div className="p-2 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-600 text-white shadow-lg shadow-indigo-500/20 shrink-0">
-          <CloudSync size={18} />
-        </div>
-        <div className="flex-1 min-w-0">
-          <h1 className="text-xs font-bold leading-none">Rclone Cloud Sync</h1>
-          <p className="text-[10px] text-[var(--text-muted)] mt-0.5">Manage backups & cloud transfers via SSH</p>
+      <div className="shrink-0 px-3 sm:px-4 py-2.5 border-b border-[var(--border-color)] bg-[var(--bg-secondary)] flex flex-wrap items-center justify-between gap-2 sm:gap-3">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <div className="p-2 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-600 text-white shadow-lg shadow-indigo-500/20 shrink-0">
+            <CloudSync size={18} />
+          </div>
+          <div className="min-w-0">
+            <h1 className="text-xs font-bold leading-none truncate">Rclone Cloud Sync</h1>
+            <p className="text-[10px] text-[var(--text-muted)] mt-0.5 truncate">Manage backups & cloud transfers via SSH</p>
+          </div>
         </div>
 
-        {/* Server Selector Dropdown (Matching AutoDeploy App) */}
-        <div className="relative shrink-0" ref={connDropdownRef} style={{ zIndex: 9999 }}>
-          <button
-            type="button"
-            onClick={() => { setConnDropdownOpen(!connDropdownOpen); setConnSearch(''); }}
-            className="bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-1.5 text-xs text-[var(--text-primary)] font-bold focus:outline-none focus:border-indigo-500 min-w-[200px] max-w-[280px] flex items-center justify-between gap-2 cursor-pointer hover:border-indigo-500/50 transition-colors shadow-sm"
-          >
-            <span className="truncate flex items-center gap-1.5">
-              <Server size={13} className="text-indigo-400 shrink-0" />
-              {selectedConn ? (
-                <span className="truncate font-mono">{selectedConn.name} <span className="text-[var(--text-muted)] font-normal">({selectedConn.host})</span></span>
-              ) : (
-                <span className="text-[var(--text-muted)] font-normal">-- Select SSH Connection --</span>
-              )}
-            </span>
-            <ChevronDown size={12} className={`text-[var(--text-muted)] transition-transform shrink-0 ${connDropdownOpen ? 'rotate-180' : ''}`} />
-          </button>
+        <div className="flex items-center gap-2 w-full sm:w-auto mt-1 sm:mt-0 justify-end">
+          {/* Server Selector Dropdown (Matching AutoDeploy App) */}
+          <div className="relative flex-1 sm:flex-initial" ref={connDropdownRef} style={{ zIndex: 9999 }}>
+            <button
+              type="button"
+              onClick={() => { setConnDropdownOpen(!connDropdownOpen); setConnSearch(''); }}
+              className="bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-1.5 text-xs text-[var(--text-primary)] font-bold focus:outline-none focus:border-indigo-500 w-full sm:min-w-[200px] sm:max-w-[280px] flex items-center justify-between gap-2 cursor-pointer hover:border-indigo-500/50 transition-colors shadow-sm"
+            >
+              <span className="truncate flex items-center gap-1.5">
+                <Server size={13} className="text-indigo-400 shrink-0" />
+                {selectedConn ? (
+                  <span className="truncate font-mono">{selectedConn.name} <span className="text-[var(--text-muted)] font-normal">({selectedConn.host})</span></span>
+                ) : (
+                  <span className="text-[var(--text-muted)] font-normal">-- Select SSH Connection --</span>
+                )}
+              </span>
+              <ChevronDown size={12} className={`text-[var(--text-muted)] transition-transform shrink-0 ${connDropdownOpen ? 'rotate-180' : ''}`} />
+            </button>
 
-          {connDropdownOpen && (
-            <div className="absolute top-full right-0 mt-1.5 w-[280px] bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl shadow-2xl overflow-hidden divide-y divide-[var(--border-color)]">
-              <div className="p-2 bg-[var(--bg-tertiary)]">
-                <div className="flex items-center gap-2 bg-[var(--bg-primary)] rounded-lg px-2.5 py-1.5 border border-[var(--border-color)]">
-                  <Search size={12} className="text-[var(--text-muted)] shrink-0" />
-                  <input
-                    type="text"
-                    value={connSearch}
-                    onChange={(e) => setConnSearch(e.target.value)}
-                    placeholder="Search SSH connections..."
-                    className="bg-transparent text-xs text-[var(--text-primary)] outline-none w-full placeholder:text-[var(--text-muted)]"
-                    autoFocus
-                  />
-                  {connSearch && (
-                    <button onClick={() => setConnSearch('')} className="text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer">
-                      <X size={10} />
-                    </button>
-                  )}
+            {connDropdownOpen && (
+              <div className="absolute top-full right-0 mt-1.5 w-full sm:w-[280px] bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl shadow-2xl overflow-hidden divide-y divide-[var(--border-color)]">
+                <div className="p-2 bg-[var(--bg-tertiary)]">
+                  <div className="flex items-center gap-2 bg-[var(--bg-primary)] rounded-lg px-2.5 py-1.5 border border-[var(--border-color)]">
+                    <Search size={12} className="text-[var(--text-muted)] shrink-0" />
+                    <input
+                      type="text"
+                      value={connSearch}
+                      onChange={(e) => setConnSearch(e.target.value)}
+                      placeholder="Search SSH connections..."
+                      className="bg-transparent text-xs text-[var(--text-primary)] outline-none w-full placeholder:text-[var(--text-muted)]"
+                      autoFocus
+                    />
+                    {connSearch && (
+                      <button onClick={() => setConnSearch('')} className="text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer">
+                        <X size={10} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="max-h-60 overflow-y-auto py-1">
+                  {(!connections || connections.length === 0) ? (
+                    <div className="px-3 py-4 text-xs text-[var(--text-muted)] text-center">No SSH connections found</div>
+                  ) : (() => {
+                    const filtered = connections.filter(c => 
+                      c.name?.toLowerCase().includes(connSearch.toLowerCase()) || 
+                      c.host?.toLowerCase().includes(connSearch.toLowerCase())
+                    );
+                    if (filtered.length === 0) {
+                      return <div className="px-3 py-4 text-xs text-[var(--text-muted)] text-center">No matching connections</div>;
+                    }
+                    return filtered.map((c) => {
+                      const id = c.id || c._id;
+                      const isSelected = id === selectedConnId;
+                      return (
+                        <button
+                          key={id}
+                          type="button"
+                          onClick={() => {
+                            setSelectedConnId(id);
+                            setConnDropdownOpen(false);
+                            setConnSearch('');
+                          }}
+                          className={`w-full px-3 py-2 text-left text-xs font-mono flex items-center justify-between transition-colors cursor-pointer ${
+                            isSelected ? 'bg-indigo-500/15 text-indigo-400 font-bold' : 'hover:bg-[var(--bg-tertiary)] text-[var(--text-primary)]'
+                          }`}
+                        >
+                          <div className="truncate flex items-center gap-2">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
+                            <span className="truncate">{c.name}</span>
+                            <span className="text-[10px] text-[var(--text-muted)] font-normal truncate">({c.host})</span>
+                          </div>
+                          {isSelected && <Check size={13} className="text-indigo-400 shrink-0 ml-1" />}
+                        </button>
+                      );
+                    });
+                  })()}
                 </div>
               </div>
+            )}
+          </div>
 
-              <div className="max-h-60 overflow-y-auto py-1">
-                {(!connections || connections.length === 0) ? (
-                  <div className="px-3 py-4 text-xs text-[var(--text-muted)] text-center">No SSH connections found</div>
-                ) : (() => {
-                  const filtered = connections.filter(c => 
-                    c.name?.toLowerCase().includes(connSearch.toLowerCase()) || 
-                    c.host?.toLowerCase().includes(connSearch.toLowerCase())
-                  );
-                  if (filtered.length === 0) {
-                    return <div className="px-3 py-4 text-xs text-[var(--text-muted)] text-center">No matching connections</div>;
-                  }
-                  return filtered.map((c) => {
-                    const id = c.id || c._id;
-                    const isSelected = id === selectedConnId;
-                    return (
-                      <button
-                        key={id}
-                        type="button"
-                        onClick={() => {
-                          setSelectedConnId(id);
-                          setConnDropdownOpen(false);
-                          setConnSearch('');
-                        }}
-                        className={`w-full px-3 py-2 text-left text-xs font-mono flex items-center justify-between transition-colors cursor-pointer ${
-                          isSelected ? 'bg-indigo-500/15 text-indigo-400 font-bold' : 'hover:bg-[var(--bg-tertiary)] text-[var(--text-primary)]'
-                        }`}
-                      >
-                        <div className="truncate flex items-center gap-2">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
-                          <span className="truncate">{c.name}</span>
-                          <span className="text-[10px] text-[var(--text-muted)] font-normal truncate">({c.host})</span>
-                        </div>
-                        {isSelected && <Check size={13} className="text-indigo-400 shrink-0 ml-1" />}
-                      </button>
-                    );
-                  });
-                })()}
-              </div>
-            </div>
-          )}
+          <button
+            onClick={fetchRcloneStatus}
+            disabled={loading}
+            className="p-1.5 rounded-lg bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] text-[var(--text-muted)] transition-colors shrink-0 cursor-pointer"
+            title="Refresh Status"
+          >
+            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+          </button>
         </div>
-
-        <button
-          onClick={fetchRcloneStatus}
-          disabled={loading}
-          className="p-1.5 rounded-lg bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] text-[var(--text-muted)] transition-colors shrink-0 cursor-pointer"
-          title="Refresh Status"
-        >
-          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-        </button>
       </div>
 
       {/* ── Navigation Tabs ── */}
-      <div className="shrink-0 flex items-center gap-0 px-4 border-b border-[var(--border-color)] bg-[var(--bg-secondary)]/60">
+      <div className="shrink-0 flex items-center gap-0 px-2 sm:px-4 border-b border-[var(--border-color)] bg-[var(--bg-secondary)]/60 overflow-x-auto no-scrollbar">
         {[
           { id: 'setup',   icon: <Settings size={13} />,   label: 'Setup' },
           { id: 'remotes', icon: <HardDrive size={13} />,  label: `Remotes (${rcloneStatus?.remotes?.length || 0})` },
@@ -1569,7 +1573,7 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
             key={tab.id}
             data-onboarding={`tab-${tab.id}`}
             onClick={() => { setActiveTab(tab.id); if (tab.id === 'browser') handleBrowseRemote(); }}
-            className={`flex items-center gap-1.5 px-4 py-2.5 text-xs font-semibold border-b-2 transition-colors cursor-pointer whitespace-nowrap ${
+            className={`flex items-center gap-1.5 px-3 sm:px-4 py-2.5 text-xs font-semibold border-b-2 transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
               activeTab === tab.id
                 ? 'border-indigo-500 text-indigo-400'
                 : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]'
@@ -1585,7 +1589,7 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
         <button
           data-onboarding="help-btn"
           onClick={() => { resetRcloneOnboarding(); ensureMaximizedThenShow(); }}
-          className="p-2 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]/60 transition-colors"
+          className="p-2 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]/60 transition-colors shrink-0"
           title="Show tutorial"
         >
           <CircleHelp size={16} />
@@ -1597,7 +1601,7 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
 
         {/* ════════════════════ TAB 1: SETUP ════════════════════ */}
         {activeTab === 'setup' && (
-          <div className="p-5 max-w-3xl space-y-4">
+          <div className="p-3 sm:p-5 max-w-3xl space-y-4">
 
             {/* Status Card */}
             <div className={`p-4 rounded-2xl border flex items-center justify-between gap-4 ${
@@ -1750,7 +1754,7 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
 
         {/* ════════════════════ TAB 2: REMOTES ════════════════════ */}
         {activeTab === 'remotes' && (
-          <div className="p-5 max-w-4xl space-y-4">
+          <div className="p-3 sm:p-5 max-w-4xl space-y-4">
             <div className="flex items-center justify-between">
               <div>
                 <h2 className="text-sm font-bold">Cloud Remotes</h2>
@@ -1810,7 +1814,7 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
 
         {/* ════════════════════ TAB 3: BACKUP ════════════════════ */}
         {activeTab === 'backup' && (
-          <div className="p-5 max-w-3xl space-y-4">
+          <div className="p-3 sm:p-5 max-w-3xl space-y-4">
 
             {/* ─ Row 1: Mode + Action ─ */}
             <div className="flex flex-wrap items-center gap-2">
@@ -2221,7 +2225,7 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
 
         {/* ════════════════════ TAB 4: HISTORY ════════════════════ */}
         {activeTab === 'history' && (
-          <div className="p-5 max-w-3xl space-y-4">
+          <div className="p-3 sm:p-5 max-w-3xl space-y-4">
 
             {/* Header & Controls */}
             <div className="flex items-center justify-between flex-wrap gap-2">
@@ -2421,7 +2425,7 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
 
         {/* ════════════════════ TAB 4: CLOUD EXPLORER ════════════════════ */}
         {activeTab === 'browser' && (
-          <div className="p-5 max-w-4xl space-y-4">
+          <div className="p-3 sm:p-5 max-w-4xl space-y-4">
             <div className="flex items-center gap-3">
               {/* Remote quick-select pills */}
               <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 shrink-0">

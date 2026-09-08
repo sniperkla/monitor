@@ -1345,11 +1345,8 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
       } catch {}
     };
     poll();
-    let id = null;
-    if (isWaiting) {
-      id = setInterval(poll, 2000);
-    }
-    return () => { if (id) clearInterval(id); };
+    const id = setInterval(poll, interval);
+    return () => clearInterval(id);
   }, [session, relayModalOpen, relayWaiting]);
 
   // Auto-start relay polling when entering step 2 (no manual "I ran it" button needed)
@@ -1951,7 +1948,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
       )}
 
       {/* Content */}
-      <div className={`flex-1 min-h-0 min-w-0 overflow-y-auto pb-28 custom-scrollbar ${deploymentOnly ? 'p-6 @3xl:p-10 @4xl:p-12' : 'p-4 @3xl:p-8'}`}>
+      <div className={`flex-1 min-h-0 min-w-0 overflow-y-auto pb-28 custom-scrollbar ${deploymentOnly ? 'p-3 sm:p-6 @3xl:p-10 @4xl:p-12' : 'p-3 sm:p-4 @3xl:p-8'}`}>
         {/* Mobile Header */}
         {!deploymentOnly && (
           <div className="flex items-center gap-3 mb-6 @3xl:hidden relative z-10">
@@ -2415,8 +2412,8 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                             <div className="flex items-center gap-2 mb-2">
                               <Server size={14} className="text-indigo-400" />
                               <span className="text-[11px] font-bold text-[var(--text-primary)]">Server</span>
-                              {window.innerWidth < 768 && (
-                                <span className="text-[8px] px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-400 font-bold">Recommended</span>
+                              {!relayConnected && (
+                                <span className="text-[8px] px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-400 font-bold">Standard</span>
                               )}
                             </div>
                             <div className="space-y-1">
@@ -2430,28 +2427,25 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                           {/* Local Mode */}
                           <button
                             onClick={() => {
-                              const isMobile = window.innerWidth < 768;
-                              if (isMobile) {
-                                addNotification({ title: 'Not Available on Mobile', message: 'Local mode requires a desktop with the relay agent. Use Server mode on mobile.', type: 'warning' });
-                                return;
-                              }
                               if (sshMode === 'local') return;
                               if (relayConnected) {
                                 localStorage.setItem('ssh_monitor_ssh_mode', 'local');
                                 setSshMode('local');
                                 window.dispatchEvent(new Event('ssh-mode-changed'));
-                                addNotification({ title: 'SSH Mode', message: 'Switched to Local mode', type: 'success' });
+                                addNotification({ title: 'SSH Mode', message: 'Switched to Local mode (Relay active)', type: 'success' });
                               } else {
-                                addNotification({ title: 'Relay Required', message: 'Install the relay agent first', type: 'warning' });
+                                addNotification({ title: 'Relay Required', message: 'Install or connect your relay agent first', type: 'warning' });
+                                setExistingRelayIds(new Set(relays.map(r => r.relayId || r.relayName)));
+                                setRelayWizardStep(2);
+                                setRelayInstallSuccess(false);
+                                setRelayModalOpen(true);
                               }
                             }}
-                            className={`relative p-3 rounded-xl border text-left transition-all ${
-                              window.innerWidth < 768
-                                ? 'border-[var(--border-color)] opacity-50 cursor-not-allowed'
-                                : sshMode === 'local'
+                            className={`relative p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                              sshMode === 'local'
                                 ? 'border-emerald-500/50 bg-emerald-500/10'
                                 : !relayConnected
-                                ? 'border-[var(--border-color)] opacity-60'
+                                ? 'border-[var(--border-color)] opacity-60 hover:opacity-90'
                                 : 'border-[var(--border-color)] hover:border-[var(--border-hover)]'
                             }`}
                           >
@@ -2463,37 +2457,34 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                             <div className="flex items-center gap-2 mb-2">
                               <Monitor size={14} className="text-emerald-400" />
                               <span className="text-[11px] font-bold text-[var(--text-primary)]">Local</span>
-                              {window.innerWidth >= 768 && (
-                                <span className="text-[8px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-bold">Recommended</span>
-                              )}
-                              {window.innerWidth < 768 ? (
-                                <span className="text-[8px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-400">Desktop only</span>
-                              ) : !relayConnected ? (
+                              {relayConnected ? (
+                                <span className="text-[8px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-bold">Relay Connected</span>
+                              ) : (
                                 <span className="text-[8px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400">Requires Relay</span>
-                              ) : null}
+                              )}
                             </div>
                             <div className="space-y-1">
                               <p className="text-[9px] text-emerald-400">✓ Your machine handles SSH</p>
                               <p className="text-[9px] text-emerald-400">✓ Server sees nothing</p>
                               <p className="text-[9px] text-emerald-400">✓ Faster (direct connection)</p>
-                              <p className="text-[9px] text-amber-400">• Desktop + relay agent required</p>
+                              <p className="text-[9px] text-amber-400">• Relay agent active</p>
                             </div>
                           </button>
                         </div>
 
                         {/* Platform tip */}
-                        {window.innerWidth < 768 ? (
-                          <div className="mt-2 flex items-start gap-2 p-2.5 rounded-xl bg-indigo-500/10 border border-indigo-500/20">
-                            <Server size={13} className="text-indigo-400 shrink-0 mt-0.5" />
-                            <p className="text-[10px] text-indigo-300">
-                              <strong>Mobile tip:</strong> Use Server mode to connect to remote servers. For localhost targets, make sure your desktop relay is running — the app server will route through it automatically.
-                            </p>
-                          </div>
-                        ) : (
+                        {relayConnected ? (
                           <div className="mt-2 flex items-start gap-2 p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
                             <Monitor size={13} className="text-emerald-400 shrink-0 mt-0.5" />
                             <p className="text-[10px] text-emerald-300">
-                              <strong>Desktop tip:</strong> Local mode is recommended — your machine handles SSH directly, the server sees nothing, and it&apos;s faster. Install the relay agent to enable it.
+                              <strong>Relay active:</strong> Local mode routes SSH and terminal connections through your active relay agent on all devices.
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="mt-2 flex items-start gap-2 p-2.5 rounded-xl bg-indigo-500/10 border border-indigo-500/20">
+                            <Server size={13} className="text-indigo-400 shrink-0 mt-0.5" />
+                            <p className="text-[10px] text-indigo-300">
+                              <strong>Server mode:</strong> Recommended when no relay agent is running. Install the relay agent to enable Local mode from any device.
                             </p>
                           </div>
                         )}
@@ -3085,14 +3076,14 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
         {activeTab === 'deployment' && (
           <div className="max-w-6xl animate-in fade-in slide-in-from-bottom-2 duration-300">
             {/* Top Toolbar / Dashboard Selector */}
-            <div className="p-4 mb-4 rounded-2xl bg-slate-900/40 border border-[var(--border-color)] flex flex-col @xl:flex-row @xl:items-center justify-between gap-4">
-              <div className="flex flex-wrap items-center gap-3">
+            <div className="p-3 sm:p-4 mb-4 rounded-2xl bg-slate-900/40 border border-[var(--border-color)] flex flex-col @xl:flex-row @xl:items-center justify-between gap-3 sm:gap-4">
+              <div className="flex flex-wrap items-center gap-2.5 sm:gap-3">
                 <label className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-wider">{t('deploy.selectProject', 'Select Project:')}</label>
-                <div className="relative" ref={projectDropdownRef}>
+                <div className="relative w-full sm:w-auto" ref={projectDropdownRef}>
                   <button
                     type="button"
                     onClick={() => { setProjectDropdownOpen(!projectDropdownOpen); setProjectSearch(''); }}
-                    className="bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-1.5 text-xs text-[var(--text-primary)] font-bold focus:outline-none focus:border-indigo-500 min-w-[200px] max-w-[280px] flex items-center justify-between gap-2 cursor-pointer hover:border-indigo-500/50 transition-colors"
+                    className="bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl px-3 py-1.5 text-xs text-[var(--text-primary)] font-bold focus:outline-none focus:border-indigo-500 w-full sm:w-auto sm:min-w-[200px] sm:max-w-[280px] flex items-center justify-between gap-2 cursor-pointer hover:border-indigo-500/50 transition-colors"
                   >
                     <span className="truncate flex items-center gap-1.5">
                       {(() => {
@@ -3104,10 +3095,10 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                       })()}
                       {selectedProjectId}{deployConfig.name ? ` - ${deployConfig.name}` : ''}
                     </span>
-                    <ChevronDown size={12} className={`text-[var(--text-muted)] transition-transform ${projectDropdownOpen ? 'rotate-180' : ''}`} />
+                    <ChevronDown size={12} className={`text-[var(--text-muted)] transition-transform shrink-0 ${projectDropdownOpen ? 'rotate-180' : ''}`} />
                   </button>
                   {projectDropdownOpen && (
-                    <div className="absolute top-full left-0 mt-1 w-[300px] bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl shadow-2xl z-50 overflow-hidden">
+                    <div className="absolute top-full left-0 mt-1 w-full sm:w-[300px] bg-[var(--bg-primary)] border border-[var(--border-color)] rounded-xl shadow-2xl z-50 overflow-hidden">
                       <div className="p-2 border-b border-[var(--border-color)]">
                         <div className="flex items-center gap-2 bg-slate-800/50 rounded-lg px-2 py-1.5">
                           <Search size={12} className="text-[var(--text-muted)] flex-shrink-0" />
@@ -3192,7 +3183,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                 )}
               </div>
 
-              {/* Replay tutorial button — pinned to the far right, same as SSH/Docker/Rclone/Mongo Sync */}
+              {/* Replay tutorial button */}
               <button
                 type="button"
                 data-onboarding="help-btn"
@@ -3202,27 +3193,26 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                   setDeployTourKey(k => k + 1);
                   setShowDeployOnboarding(true);
                 }}
-                className="p-2 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]/60 transition-colors cursor-pointer self-start @xl:self-auto"
+                className="p-2 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]/60 transition-colors cursor-pointer self-start @xl:self-auto shrink-0"
                 title="Show tutorial"
               >
                 <CircleHelp size={16} />
               </button>
-
             </div>
 
-            <div className="flex flex-col @xl:flex-row @xl:items-center @xl:justify-between gap-4 mb-2">
+            <div className="flex flex-col @xl:flex-row @xl:items-center @xl:justify-between gap-3 sm:gap-4 mb-3">
               <div>
-                <h1 className="text-2xl font-bold text-[var(--text-primary)] flex items-center gap-2">
+                <h1 className="text-xl sm:text-2xl font-bold text-[var(--text-primary)] flex flex-wrap items-center gap-2">
                   {t('deploy.title', 'Auto Deployment')}: <span className="text-indigo-400">{selectedProjectId}</span>
                   {deployConfig.name && deployConfig.name !== selectedProjectId && <span className="text-sm text-[var(--text-secondary)]">({deployConfig.name})</span>}
                 </h1>
-                <p className="text-[var(--text-secondary)] text-sm mt-1">{t('deploy.subtitle', 'Configure automated git-triggered deployments via webhooks.')}</p>
+                <p className="text-[var(--text-secondary)] text-xs sm:text-sm mt-1">{t('deploy.subtitle', 'Configure automated git-triggered deployments via webhooks.')}</p>
               </div>
               <div data-onboarding="deploy-actions" className="flex flex-wrap gap-2">
                 <button
                   onClick={handleSaveDeployConfig}
                   disabled={deploySaving || deployLoading}
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-lg flex items-center gap-1.5 cursor-pointer"
+                  className="px-3.5 py-1.5 sm:px-4 sm:py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-lg flex items-center gap-1.5 cursor-pointer"
                 >
                   {deploySaving ? <LoaderCircle size={12} className="animate-spin" /> : <CircleCheck size={12} />}
                   {t('deploy.saveSettings', 'Save Settings')}
@@ -3230,7 +3220,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                 <button
                   onClick={handleTriggerDeploy}
                   disabled={deployTriggering || deployLoading || deployConfig.status === 'running'}
-                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-lg flex items-center gap-1.5 cursor-pointer"
+                  className="px-3.5 py-1.5 sm:px-4 sm:py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-lg flex items-center gap-1.5 cursor-pointer"
                 >
                   {deployTriggering ? <LoaderCircle size={12} className="animate-spin" /> : <RefreshCw size={12} />}
                   {t('deploy.deployNow', 'Deploy Now')}
@@ -3239,7 +3229,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                   <button
                     onClick={handleTriggerDeploy}
                     disabled={deployTriggering || deployLoading}
-                    className="px-4 py-2 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-lg flex items-center gap-1.5 cursor-pointer"
+                    className="px-3.5 py-1.5 sm:px-4 sm:py-2 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-lg flex items-center gap-1.5 cursor-pointer"
                   >
                     {deployTriggering ? <LoaderCircle size={12} className="animate-spin" /> : <RotateCcw size={12} />}
                     {t('deploy.retry', 'Retry')}
@@ -3250,14 +3240,14 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                     <button
                       onClick={handleCancelDeploy}
                       disabled={deployLoading}
-                      className="px-4 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-lg flex items-center gap-1.5 cursor-pointer"
+                      className="px-3.5 py-1.5 sm:px-4 sm:py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-lg flex items-center gap-1.5 cursor-pointer"
                     >
                       {t('deploy.cancel', 'Cancel')}
                     </button>
                     <button
                       onClick={handleForceResetDeploy}
                       disabled={deployLoading}
-                      className="px-4 py-2 bg-slate-600 hover:bg-slate-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-lg flex items-center gap-1.5 cursor-pointer"
+                      className="px-3.5 py-1.5 sm:px-4 sm:py-2 bg-slate-600 hover:bg-slate-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-lg flex items-center gap-1.5 cursor-pointer"
                       title="Force-reset if deploy is stuck"
                     >
                       {t('deploy.forceReset', 'Force Reset')}
@@ -3289,7 +3279,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                       key={section.id}
                       type="button"
                       onClick={() => setDeploymentTab(section.id)}
-                      className={`flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-bold whitespace-nowrap transition cursor-pointer ${
+                      className={`flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-bold whitespace-nowrap transition cursor-pointer shrink-0 ${
                         deploymentTab === section.id
                           ? 'bg-indigo-600 text-white shadow-lg'
                           : 'text-[var(--text-secondary)] hover:bg-slate-700/50'

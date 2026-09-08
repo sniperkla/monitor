@@ -686,39 +686,37 @@ export default function ServerBackupApp({ windowId = 'server-backup', activeTab:
   const removeExclude = (i) => updateConfig('excludes', config.excludes.filter((_, idx) => idx !== i));
 
   return (
-    <div className="@container flex h-full bg-[var(--bg-primary)] text-[var(--text-primary)]">
-      <div className="w-52 shrink-0 border-r border-[var(--border-color)] bg-[var(--bg-secondary)]/30 flex flex-col">
-        <div className="p-3 border-b border-[var(--border-color)]">
-          <div className="flex items-center justify-between gap-2 text-sm font-bold">
-            <div className="flex items-center gap-2">
-              <HardDrive size={16} className="text-indigo-400" />
-              <span>Server Backup</span>
-            </div>
-            <button
-              data-onboarding="help-btn"
-              onClick={() => { resetServerBackupOnboarding(); ensureMaximizedThenShow(); }}
-              className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-white/5 transition-colors"
-              title="Show tutorial"
-            >
-              <CircleHelp size={15} />
-            </button>
+    <div className="@container flex flex-col md:flex-row h-full bg-[var(--bg-primary)] text-[var(--text-primary)] overflow-hidden">
+      <div className="w-full md:w-52 shrink-0 border-b md:border-b-0 md:border-r border-[var(--border-color)] bg-[var(--bg-secondary)]/30 flex flex-col">
+        <div className="p-2.5 sm:p-3 border-b border-[var(--border-color)] flex items-center justify-between gap-2 text-sm font-bold">
+          <div className="flex items-center gap-2">
+            <HardDrive size={16} className="text-indigo-400 shrink-0" />
+            <span className="truncate">Server Backup</span>
           </div>
+          <button
+            data-onboarding="help-btn"
+            onClick={() => { resetServerBackupOnboarding(); ensureMaximizedThenShow(); }}
+            className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-white/5 transition-colors shrink-0"
+            title="Show tutorial"
+          >
+            <CircleHelp size={15} />
+          </button>
         </div>
-        <div className="flex-1 p-2 space-y-0.5">
+        <div className="p-1.5 md:p-2 flex md:flex-col items-center md:items-stretch gap-1 md:space-y-0.5 overflow-x-auto no-scrollbar md:flex-1">
           {TABS.map(tab => (
             <button
               key={tab.id}
               data-onboarding={`tab-${tab.id}`}
               onClick={() => setActiveTab(tab.id)}
-              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold transition-all ${activeTab === tab.id ? 'bg-indigo-500/15 text-indigo-400 border border-indigo-500/30' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] border border-transparent'}`}
+              className={`flex items-center gap-2 px-3 py-1.5 md:py-2 rounded-lg text-xs font-semibold transition-all whitespace-nowrap shrink-0 md:w-full ${activeTab === tab.id ? 'bg-indigo-500/15 text-indigo-400 border border-indigo-500/30' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] border border-transparent'}`}
             >
               <tab.icon size={14} />
               {tab.label}
             </button>
           ))}
         </div>
-        <div className="p-3 border-t border-[var(--border-color)]">
-          <label className="block text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1.5">Server</label>
+        <div className="p-2 sm:p-3 border-t border-[var(--border-color)]">
+          <label className="hidden md:block text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1.5">Server</label>
           <SearchableSelect
             value={connectionId}
             onChange={setConnectionId}
@@ -728,12 +726,12 @@ export default function ServerBackupApp({ windowId = 'server-backup', activeTab:
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-5 space-y-5">
+      <div className="flex-1 overflow-y-auto p-3 sm:p-5 space-y-4 sm:space-y-5">
         {activeTab === 'backup' && (
           <>
             <div>
               <h2 className="text-sm font-bold mb-3">Backup Type</h2>
-              <div className="grid grid-cols-5 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
                 {BACKUP_TYPES.map(t => (
                   <button
                     key={t.id}

@@ -2049,7 +2049,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
   };
 
   return (
-    <div className="flex h-full w-full bg-transparent text-[var(--text-primary)] border-[var(--border-color)] overflow-hidden font-sans">
+    <div className="flex flex-col md:flex-row h-full w-full bg-transparent text-[var(--text-primary)] border-[var(--border-color)] overflow-hidden font-sans">
 
       {/* ── Real-Time Live Restore Progress Modal ──────────────────────────── */}
       <AnimatePresence>
@@ -2602,31 +2602,37 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
         )}
       </AnimatePresence>
 
-      {/* Sidebar Navigation */}
-
-      <div className="w-56 border-r border-[var(--border-color)] p-4 flex flex-col shrink-0 h-full bg-[var(--bg-secondary)]/30">
-        <div className="flex items-center gap-2 mb-6 px-1">
-          <div className="w-8 h-8 rounded-lg bg-emerald-500/10 flex items-center justify-center border border-emerald-500/20 shadow-inner">
+      {/* Sidebar / Top Navigation */}
+      <div className="w-full md:w-56 border-b md:border-b-0 md:border-r border-[var(--border-color)] p-2.5 sm:p-3 md:p-4 flex flex-col shrink-0 md:h-full bg-[var(--bg-secondary)]/30">
+        <div className="flex items-center gap-2 mb-2 md:mb-6 px-1">
+          <div className="w-8 h-8 rounded-lg bg-emerald-500/10 flex items-center justify-center border border-emerald-500/20 shadow-inner shrink-0">
             <Database size={16} className="text-emerald-400" />
           </div>
-          <span className="font-extrabold text-sm tracking-tight italic uppercase">Mongo Sync</span>
+          <span className="font-extrabold text-sm tracking-tight italic uppercase truncate">Mongo Sync</span>
+          
+          {/* Mobile Cloud Status Pill */}
+          <div className="md:hidden flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-[var(--bg-tertiary)]/50 border border-[var(--border-color)] text-[10px] text-[var(--text-muted)] font-mono ml-2 truncate">
+            <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${driveConnected ? 'bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.7)]' : 'bg-rose-500'}`} />
+            <span className="truncate max-w-[120px]">{driveConnected ? driveEmail : 'Not Connected'}</span>
+          </div>
+
           <div className="flex-1" />
           {/* Replay tutorial button */}
           <button
             data-onboarding="help-btn"
             onClick={() => { resetMongoBackupOnboarding(); ensureMaximizedThenShow(); }}
-            className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]/60 transition-colors"
+            className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]/60 transition-colors shrink-0"
             title="Show tutorial"
           >
             <CircleHelp size={15} />
           </button>
         </div>
 
-        <nav className="flex-1 space-y-1.5">
+        <nav className="flex md:flex-col items-center md:items-stretch gap-1 md:space-y-1.5 overflow-x-auto no-scrollbar py-0.5 md:py-0 md:flex-1">
           <button
             data-onboarding="tab-import"
             onClick={() => setActiveTab('import')}
-            className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs font-bold rounded-xl transition-all ${
+            className={`flex items-center gap-2 px-3 py-2 text-xs font-bold rounded-xl transition-all whitespace-nowrap shrink-0 md:w-full ${
               activeTab === 'import' ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/20 shadow-sm' : 'hover:bg-[var(--bg-card-hover)] border border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]'
             }`}
           >
@@ -2636,14 +2642,14 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
           <button
             data-onboarding="tab-gdrive"
             onClick={() => setActiveTab('gdrive')}
-            className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs font-bold rounded-xl transition-all relative ${
+            className={`flex items-center gap-2 px-3 py-2 text-xs font-bold rounded-xl transition-all whitespace-nowrap shrink-0 md:w-full relative ${
               activeTab === 'gdrive' ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/20 shadow-sm' : 'hover:bg-[var(--bg-card-hover)] border border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]'
             }`}
           >
             <Cloud size={14} />
             <span>Google Drive</span>
             {driveConnected && (
-              <span className="absolute right-3 w-1.5 h-1.5 bg-emerald-500 rounded-full animate-ping" />
+              <span className="md:absolute md:right-3 w-1.5 h-1.5 bg-emerald-500 rounded-full animate-ping ml-1 md:ml-0" />
             )}
           </button>
           <button
@@ -2651,7 +2657,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
             onClick={() => setActiveTab('jobs')}
             disabled={!driveConnected}
             title={!driveConnected ? 'Please connect Google Drive first' : ''}
-            className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs font-bold rounded-xl transition-all ${
+            className={`flex items-center gap-2 px-3 py-2 text-xs font-bold rounded-xl transition-all whitespace-nowrap shrink-0 md:w-full ${
               !driveConnected
                 ? 'opacity-40 cursor-not-allowed border border-transparent text-[var(--text-muted)]'
                 : activeTab === 'jobs'
@@ -2671,7 +2677,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
             }}
             disabled={!driveConnected}
             title={!driveConnected ? 'Please connect Google Drive first' : ''}
-            className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs font-bold rounded-xl transition-all ${
+            className={`flex items-center gap-2 px-3 py-2 text-xs font-bold rounded-xl transition-all whitespace-nowrap shrink-0 md:w-full ${
               !driveConnected
                 ? 'opacity-40 cursor-not-allowed border border-transparent text-[var(--text-muted)]'
                 : activeTab === 'restore'
@@ -2689,7 +2695,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
               fetchHistory();
               fetchAllCronLogs();
             }}
-            className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs font-bold rounded-xl transition-all ${
+            className={`flex items-center gap-2 px-3 py-2 text-xs font-bold rounded-xl transition-all whitespace-nowrap shrink-0 md:w-full ${
               activeTab === 'history' ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/20 shadow-sm' : 'hover:bg-[var(--bg-card-hover)] border border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]'
             }`}
           >
@@ -2702,17 +2708,17 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
               setActiveTab('failover');
               fetchReplicaSetStatus(rsConnId);
             }}
-            className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs font-bold rounded-xl transition-all ${
+            className={`flex items-center gap-2 px-3 py-2 text-xs font-bold rounded-xl transition-all whitespace-nowrap shrink-0 md:w-full ${
               activeTab === 'failover' ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/20 shadow-sm' : 'hover:bg-[var(--bg-card-hover)] border border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]'
             }`}
           >
             <ShieldAlert size={14} />
-            <span>Failover & Replica Set</span>
+            <span>Failover & Replica</span>
           </button>
         </nav>
 
-        {/* Status display footer */}
-        <div className="p-3 bg-[var(--bg-tertiary)]/20 rounded-xl border border-[var(--border-color)]">
+        {/* Status display footer (Desktop) */}
+        <div className="hidden md:block p-3 bg-[var(--bg-tertiary)]/20 rounded-xl border border-[var(--border-color)] mt-auto">
           <div className="flex items-center gap-2 mb-1.5">
             <div className={`w-2 h-2 rounded-full ${driveConnected ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-rose-500'}`} />
             <span className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">Cloud Sync</span>
@@ -2725,7 +2731,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col bg-transparent overflow-hidden">
-        <div className="@container flex-1 overflow-y-auto custom-scrollbar p-6">
+        <div className="@container flex-1 overflow-y-auto custom-scrollbar p-3 sm:p-6">
           <AnimatePresence mode="wait">
             {activeTab === 'import' && (
               <motion.div

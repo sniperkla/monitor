@@ -512,7 +512,7 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
           top: 0,
           left: 0,
           width: '100vw',
-          height: 'calc(100dvh - var(--taskbar-size, 56px))',
+          height: 'calc(100dvh - 56px - env(safe-area-inset-bottom, 0px))',
           background: 'rgb(10 14 26 / 0.99)',
           backdropFilter: 'none',
           WebkitBackdropFilter: 'none',
@@ -523,7 +523,8 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
         <div
           className="title-bar flex items-center border-b border-[var(--border-color)] shrink-0"
           style={{
-            height: 48,
+            height: 'calc(48px + env(safe-area-inset-top, 0px))',
+            minHeight: 'calc(48px + env(safe-area-inset-top, 0px))',
             background: 'rgb(15 20 35 / 1)',
             paddingTop: 'env(safe-area-inset-top, 0px)',
             position: 'relative',
@@ -563,7 +564,7 @@ export default function Window({ id, title, icon: Icon, component, isMinimized, 
 
         {/* Window Content */}
         <div
-          className="flex-1 min-h-0 min-w-0 overflow-x-hidden overflow-y-auto relative select-text"
+          className="flex-1 min-h-0 min-w-0 flex flex-col overflow-x-auto overflow-y-auto relative select-text"
           style={{ WebkitOverflowScrolling: 'touch' }}
           data-scrollable
         >
