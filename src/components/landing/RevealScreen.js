@@ -23,7 +23,7 @@ import { CONSOLE_CSS, SUBTITLE } from './console/theme';
 import DesktopChrome from './DesktopChrome';
 import { prefersReducedMotion, useIsTouch, useDocumentVisible } from './story/hooks';
 import { ScrambleTitle } from './console/ScrambleTitle';
-import { AuthActions, CloserActions } from './console/AuthActions';
+import { AuthActions, CloserActions, useGoogleSignIn } from './console/AuthActions';
 import { Statusline } from './console/Statusline';
 import { useScrollStory } from './story/useScrollStory';
 import { SectionHead, FleetMock, MonitorMock, SecurityMock, BackupMock, DeployMock, AgentMock } from './story/mocks';
@@ -60,6 +60,9 @@ export function RevealScreen({ onDismiss }) {
   const [passkeySupported] = useState(() => (typeof window !== 'undefined' ? passkeysSupported() : false));
   const [passkeyLoading, setPasskeyLoading] = useState(false);
   const [passkeyError, setPasskeyError] = useState(null);
+
+  // Google sign-in — resilient handler (loading state + silent-failure fallback)
+  const { googleLoading, googleError, onGoogle } = useGoogleSignIn();
 
   const cardRef = useRef(null);
   const heroRef = useRef(null);
@@ -261,6 +264,9 @@ export function RevealScreen({ onDismiss }) {
     onPasskey: handlePasskeySignIn,
     onEmail: () => setShowAuthModal(true),
     onDemo: SHOW_DEMO ? onDismiss : null,
+    onGoogle,
+    googleLoading,
+    googleError,
   };
 
   return (

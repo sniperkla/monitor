@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { signIn } from 'next-auth/react';
 import { LoaderCircle, Mail } from 'lucide-react';
 
@@ -33,6 +34,64 @@ function Row({ onClick, disabled, children }) {
   );
 }
 
+/* ── Google sign-in with a silent-failure guard ─────────────────────────────
+ * next-auth's client signIn() runs a multi-step chain (fetch /api/auth/csrf →
+ * POST /api/auth/signin/google → parse JSON → window.location = url). If ANY
+ * step throws on a device (flaky mobile network, stale service-worker cache,
+ * cookie hiccup) it becomes an unhandled rejection and the tap appears to do
+ * NOTHING — no loading, no navigation. So: show a loading state, surface the
+ * error, and fall back to a real form POST to /api/auth/signin/google, which
+ * makes the server 302 the browser straight to Google — no fetch/JSON chain
+ * left to fail silently.
+ */
+function useGoogleSignIn() {
+  const [googleLoading, setGoogleLoading] = useState(false);
+  const [googleError, setGoogleError] = useState(null);
+
+  const onGoogle = async () => {
+    if (googleLoading) return;
+    setGoogleLoading(true);
+    setGoogleError(null);
+    try {
+      // Preferred: the next-auth client flow. On success the page navigates
+      // away and this promise never settles.
+      await signIn('google', { callbackUrl: '/' });
+    } catch { /* fall through to the hard form POST */ }
+    // Still here → the client flow failed without navigating. Fall back to a
+    // plain form POST (exactly what the built-in signin page does).
+    try {
+      const csrfRes = await fetch('/api/auth/csrf', { cache: 'no-store' });
+      if (!csrfRes.ok) throw new Error(`csrf ${csrfRes.status}`);
+      const { csrfToken } = await csrfRes.json();
+      if (!csrfToken) throw new Error('no csrf token');
+      const form = document.createElement('form');
+      form.method = 'post';
+      form.action = '/api/auth/signin/google';
+      form.style.display = 'none';
+      const add = (name, value) => {
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = name;
+        input.value = value;
+        form.appendChild(input);
+      };
+      add('csrfToken', csrfToken);
+      add('callbackUrl', '/');
+      // NOTE: no `json: true` — the plain POST makes next-auth answer with a
+      // 302 redirect to Google instead of a JSON body replacing this page.
+      document.body.appendChild(form);
+      form.submit();
+    } catch (err) {
+      setGoogleLoading(false);
+      setGoogleError(
+        `Google sign-in could not start (${err?.message || 'unknown error'}). Check your connection and try again, or use Email & Password Login.`
+      );
+    }
+  };
+
+  return { googleLoading, googleError, onGoogle };
+}
+
 /* ── AuthActions — the hero console's auth menu ── */
 function AuthActions({
   passkeySupported,
@@ -41,13 +100,16 @@ function AuthActions({
   onPasskey,
   onEmail,
   onDemo,
+  onGoogle,
+  googleLoading,
+  googleError,
 }) {
   return (
     <div>
       <div className="rounded-md border border-emerald-900/40 bg-black/30 divide-y divide-emerald-900/20 overflow-hidden">
-        <Row onClick={() => signIn('google', { callbackUrl: '/' })}>
-          <GoogleGlyph />
-          <span>Continue with Google</span>
+        <Row onClick={onGoogle} disabled={googleLoading}>
+          {googleLoading ? <LoaderCircle size={13} className="animate-spin text-emerald-300" /> : <GoogleGlyph />}
+          <span>{googleLoading ? 'Opening Google…' : 'Continue with Google'}</span>
         </Row>
         {passkeySupported && (
           <Row onClick={onPasskey} disabled={passkeyLoading}>
@@ -70,8 +132,8 @@ function AuthActions({
           </Row>
         )}
       </div>
-      {passkeyError && (
-        <p className="mt-2.5 font-mono text-[10px] text-rose-400/90">✗ {passkeyError}</p>
+      {(googleError || passkeyError) && (
+        <p className="mt-2.5 font-mono text-[10px] text-rose-400/90">{googleError || `✗ ${passkeyError}`}</p>
       )}
     </div>
   );
@@ -85,24 +147,27 @@ function CloserActions({
   onPasskey,
   onEmail,
   onDemo,
+  onGoogle,
+  googleLoading,
+  googleError,
 }) {
   return (
     <div>
       <div className="rounded-md border border-emerald-900/40 bg-black/30 divide-y divide-emerald-900/20 overflow-hidden">
-        <Row onClick={() => signIn('google', { callbackUrl: '/' })}>
-          <GoogleGlyph />
-          <span>Continue with Google</span>
+        <Row onClick={onGoogle} disabled={googleLoading}>
+          {googleLoading ? <LoaderCircle size={13} className="animate-spin text-emerald-300" /> : <GoogleGlyph />}
+          <span>{googleLoading ? 'Opening Google…' : 'Continue with Google'}</span>
         </Row>
         <Row onClick={onEmail}>
           <Mail size={13} className="text-emerald-400 shrink-0" />
           <span>Email &amp; Password Login</span>
         </Row>
       </div>
-      {passkeyError && (
-        <p className="mt-2.5 font-mono text-[10px] text-rose-400/90">✗ {passkeyError}</p>
+      {(googleError || passkeyError) && (
+        <p className="mt-2.5 font-mono text-[10px] text-rose-400/90">{googleError || `✗ ${passkeyError}`}</p>
       )}
     </div>
   );
 }
 
-export { AuthActions, CloserActions };
+export { AuthActions, CloserActions, useGoogleSignIn };
