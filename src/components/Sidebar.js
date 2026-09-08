@@ -758,13 +758,12 @@ export default function Sidebar({ onNewConnection, onEditConnection }) {
 
   return (
     <>
-      {/* Mobile backdrop */}
-      {sidebarOpen && (
-        <div 
-          className="sidebar-backdrop md:hidden" 
-          onClick={() => dispatch({ type: 'TOGGLE_SIDEBAR' })}
-        />
-      )}
+      {/* NOTE: no internal mobile backdrop here — SSHApp renders its own overlay
+          UNDER the sliding panel (z-40 below the panel's z-50). An earlier
+          `.sidebar-backdrop` rendered inside this component sat within the
+          panel's transformed stacking context, painted ABOVE the connection
+          list (z-index 49 over static content) and swallowed every tap,
+          closing the sidebar instead of selecting a server. */}
       <div className={`sidebar flex flex-col shrink-0 ${sidebarOpen ? 'open' : ''} ${!sidebarOpen ? 'hidden' : ''}`} style={{ width: '100%', height: '100%', borderRight: '1px solid var(--border-color)' }}>
       {/* Header */}
       <div className="p-3.5 border-b space-y-3" style={{ borderColor: 'var(--border-color)' }}>

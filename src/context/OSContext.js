@@ -114,32 +114,73 @@ const getNextWindowZIndex = (state) => {
     }, 99);
 
   return Math.max(Number(state.nextZIndex) || 100, highestWindowZIndex + 1);
+}
+
+// Window z-indexes grow by 1 on every open/focus and are persisted with the
+// settings payload. On mobile every tap on a window calls focusWindow, so a
+// long-lived session climbs into the fixed-UI band — the mobile dock lives at
+// z-[10000], taskbar popups higher — and the dock ends up BURIED behind
+// windows ("taskbar gone on mobile"). Once the next allocation would reach
+// the ceiling, renumber every window (stack order preserved) back to a low
+// base so the dock and menus always stay on top. Settings then persist the
+// normalized values, so existing high sessions self-heal on first focus.
+const WINDOW_Z_CEILING = 9000;
+const WINDOW_Z_BASE = 100;
+
+const normalizeWindowZIndexes = (state) => {
+  const seen = new Map();
+  for (const w of [...(state.windows || []), ...Object.values(state.windowsByDesktop || {}).flat()]) {
+    if (w && !seen.has(w.id)) seen.set(w.id, w);
+  }
+  const ordered = [...seen.values()].sort((a, b) => (Number(a.zIndex) || 0) - (Number(b.zIndex) || 0));
+  const zMap = new Map(ordered.map((w, i) => [w.id, WINDOW_Z_BASE + i]));
+  const renumber = (list) => (list || []).map(w => (zMap.has(w.id) ? { ...w, zIndex: zMap.get(w.id) } : w));
+  return {
+    ...state,
+    windows: renumber(state.windows),
+    windowsByDesktop: Object.fromEntries(
+      Object.entries(state.windowsByDesktop || {}).map(([desktopId, list]) => [desktopId, renumber(list)])
+    ),
+    nextZIndex: WINDOW_Z_BASE + ordered.length,
+  };
+};
+
+// Resolve the z-index for a window being opened/focused, normalizing the
+// whole stack first if it has crept up to the fixed-UI ceiling.
+const allocateWindowZIndex = (state) => {
+  let baseState = state;
+  let nextZIndex = getNextWindowZIndex(state);
+  if (nextZIndex >= WINDOW_Z_CEILING) {
+    baseState = normalizeWindowZIndexes(state);
+    nextZIndex = getNextWindowZIndex(baseState);
+  }
+  return { baseState, nextZIndex };
 };
 
 function osReducer(state, action) {
   switch (action.type) {
     case 'OPEN_WINDOW': {
-      const nextZIndex = getNextWindowZIndex(state);
+      const { baseState, nextZIndex } = allocateWindowZIndex(state);
       // Check if window with same ID already exists (e.g. settings)
       // Also scan windowsByDesktop in case windows[] fell out of sync.
-      const existing = state.windows.find(w => w.id === action.payload.id)
-        || Object.values(state.windowsByDesktop || {}).flat().find(w => w.id === action.payload.id);
+      const existing = baseState.windows.find(w => w.id === action.payload.id)
+        || Object.values(baseState.windowsByDesktop || {}).flat().find(w => w.id === action.payload.id);
       if (existing) {
-        const targetDesktopId = Object.entries(state.windowsByDesktop || {}).find(([, list]) =>
+        const targetDesktopId = Object.entries(baseState.windowsByDesktop || {}).find(([, list]) =>
           Array.isArray(list) && list.some(w => w.id === existing.id)
         )?.[0];
 
-        const nextCurrentDesktopId = targetDesktopId || state.currentDesktopId;
+        const nextCurrentDesktopId = targetDesktopId || baseState.currentDesktopId;
 
         return {
-          ...state,
+          ...baseState,
           currentDesktopId: nextCurrentDesktopId,
           activeWindowId: existing.id,
-          windows: state.windows.map(w =>
+          windows: baseState.windows.map(w =>
             w.id === existing.id ? { ...w, isMinimized: false, zIndex: nextZIndex } : w
           ),
           windowsByDesktop: Object.fromEntries(
-            Object.entries(state.windowsByDesktop || {}).map(([desktopId, list]) => [
+            Object.entries(baseState.windowsByDesktop || {}).map(([desktopId, list]) => [
               desktopId,
               (list || []).map(w =>
                 w.id === existing.id ? { ...w, isMinimized: false, zIndex: nextZIndex } : w
@@ -149,7 +190,7 @@ function osReducer(state, action) {
           nextZIndex: nextZIndex + 1,
         };
       }
-      const cascadeOffset = (state.windows.length % 10) * 30;
+      const cascadeOffset = (baseState.windows.length % 10) * 30;
       const defaultX = 100 + cascadeOffset;
       const defaultY = 40 + cascadeOffset;
 
@@ -184,13 +225,13 @@ function osReducer(state, action) {
       };
 
       return {
-        ...state,
-        windows: [...state.windows.filter(w => w.id !== newWindow.id), newWindow],
+        ...baseState,
+        windows: [...baseState.windows.filter(w => w.id !== newWindow.id), newWindow],
         // Add to current desktop, removing any stale entry with the same id first
         windowsByDesktop: {
-          ...state.windowsByDesktop,
-          [state.currentDesktopId]: [
-            ...(state.windowsByDesktop[state.currentDesktopId] || []).filter(w => w.id !== newWindow.id),
+          ...baseState.windowsByDesktop,
+          [baseState.currentDesktopId]: [
+            ...(baseState.windowsByDesktop[baseState.currentDesktopId] || []).filter(w => w.id !== newWindow.id),
             newWindow,
           ],
         },
@@ -304,15 +345,15 @@ function osReducer(state, action) {
         ),
       };
     case 'FOCUS_WINDOW': {
-      const nextZIndex = getNextWindowZIndex(state);
+      const { baseState, nextZIndex } = allocateWindowZIndex(state);
       return {
-        ...state,
+        ...baseState,
         activeWindowId: action.payload,
-        windows: state.windows.map(w =>
+        windows: baseState.windows.map(w =>
           w.id === action.payload ? { ...w, zIndex: nextZIndex, isMinimized: false } : w
         ),
         windowsByDesktop: Object.fromEntries(
-          Object.entries(state.windowsByDesktop).map(([desktopId, wins]) => [
+          Object.entries(baseState.windowsByDesktop).map(([desktopId, wins]) => [
             desktopId,
             (wins || []).map(w =>
               w.id === action.payload ? { ...w, zIndex: nextZIndex, isMinimized: false } : w

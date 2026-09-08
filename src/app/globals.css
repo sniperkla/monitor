@@ -1686,7 +1686,10 @@ body {
   }
 
   .taskbar {
-    height: var(--taskbar-size) !important;
+    /* +safe-area so the inline env() bottom padding can't squeeze the dock
+       buttons out of a bare 48px box on notched phones (made the dock render
+       as a thin "empty" strip — reported as "taskbar gone on mobile") */
+    height: calc(var(--taskbar-size) + env(safe-area-inset-bottom, 0px)) !important;
   }
   
   .taskbar.h-full {
@@ -2756,6 +2759,12 @@ html.mobile-perf [style*="backdrop-filter"] {
 
 /* drop-shadow filters on large surfaces */
 html.mobile-perf [style*="drop-shadow"] {
+  filter: none !important;
+}
+
+/* Decorative inline blur filters (glow orbs via style={{ filter: 'blur(...)' }})
+   — same class of GPU cost as the .blur-3xl classes above */
+html.mobile-perf [style*="blur("] {
   filter: none !important;
 }
 

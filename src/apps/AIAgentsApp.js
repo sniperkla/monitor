@@ -137,6 +137,9 @@ export default function AIAgentsApp({ apiFetch }) {
   const [target, setTarget] = useState('');
   const [tab, setTab] = useState('overview'); // overview | config | skills
   const [details, setDetails] = useState(null);
+  // True when the last details fetch failed (after retries) — lets the UI say
+  // "couldn't verify" instead of lying with the "not installed" card.
+  const [detailsError, setDetailsError] = useState(false);
   const [loading, setLoading] = useState(false);
   const [busyMsg, setBusyMsg] = useState('');
   // The Web UI is opened in a REAL browser tab (see openWebUIInTab), so there
@@ -152,12 +155,23 @@ export default function AIAgentsApp({ apiFetch }) {
   const [checkingRelay, setCheckingRelay] = useState(!isMobile);
   const [credsExpanded, setCredsExpanded] = useState(false);
 
+  // Signature of the last relay state we dispatched — lets the 2.5s auto-detect
+  // poll skip duplicate dispatches (see checkLocalRelay below).
+  const lastRelaySigRef = useRef(null);
+
   const checkLocalRelay = useCallback(async () => {
     try {
       const res = await doFetch('/api/relay/token', { cache: 'no-store' });
       if (res.ok) {
         const data = await res.json();
         const isConnected = !!data.connected;
+        // The auto-detect poll re-runs this every 2.5s while the relay is
+        // offline. Dispatching SET_RELAY_INFO with a fresh payload object each
+        // time flips context state and re-renders the ENTIRE desktop tree —
+        // a major CPU/heat cost on mobile. Skip dispatches when nothing changed.
+        const sig = isConnected ? 'connected' : 'disconnected';
+        if (lastRelaySigRef.current === sig) return isConnected;
+        lastRelaySigRef.current = sig;
         if (dispatch) {
           dispatch({
             type: 'SET_RELAY_INFO',
@@ -482,12 +496,30 @@ export default function AIAgentsApp({ apiFetch }) {
     // fetch supersedes us before our response arrives (fast agent switching).
     const myGen = ++loadGenRef.current;
     setLoading(true);
+    setDetailsError(false);
     try {
-      const d = await call('details', { instance: activeInstance || undefined });
+      let d = null;
+      // The first fetch right after the app opens can fail transiently — it
+      // races a cold SSH connection pool / relay handshake on the server side.
+      // Without retries the Overview tab kept showing the WRONG status
+      // ("No default agent installed" / "Gateway stopped") until a full page
+      // refresh. Retry a couple of times with backoff before giving up.
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (myGen !== loadGenRef.current) return;
+        try {
+          const res = await call('details', { instance: activeInstance || undefined });
+          // A usable answer either reports installation state or explicit success.
+          // Server-side failures ({ success: false }) and thrown network errors
+          // are treated as transient and retried.
+          if (res && (res.installed != null || res.success)) { d = res; break; }
+        } catch { /* transient — retry below */ }
+        if (attempt < 2) await new Promise(r => setTimeout(r, 1500 * (attempt + 1)));
+      }
       // Discard stale response — user has already switched to a different agent/target
       if (myGen !== loadGenRef.current) return;
-      if (d && (d.installed != null || d.success)) {
+      if (d) {
         setDetails(d);
+        setDetailsError(false);
         const draftText = ['nanobot', 'openclaw', 'zeroclaw'].includes(agent.id) ? (d?.configJson || '') : (d?.configYaml || '');
         setYamlDraft(draftText);
         const pFiles = d?.promptFiles || {
@@ -501,9 +533,8 @@ export default function AIAgentsApp({ apiFetch }) {
         setPromptDraft(pFiles[promptActiveFile] ?? pFiles['PROMPT.md'] ?? '');
       } else {
         setDetails(null);
+        setDetailsError(true);
       }
-    } catch {
-      if (myGen === loadGenRef.current) setDetails(null);
     } finally {
       if (myGen === loadGenRef.current) setLoading(false);
     }
@@ -665,7 +696,11 @@ export default function AIAgentsApp({ apiFetch }) {
   const webUIPort = () => details?.webUIPort || (agent.id === 'hermes' ? 9119 : 8765);
 
   const handleStartWebUI = async () => {
-    if (!relayConnectedRef.current) {
+    // Mobile: the Web UI is served through the same-origin server-side SSH
+    // proxy (see openWebUIInTab) and `webui-ctl start` is a plain server-side
+    // action — neither needs the Local Relay running on some desktop, so the
+    // relay gate below only applies to desktop (direct-transfer) mode.
+    if (!isMobile && !relayConnectedRef.current) {
       setNotice({
         ok: false,
         text: 'Local Relay is required to start and use Web UI. Please start Local Relay on your computer first.',
@@ -755,8 +790,9 @@ export default function AIAgentsApp({ apiFetch }) {
   // up-front and navigate it once the relay has told us which port it bound —
   // waiting to call window.open() until after the await would be blocked.
   const openWebUIInTab = async (overridePath, preopenedTab = null) => {
-    // Require Local Relay: central socket proxy has protocol/chat desync bugs
-    if (!relayConnectedRef.current) {
+    // Mobile devices are NEVER the relay host — skip the relay gate entirely
+    // and see the mobile branch below (server-side proxy).
+    if (!isMobile && !relayConnectedRef.current) {
       if (preopenedTab && !preopenedTab.closed) {
         try { preopenedTab.close(); } catch {}
       }
@@ -782,6 +818,34 @@ export default function AIAgentsApp({ apiFetch }) {
       try { navigator.clipboard?.writeText(url); } catch { /* ignore */ }
       setNotice({ ok: true, text: `Popup blocked — URL copied to clipboard: ${url}` });
     };
+
+    // ── Mobile / non-relay-host devices ────────────────────────────────────
+    // 127.0.0.1 in a browser refers to the DEVICE RUNNING THE BROWSER. The
+    // Local Relay runs on the user's desktop, so a phone can never reach
+    // http://127.0.0.1:<localPort> — the tab lands on "127.0.0.1 refused to
+    // connect". (It only works on a laptop because the relay runs on that
+    // same laptop.) Route mobile devices through the same-origin server-side
+    // SSH HTTP proxy (src/app/api/agents/webui-proxy) instead: the central
+    // server dials the agent's Web UI port over SSH and serves it same-origin,
+    // with HTML URL rewriting, fetch/XHR patching and its own WS proxy
+    // (/api/agents/webui-ws-proxy) — no relay needed on the phone.
+    if (isMobile) {
+      // Normalise the bootstrap path: an absolute loopback URL (relay
+      // direct-transfer mode payload) would send the phone back to its own
+      // 127.0.0.1 — collapse it to path+query+hash for the proxy.
+      let proxyPath = basePath;
+      try {
+        if (/^https?:\/\//i.test(basePath)) {
+          const u = new URL(basePath, window.location.origin);
+          if (/^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])$/.test(u.hostname)) {
+            proxyPath = (u.pathname || '/') + (u.search || '') + (u.hash || '');
+          }
+        }
+      } catch { /* keep basePath as-is */ }
+      const proxyUrl = buildWebUIProxyUrl(target, webUIPort(), proxyPath, agent.id);
+      navigate(proxyUrl, 'Opened via the secure server proxy — direct relay URLs (127.0.0.1) only work on the relay host, not on a phone.');
+      return;
+    }
 
     // Direct transfer via Local Relay. The relay itself verifies the full
     // chain (listener → SSH tunnel → agent Web UI) BEFORE it acks the port —
@@ -1910,6 +1974,17 @@ export default function AIAgentsApp({ apiFetch }) {
             : <BrainCircuit size={26} className="mx-auto mb-2 text-indigo-400" />}
           <p className="text-sm font-bold mb-1">No default agent installed on this server</p>
           <p className="text-[11px] text-[var(--text-muted)] mb-4">Install {agent.name} with one click — chat with it from Telegram, LINE, Discord &amp; more.</p>
+          {detailsError && (
+            <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 mb-4 text-left">
+              <div className="text-[10px] font-bold text-red-300 mb-0.5">Couldn&apos;t verify agent state</div>
+              <div className="text-[10px] text-red-200/70">
+                The last status check failed (temporary connection issue?) — this card may not reflect reality.
+              </div>
+              <button onClick={() => loadDetails()} disabled={loading} className={`${btn} mt-2 bg-red-500/15 text-red-300 hover:bg-red-500/25 !py-1 !px-2`}>
+                <RefreshCw size={10} /> Retry status check
+              </button>
+            </div>
+          )}
           {stoppedInstanceTags.length > 0 && (
             <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 mb-4 text-left">
               <div className="text-[10px] font-bold text-amber-300 mb-0.5">
@@ -2207,7 +2282,11 @@ export default function AIAgentsApp({ apiFetch }) {
                         <div className="font-bold text-white text-xs flex items-center gap-2 flex-wrap">
                           <span>Web UI</span>
                           <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-sky-500/20 text-sky-300 border border-sky-500/30">:{details.webUIPort}</span>
-                          {relayInfo?.connected ? (
+                          {isMobile ? (
+                            <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold bg-sky-500/15 text-sky-300 border border-sky-500/30" title="Mobile: the Web UI is served through the secure server-side proxy — no Local Relay needed on the phone.">
+                              <Shield size={10} className="text-sky-400" /> Server Proxy (mobile)
+                            </span>
+                          ) : relayInfo?.connected ? (
                             <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold bg-pink-500/15 text-pink-300 border border-pink-500/30 shadow-[0_0_8px_rgba(236,72,153,0.2)]" title="Direct local tunnel active: chat and UI stream directly with 0ms server latency">
                               <Cable size={10} className="text-pink-400" /> Local Relay Active (0ms)
                             </span>
@@ -2219,9 +2298,11 @@ export default function AIAgentsApp({ apiFetch }) {
                         </div>
                         <div className="text-[10px] text-[var(--text-muted)]">
                           {agent.name} built-in web interface — chat, sessions, skills, cron and logs in your browser.
-                          {relayInfo?.connected
-                            ? ' ⚡ Direct mode: Served straight from your Local Relay (http://127.0.0.1:18791) with zero server hops.'
-                            : ' ⚠️ Local Relay required: Central WebSocket proxy is disabled to eliminate chat bugs. Run Local Relay on your computer to open Web UI directly.'}
+                          {isMobile
+                            ? ' 📱 Mobile mode: served through the encrypted server proxy — direct relay URLs (127.0.0.1) only work on the relay host, not on a phone.'
+                            : relayInfo?.connected
+                              ? ' ⚡ Direct mode: Served straight from your Local Relay (http://127.0.0.1:18791) with zero server hops.'
+                              : ' ⚠️ Local Relay required: Central WebSocket proxy is disabled to eliminate chat bugs. Run Local Relay on your computer to open Web UI directly.'}
                         </div>
                       </div>
                     </div>
@@ -2273,13 +2354,17 @@ export default function AIAgentsApp({ apiFetch }) {
                       <button
                         onClick={() => openWebUIInTab()}
                         className={`px-3 py-1.5 rounded-xl font-bold text-xs flex items-center gap-1.5 border transition cursor-pointer ${
-                          relayInfo?.connected
+                          (isMobile || relayInfo?.connected)
                             ? 'bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 hover:text-sky-200 border-sky-500/30'
                             : 'bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 hover:text-amber-200 border-amber-500/30'
                         }`}
-                        title={relayInfo?.connected ? "Open directly via Local Relay (http://127.0.0.1:18791)" : "Local Relay is required for Web UI"}
+                        title={isMobile
+                          ? "Open via the secure server proxy — phones can't reach the relay's 127.0.0.1 (that only works on the relay host)"
+                          : relayInfo?.connected ? "Open directly via Local Relay (http://127.0.0.1:18791)" : "Local Relay is required for Web UI"}
                       >
-                        {relayInfo?.connected ? (
+                        {isMobile ? (
+                          <><ExternalLink size={12} /> Open Web UI</>
+                        ) : relayInfo?.connected ? (
                           <><ExternalLink size={12} /> Open in New Tab</>
                         ) : (
                           <><Cable size={12} /> Local Relay Required</>
