@@ -33,6 +33,9 @@ function isTermux() {
   return PLATFORM === 'android' ||
     /com\.termux/i.test(String(process.env.PREFIX || process.env.TERMUX_VERSION || ''));
 }
+if (isTermux()) {
+  try { spawnSync('termux-wake-lock', { stdio: 'ignore' }); } catch (_) {}
+}
 const INSTALL_DIR = PLATFORM === 'win32'
   ? path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'SSH Monitor Relay')
   : path.join(os.homedir(), '.ssh-monitor-relay');
@@ -299,7 +302,7 @@ async function pairAndGetToken({ client, scope }) {
 const savedConfig = loadConfig();
 let SERVER = args.server || savedConfig.server || process.env.RELAY_SERVER || '';
 let TOKEN  = args.token  || savedConfig.token  || process.env.RELAY_TOKEN  || '';
-const RELAY_VERSION = '1.0.15';
+const RELAY_VERSION = '1.0.16';
 const RELAY_NAME = args.name || savedConfig.name || os.hostname();
 
 // -- Install/uninstall handling (unchanged from original) --
@@ -602,11 +605,24 @@ function connect() {
   }
 
   let keepAlive = null;
+  let lastPongAt = Date.now();
 
   ws.addEventListener('open', () => {
     retryDelay = 3000;
+    lastPongAt = Date.now();
     // Don't send init here — wait for 'ready' from server
-    keepAlive = setInterval(() => { if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'ping' })); }, 30000);
+    // Shorter ping interval (12s) prevents mobile/carrier NAT drops.
+    // Watchdog: If no pong received within 28s, force-reconnect the dead socket.
+    keepAlive = setInterval(() => {
+      if (ws.readyState === 1) {
+        if (Date.now() - lastPongAt > 28000) {
+          console.log('\n⚠ Mobile/Network timeout: missed keepalive replies. Reconnecting...');
+          try { if (ws.terminate) ws.terminate(); else ws.close(4008, 'Keepalive watchdog timeout'); } catch (_) {}
+          return;
+        }
+        ws.send(JSON.stringify({ type: 'ping' }));
+      }
+    }, 12000);
   });
 
   ws.addEventListener('message', ({ data }) => {
@@ -737,7 +753,9 @@ function connect() {
         process.exit(0);
         break;
 
-      case 'pong': break; // keepalive reply — no-op
+      case 'pong':
+        lastPongAt = Date.now();
+        break;
 
       case 'error':
         console.error(`❌ Server error: ${msg.message}`);

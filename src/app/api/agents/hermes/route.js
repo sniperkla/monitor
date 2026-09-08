@@ -327,19 +327,26 @@ export async function POST(request) {
     if (!connectionId || !action) {
       return NextResponse.json({ success: false, error: 'Missing connectionId or action' }, { status: 400 });
     }
+    const sshMode = request.headers.get('x-ssh-mode') || undefined;
+    const preferredRelay = request.headers.get('x-preferred-relay') || undefined;
     // `job` polling needs no connectionId
     if (action === 'job') return dispatchWithLiveLogs(body, () => ({}));
-    return dispatchWithLiveLogs(body, (b, log) => handleAgentAction(b, session, log));
+    return dispatchWithLiveLogs(body, (b, log) => handleAgentAction(b, session, log, { sshMode, preferredRelay }));
   } catch (e) {
     logger.error('[agents/hermes] POST failed:', e?.message);
     return NextResponse.json({ success: false, error: e?.message || 'Request failed' }, { status: 500 });
   }
 }
 
-async function handleAgentAction(body, session, log = []) {
+async function handleAgentAction(body, session, log = [], options = {}) {
   try {
     const { connectionId, action, config = {}, purge = false } = body;
-    const sshConfig = await getSshConfig(connectionId);
+    const sshConfig = await getSshConfig(connectionId, {
+      userId: session?.user?.id,
+      role: session?.user?.role,
+      sshMode: options.sshMode,
+      preferredRelay: options.preferredRelay,
+    });
 
     // ── Multi-instance support: optional instance tag ──
     // instance '' → default install (~/.hermes); tag → ~/.hermes-<tag> with

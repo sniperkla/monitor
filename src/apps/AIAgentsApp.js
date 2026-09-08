@@ -144,8 +144,14 @@ export default function AIAgentsApp({ apiFetch }) {
   const startingWebUIRef = useRef(false);
   const handleStartWebUIRef = useRef(null);
   const [stoppingWebUI, setStoppingWebUI] = useState(false);
-  const stoppingWebUIRef = useRef(false);
-  const [forceBypassRelay, setForceBypassRelay] = useState(false);
+  const [forceBypassRelay, setForceBypassRelay] = useState(() => {
+    try {
+      return typeof window !== 'undefined' && localStorage.getItem('ssh_monitor_ssh_mode') === 'server';
+    } catch {
+      return false;
+    }
+  });
+  const [loadError, setLoadError] = useState(null);
   const [checkingRelay, setCheckingRelay] = useState(true);
   const [credsExpanded, setCredsExpanded] = useState(false);
 
@@ -479,12 +485,14 @@ export default function AIAgentsApp({ apiFetch }) {
     // fetch supersedes us before our response arrives (fast agent switching).
     const myGen = ++loadGenRef.current;
     setLoading(true);
+    setLoadError(null);
     try {
       const d = await call('details', { instance: activeInstance || undefined });
       // Discard stale response — user has already switched to a different agent/target
       if (myGen !== loadGenRef.current) return;
       if (d && (d.installed != null || d.success)) {
         setDetails(d);
+        setLoadError(null);
         const draftText = ['nanobot', 'openclaw', 'zeroclaw'].includes(agent.id) ? (d?.configJson || '') : (d?.configYaml || '');
         setYamlDraft(draftText);
         const pFiles = d?.promptFiles || {
@@ -496,11 +504,18 @@ export default function AIAgentsApp({ apiFetch }) {
         };
         setPromptFilesMap(pFiles);
         setPromptDraft(pFiles[promptActiveFile] ?? pFiles['PROMPT.md'] ?? '');
+      } else if (d?.error) {
+        setLoadError(d.error);
+        setDetails(null);
       } else {
+        setLoadError('Failed to read agent status from server');
         setDetails(null);
       }
-    } catch {
-      if (myGen === loadGenRef.current) setDetails(null);
+    } catch (err) {
+      if (myGen === loadGenRef.current) {
+        setLoadError(err?.message || 'Failed to connect to target server');
+        setDetails(null);
+      }
     } finally {
       if (myGen === loadGenRef.current) setLoading(false);
     }
@@ -545,6 +560,7 @@ export default function AIAgentsApp({ apiFetch }) {
     setPromptDraft('');
     setPromptActiveFile('PROMPT.md');
     setDetails(null);
+    setLoadError(null);
     setLoading(false);
     setTab('overview');
     // Bump the generation so any in-flight fetch for the old agent is discarded.
@@ -1755,6 +1771,17 @@ export default function AIAgentsApp({ apiFetch }) {
                   npm i -g ssh-monitor-relay &amp;&amp; local-relay --pair --server {serverOrigin}
                 </div>
               </div>
+
+              {/* Bypass option for Cloud / Mobile / Server mode */}
+              <div className="pt-2 text-center">
+                <button
+                  onClick={() => setForceBypassRelay(true)}
+                  className="w-full py-2.5 px-3 rounded-xl bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30 text-xs font-semibold text-indigo-300 hover:text-indigo-200 transition flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <ServerIcon size={14} className="text-indigo-400" />
+                  <span>Using a cloud server or phone? Continue with direct connection</span>
+                </button>
+              </div>
             </div>
           </div>
 
@@ -1873,6 +1900,21 @@ export default function AIAgentsApp({ apiFetch }) {
         <div className="rounded-xl border border-dashed border-[var(--border-color)] p-8 text-center text-xs text-[var(--text-muted)]">Select a server to begin</div>
       ) : loading ? (
         <div className="flex items-center justify-center gap-2 p-8 text-xs text-[var(--text-muted)]"><Loader2 size={14} className="animate-spin" /> Reading agent state…</div>
+      ) : loadError ? (
+        /* Connection error card — do not mask connection failures as 'not installed' */
+        <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-6 text-center">
+          <AlertCircle size={28} className="mx-auto mb-2 text-rose-400" />
+          <p className="text-sm font-bold mb-1 text-rose-200">Unable to Connect to Server</p>
+          <p className="text-[11px] text-[var(--text-muted)] mb-4 max-w-md mx-auto">{loadError}</p>
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            <button onClick={() => loadDetails()} className={`${btn} bg-rose-500/20 hover:bg-rose-500/30 text-rose-200 border border-rose-500/30 text-xs px-4 py-2`}>
+              <RefreshCw size={12} /> Retry Connection
+            </button>
+            <button onClick={() => { setForceBypassRelay(true); setTimeout(() => loadDetails(), 50); }} className={`${btn} bg-white/5 hover:bg-white/10 border border-[var(--border-color)] text-xs px-3 py-2 text-[var(--text-muted)] hover:text-white`}>
+              <ServerIcon size={12} /> Force Cloud / Direct Mode
+            </button>
+          </div>
+        </div>
       ) : !details?.installed ? (
         /* Not installed → install card */
         <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/10 p-5 text-center">

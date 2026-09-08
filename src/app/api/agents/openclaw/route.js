@@ -107,18 +107,25 @@ export async function POST(request) {
     const body = await request.json();
     const { connectionId, action, config = {}, purge = false } = body;
     if ((!connectionId || !action) && action !== 'job') return NextResponse.json({ success: false, error: 'Missing connectionId or action' }, { status: 400 });
+    const sshMode = request.headers.get('x-ssh-mode') || undefined;
+    const preferredRelay = request.headers.get('x-preferred-relay') || undefined;
     if (action === 'job') return dispatchWithLiveLogs(body, () => ({}));
-    return dispatchWithLiveLogs(body, (b, log) => handleAgentAction(b, session, log));
+    return dispatchWithLiveLogs(body, (b, log) => handleAgentAction(b, session, log, { sshMode, preferredRelay }));
   } catch (e) {
     logger.error('[agents/openclaw] POST failed:', e?.message);
     return NextResponse.json({ success: false, error: e?.message || 'Request failed' }, { status: 500 });
   }
 }
 
-async function handleAgentAction(body, session, log = []) {
+async function handleAgentAction(body, session, log = [], options = {}) {
   try {
     const { connectionId, action, config = {}, purge = false } = body;
-    const sshConfig = await getSshConfig(connectionId);
+    const sshConfig = await getSshConfig(connectionId, {
+      userId: session?.user?.id,
+      role: session?.user?.role,
+      sshMode: options.sshMode,
+      preferredRelay: options.preferredRelay,
+    });
     const run = async (label, cmd, opts = {}) => {
       const r = await execCommand(sshConfig, cmd, { pool: false, timeoutMs: 60000, ...opts });
       const out = ((r.stdout || '') + (r.stderr || '')).trim();

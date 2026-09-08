@@ -1672,10 +1672,10 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
   // wake-lock. Package name matches npmInstallCommand's NPM_PACKAGE.
   const termuxInstallSnippet = () =>
     [
-      'pkg install nodejs-lts -y',
-      `npm install -g ssh-monitor-relay`,
-      `local-relay --pair --server ${window.location.origin}`,
+      'pkg install nodejs-lts tmux -y',
       'termux-wake-lock',
+      'npm install -g ssh-monitor-relay',
+      `local-relay --pair --server ${window.location.origin}`,
     ].join('\n');
 
   const getRelayUninstallSnippet = () =>
@@ -4908,7 +4908,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                             </div>
                           </div>
                           <p className="text-[10px] text-[var(--text-muted)] leading-relaxed">
-                            Run <code className="text-amber-300">termux-wake-lock</code> (included above) so Android does not sleep the relay, and approve the pairing code it prints below — same as on a computer. Give the phone relay a unique name with <code className="text-amber-300">--name MyPhone</code> if you add more than one.
+                            Run <code className="text-amber-300">termux-wake-lock</code> (included above) so Android does not sleep the relay. For 24/7 background stability on Android: disable battery optimization for Termux (set Battery to <strong className="text-[var(--text-secondary)]">Unrestricted</strong> in Android App Settings), and run inside <code className="text-amber-300">tmux</code> so it stays alive when backgrounded.
                           </p>
                         </div>
                       </details>

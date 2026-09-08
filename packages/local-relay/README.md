@@ -198,6 +198,10 @@ service are not granted. No warranty of any kind.
 
 ## Version note
 
+- **1.0.16** — mobile & Termux stability improvements: automatic startup
+  wake-lock detection on Termux, resilient 12s keepalive interval to prevent
+  cellular carrier NAT timeouts, and active 28s pong watchdog to instantly
+  recover from dropped sockets.
 - **1.0.15** — clearer hints when the optional WebRTC module is missing: new
   npm releases gate native-module install scripts behind an allowlist
   (`allow-scripts`), so `node-datachannel` is silently skipped (it is an
