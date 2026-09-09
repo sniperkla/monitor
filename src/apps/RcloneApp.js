@@ -2896,6 +2896,9 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
                             <p className="text-[10px] text-amber-300/90 leading-relaxed mt-1">
                               Then paste the shared folder&apos;s URL into <span className="font-bold">Folder URL/ID</span> below — sharing alone does NOT make the folder appear in the SA root; rclone can only reach it by its folder ID.
                             </p>
+                            <p className="text-[10px] text-rose-300/90 leading-relaxed mt-1">
+                              🚫 Quota: service accounts have <span className="font-bold">zero storage quota</span> — uploads to a personal Drive fail with <span className="font-mono">storageQuotaExceeded</span>. For personal Drive use the <span className="font-bold">OAuth</span> tab; for Google Workspace use a Shared Drive (team_drive).
+                            </p>
                           </div>
                         </>
                       )}
