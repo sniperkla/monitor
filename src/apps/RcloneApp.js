@@ -6,7 +6,7 @@ import {
   Plus, Trash2, Folder, File, Play, Shield, Settings, Server, Database,
   ArrowRight, Download, Eye, ExternalLink, Cpu, Info, Check, ShieldCheck,
   Zap, Copy, ArrowLeftRight, Monitor, ChevronRight, Link2, ChevronDown, Search, X, Clock,
-  KeyRound, LogIn, CircleHelp
+  KeyRound, LogIn, CircleHelp, FolderOpen, Upload, FileJson, ChevronUp
 } from 'lucide-react';
 import { useVault } from '@/context/VaultContext';
 import { useApp } from '@/context/AppContext';
@@ -588,6 +588,54 @@ function DynamicCronPicker({ value, onChange }) {
   );
 }
 
+// 📂 Compact server-side file picker for the Drive Service Account JSON key.
+// Lists folders + .json files only; navigating drives `onDir`, tapping a
+// .json file calls `onFile(item)`.
+function SaServerPicker({ path, items, loading, homeResolved, onUp, canUp, onRefresh, onClose, onDir, onFile }) {
+  const entries = items
+    .filter((i) => i.IsDir || /\.json$/i.test(i.Name || ''))
+    .sort((a, b) => ((b.IsDir ? 1 : 0) - (a.IsDir ? 1 : 0)) || String(a.Name).localeCompare(String(b.Name)));
+  return (
+    <div className="rounded-lg border border-[var(--border-color)] bg-black/30 overflow-hidden">
+      <div className="flex items-center gap-1 px-2 py-1.5 border-b border-[var(--border-color)] bg-[var(--bg-tertiary)]/50">
+        <button type="button" onClick={onUp} disabled={loading || !canUp} title="Up one level"
+          className="p-1 rounded hover:bg-[var(--bg-tertiary)] text-[var(--text-muted)] hover:text-[var(--text-primary)] disabled:opacity-30 cursor-pointer disabled:cursor-not-allowed">
+          <ChevronUp size={12} />
+        </button>
+        <span className="flex-1 font-mono text-[10px] text-[var(--text-muted)] truncate" title={path}>{path}</span>
+        {!homeResolved && <span className="text-[9px] text-amber-400 shrink-0" title="Could not resolve the absolute home path — $HOME stays literal in the path. Edit it manually if rclone reports the file missing.">$HOME</span>}
+        <button type="button" onClick={onRefresh} title="Refresh"
+          className="p-1 rounded hover:bg-[var(--bg-tertiary)] text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer">
+          <RefreshCw size={11} className={loading ? 'animate-spin' : ''} />
+        </button>
+        <button type="button" onClick={onClose} title="Close"
+          className="p-1 rounded hover:bg-[var(--bg-tertiary)] text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer">
+          <X size={12} />
+        </button>
+      </div>
+      <div className="max-h-40 overflow-y-auto">
+        {loading ? (
+          <div className="flex items-center justify-center gap-2 py-4 text-[10px] text-[var(--text-muted)]">
+            <RefreshCw size={12} className="animate-spin" /> Loading…
+          </div>
+        ) : entries.length === 0 ? (
+          <p className="px-2.5 py-3 text-[10px] text-[var(--text-muted)] text-center">No folders or .json files here</p>
+        ) : (
+          entries.map((item, i) => (
+            <button key={`${item.Path || item.Name}-${i}`} type="button"
+              onClick={() => (item.IsDir ? onDir(item.Name) : onFile(item))}
+              className={`w-full flex items-center gap-2 px-2.5 py-1.5 text-left text-[11px] font-mono transition-colors cursor-pointer ${item.IsDir ? 'text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]' : 'text-amber-300 hover:bg-emerald-500/10'}`}>
+              {item.IsDir ? <Folder size={11} className="shrink-0 text-indigo-400" /> : <FileJson size={11} className="shrink-0" />}
+              <span className="truncate">{item.Name}</span>
+              {!item.IsDir && <span className="ml-auto text-[9px] text-[var(--text-muted)] shrink-0">select</span>}
+            </button>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTab }) {
   const { vaultStatus } = useVault();
   const { state: appState, apiFetch, connectionsReady } = useApp();
@@ -645,6 +693,15 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
   const [remoteConfig, setRemoteConfig] = useState({});
   // Google Drive auth mode: 'oauth' | 'service_account'
   const [driveAuthMode, setDriveAuthMode] = useState('oauth');
+  // Service-account JSON source: 'server' (browse the target host) | 'computer' (upload)
+  const [saSource, setSaSource] = useState('server');
+  const [saPickerOpen, setSaPickerOpen] = useState(false);
+  const [saPickerPath, setSaPickerPath] = useState('$HOME');
+  const [saPickerItems, setSaPickerItems] = useState([]);
+  const [saPickerLoading, setSaPickerLoading] = useState(false);
+  const [saHome, setSaHome] = useState(null); // resolved absolute $HOME on the target host
+  const [saUploadLoading, setSaUploadLoading] = useState(false);
+  const saFileInputRef = useRef(null);
   // OAuth flow state
   const [oauthLoading, setOauthLoading] = useState(false);
   const [oauthToast, setOauthToast] = useState(null); // { type: 'success'|'error', msg: string }
@@ -991,6 +1048,115 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
       showAlert(err.message, 'Error');
     }
     setLoading(false);
+  };
+
+  /* ── Service Account JSON: server browser + upload from computer ── */
+
+  // Resolve the target host's absolute $HOME once, so picked files become
+  // REAL absolute paths in rclone.conf (rclone does not expand $HOME/~ in
+  // service_account_file).
+  const resolveSaHome = async () => {
+    if (saHome) return saHome;
+    try {
+      const res = await apiFetch('/api/rclone/upload-sa', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ connectionId: selectedConnId, action: 'home' }),
+      });
+      const data = await res.json();
+      if (data?.success && data.home) {
+        setSaHome(data.home);
+        return data.home;
+      }
+    } catch { /* non-fatal — picker falls back to $HOME literals */ }
+    return null;
+  };
+
+  const openSaPicker = async () => {
+    if (!selectedConnId) {
+      showAlert('Select a server connection first', 'Warning');
+      return;
+    }
+    setSaPickerOpen(true);
+    setSaPickerLoading(true);
+    const home = await resolveSaHome();
+    const start = home || '$HOME';
+    setSaPickerPath(start);
+    try {
+      const res = await apiFetch(`/api/rclone/browse?connectionId=${selectedConnId}&remote=local&path=${encodeURIComponent(start)}`);
+      const data = await res.json();
+      setSaPickerItems(data?.success && Array.isArray(data.items) ? data.items : []);
+    } catch {
+      setSaPickerItems([]);
+    }
+    setSaPickerLoading(false);
+  };
+
+  const saBrowse = async (dir) => {
+    setSaPickerLoading(true);
+    try {
+      const res = await apiFetch(`/api/rclone/browse?connectionId=${selectedConnId}&remote=local&path=${encodeURIComponent(dir)}`);
+      const data = await res.json();
+      if (data?.success) {
+        setSaPickerPath(dir);
+        setSaPickerItems(Array.isArray(data.items) ? data.items : []);
+      }
+    } catch { /* keep current listing */ }
+    setSaPickerLoading(false);
+  };
+
+  const saChildPath = (name) => (saPickerPath.endsWith('/') ? `${saPickerPath}${name}` : `${saPickerPath}/${name}`);
+  const saParentPath = () => {
+    if (saPickerPath === '$HOME' || saPickerPath === '/') return null;
+    const stripped = saPickerPath.replace(/\/+$/, '');
+    const up = stripped.split('/').slice(0, -1).join('/');
+    return up || '/';
+  };
+  // Convert the browser's $HOME-prefixed path into a real absolute path.
+  const saAbsolutePath = (p) => (saHome && p.startsWith('$HOME') ? saHome + p.slice('$HOME'.length) : p);
+
+  const saPickFile = (item) => {
+    const abs = saAbsolutePath(saChildPath(item.Path || item.Name));
+    setRemoteConfig((rc) => ({ ...rc, service_account_file: abs }));
+    setSaPickerOpen(false);
+  };
+
+  const saGoUp = () => {
+    const up = saParentPath();
+    if (up !== null) saBrowse(up);
+  };
+
+  // Upload a JSON key from the user's device: read it client-side, ship the
+  // text to the API, and the server writes it to
+  // ~/.config/rclone/service-accounts/<name> (chmod 600) via SSH.
+  const handleSaUpload = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = null; // allow re-selecting the same file
+    if (!file) return;
+    if (!selectedConnId) {
+      showAlert('Select a server connection first', 'Warning');
+      return;
+    }
+    setSaUploadLoading(true);
+    try {
+      const content = await file.text();
+      const res = await apiFetch('/api/rclone/upload-sa', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ connectionId: selectedConnId, action: 'upload', fileName: file.name, content }),
+      });
+      const data = await res.json();
+      if (data?.success && data.path) {
+        setRemoteConfig((rc) => ({ ...rc, service_account_file: data.path }));
+        setSaSource('server');
+        showAlert(`Service account key uploaded to ${data.path}`, 'Success');
+      } else {
+        showAlert(data?.error || 'Upload failed', 'Error');
+      }
+    } catch (err) {
+      showAlert(err.message || 'Upload failed', 'Error');
+    }
+    setSaUploadLoading(false);
   };
 
   /**
@@ -2608,13 +2774,66 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
                       <div className="flex items-start gap-2 bg-emerald-500/8 rounded-lg px-2.5 py-2 border border-emerald-500/20">
                         <ShieldCheck size={13} className="text-emerald-400 shrink-0 mt-0.5" />
                         <p className="text-[10px] text-[var(--text-muted)] leading-relaxed">
-                          GCP → IAM → Service Accounts → Create → grant Drive access → download JSON → upload to server → paste path below.
+                          GCP → IAM → Service Accounts → Create → grant Drive access → download JSON. Then pick the file below — browse the server or upload it from your computer.
                         </p>
                       </div>
-                      <input type="text" placeholder="JSON path on server  (e.g. /home/ec2-user/gdrive-sa.json)"
-                        value={remoteConfig.service_account_file || ''}
-                        onChange={(e) => setRemoteConfig({ ...remoteConfig, service_account_file: e.target.value })}
-                        className="w-full px-2.5 py-1.5 text-[11px] rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:border-emerald-500 focus:outline-none" />
+
+                      {/* JSON source selector */}
+                      <div className="flex gap-1 p-0.5 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)]">
+                        <button type="button" onClick={() => setSaSource('server')}
+                          className={`flex-1 flex items-center justify-center gap-1 py-1 rounded-md text-[11px] font-bold transition-all cursor-pointer ${saSource === 'server' ? 'bg-emerald-600 text-white shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}`}>
+                          <FolderOpen size={11} /> On this server
+                        </button>
+                        <button type="button" onClick={() => setSaSource('computer')}
+                          className={`flex-1 flex items-center justify-center gap-1 py-1 rounded-md text-[11px] font-bold transition-all cursor-pointer ${saSource === 'computer' ? 'bg-emerald-600 text-white shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}`}>
+                          <Upload size={11} /> From my computer
+                        </button>
+                      </div>
+
+                      {saSource === 'server' ? (
+                        <>
+                          <input type="text" placeholder="JSON path on server  (e.g. /home/ec2-user/gdrive-sa.json)"
+                            value={remoteConfig.service_account_file || ''}
+                            onChange={(e) => setRemoteConfig({ ...remoteConfig, service_account_file: e.target.value })}
+                            className="w-full px-2.5 py-1.5 text-[11px] rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-color)] font-mono text-[var(--text-primary)] focus:border-emerald-500 focus:outline-none" />
+                          <button type="button" onClick={openSaPicker}
+                            className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-[var(--bg-tertiary)] hover:bg-[var(--border-color)] text-[11px] font-semibold text-[var(--text-primary)] border border-[var(--border-color)] cursor-pointer transition-colors">
+                            <FolderOpen size={12} /> Browse server files…
+                          </button>
+                          {saPickerOpen && (
+                            <SaServerPicker
+                              path={saPickerPath}
+                              items={saPickerItems}
+                              loading={saPickerLoading}
+                              homeResolved={!!saHome}
+                              canUp={saParentPath() !== null}
+                              onUp={saGoUp}
+                              onRefresh={() => saBrowse(saPickerPath)}
+                              onClose={() => setSaPickerOpen(false)}
+                              onDir={(name) => saBrowse(saChildPath(name))}
+                              onFile={saPickFile}
+                            />
+                          )}
+                        </>
+                      ) : (
+                        <>
+                          <input ref={saFileInputRef} type="file" accept=".json,application/json" className="hidden" onChange={handleSaUpload} />
+                          <button type="button" onClick={() => saFileInputRef.current?.click()} disabled={saUploadLoading}
+                            className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-dashed border-emerald-500/40 hover:border-emerald-500 hover:bg-emerald-500/5 text-[11px] font-semibold text-[var(--text-primary)] cursor-pointer transition-colors disabled:opacity-50">
+                            {saUploadLoading ? <RefreshCw size={12} className="animate-spin text-emerald-400" /> : <Upload size={12} className="text-emerald-400" />}
+                            {saUploadLoading ? 'Uploading to server…' : 'Choose JSON file from this device…'}
+                          </button>
+                          <p className="text-[10px] text-[var(--text-muted)] px-0.5">
+                            The file is uploaded to <span className="font-mono text-emerald-400">~/.config/rclone/service-accounts/</span> on the server (chmod 600) and the path is filled in automatically.
+                          </p>
+                        </>
+                      )}
+
+                      {remoteConfig.service_account_file && (
+                        <p className="text-[10px] text-emerald-400 font-mono px-0.5 truncate" title={remoteConfig.service_account_file}>
+                          ✓ {remoteConfig.service_account_file}
+                        </p>
+                      )}
                       <input type="text" placeholder="Folder URL/ID (optional)"
                         value={remoteConfig._drive_url || ''}
                         onChange={(e) => {
