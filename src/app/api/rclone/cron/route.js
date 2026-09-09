@@ -599,7 +599,9 @@ if [ "$(count_task_lines)" != "0" ]; then
   remove_task_lines
   if [ "$(count_task_lines)" != "0" ]; then
     echo "DELETE_FAILED: task entry still present in crontab after removal attempts (first_rc=$FIRST_RC)" >&2
-    crontab -l 2>/dev/null >&2
+    echo "--- ssh user: $(whoami)@$(hostname) | home: $HOME ---" >&2
+    echo "--- current crontab ---" >&2
+    crontab -l 2>&1 | head -30 >&2
     exit 1
   fi
 fi
