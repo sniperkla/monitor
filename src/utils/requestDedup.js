@@ -23,9 +23,19 @@
 // Non-GET methods (POST / PUT / DELETE / PATCH) are NEVER short-circuited
 // by the time-window logic — only by the in-flight coalescer.
 //
-// The cache is keyed by `${METHOD} ${URL}` so different methods to the
-// same URL do not collide. This module is intentionally framework-free so
-// it can be used from anywhere (AppContext, hooks, lib/*, etc.).
+// The cache key for GETs is `${METHOD} ${URL}`. For everything else the
+//     request body is part of the key — without it, two POSTs to the same
+//     route that mean different things (e.g. /api/agents/hermes with
+//     action:"instances" vs action:"details") collide on the in-flight
+//     slot, the second caller awaits the first's response, and returns
+//     data shaped for the wrong question. This bit AI Agents on first
+//     open: refreshInstances fired before loadDetails, the in-flight
+//     `instances` response was served to loadDetails, and the UI stayed
+//     on the install card until a manual Refresh. Reproduced in
+//     tmp/mb-harness/details-race.mjs.
+//
+// This module is intentionally framework-free so it can be used from
+// anywhere (AppContext, hooks, lib/*, etc.).
 
 const WINDOW_MS = 1000; // 1s short-circuit window for GET requests
 
@@ -37,7 +47,14 @@ const recent = new Map();
 
 const isPlainGet = (method) => !method || String(method).toUpperCase() === 'GET';
 
-const keyFor = (url, method) => `${String(method || 'GET').toUpperCase()} ${url}`;
+// Cache key. For GETs (no body) URL alone is enough. For non-GETs the
+// request body distinguishes "the same endpoint, two different questions"
+// — e.g. POST /api/agents/hermes with action:"instances" vs action:"details".
+const keyFor = (url, method, body) => {
+  const m = String(method || 'GET').toUpperCase();
+  if (isPlainGet(m) || !body) return `${m} ${url}`;
+  return `${m} ${url} ${body}`;
+};
 
 const cloneResponse = (res) => {
   // Response bodies can only be consumed once — clone before reading so we
@@ -80,7 +97,7 @@ const getRecent = (key) => {
 export async function dedupedFetch(url, options, doFetch) {
   const method = (options && options.method) || 'GET';
   const dedup = options && options.dedup === false ? false : true;
-  const key = keyFor(url, method);
+  const key = keyFor(url, method, options && options.body);
 
   // 1) In-flight coalescing — strongest, works for any method.
   // If a request for the same key is already in flight, share the response.

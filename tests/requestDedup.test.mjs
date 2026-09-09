@@ -152,3 +152,50 @@ test('in-flight error: caller does not deadlock and falls through to a fresh req
   const recovered = await dedupedFetch('http://x.test/api/err', {}, fakeFetch);
   assert.equal((await recovered.json()).recovered, true);
 });
+
+test('POSTs to the same URL with DIFFERENT bodies do NOT coalesce (action discriminator)', async () => {
+  // Regression: two POSTs to /api/agents/<agent> — one with action:"instances"
+  // and one with action:"details" — used to share the in-flight slot keyed
+  // only on (method, URL). The second caller got the first response, which
+  // was shaped for the wrong question, and the AI Agents UI stayed on the
+  // install card on first open until a manual Refresh. Reproduced in
+  // tmp/mb-harness/details-race.mjs.
+  clearDedupCache();
+  let calls = 0;
+  const fakeFetch = makeFakeFetch(async (url, opts) => {
+    calls += 1;
+    const body = opts && opts.body ? JSON.parse(opts.body) : {};
+    return { ok: true, action: body.action, n: calls };
+  });
+
+  const [a, b] = await Promise.all([
+    dedupedFetch('http://x.test/api/agents/hermes',
+      { method: 'POST', body: JSON.stringify({ action: 'instances' }) }, fakeFetch),
+    dedupedFetch('http://x.test/api/agents/hermes',
+      { method: 'POST', body: JSON.stringify({ action: 'details' }) }, fakeFetch),
+  ]);
+
+  assert.equal(calls, 2, 'different bodies must hit the network separately');
+  assert.equal((await a.json()).action, 'instances');
+  assert.equal((await b.json()).action, 'details');
+});
+
+test('POSTs to the same URL with IDENTICAL bodies still coalesce', async () => {
+  clearDedupCache();
+  let calls = 0;
+  const fakeFetch = makeFakeFetch(async () => {
+    calls += 1;
+    await new Promise((r) => setTimeout(r, 10));
+    return { ok: true, n: calls };
+  });
+
+  const body = JSON.stringify({ action: 'details', connectionId: 'X' });
+  const [a, b] = await Promise.all([
+    dedupedFetch('http://x.test/api/agents/hermes', { method: 'POST', body }, fakeFetch),
+    dedupedFetch('http://x.test/api/agents/hermes', { method: 'POST', body }, fakeFetch),
+  ]);
+
+  assert.equal(calls, 1, 'identical POSTs should still coalesce — body-keyed, not URL-only');
+  assert.deepEqual(await a.json(), { ok: true, n: 1 });
+  assert.deepEqual(await b.json(), { ok: true, n: 1 });
+});
