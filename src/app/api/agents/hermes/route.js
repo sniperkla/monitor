@@ -1219,6 +1219,17 @@ echo WU_STOPPED`, { pool: false, timeoutMs: 30000 });
         }
         const monitorOrigin = String(config.monitorOrigin || '');
         const forwardId = `${connectionId}-${wuPort}`;
+        // `sshConfig` above is intentionally resolved for the current request
+        // mode. In local mode that means it may already point at the monitor's
+        // relay listener (127.0.0.1:<forwarder-port>). Do NOT send that
+        // rewritten endpoint to the Mac relay: the Mac must SSH to the
+        // connection's original target, not back into the monitor server.
+        const relayConnection = await getSshConfig(connectionId, {
+          userId: session?.user?.id,
+          role: session?.user?.role,
+          sshMode: 'server',
+          skipRelayResolution: true,
+        });
         const forwardMsg = {
           type: 'webui:forward',
           forwardId,
@@ -1234,8 +1245,8 @@ echo WU_STOPPED`, { pool: false, timeoutMs: 30000 });
           // is no bootstrap secret to forward (unlike nanobot).
           bootstrapSecret: '',
           connection: {
-            host: sshConfig.host, port: sshConfig.port, username: sshConfig.username,
-            password: sshConfig.password, privateKey: sshConfig.privateKey, passphrase: sshConfig.passphrase,
+            host: relayConnection.host, port: relayConnection.port, username: relayConnection.username,
+            password: relayConnection.password, privateKey: relayConnection.privateKey, passphrase: relayConnection.passphrase,
           },
         };
         // Register the waiter BEFORE sending, or the relay's ack can arrive
@@ -1243,12 +1254,26 @@ echo WU_STOPPED`, { pool: false, timeoutMs: 30000 });
         const ackPromise = typeof global.__waitForWebuiForward === 'function'
           ? global.__waitForWebuiForward(forwardId, 20000)
           : Promise.resolve(null);
-        const sent = await (global.__sendToRelayForUserAny([session?.user?.id, session?.user?.dbId, session?.user?.sub], forwardMsg) || Promise.resolve(false));
+        const sent = await (global.__sendToRelayForUserAny([session?.user?.id, session?.user?.dbId, session?.user?.sub], forwardMsg, options.preferredRelay) || Promise.resolve(false));
         if (!sent) {
           return NextResponse.json({ success: false, error: 'Local Relay is not connected — start it or use the central proxy' }, { status: 409, log });
         }
         const ackedPort = await ackPromise;
-        const localPort = Number(ackedPort) || 18791;
+        const localPort = Number(ackedPort) || 0;
+        // No ack means the relay never got the tunnel up (SSH refused, the
+        // dashboard port is dead, or the relay predates `webui:ready`). This
+        // used to answer `success` with a GUESSED port, which sent the browser
+        // to a dead address while the tab sat on "Opening Web UI…". Fail loudly
+        // instead, so the tab can explain itself and offer the proxy route.
+        if (!localPort) {
+          log.push('✗ [webui] Local Relay never confirmed the tunnel (timed out)');
+          return NextResponse.json({
+            success: false,
+            portConfirmed: false,
+            error: 'Local Relay did not confirm the Web UI tunnel. Check that Local Relay is running on your computer and can reach this server over SSH.',
+            log,
+          }, { status: 504 });
+        }
         log.push(`> [webui] Direct relay requested — dashboard serving at http://127.0.0.1:${localPort}`);
         return NextResponse.json({
           success: true, active: true, relay: true, localPort,

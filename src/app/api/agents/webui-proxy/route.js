@@ -514,7 +514,7 @@ async function handleProxy(request) {
     // Append any extra query parameters that aren't proxy parameters
     const extraParams = new URLSearchParams();
     for (const [k, v] of searchParams.entries()) {
-      if (!['connectionId', 'port', 'path', '_base'].includes(k)) {
+      if (!['connectionId', 'port', 'path', '_base', 'agent', 'sshMode', 'preferredRelay'].includes(k)) {
         extraParams.append(k, v);
       }
     }
@@ -531,7 +531,12 @@ async function handleProxy(request) {
       'Cross-Origin-Embedder-Policy': 'unsafe-none',
     };
 
-    const sshConfig = await getSshConfig(connectionId);
+    const requestedSshMode = searchParams.get('sshMode') || request.headers.get('x-ssh-mode') || undefined;
+    const requestedRelay = searchParams.get('preferredRelay') || request.headers.get('x-preferred-relay') || undefined;
+    const sshConfig = await getSshConfig(connectionId, {
+      sshMode: requestedSshMode,
+      preferredRelay: requestedRelay,
+    });
 
     // Open SSH tunnel
     let tunnel;

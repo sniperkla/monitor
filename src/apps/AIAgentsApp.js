@@ -94,7 +94,17 @@ const AGENTS = [
 // gateway port, reachable through the central proxy alone.
 const WEBUI_START_AGENTS = ['nanobot', 'hermes'];
 
-function buildWebUIProxyUrl(connectionId, port, p, agentId = 'nanobot') {
+// Same-origin Web UI proxy URL — the fallback for every device that is NOT the
+// relay host. A phone has no Local Relay of its own, so http://127.0.0.1:<port>
+// can never resolve there; this route makes the monitor dial the target itself
+// (monitor → target) instead of asking the device to (device → target).
+//
+// Tunnel coordinates ride in the PATH, never the query: a bundler resolves a
+// chunk's relative imports against import.meta.url, and RFC 3986 relative
+// resolution drops the base URL's query string — so `?connectionId=&port=` on
+// the entry module makes every lazy chunk 400 and the SPA never leaves its boot
+// splash. See tests/webui-proxy-assets.test.mjs.
+function buildWebUIProxyUrl(connectionId, port, p, agentId = 'nanobot', routeOptions = {}) {
   // Defensive: only a non-empty string is meaningful here. Some code paths can
   // hand us a non-string (e.g. an object from the details payload) — guard
   // before calling string methods on it.
@@ -103,12 +113,14 @@ function buildWebUIProxyUrl(connectionId, port, p, agentId = 'nanobot') {
   // user's own machine (http://127.0.0.1:<port>) — no central proxy involved.
   if (/^https?:\/\//i.test(full)) return full;
   const hashIdx = full.indexOf('#');
-  if (hashIdx >= 0) {
-    const pathPart = full.slice(0, hashIdx) || '/';
-    const hashPart = full.slice(hashIdx);
-    return `/api/agents/webui-proxy?connectionId=${encodeURIComponent(connectionId)}&port=${port}&agent=${encodeURIComponent(agentId)}&path=${encodeURIComponent(pathPart)}${hashPart}`;
-  }
-  return `/api/agents/webui-proxy?connectionId=${encodeURIComponent(connectionId)}&port=${port}&agent=${encodeURIComponent(agentId)}&path=${encodeURIComponent(full)}`;
+  const pathPart = hashIdx >= 0 ? (full.slice(0, hashIdx) || '/') : full;
+  const hashPart = hashIdx >= 0 ? full.slice(hashIdx) : '';
+  const suffix = pathPart === '/' ? '' : pathPart.replace(/^\/+/, '');
+  const relayQuery = routeOptions.preferredRelay
+    ? `&sshMode=local&preferredRelay=${encodeURIComponent(routeOptions.preferredRelay)}`
+    : '';
+  return `/api/agents/webui-proxy/m/${encodeURIComponent(connectionId)}/${encodeURIComponent(String(port))}`
+    + `${suffix ? '/' + suffix : ''}?agent=${encodeURIComponent(agentId)}${relayQuery}${hashPart}`;
 }
 
 // The nanobot WebUI pair credential is its bootstrap secret — the value in the
@@ -667,6 +679,92 @@ export default function AIAgentsApp({ apiFetch }) {
     }
   };
 
+  // ── The Web UI tab is a status page, not a dead end ────────────────────
+  //
+  // A tab claimed with window.open('', '_blank') starts on about:blank, which
+  // INHERITS the monitor's origin. That is why document.write() works at all —
+  // and it means the tab stays same-origin (and scriptable from here) right up
+  // until it actually navigates somewhere else. Two consequences we rely on:
+  //
+  //   1. It can SPEAK. When the open fails we rewrite the placeholder with the
+  //      real reason and a way out, instead of leaving the user staring at
+  //      "Opening Web UI…" forever.
+  //   2. It can be WATCHED. A tab still sitting on about:blank seconds after we
+  //      set location.href never navigated. Chrome blocks public-origin →
+  //      loopback jumps under Local Network Access (on by default since
+  //      Chrome 142), and a phone has no relay of its own, so 127.0.0.1 there
+  //      is the phone itself. Waiting longer changes nothing in either case.
+  //
+  // NOTE: no backticks anywhere in this CSS/HTML — it is injected through a JS
+  // template literal and one stray backtick would terminate it.
+  const WEBUI_TAB_CSS = [
+    '*{box-sizing:border-box}',
+    'body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b1020;color:#e2e8f0;',
+    'font:14px system-ui,-apple-system,Segoe UI,sans-serif;padding:24px}',
+    '.card{max-width:520px;width:100%;background:#151c2e;border:1px solid #1e293b;border-radius:14px;',
+    'padding:22px;box-shadow:0 10px 30px rgba(0,0,0,.45)}',
+    '.center{text-align:center}',
+    '.kicker{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#7dd3fc}',
+    'h1{margin:8px 0 10px;font-size:16px;color:#fff}',
+    'p{margin:6px 0;font-size:13px;color:#94a3b8;line-height:1.55}',
+    'pre{margin:10px 0 0;background:#080c14;border:1px solid #1e293b;border-radius:8px;padding:8px 10px;',
+    'color:#f87171;font-size:11px;white-space:pre-wrap;word-break:break-all;',
+    'font-family:ui-monospace,SFMono-Regular,Menlo,monospace}',
+    '.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}',
+    'button{font:inherit;font-size:12px;font-weight:700;border-radius:9px;padding:9px 14px;cursor:pointer;border:0}',
+    '.primary{background:#0284c7;color:#fff}.primary:hover{background:#0369a1}',
+    '.ghost{background:rgba(255,255,255,.08);color:#cbd5e1;border:1px solid rgba(255,255,255,.15)}',
+    '.ghost:hover{background:rgba(255,255,255,.15)}',
+    '.spin{width:26px;height:26px;border-radius:50%;border:2px solid rgba(125,211,252,.25);',
+    'border-top-color:#7dd3fc;animation:sp .8s linear infinite;margin:0 auto 14px}',
+    '@keyframes sp{to{transform:rotate(360deg)}}',
+  ].join('');
+
+  const escWebUI = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+
+  const writeWebUITab = (tab, title, bodyHtml) => {
+    if (!tab) return false;
+    try {
+      const doc = tab.document;
+      doc.open();
+      doc.write('<!doctype html><meta charset="utf-8">'
+        + '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        + '<title>' + escWebUI(title) + '</title>'
+        + '<style>' + WEBUI_TAB_CSS + '</style><body>' + bodyHtml + '</body>');
+      doc.close();
+      return true;
+    } catch { return false; }
+  };
+
+  // Replace "Opening Web UI…" with an actionable card. proxyUrl is the
+  // same-origin central proxy: it works from any device because the MONITOR
+  // dials the target, so a phone (which runs no relay) can still get in.
+  const failWebUITab = (tab, { heading, reason, detail, directUrl, proxyUrl }) => {
+    if (!tab) return;
+    const body = '<div class="card">'
+      + '<div class="kicker">Web UI</div>'
+      + '<h1>' + escWebUI(heading) + '</h1>'
+      + '<p>' + escWebUI(reason) + '</p>'
+      + (detail ? '<pre>' + escWebUI(detail) + '</pre>' : '')
+      + '<div class="row">'
+      + (proxyUrl ? '<button class="primary" id="wb-proxy">Open through the server</button>' : '')
+      + (directUrl ? '<button class="ghost" id="wb-retry">Retry direct</button>' : '')
+      + (directUrl ? '<button class="ghost" id="wb-copy">Copy address</button>' : '')
+      + '</div></div>';
+    if (!writeWebUITab(tab, heading || 'Web UI', body)) return;
+    try {
+      const doc = tab.document;
+      const go = (url) => { try { tab.location.href = url; } catch { /* blocked */ } };
+      doc.getElementById('wb-proxy')?.addEventListener('click', () => go(proxyUrl));
+      doc.getElementById('wb-retry')?.addEventListener('click', () => go(directUrl));
+      doc.getElementById('wb-copy')?.addEventListener('click', (e) => {
+        try { navigator.clipboard?.writeText(directUrl); if (e?.target) e.target.textContent = 'Copied'; } catch { /* ignore */ }
+      });
+    } catch { /* the tab may already be gone */ }
+  };
+
   // Claim a blank browser tab for the Web UI.
   //
   // MUST be called synchronously from a click handler: window.open() after an
@@ -689,11 +787,9 @@ export default function AIAgentsApp({ apiFetch }) {
     // out the handle we need in order to navigate the tab later. Sever the
     // reverse link by hand instead, so the opened page can't script us.
     try { tab.opener = null; } catch { /* ignore */ }
-    try {
-      tab.document.write('<!doctype html><meta charset="utf-8"><title>Opening Web UI…</title>'
-        + '<body style="margin:0;height:100vh;display:grid;place-items:center;background:#0b1020;color:#8ec5ff;font:14px system-ui,-apple-system,sans-serif">Opening Web UI…</body>');
-      tab.document.close();
-    } catch { /* cosmetic only */ }
+    writeWebUITab(tab, 'Opening Web UI…',
+      '<div class="card center"><div class="spin"></div>'
+      + '<div style="font-size:13px;color:#94a3b8">Opening Web UI…</div></div>');
     return tab;
   };
 
@@ -701,6 +797,17 @@ export default function AIAgentsApp({ apiFetch }) {
   // (tagged instances get their own allocated port) and fall back to the
   // agent's shipped default: Hermes' dashboard is 9119, nanobot's webui 8765.
   const webUIPort = () => details?.webUIPort || (agent.id === 'hermes' ? 9119 : 8765);
+
+  // Same-origin proxy fallback for this agent/target (see buildWebUIProxyUrl).
+  // Handed to every failure card so the user is never left without a way in.
+  const webUIProxyUrl = () => {
+    if (!target) return '';
+    let preferredRelay = '';
+    try { preferredRelay = localStorage.getItem('ssh_monitor_preferred_relay') || ''; } catch {}
+    return buildWebUIProxyUrl(target, webUIPort(), details?.webUIBootstrapPath || '/', agent.id, {
+      preferredRelay,
+    });
+  };
 
   const handleStartWebUI = async () => {
     if (!relayConnectedRef.current) {
@@ -740,9 +847,29 @@ export default function AIAgentsApp({ apiFetch }) {
         // delay doesn't cost us the user-gesture token.
         await new Promise((res) => setTimeout(res, 1000));
         await openWebUIInTab(r?.webUIBootstrapPath, startTab);
+      } else {
+        // The tab is already open on "Opening Web UI…" and nothing is coming.
+        // callAction also returns `undefined` when it throws, so this branch is
+        // the only feedback the user gets — make it real, in the tab they are
+        // looking at, not just in a notice they may have scrolled past.
+        const reason = r?.error
+          || `The ${agent.name} Web UI did not report as running on port ${webUIPort()}.`;
+        failWebUITab(startTab, {
+          heading: 'Could not start the Web UI',
+          reason,
+          directUrl: '',
+          proxyUrl: webUIProxyUrl(),
+        });
+        setNotice({ ok: false, text: `Start Web UI: ${reason}` });
       }
     } catch (err) {
       console.error('[WebUI] Failed to start Web UI:', err);
+      failWebUITab(startTab, {
+        heading: 'Could not start the Web UI',
+        reason: err?.message || 'The start command failed.',
+        directUrl: '',
+        proxyUrl: webUIProxyUrl(),
+      });
     } finally {
       startingWebUIRef.current = false;
       setStartingWebUI(false);
@@ -793,10 +920,41 @@ export default function AIAgentsApp({ apiFetch }) {
   // up-front and navigate it once the relay has told us which port it bound —
   // waiting to call window.open() until after the await would be blocked.
   const openWebUIInTab = async (overridePath, preopenedTab = null) => {
+    const proxyUrl = webUIProxyUrl();
+    const isMobileBrowser = typeof navigator !== 'undefined'
+      && /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '');
+
+    // A relay selected on a phone belongs to another device (usually the
+    // user's Mac). Its 127.0.0.1 gateway is therefore the Mac's loopback, not
+    // the phone's. Skip the impossible direct navigation on mobile and use the
+    // same-origin server route immediately; this avoids a guaranteed 9-second
+    // wait on the fallback card and keeps the selected Mac relay available for
+    // agent commands and data.
+    if (isMobileBrowser && proxyUrl) {
+      const tab = preopenedTab || openBlankWebUITab();
+      if (tab) {
+        try {
+          tab.location.href = proxyUrl;
+          setNotice({ ok: true, text: 'Opened the Web UI through the server.' });
+          return;
+        } catch { /* fall through — popup may have been blocked */ }
+      }
+      try { navigator.clipboard?.writeText(proxyUrl); } catch { /* ignore */ }
+      setNotice({ ok: true, text: `Popup blocked — URL copied to clipboard: ${proxyUrl}` });
+      return;
+    }
+
     // Require Local Relay: central socket proxy has protocol/chat desync bugs
     if (!relayConnectedRef.current) {
+      // Do not just close the claimed tab — the user is looking at it. Tell
+      // them why, and offer the same-origin route that needs no relay here.
       if (preopenedTab && !preopenedTab.closed) {
-        try { preopenedTab.close(); } catch {}
+        failWebUITab(preopenedTab, {
+          heading: 'Local Relay is required',
+          reason: 'The direct route tunnels through the Local Relay running on your computer. Start it, or open the Web UI through the server instead.',
+          directUrl: '',
+          proxyUrl,
+        });
       }
       setNotice({
         ok: false,
@@ -813,8 +971,12 @@ export default function AIAgentsApp({ apiFetch }) {
 
     const navigate = (url, note) => {
       if (tab) {
-        try { tab.location.href = url; setNotice({ ok: true, text: note }); return; }
-        catch { /* fall through */ }
+        try {
+          if (navigateWebUITab(tab, url, proxyUrl)) {
+            setNotice({ ok: true, text: note });
+            return;
+          }
+        } catch { /* fall through */ }
       }
       // Popup blocked: hand over the URL rather than navigating the app away.
       try { navigator.clipboard?.writeText(url); } catch { /* ignore */ }
@@ -830,6 +992,7 @@ export default function AIAgentsApp({ apiFetch }) {
     // tab would then be closed after the timeout even though the URL works
     // fine when pasted into the address bar (CSP does not restrict
     // navigations). Trust the relay's ack and navigate immediately.
+    let relayFailure = '';
     if (WEBUI_START_AGENTS.includes(agentRef.current?.id) && callRef.current) {
       try {
         const rr = await callRef.current('webui-ctl', {
@@ -841,17 +1004,106 @@ export default function AIAgentsApp({ apiFetch }) {
             `Opened in a new tab — direct via Local Relay (${candidate}).`);
           return;
         }
-      } catch { /* relay path is best-effort */ }
+        relayFailure = rr?.error || 'Local Relay did not report a tunnel port.';
+      } catch (e) {
+        relayFailure = e?.message || 'The request to Local Relay failed.';
+      }
+    } else {
+      relayFailure = `${agentRef.current?.id || 'This agent'} has no startable Web UI to tunnel.`;
     }
 
-    // Tunnel could not be bound — do not fall back to buggy WebSocket proxy
+    // Tunnel could not be bound. The claimed tab is sitting on
+    // "Opening Web UI…" — write the reason into it instead of closing it under
+    // the user's nose and leaving them with nothing.
     if (tab && !tab.closed) {
-      try { tab.close(); } catch {}
+      failWebUITab(tab, {
+        heading: 'Could not reach the Web UI',
+        reason: relayFailure,
+        directUrl: '',
+        proxyUrl,
+      });
     }
     setNotice({
       ok: false,
-      text: 'Could not connect through Local Relay. Please verify Local Relay is running on your computer.',
+      text: relayFailure || 'Could not connect through Local Relay. Please verify Local Relay is running on your computer.',
     });
+  };
+
+  // Hand the claimed tab its destination — and make the TAB responsible for
+  // noticing if the jump never happens.
+  //
+  // We cannot detect a blocked navigation from the opener. Measured in Chrome:
+  // once the tab really leaves, reading `tab.location.href` throws and tells
+  // us nothing; and before it leaves, an about:blank popup reports the
+  // OPENER's URL as its href (about:blank inherits the creator's URL), so
+  // "did it move?" cannot be answered from out here either. Both checks were
+  // tried and both are blind.
+  //
+  // So the tab watches itself. The script below runs INSIDE it: it attempts
+  // the navigation, and if it is still alive `graceMs` later the jump never
+  // committed — Chrome refuses public-origin → loopback under Local Network
+  // Access (default since Chrome 142), and on a phone 127.0.0.1 is the phone,
+  // where no relay is listening. It then renders the fallback card itself.
+  const navigateWebUITab = (tab, directUrl, proxyUrl, graceMs = 9000) => {
+    if (!tab) return false;
+    const card = '<div class="card">'
+      + '<div class="kicker">Web UI</div>'
+      + '<h1>Could not reach the Web UI</h1>'
+      + '<p>The browser never opened the local address. Chrome blocks this while'
+      + ' Local Network Access is on (a public site reaching 127.0.0.1), and'
+      + ' 127.0.0.1 only exists on the computer running Local Relay &mdash; never on a'
+      + ' phone. Opening through the server works from any device.</p>'
+      + (directUrl ? '<pre>' + escWebUI(directUrl) + '</pre>' : '')
+      + '<div class="row">'
+      + (proxyUrl ? '<button class="primary" id="wb-proxy">Open through the server</button>' : '')
+      + (directUrl ? '<button class="ghost" id="wb-retry">Retry direct</button>' : '')
+      + '</div></div>';
+    // NOTE: the closing tag is split so the string cannot terminate the block.
+    const script = [
+      '(function () {',
+      '  var direct = ' + JSON.stringify(directUrl || '') + ';',
+      '  var proxy = ' + JSON.stringify(proxyUrl || '') + ';',
+      '  if (direct) { setTimeout(function () { location.replace(direct); }, 60); }',
+      '  setTimeout(function () {',
+      '    var box = document.getElementById("wb-stage");',
+      '    if (!box) { return; }',
+      '    box.innerHTML = ' + JSON.stringify(card) + ';',
+      '    var p = document.getElementById("wb-proxy");',
+      '    if (p && proxy) { p.addEventListener("click", function () { location.replace(proxy); }); }',
+      '    var r = document.getElementById("wb-retry");',
+      '    if (r && direct) { r.addEventListener("click", function () { location.replace(direct); }); }',
+      '  }, ' + Number(graceMs) + ');',
+      '})();',
+    ].join('\n');
+    return writeWebUITab(tab, 'Opening Web UI…',
+      '<div id="wb-stage" class="card center"><div class="spin"></div>'
+      + '<div style="font-size:13px;color:#94a3b8">Opening Web UI…</div></div>'
+      + '<script>' + script + '<\/script>');
+  };
+
+  // Open the Web UI through the monitor server instead of this device.
+  //
+  // Same origin, so there is no Local Network Access check and no dependency
+  // on this device running a relay: the server opens the SSH tunnel itself.
+  // This is the route that works from a phone (no relay, and its 127.0.0.1 is
+  // the phone), from a browser that blocks loopback, and any time the direct
+  // jump is refused.
+  const openWebUIViaServer = () => {
+    const url = webUIProxyUrl();
+    if (!url) {
+      setNotice({ ok: false, text: 'Select a server before opening the Web UI.' });
+      return;
+    }
+    const tab = openBlankWebUITab();
+    if (tab) {
+      try {
+        tab.location.href = url;
+        setNotice({ ok: true, text: 'Opened the Web UI through the server.' });
+        return;
+      } catch { /* fall through — popup may have been blocked */ }
+    }
+    try { navigator.clipboard?.writeText(url); } catch { /* ignore */ }
+    setNotice({ ok: true, text: `Popup blocked — URL copied to clipboard: ${url}` });
   };
 
   const act = async (label, fn) => {
@@ -2327,6 +2579,17 @@ export default function AIAgentsApp({ apiFetch }) {
                         ) : (
                           <><Cable size={12} /> Local Relay Required</>
                         )}
+                      </button>
+                      {/* Works from ANY device: the monitor dials the target
+                          itself, so a phone — which runs no relay and whose
+                          127.0.0.1 is the phone — can still reach the UI. */}
+                      <button
+                        onClick={openWebUIViaServer}
+                        disabled={!target}
+                        className="px-3 py-1.5 rounded-xl bg-slate-500/15 hover:bg-slate-500/25 text-slate-200 hover:text-white font-bold text-xs flex items-center gap-1.5 border border-slate-400/30 transition cursor-pointer disabled:opacity-50"
+                        title="Open through the monitor server (same-origin proxy) — works from any device"
+                      >
+                        <ServerIcon size={12} /> Via server
                       </button>
                     </div>
                   </div>

@@ -26,6 +26,8 @@ import { readFileSync } from 'node:fs';
 const app = readFileSync('src/apps/AIAgentsApp.js', 'utf8');
 const ctx = readFileSync('src/context/AppContext.js', 'utf8');
 const ssh = readFileSync('src/app/api/server-backup/_ssh.js', 'utf8');
+const nanobot = readFileSync('src/app/api/agents/nanobot/route.js', 'utf8');
+const hermes = readFileSync('src/app/api/agents/hermes/route.js', 'utf8');
 
 function section(src, start, end) {
   const from = src.indexOf(start);
@@ -59,10 +61,33 @@ test('every bypass entry point goes through bypassRelay', () => {
 });
 
 test('relay auto-pin respects an explicit direct-connection opt-out', () => {
-  const pin = section(ctx, 'let changed = false;', 'const first = relays[0]');
+  const pin = section(ctx, 'let changed = false;', 'if (relayDownRef.current)');
   assert.match(pin, /ssh_monitor_relay_optout/);
   // The guard must wrap the write, not sit next to it.
   assert.match(pin, /if \(!relayOptedOut && localStorage\.getItem\('ssh_monitor_ssh_mode'\) !== 'local'\)/);
+});
+
+test('relay auto-pin preserves an explicitly preferred connected relay', () => {
+  const pin = section(ctx, 'const savedPreferred = localStorage.getItem(\'ssh_monitor_preferred_relay\');', 'if (relayDownRef.current)');
+  // Poll order is not a stable identity. Prefer the saved relay when it is
+  // still present, and only fall back to the first result when it disappeared.
+  assert.match(pin, /const preferred = savedPreferred\s*\n\s*\? relays\.find\(\(relay\) => \(relay\.relayName \|\| relay\.relayId\) === savedPreferred\)/);
+  assert.match(pin, /const selected = preferred \|\| relays\[0\] \|\| null/);
+  assert.match(pin, /const relayName = selected \? \(selected\.relayName \|\| selected\.relayId\) : null/);
+});
+
+test('relay-start sends the original connection target to the local relay', () => {
+  for (const [name, src] of [['nanobot', nanobot], ['hermes', hermes]]) {
+    const block = section(src, "if (op === 'relay-start') {", "if (op === 'start' || op === 'restart')");
+    // Local mode may rewrite sshConfig to the monitor-side relay listener. The
+    // browser relay must instead receive the untouched connection coordinates.
+    assert.match(block, /const relayConnection = await getSshConfig\(connectionId, \{/,
+      `${name} must resolve an unmodified relay target`);
+    assert.match(block, /connection:\s*\{\s*host: relayConnection\.host,\s*port: relayConnection\.port,/,
+      `${name} must forward relayConnection, not rewritten sshConfig`);
+    assert.match(block, /skipRelayResolution: true/,
+      `${name} must bypass relay rewriting while recovering the target`);
+  }
 });
 
 test('pairing a relay on the device clears the opt-out so it is not a one-way door', () => {

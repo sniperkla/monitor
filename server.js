@@ -686,14 +686,14 @@ function sendToRelayForUser(userId, preferredRelay, msgObj) {
 // Relay registrations are keyed by the JWT sub (googleId), while sessions
 // carry the Mongo _id — translate like getSshConfig does.
 global.__sendToRelayForUser = sendToRelayForUser;
-global.__sendToRelayForUserAny = async function (userIds, msgObj) {
+global.__sendToRelayForUserAny = async function (userIds, msgObj, preferredRelay = null) {
   const arr = (Array.isArray(userIds) ? userIds : [userIds]).filter(Boolean).map(String);
-  for (const id of arr) { if (sendToRelayForUser(id, null, msgObj)) return true; }
+  for (const id of arr) { if (sendToRelayForUser(id, preferredRelay, msgObj)) return true; }
   try {
     if (mongoose.connection.readyState === 1 && arr.length) {
       const u = await mongoose.connection.db.collection('users').findOne({ _id: new (require('mongodb').ObjectId)(arr[0]) });
       const gid = u?.googleId || u?.sub;
-      if (gid && sendToRelayForUser(String(gid), null, msgObj)) return true;
+      if (gid && sendToRelayForUser(String(gid), preferredRelay, msgObj)) return true;
     }
   } catch (_) {}
   return false;

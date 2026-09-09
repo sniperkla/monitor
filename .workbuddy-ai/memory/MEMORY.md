@@ -23,8 +23,42 @@
 - **Anything that changes relay state must nudge the poller**, not wait for its tick: pairing approval and the install wizard call `requestRelayStatusRefresh(...)`. `AppContext` owns the only continuous relay poller (5s while missing → 20s after ~2 min, 20s when attached, 60s hidden, immediate on focus/visibility/online). The relay install finishes in the user's terminal, so the browser is never told — one-shot mount reads of `relayInfo` are always stale.
 - `relayDown` is only raised when the browser shows relay *intent* (local mode, a chosen preferred relay, or a relay discovered on 127.0.0.1:48923). Setting it unconditionally nags every server-mode user who never installed one.
 - `MongoDeadBanner` reads `ssh_monitor_ssh_mode` only. It used to `||` in `ssh_monitor_preferred_relay`, but that key holds a relay *name*, never a mode, so it made the banner appear for server-mode users.
-- **`ssh_monitor_ssh_mode` is per-ACCOUNT, not per-device.** `AppContext` auto-pins `local` for *any* browser that sees the user's relay, so a phone (which can never run a relay) still sends `x-ssh-mode: local`. `resolveSshConfig` must therefore treat a missing relay as *fall back to direct* for non-localhost hosts, never as a hard error — otherwise every agent call 500s with "Local Relay Agent is not connected" for public-IP targets the server reaches fine. Localhost hosts MUST still throw (falling back = server dials its own loopback = SSRF). Regression tests in `tests/ai-agents-relay-routing.test.mjs`.
+- **`ssh_monitor_ssh_mode` is stored per-device (localStorage) but converges per-ACCOUNT.** `AppContext` auto-pins `local` + `ssh_monitor_preferred_relay` for *any* browser that sees the user's relay, so a phone (which can never run a relay) still sends `x-ssh-mode: local` and gets routed through the Mac's relay. `ssh_monitor_relay_optout === '1'` ("Continue with direct connection") blocks that auto-pin; pairing a relay clears it. `resolveSshConfig` must therefore treat a missing relay as *fall back to direct* for non-localhost hosts, never as a hard error — otherwise every agent call 500s with "Local Relay Agent is not connected" for public-IP targets the server reaches fine. Localhost hosts MUST still throw (falling back = server dials its own loopback = SSRF). Regression tests in `tests/ai-agents-relay-routing.test.mjs`.
 - WebUI relay ports are hints only; use the `webui:ready` acknowledgement. Preserve WebUI `authorization` headers; cookie may be stripped. Production WebUI relay needs `CSP_ALLOW_LOCAL_RELAY=1`.
+- **`webui-proxy` never routes through a relay.** `route.js:534` calls `getSshConfig(connectionId)` with NO options, so `sshMode` is undefined and `conn.sshMode` is never persisted → `resolveSshConfig` returns the plain config → direct server→target SSH. Every other route passes `x-ssh-mode` / `x-preferred-relay` from headers. Consequence: "Via server" works only when the Next.js box can reach the target directly; it cannot reuse the user's relay for hosts only the relay can see.
+- **`relay-start` tunnels to 127.0.0.1 on the RELAY HOST, not the caller.** The gateway lands on the Mac, so the returned `http://127.0.0.1:<port>` is only usable from that Mac. Direct Web UI can therefore never work from a phone or another machine (and Chrome 142+ LNA blocks public→loopback anyway).
+
+## Opening the agent Web UI (AIAgentsApp)
+- **The claimed tab must never be left on "Opening Web UI…".** It is opened
+  synchronously (popup-blocker requirement) and navigated later, so every
+  failure path in between strands a tab the user is staring at. All of them now
+  write the reason INTO the tab (`failWebUITab`) and offer the same-origin
+  server route. Regression tests: `tests/ai-agents-webui-open.test.mjs`.
+- **The tab has to watch ITSELF — the opener cannot.** Measured in Chrome: an
+  about:blank popup reports the OPENER's URL as `location.href` (about:blank
+  inherits the creator's URL), and once it really navigates, reading `href`
+  throws. Both opener-side "did it move?" checks are blind; don't reintroduce
+  them. `navigateWebUITab()` instead writes a script into the tab that calls
+  `location.replace(direct)` and renders the fallback card if the document is
+  still alive at the deadline.
+- **Direct mode (`http://127.0.0.1:<port>`) is fundamentally device-local**: it
+  only works on the machine running the relay, so it can never work on a phone.
+  Chrome's Local Network Access (default-on since 142) additionally blocks
+  public-origin → loopback. The relay's PNA OPTIONS preflight mitigation is
+  obsolete — Chrome put PNA on hold, and top-level navigations never preflight.
+  When the jump is refused Chrome commits an error page, so even the in-tab
+  card can't help there; the **"Via server" button** is the deterministic route
+  for those devices.
+- `relay-start` must FAIL (504) when the relay never acks `webui:ready`. It used
+  to return `success:true` with a guessed port, sending the browser to a dead
+  address. `handleWebuiForward` swallows its errors, so failures currently cost
+  the full 20s ack timeout — adding a `webui:fail` message is still open
+  (needs a relay rebuild + reinstall).
+- The relay's own log is `~/Library/Logs/ssh-monitor-relay.log` (no timestamps) —
+  grep it for `[Relay WebUI]` before theorising about Web UI failures. The
+  installed relay at `~/.ssh-monitor-relay/local-relay.js` is byte-identical to
+  the obfuscated `public/local-relay.min.js`, so plain-text greps for its
+  strings find nothing; that is NOT evidence the code is missing.
 
 ## Monitor Agent / Server-side install
 - `public/monitor-agent.js` → `public/monitor-agent.min.js`; installed on a remote target by `AgentSetupWizard.js` / `/api/server-monitor/agent`; connects outbound to `/agent-ws` and can run as `server-monitor-agent.service`.

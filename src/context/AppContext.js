@@ -644,9 +644,17 @@ export function AppProvider({ children }) {
         localStorage.setItem('ssh_monitor_ssh_mode', 'local');
         changed = true;
       }
-      const first = relays[0] || null;
-      const relayName = first ? (first.relayName || first.relayId) : null;
-      if (relayName && localStorage.getItem('ssh_monitor_preferred_relay') !== relayName) {
+      // Preserve an explicitly selected relay while it is still connected.
+      // The status endpoint may reorder relays between polls; blindly taking
+      // relays[0] made switching to a different Mac appear to work, then
+      // silently switched the browser back a few seconds later.
+      const savedPreferred = localStorage.getItem('ssh_monitor_preferred_relay');
+      const preferred = savedPreferred
+        ? relays.find((relay) => (relay.relayName || relay.relayId) === savedPreferred)
+        : null;
+      const selected = preferred || relays[0] || null;
+      const relayName = selected ? (selected.relayName || selected.relayId) : null;
+      if (relayName && savedPreferred !== relayName) {
         localStorage.setItem('ssh_monitor_preferred_relay', relayName);
         changed = true;
       }

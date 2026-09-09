@@ -128,7 +128,7 @@ test('a relay recovery re-pins local mode and preferred relay BEFORE refetching'
   // after the refetch routes the request through the old relay, or none.
   const start = appContextSrc.indexOf('const applyStatus =');
   assert.notEqual(start, -1, 'applyStatus should exist');
-  const body = appContextSrc.slice(start, start + 3200);
+  const body = appContextSrc.slice(start, start + 5000);
 
   const modeWrite = body.indexOf("setItem('ssh_monitor_ssh_mode', 'local')");
   const relayWrite = body.indexOf("setItem('ssh_monitor_preferred_relay'");

@@ -161,6 +161,12 @@ export async function getSshConfig(connectionId, options = {}) {
     }
   }
 
+  // Some callers (the Local Relay WebUI handshake) need the original target
+  // credentials to send to another machine. They must not receive the
+  // monitor-side relay listener, and localhost targets must not be rejected
+  // merely because this lookup is preparing a relay message.
+  if (options.skipRelayResolution) return baseConfig;
+
   return resolveSshConfig(baseConfig, {
     sshMode: conn.sshMode || options.sshMode,
     preferredRelay: conn.preferredRelay || options.preferredRelay,
