@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
 import { logger } from '@/lib/logger';
 import { requireSession } from '@/lib/requireSession';
+import { putOauthJob } from '@/lib/rcloneOauthJobs';
 
 function quote(str) {
   return `'${String(str).replace(/'/g, `'\\''`)}'`;
@@ -43,6 +44,21 @@ export async function POST(req) {
     const proto = host.includes('localhost') ? 'http' : 'https';
     const callbackUrl = `${proto}://${host}/api/rclone/oauth/callback`;
 
+    // Stash the caller's DB context server-side so the callback route (a plain
+    // browser redirect from Google, which carries no custom headers) can save
+    // the config itself. This makes the save independent of the popup/opener
+    // handoff — the historical source of "sign-in succeeded but rclone.conf
+    // stayed empty". Secret stays in memory, TTL-bound, never in the URL.
+    const startJobId = putOauthJob({
+      phase: 'start',
+      vaultUri: req.headers.get('x-mongodb-uri') || null,
+      connectionId,
+      remoteName,
+      clientId,
+      clientSecret,
+      scope,
+    });
+
     const sshConfig = await getSshConfig(connectionId, { sshMode, preferredRelay });
     const pathPrefix = 'export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:/usr/bin:$PATH"; ';
 
@@ -65,7 +81,7 @@ export async function POST(req) {
       access_type: 'offline',
       prompt: 'consent',
       // Store context in state so callback knows which server/remote to write to
-      state: Buffer.from(JSON.stringify({ connectionId, remoteName, clientId, clientSecret, scope })).toString('base64url'),
+      state: Buffer.from(JSON.stringify({ connectionId, remoteName, clientId, clientSecret, scope, startJobId })).toString('base64url'),
     });
 
     const authUrl = `${GOOGLE_AUTH_URL}?${params.toString()}`;

@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server';
-import { putOauthJob } from '@/lib/rcloneOauthJobs';
+import { putOauthJob, takeOauthJob } from '@/lib/rcloneOauthJobs';
+import { getSshConfig } from '@/app/api/server-backup/_ssh';
+import { writeDriveRemote } from '@/lib/rcloneConfigWrite';
+import { logger } from '@/lib/logger';
 
 /**
  * Returns an HTML page that sends a postMessage to window.opener and
@@ -160,11 +163,40 @@ export async function GET(req) {
       : new Date(Date.now() + 3600 * 1000).toISOString(),
   });
 
-  // ── Store the token server-side under a one-time jobId ─────────────────────
-  // The popup may fail to reach the opener (opener reloaded on mobile, popup
-  // blocked from postMessage, etc.). Storing here lets the opener — or any
-  // reloaded app tab reading the localStorage pending flag — finish the save
-  // later via POST /api/rclone/oauth/save-token { jobId }.
+  // ── PRIMARY PATH: save the rclone config server-side, right here ─────────
+  // The start route stashed the caller's vault DB URI + context under
+  // state.startJobId. The callback GET is a same-origin navigation from
+  // Google, so it carries the user's session cookies — getSshConfig can
+  // resolve ownership, and the stashed URI covers the vault DB lookup.
+  // This makes the save completely independent of the popup/opener handoff.
+  let startJob = null;
+  try { startJob = ctx.startJobId ? takeOauthJob(ctx.startJobId) : null; } catch (_) {}
+
+  let saved = false;
+  let saveError = null;
+  if (startJob?.connectionId) {
+    try {
+      const sshConfig = await getSshConfig(startJob.connectionId, {
+        dbUri: startJob.vaultUri || undefined,
+      });
+      const result = await writeDriveRemote(sshConfig, {
+        name: startJob.remoteName || remoteName,
+        clientId: startJob.clientId,
+        clientSecret: startJob.clientSecret,
+        scope: startJob.scope || scope,
+        rcloneToken,
+      });
+      saved = result.ok;
+      if (!result.ok) saveError = result.error;
+    } catch (err) {
+      logger.error('[rclone/oauth/callback] server-side save failed:', err.message);
+      saveError = err.message;
+    }
+  }
+
+  // ── FALLBACK PATH: stash the token for the browser-driven save ────────────
+  // Used when the start job expired (>10 min on consent) or the server-side
+  // SSH write failed and the app should retry with its own headers.
   const jobId = putOauthJob({
     rcloneToken,
     connectionId,
@@ -174,14 +206,18 @@ export async function GET(req) {
     scope,
   });
 
-  // ── Send token + context back to the parent window via postMessage ────────
-  // The parent (RcloneApp) will call /api/rclone/oauth/save-token via apiFetch
-  // so that the correct x-mongodb-uri / SSH headers are included.
+  // ── Report the outcome to the parent window ───────────────────────────────
+  const message = saved
+    ? `Configuration saved to rclone.conf on your server!`
+    : `Google authorisation received for "${remoteName}". ${saved === false && saveError ? 'Will retry from the app…' : 'Saving config…'}`;
+
   return popupResponse({
     success: true,
-    message: `Google authorisation received for "${remoteName}". Saving config…`,
+    message,
+    error: saved ? null : saveError,
     payload: {
       jobId,
+      saved,
       rcloneToken,
       connectionId,
       remoteName,

@@ -120,7 +120,7 @@ export async function getSshConfig(connectionId, options = {}) {
     }
   }
 
-  const db = await connectDB();
+  const db = await connectDB(options.dbUri || null);
   const repo = new ConnectionRepository(db, actingUserId || null);
   if (actingUserRole) repo.role = actingUserRole;
   await repo.init();
