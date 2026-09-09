@@ -557,28 +557,66 @@ export async function DELETE(req) {
 
     const escapedRaw = bashSingleQuote(rawLine);
 
+    // Remove the schedule, then VERIFY it is actually gone. The naive
+    // `grep -F -v "$RAW_LINE"` misses lines whose spacing/comment drifted
+    // (hand-edited crontabs, `crontab -l` re-rendering), which made delete
+    // silently do nothing. Instead: rebuild the crontab dropping any line
+    // containing the raw line OR the task's unique script basename
+    // (rclone-cron-<safeName>.sh), then verify and retry once.
     const removeCronScript = `
 RAW_LINE=${escapedRaw}
 
-# Extract script path ending with rclone-cron-*.sh
 SCRIPT_PATH=$(echo "$RAW_LINE" | awk '{for(i=1;i<=NF;i++) if($i ~ /rclone-cron-.*\\.sh$/) print $i}')
+SCRIPT_BASE=$(basename "${'$'}{SCRIPT_PATH:-NONE}" 2>/dev/null)
 
-TMP_CRON=$(mktemp)
-if [ -n "$SCRIPT_PATH" ]; then
-  crontab -l 2>/dev/null | grep -F -v "$RAW_LINE" | grep -F -v "$SCRIPT_PATH" > "$TMP_CRON" || true
-  ${removeScript ? `rm -f "$SCRIPT_PATH"
-  BASE_NAME=$(basename "$SCRIPT_PATH" .sh)
-  rm -rf "$HOME/.rclone-scripts/$BASE_NAME"* "$HOME/.rclone-scripts/logs/$BASE_NAME"* "/tmp/$BASE_NAME"* "/tmp/rclone-logs/$BASE_NAME"* 2>/dev/null || true` : '# Keep script & log files as requested'}
-else
-  crontab -l 2>/dev/null | grep -F -v "$RAW_LINE" > "$TMP_CRON" || true
+remove_task_lines() {
+  TMP_CRON=$(mktemp)
+  crontab -l 2>/dev/null | awk -v raw="$RAW_LINE" -v base="$SCRIPT_BASE" '
+    index($0, raw) > 0 { next }
+    base != "NONE" && base != "" && index($0, base) > 0 { next }
+    { print }
+  ' > "$TMP_CRON"
+  crontab "$TMP_CRON"
+  RC=$?
+  rm -f "$TMP_CRON"
+  return $RC
+}
+
+count_task_lines() {
+  crontab -l 2>/dev/null | awk -v raw="$RAW_LINE" -v base="$SCRIPT_BASE" '
+    index($0, raw) > 0 { c++ }
+    base != "NONE" && base != "" && index($0, base) > 0 { c++ }
+    END { print c + 0 }
+  '
+}
+
+remove_task_lines
+FIRST_RC=$?
+
+if [ "$(count_task_lines)" != "0" ]; then
+  # Retry once — some cron daemons race a concurrent write
+  sleep 1
+  remove_task_lines
+  if [ "$(count_task_lines)" != "0" ]; then
+    echo "DELETE_FAILED: task entry still present in crontab after removal attempts (first_rc=$FIRST_RC)" >&2
+    crontab -l 2>/dev/null >&2
+    exit 1
+  fi
 fi
 
-crontab "$TMP_CRON"
-rm -f "$TMP_CRON"
+${removeScript ? `if [ -n "$SCRIPT_PATH" ]; then
+  rm -f "$SCRIPT_PATH"
+  BASE_NAME=$(basename "$SCRIPT_PATH" .sh)
+  rm -rf "$HOME/.rclone-scripts/$BASE_NAME"* "$HOME/.rclone-scripts/logs/$BASE_NAME"* "/tmp/$BASE_NAME"* "/tmp/rclone-logs/$BASE_NAME"* 2>/dev/null || true
+fi` : '# Keep script & log files as requested'}
+exit 0
 `;
     const delRes = await execCommand(sshConfig, removeCronScript);
 
-    return NextResponse.json({ success: delRes.code === 0, error: delRes.code !== 0 ? delRes.stderr : null });
+    return NextResponse.json({
+      success: delRes.code === 0,
+      error: delRes.code !== 0 ? (delRes.stderr?.trim() || 'Failed to remove crontab job — the entry may still be on the server') : null,
+    });
 
   } catch (error) {
     logger.error('[rclone/cron DELETE] error:', error.message);

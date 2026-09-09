@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
 import { logger } from '@/lib/logger';
+import { takeOauthJob } from '@/lib/rcloneOauthJobs';
 
 function quote(str) {
   return `'${String(str).replace(/'/g, `'\\''`)}'`;
@@ -9,26 +10,53 @@ function quote(str) {
 /**
  * POST /api/rclone/oauth/save-token
  *
- * Called by the frontend (RcloneApp) after the OAuth popup returns a token
- * via postMessage. This route runs through the normal apiFetch path so it
+ * Writes the rclone config on the remote server after Google OAuth consent.
+ * Called by the frontend (RcloneApp) through the normal apiFetch path so it
  * carries the correct x-mongodb-uri / x-ssh-mode headers.
  *
- * Body: { connectionId, remoteName, clientId, clientSecret, scope, rcloneToken }
+ * Body: { connectionId, remoteName, clientId, clientSecret, scope,
+ *         rcloneToken | jobId }
+ *
+ * jobId is preferred: the callback stored the token server-side under a
+ * one-time jobId, which makes the save recoverable even if the opener window
+ * reloaded and the postMessage was lost.
  */
 export async function POST(req) {
   try {
-    const {
+    const body = await req.json();
+
+    // Two ways to receive the token:
+    //  1. jobId  — the callback stored the token server-side (preferred; used
+    //     by the postMessage path AND the localStorage self-heal path)
+    //  2. rcloneToken — legacy inline token (kept for backward compatibility)
+    let {
       connectionId,
       remoteName,
       clientId,
       clientSecret,
       scope = 'drive',
       rcloneToken,
-    } = await req.json();
+    } = body;
+
+    if (body?.jobId && !rcloneToken) {
+      const job = takeOauthJob(body.jobId);
+      if (!job) {
+        return NextResponse.json({
+          success: false,
+          error: 'OAuth token expired or already used — please sign in again (valid for 10 minutes).',
+        }, { status: 410 });
+      }
+      rcloneToken  = job.rcloneToken;
+      connectionId = connectionId || job.connectionId;
+      remoteName   = remoteName  || job.remoteName;
+      clientId     = clientId    || job.clientId;
+      clientSecret = clientSecret || job.clientSecret;
+      scope        = body.scope  || job.scope || scope;
+    }
 
     if (!connectionId || !remoteName || !rcloneToken) {
       return NextResponse.json(
-        { success: false, error: 'connectionId, remoteName, and rcloneToken are required' },
+        { success: false, error: 'connectionId, remoteName, and rcloneToken (or jobId) are required' },
         { status: 400 }
       );
     }

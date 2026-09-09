@@ -1069,12 +1069,14 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
           return;
         }
 
-        // Token received — now save via apiFetch so x-mongodb-uri headers are included
+        // Token received — now save via apiFetch so x-mongodb-uri headers are included.
+        // jobId preferred (server-side token store); rcloneToken kept as legacy fallback.
         try {
           const saveRes = await apiFetch('/api/rclone/oauth/save-token', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
+              jobId:         oauthResult.jobId,
               connectionId:  oauthResult.connectionId,
               remoteName:    oauthResult.remoteName,
               clientId:      oauthResult.clientId,
@@ -1087,6 +1089,9 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
 
           popup.close();
           setOauthLoading(false);
+          // The postMessage path handled the outcome — remove the localStorage
+          // pending flag so the focus self-heal doesn't retry a consumed job.
+          try { localStorage.removeItem('rclone_oauth_pending'); } catch (_) {}
 
           if (saveData?.success) {
             setOauthToast({ type: 'success', msg: saveData.message || `Remote "${newRemoteName}" authenticated!` });
@@ -1100,6 +1105,7 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
         } catch (saveErr) {
           popup.close();
           setOauthLoading(false);
+          try { localStorage.removeItem('rclone_oauth_pending'); } catch (_) {}
           setOauthToast({ type: 'error', msg: `Save failed: ${saveErr.message}` });
         }
         setTimeout(() => setOauthToast(null), 8000);
@@ -1120,6 +1126,57 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
       setOauthToast({ type: 'error', msg: err.message });
     }
   };
+
+  // 🔁 OAuth self-heal: if the opener tab was reloaded while the Google popup
+  // was open (typical on mobile — switching apps evicts the tab), the
+  // postMessage listener died and the save never ran. The callback page
+  // stored the token server-side and wrote a pending flag to localStorage;
+  // any app tab picks it up here on mount / focus / visibility-change and
+  // finishes the save. Single-use server-side job prevents double-apply.
+  const oauthHealInFlight = useRef(false);
+  useEffect(() => {
+    const tryCompletePendingOauth = async () => {
+      if (oauthHealInFlight.current) return;
+      let pending = null;
+      try { pending = JSON.parse(localStorage.getItem('rclone_oauth_pending') || 'null'); } catch (_) {}
+      if (!pending?.jobId) return;
+      if (Date.now() - (pending.ts || 0) > 10 * 60 * 1000) {
+        try { localStorage.removeItem('rclone_oauth_pending'); } catch (_) {}
+        return;
+      }
+      oauthHealInFlight.current = true;
+      try {
+        const res = await apiFetch('/api/rclone/oauth/save-token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jobId: pending.jobId }),
+        });
+        const data = await res.json();
+        try { localStorage.removeItem('rclone_oauth_pending'); } catch (_) {}
+        if (data?.success) {
+          setOauthToast({ type: 'success', msg: data.message || 'Google Drive remote saved!' });
+          setTimeout(fetchRcloneStatus, 600);
+        } else if (!`${data?.error || ''}`.includes('expired or already used')) {
+          // A 410 means the original opener already consumed the job — stay quiet.
+          setOauthToast({ type: 'error', msg: data?.error || 'Failed to finish Google sign-in' });
+        }
+        setTimeout(() => setOauthToast(null), 8000);
+      } catch (err) {
+        try { localStorage.removeItem('rclone_oauth_pending'); } catch (_) {}
+        setOauthToast({ type: 'error', msg: `Failed to finish Google sign-in: ${err.message}` });
+        setTimeout(() => setOauthToast(null), 8000);
+      }
+      oauthHealInFlight.current = false;
+    };
+    tryCompletePendingOauth();
+    window.addEventListener('focus', tryCompletePendingOauth);
+    document.addEventListener('visibilitychange', tryCompletePendingOauth);
+    return () => {
+      window.removeEventListener('focus', tryCompletePendingOauth);
+      document.removeEventListener('visibilitychange', tryCompletePendingOauth);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const fetchCrons = async () => {
     if (!selectedConnId) return;

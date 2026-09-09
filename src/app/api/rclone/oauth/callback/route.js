@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { putOauthJob } from '@/lib/rcloneOauthJobs';
 
 /**
  * Returns an HTML page that sends a postMessage to window.opener and
@@ -8,31 +9,48 @@ function popupResponse({ success, message, error, payload }) {
   const data = JSON.stringify({
     oauthResult: { success, message, error, ...(payload || {}) },
   });
+  // Same-origin persistence: a reloaded opener tab reads this on focus and
+  // completes the save via /api/rclone/oauth/save-token { jobId }.
+  const pendingFlag = payload?.jobId
+    ? JSON.stringify({ jobId: payload.jobId, ts: Date.now() })
+    : null;
   const html = `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>${success ? 'Authenticated!' : 'Auth Failed'}</title>
   <style>
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
       display: flex; flex-direction: column; align-items: center; justify-content: center;
-      min-height: 100vh; margin: 0;
+      min-height: 100vh; margin: 0; padding: 1rem; text-align: center;
       background: ${success ? '#0f1a12' : '#1a0f0f'};
       color: ${success ? '#4ade80' : '#f87171'};
     }
     .icon { font-size: 3rem; margin-bottom: 1rem; }
     h2 { margin: 0 0 .5rem; font-size: 1.1rem; }
-    p  { margin: 0; font-size: .85rem; opacity: .7; }
+    p  { margin: 0 0 1rem; font-size: .85rem; opacity: .7; }
+    a.back {
+      display: inline-block; padding: .6rem 1.2rem; border-radius: .6rem;
+      background: rgba(255,255,255,.08); color: #e2e8f0; text-decoration: none;
+      font-size: .85rem; font-weight: 600;
+    }
   </style>
 </head>
 <body>
   <div class="icon">${success ? '✅' : '❌'}</div>
   <h2>${success ? 'Google Sign-In Successful!' : 'Authentication Failed'}</h2>
   <p>${success ? 'Saving your configuration… This window will close.' : (error || 'An error occurred.')}</p>
+  ${success ? '<a class="back" href="/?app=rclone">Back to app</a>' : ''}
   <script>
     (function () {
       var payload = ${data};
+      try {
+        // Same-origin handoff: survives an opener reload. The app picks this
+        // up on load/focus and completes the config save.
+        ${pendingFlag ? `localStorage.setItem('rclone_oauth_pending', ${JSON.stringify(pendingFlag)});` : ''}
+      } catch (e) {}
       try {
         if (window.opener && !window.opener.closed) {
           window.opener.postMessage(payload, window.location.origin);
@@ -142,6 +160,20 @@ export async function GET(req) {
       : new Date(Date.now() + 3600 * 1000).toISOString(),
   });
 
+  // ── Store the token server-side under a one-time jobId ─────────────────────
+  // The popup may fail to reach the opener (opener reloaded on mobile, popup
+  // blocked from postMessage, etc.). Storing here lets the opener — or any
+  // reloaded app tab reading the localStorage pending flag — finish the save
+  // later via POST /api/rclone/oauth/save-token { jobId }.
+  const jobId = putOauthJob({
+    rcloneToken,
+    connectionId,
+    remoteName,
+    clientId,
+    clientSecret,
+    scope,
+  });
+
   // ── Send token + context back to the parent window via postMessage ────────
   // The parent (RcloneApp) will call /api/rclone/oauth/save-token via apiFetch
   // so that the correct x-mongodb-uri / SSH headers are included.
@@ -149,6 +181,7 @@ export async function GET(req) {
     success: true,
     message: `Google authorisation received for "${remoteName}". Saving config…`,
     payload: {
+      jobId,
       rcloneToken,
       connectionId,
       remoteName,
