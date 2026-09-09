@@ -15,7 +15,7 @@ function popupResponse({ success, message, error, payload }) {
   // Same-origin persistence: a reloaded opener tab reads this on focus and
   // completes the save via /api/rclone/oauth/save-token { jobId }.
   const pendingFlag = payload?.jobId
-    ? JSON.stringify({ jobId: payload.jobId, ts: Date.now() })
+    ? JSON.stringify({ jobId: payload.jobId, ts: Date.now(), done: payload.saved === true })
     : null;
   const html = `<!DOCTYPE html>
 <html>

@@ -1007,9 +1007,26 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
    * (rcloneToken legacy fallback). Shared by all three completion paths:
    * postMessage handler, localStorage poll, and the reload self-heal effect.
    */
-  const completeOauthSave = async (jobId, fallbackToken = null, ctx = {}) => {
+  const completeOauthSave = async (jobId, fallbackToken = null, ctx = {}, alreadySaved = false) => {
     // Claim the pending flag immediately so parallel paths/tabs don't double-run.
     try { localStorage.removeItem('rclone_oauth_pending'); } catch (_) {}
+    setOauthLoading(false);
+
+    const finishUi = (msg) => {
+      setOauthToast({ type: 'success', msg });
+      setShowAddRemoteModal(false);
+      setNewRemoteName('');
+      setRemoteConfig({});
+      setTimeout(fetchRcloneStatus, 600);
+      setTimeout(() => setOauthToast(null), 8000);
+    };
+
+    // The callback already wrote rclone.conf server-side — just close + refresh.
+    if (alreadySaved) {
+      finishUi('Google Drive remote saved on the server!');
+      return true;
+    }
+
     try {
       const saveRes = await apiFetch('/api/rclone/oauth/save-token', {
         method: 'POST',
@@ -1025,22 +1042,16 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
         }),
       });
       const saveData = await saveRes.json();
-      setOauthLoading(false);
 
       const alreadyDone = `${saveData?.error || ''}`.includes('expired or already used');
       if (saveData?.success) {
-        setOauthToast({ type: 'success', msg: saveData.message || 'Google Drive remote authenticated!' });
-        setShowAddRemoteModal(false);
-        setNewRemoteName('');
-        setRemoteConfig({});
-        setTimeout(fetchRcloneStatus, 600);
+        finishUi(saveData.message || 'Google Drive remote authenticated!');
       } else if (!alreadyDone) {
         setOauthToast({ type: 'error', msg: saveData?.error || 'Failed to save rclone config' });
+        setTimeout(() => setOauthToast(null), 8000);
       }
-      setTimeout(() => setOauthToast(null), 8000);
       return saveData?.success === true;
     } catch (err) {
-      setOauthLoading(false);
       setOauthToast({ type: 'error', msg: `Save failed: ${err.message}` });
       setTimeout(() => setOauthToast(null), 8000);
       return false;
@@ -1120,7 +1131,8 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
         }
 
         // jobId preferred (server-side token store); rcloneToken kept as legacy fallback.
-        completeOauthSave(oauthResult.jobId, oauthResult.rcloneToken, oauthResult)
+        // saved=true means the callback already wrote rclone.conf — skip the re-save.
+        completeOauthSave(oauthResult.jobId, oauthResult.rcloneToken, oauthResult, !!oauthResult.saved)
           .finally(() => { try { popup.close(); } catch (_) {} });
       };
       window.addEventListener('message', messageHandler);
@@ -1139,7 +1151,7 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
         if (pending?.jobId) {
           clearInterval(pollInterval);
           window.removeEventListener('message', messageHandler);
-          completeOauthSave(pending.jobId)
+          completeOauthSave(pending.jobId, null, {}, !!pending.done)
             .finally(() => { try { popup.close(); } catch (_) {} });
           return;
         }
@@ -1176,7 +1188,7 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
       }
       oauthHealInFlight.current = true;
       try {
-        await completeOauthSave(pending.jobId);
+        await completeOauthSave(pending.jobId, null, {}, !!pending.done);
       } finally {
         oauthHealInFlight.current = false;
       }
