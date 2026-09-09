@@ -567,17 +567,31 @@ echo "$SEC"
       // fragile to layer into this much bigger script. A curl against the
       // port answers the question we actually care about — is it serving?
       let webUIActive = false;
+      let webUIBind = null;
       try {
         const wuResp = await execCommand(
           sshConfig,
-          `HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 2 "http://127.0.0.1:${webUIPort}/" 2>/dev/null || true); echo "HTTP_CODE=$HTTP_CODE"`,
+          `HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 2 "http://127.0.0.1:${webUIPort}/" 2>/dev/null || true); echo "HTTP_CODE=$HTTP_CODE"; `
+          + `BB=''; if command -v ss >/dev/null 2>&1; then BB=$(ss -tln 2>/dev/null | awk '$4 ~ /:${webUIPort}$/ {print $4; exit}'); fi; `
+          + `if [ -z "$BB" ] && command -v netstat >/dev/null 2>&1; then BB=$(netstat -tln 2>/dev/null | awk '$4 ~ /:${webUIPort}$/ {print $4; exit}'); fi; `
+          + `echo "BIND=$(echo "$BB" | sed 's/:[0-9]*$//')"`,
           { pool: false, timeoutMs: 8000 },
         );
         const hc = parseInt((wuResp?.stdout || '').match(/HTTP_CODE=(\d+)/)?.[1] || '0', 10);
         // Anything that answers at all (2xx–4xx) means something is listening
         // and serving; only 000/5xx-network means "not up".
         webUIActive = hc >= 200 && hc < 500;
+        // Listen address of the Web UI port (ss/netstat): '127.0.0.1',
+        // '0.0.0.0', '[::]', … — empty when the probe failed or nothing is
+        // listening. Drives webUILoopback below, which the UI uses to decide
+        // whether "Via server" is offered at all.
+        const rawBind = (wuResp?.stdout || '').match(/BIND=(.*)/)?.[1]?.trim() || '';
+        webUIBind = rawBind ? String(rawBind).replace(/^\[/, '').replace(/\]$/, '') : null;
       } catch { /* treat as not running */ }
+      // True only when the Web UI listens on the target server's loopback —
+      // the only case where the same-origin "Via server" proxy (which dials
+      // 127.0.0.1:<port> ON the target over SSH) is the right access route.
+      const webUILoopback = !!webUIBind && (/^127\./.test(webUIBind) || webUIBind === '::1' || webUIBind === 'localhost');
       envText = envText.trim();
       const currentVer = sec('VERSION', 'BINPATH') || null;
       let latestVersion = null;
@@ -613,6 +627,11 @@ echo "$SEC"
         // True only when the Web UI is actually serving on webUIPort. Distinct
         // from `running` (the gateway process) — see the probe above.
         webUIActive,
+        // Listen address of the Web UI port on the target ('127.0.0.1',
+        // '0.0.0.0', …) and whether it is loopback-only. AIAgentsApp shows the
+        // "Via server" proxy route only when this is true.
+        webUIBind,
+        webUILoopback,
         promptFiles: {
           'PROMPT.md': systemPrompt,
           'SOUL.md': soulPrompt,

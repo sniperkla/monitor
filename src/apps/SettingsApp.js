@@ -1287,7 +1287,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
 
     const poll = async () => {
       try {
-        const res = await fetch('/api/relay/token', { credentials: 'include' });
+        const res = await fetch('/api/relay/token', { credentials: 'include', cache: 'no-store' });
         const data = await res.json();
         if (data.success) {
           setRelayConnected(data.connected);
@@ -1305,9 +1305,12 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
               firstPoll = false;
             } else {
               consecutiveDisconnects++;
-              // Require 4 consecutive failures (~20s apart = 80s grace) before switching
-              // to avoid brief relay blips from reconnecting all active SSH terminals
-              if (consecutiveDisconnects >= 4) {
+              // Require ~80s of confirmed absence before switching to avoid
+              // brief relay blips from reconnecting all active SSH terminals.
+              // The threshold is scaled to the poll cadence (16 x 5s, or 4 x 2s
+              // while the install wizard is open) so the grace window stays the
+              // same either way.
+              if (consecutiveDisconnects >= (isWaiting ? 4 : 16)) {
                 localStorage.setItem('ssh_monitor_ssh_mode', 'server');
                 window.dispatchEvent(new Event('ssh-mode-changed'));
               }
@@ -1346,11 +1349,19 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
       } catch {}
     };
     poll();
-    let id = null;
-    if (isWaiting) {
-      id = setInterval(poll, 2000);
-    }
-    return () => { if (id) clearInterval(id); };
+    // Poll for the whole lifetime of the page, not just while the install
+    // wizard waits. This used to fetch exactly once on mount (the interval was
+    // only registered when isWaiting), so anything that changed server-side
+    // afterwards — revoking a relay, the agent reconnecting, a device being
+    // paused from another tab — stayed invisible until a manual page refresh.
+    let inFlight = false;
+    const guardedPoll = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      try { await poll(); } finally { inFlight = false; }
+    };
+    const id = setInterval(guardedPoll, interval);
+    return () => clearInterval(id);
   }, [session, relayModalOpen, relayWaiting]);
 
   // Auto-start relay polling when entering step 2 (no manual "I ran it" button needed)
@@ -1499,6 +1510,10 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
       // dispatches 'ssh-mode-changed' here, and that listener would suppress the
       // fetch anyway whenever the mode string happens to be unchanged.
       fetchConnections();
+      // AppContext keeps its own copy of relay state (sidebar banner, terminal
+      // routing) on a 20s poll — tell it to re-read now so the rest of the app
+      // reflects the disconnect immediately.
+      requestRelayStatusRefresh('relay-disconnected');
       addNotification({ title: 'Relay Disconnected', message: `"${targetId}" has been disconnected.`, type: 'info' });
     } catch (e) {
       console.error(e);
@@ -1523,6 +1538,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
           if (prev.some(t => t.tokenId === tokenId)) return prev;
           return [...prev, { tokenId, label: label || null, suspended: true }];
         });
+        requestRelayStatusRefresh('relay-suspended');
         addNotification({ title: 'Relay Paused', message: 'Device paused — it will reconnect automatically when you resume it.', type: 'info' });
       } else {
         addNotification({ title: 'Error', message: data.error || 'Failed to pause relay', type: 'error' });
@@ -1543,6 +1559,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
       const data = await res.json();
       if (data.success) {
         setSuspendedTokens(prev => prev.filter(t => t.tokenId !== tokenId));
+        requestRelayStatusRefresh('relay-resumed');
         addNotification({ title: 'Relay Resumed', message: 'Device reactivated — it will reconnect within a few seconds.', type: 'success' });
       } else {
         addNotification({ title: 'Error', message: data.error || 'Failed to resume relay', type: 'error' });
@@ -1558,9 +1575,19 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
       setRelayToken(null);
       setRelayConnected(false);
       setRelays([]);
+      // Revoke All sweeps every token the user owns — paused tokens included —
+      // so the paused list empties too.
+      setSuspendedTokens([]);
+      // No preferred relay can survive a full sweep; stop routing through a
+      // dead one (same reasoning as handleDisconnectRelay).
+      localStorage.removeItem('ssh_monitor_preferred_relay');
+      setPreferredRelay(null);
       // Same reasoning as handleDisconnectRelay: without a relay, localhost
       // connections become unreachable, so the list must be rebuilt.
       fetchConnections();
+      // AppContext polls relay state every 20s (60s in a hidden tab); nudge it
+      // so the banner, terminal routing and other tabs update immediately.
+      requestRelayStatusRefresh('relay-revoked-all');
       addNotification({ title: t('settings_ui.relay.toasts.tokenRevoked'), message: t('settings_ui.relay.toasts.tokenRevokedMsg'), type: 'info' });
     } catch {}
   };
@@ -2757,6 +2784,7 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
                                   try {
                                     await fetch(`/api/relay/token?tokenId=${encodeURIComponent(t.tokenId)}`, { method: 'DELETE', credentials: 'include' });
                                     setSuspendedTokens(prev => prev.filter(x => x.tokenId !== t.tokenId));
+                                    requestRelayStatusRefresh('relay-token-revoked');
                                     addNotification({ title: 'Relay Revoked', message: 'Device token revoked — it must be re-paired to connect again.', type: 'info' });
                                   } catch (e) { console.error(e); }
                                 }}

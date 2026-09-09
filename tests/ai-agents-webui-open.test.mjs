@@ -87,13 +87,54 @@ test('every direct navigation goes through the self-watching tab', () => {
 });
 
 test('mobile WebUI opening skips the impossible relay loopback', () => {
-  // A phone runs no relay and its 127.0.0.1 is the phone. Mobile must use the
-  // same-origin proxy immediately, before the direct-relay guard and its wait.
+  // A phone runs no relay and its 127.0.0.1 is the phone. The mobile branch
+  // must run before the direct-relay guard, decide synchronously (no await may
+  // precede window.open or the popup blocker wins), and pick the route from
+  // the loopback probe — the same rule as the desktop "Via server" button:
+  //   • webUILoopback === false → direct http://<host>:<port> (public bind)
+  //   • loopback / probe pending → same-origin proxy (the only way in)
   const mobile = section(openHandler, 'const isMobileBrowser =', '// Require Local Relay');
   assert.match(mobile, /navigator\.userAgent/);
-  assert.match(mobile, /tab\.location\.href = proxyUrl/);
-  assert.ok(mobile.indexOf('tab.location.href = proxyUrl') < openHandler.indexOf('if (!relayConnectedRef.current)'),
-    'mobile proxy navigation must precede the direct relay guard');
+  assert.match(mobile, /if \(isMobileBrowser\) \{/);
+  // Proxy route (loopback bind or probe pending) still navigates the tab.
+  assert.match(mobile, /tab\.location\.href = mobileUrl/);
+  assert.match(mobile, /mobileUrl = proxyUrl/);
+  // Public bind → direct to the target's host, never through the loopback proxy.
+  assert.match(mobile, /webUILoopback === false/);
+  assert.match(mobile, /http:\/\/\$\{conn\.host\}:\$\{webUIPort\(\)\}/);
+  // Reads go through refs, not the render closure — details may have been
+  // refreshed by loadDetails() between handleStartWebUI and this call.
+  assert.match(mobile, /detailsRef\.current\?\.webUILoopback/);
+  assert.match(mobile, /connectionsRef\.current\?\.find/);
+  assert.ok(mobile.indexOf('tab.location.href = mobileUrl') < openHandler.indexOf('if (!relayConnectedRef.current)'),
+    'mobile routing must precede the direct relay guard');
+});
+
+test('the open/start round trips have a hard client-side deadline', () => {
+  // A hung server leg (e.g. execCommand's non-pooled SSH connect that fires
+  // neither 'ready' nor 'error') used to leave the claimed tab on the spinner
+  // forever, because the fallback card is only written once the await resolves.
+  assert.match(app, /const WEBUI_OPEN_DEADLINE_MS = /);
+  assert.match(app, /function withDeadline\(/);
+  // The relay-start call in openWebUIInTab is wrapped.
+  assert.match(openHandler, /withDeadline\(\s*callRef\.current\('webui-ctl'/);
+  // A deadline on Start Web UI explains itself in the claimed tab.
+  assert.match(startHandler, /withDeadline\(\s*callAction\('Start Web UI'/);
+  assert.match(startHandler, /r\?\.deadline/);
+  assert.match(startHandler, /failWebUITab\(startTab, \{/);
+});
+
+test('"Via server" is only offered for a loopback-bound Web UI on the target', () => {
+  // The proxy dials 127.0.0.1:<port> ON the target over SSH — meaningless for a
+  // UI already exposed on a public interface (and the desktop button is hidden
+  // there, so mobile must not silently proxy either).
+  assert.match(app, /details\?\.webUILoopback && \(/);
+  for (const [name, src] of [['nanobot', nanobot], ['hermes', hermes]]) {
+    assert.match(src, /webUILoopback/, `${name} must report webUILoopback`);
+    assert.match(src, /webUIBind/, `${name} must report webUIBind`);
+    assert.match(src, /ss -tln/, `${name} must probe the listen address`);
+    assert.match(src, /netstat -tln/, `${name} must fall back to netstat`);
+  }
 });
 
 test('failure cards always offer the same-origin server route', () => {

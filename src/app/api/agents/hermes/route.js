@@ -842,6 +842,13 @@ echo "===WEBUI==="
 # NOTE: no backticks in this script — it lives inside a JS template literal.
 WU=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "http://127.0.0.1:${WEBUI_PORT}/" 2>/dev/null || true)
 echo "WU_HTTP=$WU"
+echo "===WEBUIBIND==="
+# Listen address of the Web UI port — loopback-only binds are what make the
+# "Via server" proxy route meaningful (it dials 127.0.0.1:<port> ON the target).
+BB=''
+if command -v ss >/dev/null 2>&1; then BB=$(ss -tln 2>/dev/null | awk '$4 ~ /:${WEBUI_PORT}$/ {print $4; exit}'); fi
+if [ -z "$BB" ] && command -v netstat >/dev/null 2>&1; then BB=$(netstat -tln 2>/dev/null | awk '$4 ~ /:${WEBUI_PORT}$/ {print $4; exit}'); fi
+echo "WU_BIND=$(echo "$BB" | sed 's/:[0-9]*$//')"
 echo "===VERSION==="
 [ -n "$BIN" ] && "$BIN" --version 2>/dev/null | tail -1 | cut -c1-40
 echo "===MODEL==="
@@ -890,8 +897,14 @@ echo "$MDL"
       // Hermes' bundled dashboard (`hermes dashboard`) — the browser-facing
       // equivalent of nanobot's WebUI. `webUIActive` is a live HTTP probe, not
       // a flag, so it only reads true when something is actually serving.
-      const webuiHttp = Number(section('WEBUI', 'VERSION').match(/WU_HTTP=(\d+)/)?.[1] || 0);
+      const webuiHttp = Number(section('WEBUI', 'WEBUIBIND').match(/WU_HTTP=(\d+)/)?.[1] || 0);
       const webUIActive = webuiHttp >= 200 && webuiHttp < 500;
+      // Listen address of the Web UI port on the target ('127.0.0.1',
+      // '0.0.0.0', …) and whether it is loopback-only. AIAgentsApp shows the
+      // "Via server" proxy route only when this is true.
+      const webuiBindRaw = section('WEBUIBIND', 'VERSION').match(/WU_BIND=(.*)/)?.[1]?.trim() || '';
+      const webUIBind = webuiBindRaw ? String(webuiBindRaw).replace(/^\[/, '').replace(/\]$/, '') : null;
+      const webUILoopback = !!webUIBind && (/^127\./.test(webUIBind) || webUIBind === '::1' || webUIBind === 'localhost');
       const installed = (!!remoteBinPath && hasHomeDir) || running;
       const currentVer = section('VERSION', 'MODEL') || null;
       let model = section('MODEL') || null;
@@ -928,6 +941,8 @@ echo "$MDL"
         hasWebUI: installed,
         webUIPort: WEBUI_PORT,
         webUIActive,
+        webUIBind,
+        webUILoopback,
         // No bootstrap secret: on a loopback bind hermes sets
         // __HERMES_AUTH_REQUIRED__=false and injects its own session token into
         // the served index.html, so "/" is a complete, working entry point.

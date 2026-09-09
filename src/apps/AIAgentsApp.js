@@ -94,6 +94,29 @@ const AGENTS = [
 // gateway port, reachable through the central proxy alone.
 const WEBUI_START_AGENTS = ['nanobot', 'hermes'];
 
+// Hard client-side deadline for any Web UI open/start round trip. Every leg of
+// it server-side (SSH execs, the relay ack wait) has its own timeout, but their
+// SUM can run past a minute — and nothing protects against a leg that never
+// settles at all (e.g. an SSH connect in execCommand's non-pooled path that
+// fires neither 'ready' nor 'error'). Without this deadline the claimed browser
+// tab sits on "Opening Web UI…" forever, because the fallback card is only
+// written once the await resolves.
+const WEBUI_OPEN_DEADLINE_MS = 75_000;
+
+// Race `promise` against a deadline. Never rejects: on timeout it resolves
+// with { success:false, deadline:true, error }. A late rejection of the
+// original promise is swallowed so it can't surface as an unhandled rejection
+// after the race has already settled.
+function withDeadline(promise, ms, error) {
+  let timer = null;
+  const wrapped = Promise.resolve(promise).then((v) => { if (timer) clearTimeout(timer); return v; });
+  wrapped.catch(() => {}); // keep a handler attached for the late-rejection case
+  const deadline = new Promise((resolve) => {
+    timer = setTimeout(() => resolve({ success: false, deadline: true, error }), ms);
+  });
+  return Promise.race([wrapped, deadline]);
+}
+
 // Same-origin Web UI proxy URL — the fallback for every device that is NOT the
 // relay host. A phone has no Local Relay of its own, so http://127.0.0.1:<port>
 // can never resolve there; this route makes the monitor dial the target itself
@@ -826,9 +849,26 @@ export default function AIAgentsApp({ apiFetch }) {
     // is actually up.
     const startTab = openBlankWebUITab();
     try {
-      const r = await callAction('Start Web UI', 'webui-ctl', {
-        config: { op: 'start', port: webUIPort() }
-      });
+      // Same stranded-tab protection as openWebUIInTab: if the start round trip
+      // never settles, the claimed tab would sit on "Opening Web UI…" forever.
+      // Resolve to { deadline:true } and explain inside the tab instead.
+      const r = await withDeadline(
+        callAction('Start Web UI', 'webui-ctl', {
+          config: { op: 'start', port: webUIPort() }
+        }),
+        WEBUI_OPEN_DEADLINE_MS,
+        `Starting the Web UI timed out on the server (port ${webUIPort()}).`,
+      );
+      if (r?.deadline) {
+        failWebUITab(startTab, {
+          heading: 'Could not start the Web UI',
+          reason: r.error,
+          directUrl: '',
+          proxyUrl: webUIProxyUrl(),
+        });
+        setNotice({ ok: false, text: `Start Web UI: ${r.error}` });
+        return;
+      }
       if (r?.active || r?.success) {
         // Re-read the agent details BEFORE opening the tab.
         //
@@ -924,24 +964,47 @@ export default function AIAgentsApp({ apiFetch }) {
     const isMobileBrowser = typeof navigator !== 'undefined'
       && /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '');
 
-    // A relay selected on a phone belongs to another device (usually the
-    // user's Mac). Its 127.0.0.1 gateway is therefore the Mac's loopback, not
-    // the phone's. Skip the impossible direct navigation on mobile and use the
-    // same-origin server route immediately; this avoids a guaranteed 9-second
-    // wait on the fallback card and keeps the selected Mac relay available for
-    // agent commands and data.
-    if (isMobileBrowser && proxyUrl) {
-      const tab = preopenedTab || openBlankWebUITab();
-      if (tab) {
-        try {
-          tab.location.href = proxyUrl;
-          setNotice({ ok: true, text: 'Opened the Web UI through the server.' });
-          return;
-        } catch { /* fall through — popup may have been blocked */ }
+    // Mobile routing — same rule as the desktop "Via server" button, which is
+    // only offered for a Web UI bound to LOOPBACK (127.0.0.1) on the target:
+    //   • webUILoopback === false  → the UI is exposed on a public interface,
+    //     so the phone goes DIRECT to http://<host>:<port> (no proxy).
+    //   • loopback, or the probe hasn't reported yet → same-origin server
+    //     route. A relay selected on a phone belongs to another device
+    //     (usually the user's Mac) and its 127.0.0.1 gateway is the Mac's
+    //     loopback, not the phone's — the phone can never jump there itself,
+    //     so the proxy is the only way in.
+    // All reads go through refs: handleStartWebUI awaits loadDetails() before
+    // calling this, so the render-closure `details` can be stale here. The
+    // whole decision is synchronous — no await may precede openBlankWebUITab,
+    // or the popup blocker kills the tab.
+    if (isMobileBrowser) {
+      let mobileUrl = '';
+      let viaServer = true;
+      if (detailsRef.current?.webUILoopback === false) {
+        const conn = connectionsRef.current?.find((c) => c._id === targetRef.current);
+        if (conn?.host) {
+          mobileUrl = `http://${conn.host}:${webUIPort()}${detailsRef.current?.webUIBootstrapPath || '/'}`;
+          viaServer = false;
+        }
+        // Probe says public but the connection host is unknown → no URL we can
+        // justify (the loopback proxy is reserved for loopback binds now), so
+        // fall through to the guard below rather than silently proxying.
+      } else {
+        mobileUrl = proxyUrl;
       }
-      try { navigator.clipboard?.writeText(proxyUrl); } catch { /* ignore */ }
-      setNotice({ ok: true, text: `Popup blocked — URL copied to clipboard: ${proxyUrl}` });
-      return;
+      if (mobileUrl) {
+        const tab = preopenedTab || openBlankWebUITab();
+        if (tab) {
+          try {
+            tab.location.href = mobileUrl;
+            setNotice({ ok: true, text: viaServer ? 'Opened the Web UI through the server.' : `Opened the Web UI directly — ${mobileUrl}` });
+            return;
+          } catch { /* fall through — popup may have been blocked */ }
+        }
+        try { navigator.clipboard?.writeText(mobileUrl); } catch { /* ignore */ }
+        setNotice({ ok: true, text: `Popup blocked — URL copied to clipboard: ${mobileUrl}` });
+        return;
+      }
     }
 
     // Require Local Relay: central socket proxy has protocol/chat desync bugs
@@ -995,9 +1058,15 @@ export default function AIAgentsApp({ apiFetch }) {
     let relayFailure = '';
     if (WEBUI_START_AGENTS.includes(agentRef.current?.id) && callRef.current) {
       try {
-        const rr = await callRef.current('webui-ctl', {
-          config: { op: 'relay-start', port: webUIPort(), monitorOrigin: window.location.origin },
-        });
+        // Hard deadline: a hung server leg must never leave this tab on the
+        // spinner — the fail card below is the only thing the user can act on.
+        const rr = await withDeadline(
+          callRef.current('webui-ctl', {
+            config: { op: 'relay-start', port: webUIPort(), monitorOrigin: window.location.origin },
+          }),
+          WEBUI_OPEN_DEADLINE_MS,
+          'The server did not answer the open request in time. Check your connection and try again.',
+        );
         if (rr?.success && rr?.localPort) {
           const candidate = `http://127.0.0.1:${rr.localPort}`;
           navigate(`${candidate}${basePath}`,
@@ -2580,17 +2649,23 @@ export default function AIAgentsApp({ apiFetch }) {
                           <><Cable size={12} /> Local Relay Required</>
                         )}
                       </button>
-                      {/* Works from ANY device: the monitor dials the target
-                          itself, so a phone — which runs no relay and whose
-                          127.0.0.1 is the phone — can still reach the UI. */}
-                      <button
-                        onClick={openWebUIViaServer}
-                        disabled={!target}
-                        className="px-3 py-1.5 rounded-xl bg-slate-500/15 hover:bg-slate-500/25 text-slate-200 hover:text-white font-bold text-xs flex items-center gap-1.5 border border-slate-400/30 transition cursor-pointer disabled:opacity-50"
-                        title="Open through the monitor server (same-origin proxy) — works from any device"
-                      >
-                        <ServerIcon size={12} /> Via server
-                      </button>
+                      {/* "Via server" only makes sense for a Web UI bound to
+                          LOOPBACK (127.0.0.1) on the target server — that is
+                          exactly what the proxy dials over SSH. When the UI is
+                          exposed on a public interface the browser reaches it
+                          directly and the button is hidden. details.webUILoopback
+                          comes from the ss/netstat probe in the agent's details
+                          action (nanobot + hermes routes). */}
+                      {details?.webUILoopback && (
+                        <button
+                          onClick={openWebUIViaServer}
+                          disabled={!target}
+                          className="px-3 py-1.5 rounded-xl bg-slate-500/15 hover:bg-slate-500/25 text-slate-200 hover:text-white font-bold text-xs flex items-center gap-1.5 border border-slate-400/30 transition cursor-pointer disabled:opacity-50"
+                          title="Open through the monitor server (same-origin proxy) — works from any device"
+                        >
+                          <ServerIcon size={12} /> Via server
+                        </button>
+                      )}
                     </div>
                   </div>
                 )}
