@@ -97,7 +97,7 @@ function addPollution(amount = 1) {
 }
 
 
-export default function DesktopIcon({ id, title, icon: Icon, component, defaultPos, initialWidth, initialHeight, isMobile }) {
+function DesktopIcon({ id, title, icon: Icon, component, defaultPos, initialWidth, initialHeight, isMobile }) {
   const { state, openWindow, updateIconPosition, setSortBy, setSelectedIcons, toggleIconSelection, updateMultipleIconPositions, pinApp, unpinApp } = useOS();
   const { selectedIconIds, pinnedApps } = state;
   const isPinned = (pinnedApps || []).includes(id);
