@@ -752,6 +752,11 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
   const [browsePath, setBrowsePath] = useState('');
   const [remoteItems, setRemoteItems] = useState([]);
   const [browseLoading, setBrowseLoading] = useState(false);
+  // Why a remote listing came back empty (rclone stderr) — empty ≠ broken.
+  const [browseError, setBrowseError] = useState('');
+  // The uploaded service-account key's email — Drive folders must be shared
+  // with it, otherwise the SA only sees its own (empty) Drive.
+  const [saClientEmail, setSaClientEmail] = useState(null);
 
   // Backup History State
   const [historyRuns, setHistoryRuns] = useState([]);
@@ -1148,6 +1153,7 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
       const data = await res.json();
       if (data?.success && data.path) {
         setRemoteConfig((rc) => ({ ...rc, service_account_file: data.path }));
+        setSaClientEmail(data.clientEmail || null);
         setSaSource('server');
         showAlert(`Service account key uploaded to ${data.path}`, 'Success');
       } else {
@@ -1601,13 +1607,18 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
   const handleBrowseRemote = async (targetRemote = browseRemote, subPath = browsePath) => {
     if (!targetRemote) return;
     setBrowseLoading(true);
+    setBrowseError('');
     try {
       const res = await apiFetch(`/api/rclone/browse?connectionId=${selectedConnId}&remote=${encodeURIComponent(targetRemote)}&path=${encodeURIComponent(subPath)}`);
       const data = await res.json();
       if (data?.success) {
         setRemoteItems(data.items || []);
+        // rclone failed (bad SA key, 403, auth expired, …) — show why instead
+        // of rendering a silently-empty list.
+        if (data.error) setBrowseError(String(data.error));
       }
     } catch (err) {
+      setBrowseError(err.message || 'Failed to list remote');
       console.error(err);
     }
     setBrowseLoading(false);
@@ -2613,8 +2624,26 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
                   <div className="p-10 text-center text-xs text-[var(--text-muted)] flex items-center justify-center gap-2">
                     <RefreshCw size={14} className="animate-spin text-indigo-400" /> Loading files...
                   </div>
+                ) : browseError ? (
+                  <div className="p-5 text-xs">
+                    <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2.5 font-mono text-[11px] text-rose-300 break-words">
+                      <TriangleAlert size={12} className="inline mr-1.5 -mt-0.5" />{browseError}
+                    </div>
+                  </div>
                 ) : remoteItems.length === 0 ? (
-                  <div className="p-10 text-center text-xs text-[var(--text-muted)]">No files found or remote not selected.</div>
+                  <div className="p-6 text-center">
+                    <p className="text-xs text-[var(--text-muted)]">No files found or remote not selected.</p>
+                    {browseRemote && /drive/i.test(browseRemote) && (
+                      <div className="mt-3 rounded-xl border border-amber-500/25 bg-amber-500/8 px-3 py-2.5 text-left">
+                        <p className="text-[11px] font-semibold text-amber-300 mb-1">Google Drive + Service Account?</p>
+                        <p className="text-[10px] text-amber-200/80 leading-relaxed">
+                          A service account sees only its OWN (empty) Drive. Share your folders with the SA&apos;s
+                          <span className="font-mono text-amber-200"> client_email </span>
+                          address, or use a Shared Drive (team_drive) / set a root folder ID. GCP → IAM → Service Accounts shows the email.
+                        </p>
+                      </div>
+                    )}
+                  </div>
                 ) : (
                   remoteItems.map((item, idx) => (
                     <div key={idx} className="px-4 py-2 flex items-center justify-between hover:bg-[var(--bg-tertiary)] transition-colors group">
@@ -2830,9 +2859,19 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
                       )}
 
                       {remoteConfig.service_account_file && (
-                        <p className="text-[10px] text-emerald-400 font-mono px-0.5 truncate" title={remoteConfig.service_account_file}>
-                          ✓ {remoteConfig.service_account_file}
-                        </p>
+                        <>
+                          <p className="text-[10px] text-emerald-400 font-mono px-0.5 truncate" title={remoteConfig.service_account_file}>
+                            ✓ {remoteConfig.service_account_file}
+                          </p>
+                          <div className="rounded-lg border border-amber-500/25 bg-amber-500/8 px-2.5 py-2">
+                            <p className="text-[10px] text-amber-300/90 leading-relaxed">
+                              ⚠️ A service account sees only its OWN (empty) Drive — your personal folders are invisible to it.
+                              {saClientEmail
+                                ? <> Share your folders with <span className="font-mono text-amber-200 break-all">{saClientEmail}</span> (Editor), or use a Shared Drive.</>
+                                : <> Share folders with the key&apos;s <span className="font-mono text-amber-200">client_email</span> address, or use a Shared Drive.</>}
+                            </p>
+                          </div>
+                        </>
                       )}
                       <input type="text" placeholder="Folder URL/ID (optional)"
                         value={remoteConfig._drive_url || ''}

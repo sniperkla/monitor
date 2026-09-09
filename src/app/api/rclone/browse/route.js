@@ -38,7 +38,7 @@ export async function GET(req) {
       target = remote.endsWith(':') ? `${remote}${path}` : `${remote}:${path}`;
     }
 
-    const cmd = `${pathPrefix}rclone lsjson ${quote(target)} 2>/dev/null`;
+    const cmd = `${pathPrefix}rclone lsjson ${quote(target)}`;
     const result = await execCommand(sshConfig, cmd);
 
     if (result.code === 0 && result.stdout.trim()) {
@@ -56,7 +56,17 @@ export async function GET(req) {
       });
     }
 
-    // Fallback for local server directory browsing if rclone lsjson is empty
+    // rclone failed — capture WHY (bad service-account key, 403 API not
+    // enabled, auth expired, …). The old code threw stderr away with
+    // `2>/dev/null` and returned a clean empty list, making a broken remote
+    // indistinguishable from an empty one.
+    const remoteError = ((result.stderr || '') + '\n' + (result.stdout || ''))
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .pop() || '';
+
+    // Fallback for local server directory browsing if rclone lsjson failed
     if (isLocal) {
       const lsCmd = `ls -la --time-style=long-iso ${quote(target)} 2>/dev/null || ls -la ${quote(target)} 2>/dev/null`;
       const lsRes = await execCommand(sshConfig, lsCmd);
@@ -91,6 +101,8 @@ export async function GET(req) {
       target,
       isLocal,
       items: [],
+      // surfaced so the UI can show why a remote looks empty
+      error: remoteError || undefined,
     });
 
   } catch (error) {

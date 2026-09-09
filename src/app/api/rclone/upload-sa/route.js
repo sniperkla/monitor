@@ -90,7 +90,15 @@ export async function POST(req) {
       );
     }
     const absPath = (result.stdout || '').trim();
-    return NextResponse.json({ success: true, path: absPath, name: safeName });
+    return NextResponse.json({
+      success: true,
+      path: absPath,
+      name: safeName,
+      // The SA email — folders must be SHARED with this address (or accessed
+      // via a Shared Drive) or the remote lists an empty Drive. Surfacing it
+      // here lets the UI show a copy-paste hint right after upload.
+      clientEmail: parsed.client_email || null,
+    });
   } catch (error) {
     logger.error('[rclone/upload-sa] error:', error.message);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
