@@ -37,17 +37,24 @@ export default function DesktopModal() {
   if (!modal.isOpen) return null;
 
   const handleConfirm = () => {
-    if (modal.type === 'prompt') {
-      modal.onConfirm?.(promptValue);
-    } else {
-      modal.onConfirm?.();
-    }
+    // Close FIRST, then run the callback. Some callbacks (e.g. RcloneApp's
+    // schedule delete) open a follow-up confirm dialog — if we run the
+    // callback before closeModal(), the CLOSE_MODAL dispatched afterwards
+    // wipes the newly-opened dialog and the action silently never happens.
+    const cb = modal.onConfirm;
     closeModal();
+    if (modal.type === 'prompt') {
+      cb?.(promptValue);
+    } else {
+      cb?.();
+    }
   };
 
   const handleCancel = () => {
-    modal.onCancel?.();
+    // Same ordering as handleConfirm: a cancel handler may open its own modal.
+    const cb = modal.onCancel;
     closeModal();
+    cb?.();
   };
 
   const getIcon = () => {
