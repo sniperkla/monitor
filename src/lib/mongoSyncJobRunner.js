@@ -104,7 +104,7 @@ export async function executeMongoSyncJob(request, jobId) {
       }
       const timeStamp = new Date().toISOString().replace(/[:.]/g, '-');
       const fileName = `backup_ALL_DATABASES_${timeStamp}.json`;
-      await uploadFileToGoogleDrive({ fileName, content: JSON.stringify(allData, null, 2), folderId: job.driveFolderId });
+      await uploadFileToGoogleDrive({ fileName, content: JSON.stringify(allData, null, 2), folderId: job.driveFolderId, userId });
       count = totalDocs;
       runMessage = `Successfully backed up ALL ${dbNames.length} databases (${count} total docs) to Google Drive.`;
 
@@ -120,7 +120,7 @@ export async function executeMongoSyncJob(request, jobId) {
       }
       const timeStamp = new Date().toISOString().replace(/[:.]/g, '-');
       const fileName = `backup_${job.database}_ALL_COLLECTIONS_${timeStamp}.json`;
-      await uploadFileToGoogleDrive({ fileName, content: JSON.stringify(allDbData, null, 2), folderId: job.driveFolderId });
+      await uploadFileToGoogleDrive({ fileName, content: JSON.stringify(allDbData, null, 2), folderId: job.driveFolderId, userId });
       count = totalDocs;
       runMessage = `Successfully backed up ALL ${colNames.length} collections (${count} total docs) to Google Drive.`;
 
@@ -130,7 +130,7 @@ export async function executeMongoSyncJob(request, jobId) {
       count = docs.length;
       const timeStamp = new Date().toISOString().replace(/[:.]/g, '-');
       const fileName = `backup_${job.database}_${job.collection}_${timeStamp}.json`;
-      await uploadFileToGoogleDrive({ fileName, content: JSON.stringify(docs, null, 2), folderId: job.driveFolderId });
+      await uploadFileToGoogleDrive({ fileName, content: JSON.stringify(docs, null, 2), folderId: job.driveFolderId, userId });
       runMessage = `Successfully backed up ${count} documents from '${job.collection}' to Google Drive.`;
     }
 

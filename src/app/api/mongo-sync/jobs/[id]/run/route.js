@@ -88,7 +88,7 @@ export async function POST(request, { params }) {
       const folderName = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}`;
       let targetFolder = job.driveFolderId;
       if (job.driveFolderId) {
-        const subfolder = await ensureDriveFolder(job.driveFolderId, folderName);
+        const subfolder = await ensureDriveFolder(job.driveFolderId, folderName, userId);
         targetFolder = subfolder.id || job.driveFolderId;
       }
 
@@ -121,7 +121,7 @@ export async function POST(request, { params }) {
         }
 
         const fileName = `backup_ALL_DATABASES.json`;
-        await uploadFileToGoogleDrive({ fileName, content: JSON.stringify(allData, null, 2), folderId: targetFolder });
+        await uploadFileToGoogleDrive({ fileName, content: JSON.stringify(allData, null, 2), folderId: targetFolder, userId });
         count = totalDocs;
         runMessage = `Successfully backed up ALL ${dbNames.length} databases (${count} total docs) to Google Drive folder: ${folderName}`;
 
@@ -135,7 +135,7 @@ export async function POST(request, { params }) {
           const docs = await targetDb.collection(colName).find({}).toArray();
           const jsonContent = JSON.stringify(docs, null, 2);
           const fileName = `${colName}.json`;
-          await uploadFileToGoogleDrive({ fileName, content: jsonContent, folderId: targetFolder });
+          await uploadFileToGoogleDrive({ fileName, content: jsonContent, folderId: targetFolder, userId });
           totalDocs += docs.length;
         }
 
@@ -149,7 +149,7 @@ export async function POST(request, { params }) {
         count = docs.length;
 
         const fileName = `${job.collection}.json`;
-        await uploadFileToGoogleDrive({ fileName, content: JSON.stringify(docs, null, 2), folderId: targetFolder });
+        await uploadFileToGoogleDrive({ fileName, content: JSON.stringify(docs, null, 2), folderId: targetFolder, userId });
         runMessage = `Successfully backed up ${count} documents from '${job.collection}' to Google Drive folder: ${folderName}`;
       }
 
