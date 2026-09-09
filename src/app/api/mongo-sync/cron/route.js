@@ -560,7 +560,6 @@ PROBE_LOG="$HOME/.mongosync-scripts/logs/mongosync-${safeId}-$(date +%Y%m%d_%H%M
   MONGO_REACHABLE=$(python3 -c "
 from pymongo import MongoClient
 import sys
-import { logger } from '@/lib/logger';
 try:
     c = MongoClient('${mongoUri.replace(/'/g, "'\\''")}', serverSelectionTimeoutMS=3000)
     c.admin.command('ping')
