@@ -2097,6 +2097,8 @@ logstash:
     // --- Background Task Monitoring Logic ---
     const monitorBgTasks = async () => {
       if (status !== 'connected' || !sshAiPrefs?.autoTmux || !socketRef.current?.connected) return;
+      // Skip while the page is hidden (mobile screen off / tab backgrounded)
+      if (typeof document !== 'undefined' && document.hidden) return;
 
       try {
         const checkCmd = "tmux has-session -t ai-bg-task 2>/dev/null && echo 'ACTIVE' || echo 'INACTIVE'";

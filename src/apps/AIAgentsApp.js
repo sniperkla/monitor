@@ -139,9 +139,16 @@ function buildWebUIProxyUrl(connectionId, port, p, agentId = 'nanobot', routeOpt
   const pathPart = hashIdx >= 0 ? (full.slice(0, hashIdx) || '/') : full;
   const hashPart = hashIdx >= 0 ? full.slice(hashIdx) : '';
   const suffix = pathPart === '/' ? '' : pathPart.replace(/^\/+/, '');
-  const relayQuery = routeOptions.preferredRelay
-    ? `&sshMode=local&preferredRelay=${encodeURIComponent(routeOptions.preferredRelay)}`
-    : '';
+  const relayParts = [];
+  if (routeOptions.sshMode) {
+    relayParts.push(`sshMode=${encodeURIComponent(routeOptions.sshMode)}`);
+  } else if (routeOptions.preferredRelay) {
+    relayParts.push('sshMode=local');
+  }
+  if (routeOptions.preferredRelay) {
+    relayParts.push(`preferredRelay=${encodeURIComponent(routeOptions.preferredRelay)}`);
+  }
+  const relayQuery = relayParts.length ? `&${relayParts.join('&')}` : '';
   return `/api/agents/webui-proxy/m/${encodeURIComponent(connectionId)}/${encodeURIComponent(String(port))}`
     + `${suffix ? '/' + suffix : ''}?agent=${encodeURIComponent(agentId)}${relayQuery}${hashPart}`;
 }
@@ -815,10 +822,6 @@ export default function AIAgentsApp({ apiFetch }) {
       return null;
     }
     if (!tab) return null;
-    // Deliberately NOT passing 'noopener' in the features string — that nulls
-    // out the handle we need in order to navigate the tab later. Sever the
-    // reverse link by hand instead, so the opened page can't script us.
-    try { tab.opener = null; } catch { /* ignore */ }
     writeWebUITab(tab, 'Opening Web UI…',
       '<div class="card center"><div class="spin"></div>'
       + '<div style="font-size:13px;color:#94a3b8">Opening Web UI…</div></div>');
@@ -833,12 +836,25 @@ export default function AIAgentsApp({ apiFetch }) {
   // Same-origin proxy fallback for this agent/target (see buildWebUIProxyUrl).
   // Handed to every failure card so the user is never left without a way in.
   const webUIProxyUrl = () => {
-    if (!target) return '';
+    const curTarget = targetRef.current || target;
+    if (!curTarget) return '';
     let preferredRelay = '';
     try { preferredRelay = localStorage.getItem('ssh_monitor_preferred_relay') || ''; } catch {}
-    return buildWebUIProxyUrl(target, webUIPort(), details?.webUIBootstrapPath || '/', agent.id, {
-      preferredRelay,
-    });
+    if (!preferredRelay && relayInfo?.relays?.length) {
+      preferredRelay = relayInfo.relays[0].relayName || relayInfo.relays[0].relayId || '';
+    }
+    const currentDetails = detailsRef.current || details;
+    const isRelayActive = !!(relayConnectedRef.current || relayInfo?.connected);
+    return buildWebUIProxyUrl(
+      curTarget,
+      webUIPort(),
+      currentDetails?.webUIBootstrapPath || '/',
+      agentRef.current?.id || agent.id,
+      {
+        preferredRelay,
+        sshMode: isRelayActive ? 'local' : undefined,
+      }
+    );
   };
 
   const handleStartWebUI = async () => {
@@ -970,8 +986,11 @@ export default function AIAgentsApp({ apiFetch }) {
   // waiting to call window.open() until after the await would be blocked.
   const openWebUIInTab = async (overridePath, preopenedTab = null) => {
     const proxyUrl = webUIProxyUrl();
-    const isMobileBrowser = typeof navigator !== 'undefined'
-      && /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '');
+    const isMobileBrowser = typeof navigator !== 'undefined' && (
+      /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '')
+      || (navigator.maxTouchPoints > 1 && /Macintosh/i.test(navigator.userAgent || ''))
+      || (typeof window !== 'undefined' && window.innerWidth < 768)
+    );
 
     // Mobile routing — same rule as the desktop "Via server" button, which is
     // only offered for a Web UI bound to LOOPBACK (127.0.0.1) on the target:
@@ -1002,9 +1021,23 @@ export default function AIAgentsApp({ apiFetch }) {
         mobileUrl = proxyUrl;
       }
       if (mobileUrl) {
+        if (!preopenedTab) {
+          try {
+            const directTab = window.open(mobileUrl, '_blank');
+            if (directTab) {
+              setNotice({ ok: true, text: viaServer ? 'Opened the Web UI through the server.' : `Opened the Web UI directly — ${mobileUrl}` });
+              return;
+            }
+          } catch { /* popup blocked */ }
+        }
         const tab = preopenedTab || openBlankWebUITab();
         if (tab) {
           try {
+            if (preopenedTab && typeof navigateWebUITab === 'function') {
+              navigateWebUITab(tab, mobileUrl, proxyUrl);
+            } else {
+              try { tab.location.replace(mobileUrl); } catch {}
+            }
             tab.location.href = mobileUrl;
             setNotice({ ok: true, text: viaServer ? 'Opened the Web UI through the server.' : `Opened the Web UI directly — ${mobileUrl}` });
             return;
@@ -1212,9 +1245,17 @@ export default function AIAgentsApp({ apiFetch }) {
       setNotice({ ok: false, text: 'Select a server before opening the Web UI.' });
       return;
     }
+    try {
+      const directTab = window.open(url, '_blank');
+      if (directTab) {
+        setNotice({ ok: true, text: 'Opened the Web UI through the server.' });
+        return;
+      }
+    } catch { /* blocked */ }
     const tab = openBlankWebUITab();
     if (tab) {
       try {
+        try { tab.location.replace(url); } catch {}
         tab.location.href = url;
         setNotice({ ok: true, text: 'Opened the Web UI through the server.' });
         return;

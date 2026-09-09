@@ -1872,6 +1872,8 @@ export default function ServerMonitorApp() {
       : historyRange === '24h' ? 60_000
       : 30_000;
     const id = setInterval(() => {
+      // Skip when page is hidden (mobile background / screen locked)
+      if (typeof document !== 'undefined' && document.hidden) return;
       fetchHistory(historyRange, selectedConnection);
     }, intervalMs);
     return () => clearInterval(id);

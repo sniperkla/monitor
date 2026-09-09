@@ -435,6 +435,8 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
     // Background Polling logic with guard to prevent SSH stream flooding
     let isPollingBusy = false;
     const pollInterval = setInterval(() => {
+      // Pause polling when the page is hidden (mobile screen off / tab backgrounded)
+      if (typeof document !== 'undefined' && document.hidden) return;
       if (socketRef.current && socketRef.current.connected && !isPollingBusy) {
          isPollingBusy = true;
          socketRef.current.emit('docker:command', { action: 'list' });

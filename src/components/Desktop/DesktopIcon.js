@@ -1,9 +1,43 @@
 'use client';
 
 import { useOS } from '@/context/OSContext';
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, memo } from 'react';
 import { createPortal } from 'react-dom';
 import AppIcon from '@/components/common/AppIcon';
+
+// ── Nuclear hover gimmick config — hoisted outside the component so this
+// object is created exactly once per module, not on every render of every
+// desktop icon. (Was previously declared inside the function body.)
+const THEME_GIMMICKS = {
+  retro: {
+    label: '⚠ DETONATION IN', tag: 'ARMED',
+    digit: ['#ffc21a', '#ff7a1a', '#ff3020'], panelBorder: 'rgba(255,180,40,0.55)',
+    ember: ['#ff4400', '#ff6600', '#ffaa00', '#18e12c', '#ff2200'],
+    capCore: ['#ffffff', '#ffcc00', '#ff2200'], lobeInner: 'rgba(255,100,0,0.5)', lobeGlow: 'rgba(255,68,0,0.2)',
+    swFrom: 'rgba(255,200,100,0.8)', swTo: 'rgba(255,0,0,0.1)',
+    rgBorder: 'rgba(255,200,50,0.4)', rgGlow: 'rgba(255,100,0,0.8)',
+    rain: 'rgba(24,225,44,0.6)', rainGlow: '#18e12c', crtFilter: 'none',
+  },
+  synthwave: {
+    label: '▶ TRACKING ERROR', tag: 'EJECT',
+    digit: ['#01cdfe', '#b967ff', '#ff2ec4'], panelBorder: 'rgba(255,46,196,0.6)',
+    ember: ['#ff2ec4', '#ff71ce', '#01cdfe', '#b967ff', '#ffffff'],
+    capCore: ['#ffffff', '#ff71ce', '#a1006e'], lobeInner: 'rgba(255,46,196,0.45)', lobeGlow: 'rgba(1,205,254,0.25)',
+    swFrom: 'rgba(255,46,196,0.8)', swTo: 'rgba(1,205,254,0.1)',
+    rgBorder: 'rgba(255,46,196,0.45)', rgGlow: 'rgba(1,205,254,0.7)',
+    rain: 'rgba(255,46,196,0.6)', rainGlow: '#ff2ec4', crtFilter: 'hue-rotate(260deg)',
+  },
+  cyberpunk: {
+    label: '⌁ BREACH IN', tag: 'HACKING',
+    digit: ['#ffe600', '#00fff0', '#ff003c'], panelBorder: 'rgba(0,255,240,0.55)',
+    ember: ['#00fff0', '#ff003c', '#ffe600', '#00b3ff', '#ffffff'],
+    capCore: ['#eaffff', '#00fff0', '#003cff'], lobeInner: 'rgba(0,255,240,0.4)', lobeGlow: 'rgba(255,0,60,0.22)',
+    swFrom: 'rgba(0,255,240,0.75)', swTo: 'rgba(255,0,60,0.12)',
+    rgBorder: 'rgba(0,255,240,0.4)', rgGlow: 'rgba(255,0,60,0.6)',
+    rain: 'rgba(0,255,240,0.55)', rainGlow: '#00fff0', crtFilter: 'hue-rotate(160deg) saturate(1.4)',
+  },
+};
+THEME_GIMMICKS.fallout = THEME_GIMMICKS.retro;
 
 // ── Global pollution system (shared across all icon instances) ──
 // Every nuke adds a unit of pollution; the haze + falling ash build up and
@@ -79,36 +113,7 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
   // Nuclear hover gimmick: Fallout/Retro get the nuke; Synthwave gets a
   // Thanos-snap dust disintegration ("EJECT"); Cyberpunk gets an ICE-breach
   // system crash. Each has its own palette + flavor.
-  const THEME_GIMMICKS = {
-    retro: {
-      label: '⚠ DETONATION IN', tag: 'ARMED',
-      digit: ['#ffc21a', '#ff7a1a', '#ff3020'], panelBorder: 'rgba(255,180,40,0.55)',
-      ember: ['#ff4400', '#ff6600', '#ffaa00', '#18e12c', '#ff2200'],
-      capCore: ['#ffffff', '#ffcc00', '#ff2200'], lobeInner: 'rgba(255,100,0,0.5)', lobeGlow: 'rgba(255,68,0,0.2)',
-      swFrom: 'rgba(255,200,100,0.8)', swTo: 'rgba(255,0,0,0.1)',
-      rgBorder: 'rgba(255,200,50,0.4)', rgGlow: 'rgba(255,100,0,0.8)',
-      rain: 'rgba(24,225,44,0.6)', rainGlow: '#18e12c', crtFilter: 'none',
-    },
-    synthwave: {
-      label: '▶ TRACKING ERROR', tag: 'EJECT',
-      digit: ['#01cdfe', '#b967ff', '#ff2ec4'], panelBorder: 'rgba(255,46,196,0.6)',
-      ember: ['#ff2ec4', '#ff71ce', '#01cdfe', '#b967ff', '#ffffff'],
-      capCore: ['#ffffff', '#ff71ce', '#a1006e'], lobeInner: 'rgba(255,46,196,0.45)', lobeGlow: 'rgba(1,205,254,0.25)',
-      swFrom: 'rgba(255,46,196,0.8)', swTo: 'rgba(1,205,254,0.1)',
-      rgBorder: 'rgba(255,46,196,0.45)', rgGlow: 'rgba(1,205,254,0.7)',
-      rain: 'rgba(255,46,196,0.6)', rainGlow: '#ff2ec4', crtFilter: 'hue-rotate(260deg)',
-    },
-    cyberpunk: {
-      label: '⌁ BREACH IN', tag: 'HACKING',
-      digit: ['#ffe600', '#00fff0', '#ff003c'], panelBorder: 'rgba(0,255,240,0.55)',
-      ember: ['#00fff0', '#ff003c', '#ffe600', '#00b3ff', '#ffffff'],
-      capCore: ['#eaffff', '#00fff0', '#003cff'], lobeInner: 'rgba(0,255,240,0.4)', lobeGlow: 'rgba(255,0,60,0.22)',
-      swFrom: 'rgba(0,255,240,0.75)', swTo: 'rgba(255,0,60,0.12)',
-      rgBorder: 'rgba(0,255,240,0.4)', rgGlow: 'rgba(255,0,60,0.6)',
-      rain: 'rgba(0,255,240,0.55)', rainGlow: '#00fff0', crtFilter: 'hue-rotate(160deg) saturate(1.4)',
-    },
-  };
-  THEME_GIMMICKS.fallout = THEME_GIMMICKS.retro;
+  // Inlined from module-level THEME_GIMMICKS (already hoisted above this component)
   const gm = THEME_GIMMICKS[state.theme] || null;
   const isFalloutTheme = !!gm;
   // Destruction flavor: nuke (Fallout/Retro), dust snap (Synthwave),
@@ -1716,3 +1721,7 @@ export default function DesktopIcon({ id, title, icon: Icon, component, defaultP
     </div>
   );
 }
+
+// Wrap with memo so individual icons only re-render when their own props
+// change, not whenever any window or global desktop state is updated.
+export default memo(DesktopIcon);

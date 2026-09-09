@@ -94,6 +94,8 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
   };
 
   const pingAllConnections = async () => {
+    // Skip while the page is hidden (mobile background / screen locked)
+    if (typeof document !== 'undefined' && document.hidden) return;
     const conns = connectionsRef.current;
     for (const conn of conns) {
       if (conn.storage !== 'manual') {

@@ -460,11 +460,17 @@ function readCoordCookie(request) {
   const raw = request.headers.get('cookie') || '';
   const hit = raw.split(';').map((c) => c.trim()).find((c) => c.startsWith(COORD_COOKIE + '='));
   if (!hit) return null;
-  const [connectionId, portStr, agentId] = decodeURIComponent(hit.slice(COORD_COOKIE.length + 1)).split('~');
+  const [connectionId, portStr, agentId, sshMode, preferredRelay] = decodeURIComponent(hit.slice(COORD_COOKIE.length + 1)).split('~');
   const port = parseInt(portStr, 10);
   if (!/^[A-Za-z0-9_-]{6,64}$/.test(connectionId || '')) return null;
   if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
-  return { connectionId, port, agentId: (agentId || 'nanobot').replace(/[^a-z0-9_-]/gi, '') };
+  return {
+    connectionId,
+    port,
+    agentId: (agentId || 'nanobot').replace(/[^a-z0-9_-]/gi, ''),
+    sshMode: sshMode || undefined,
+    preferredRelay: preferredRelay || undefined,
+  };
 }
 
 // ─── route handler ───────────────────────────────────────────────────────────
@@ -498,10 +504,10 @@ async function handleProxy(request) {
       remotePath = remotePath.split('#')[0] || '/';
     }
 
+    const remembered = readCoordCookie(request);
     if (!connectionId) {
       // Bare URL — the hosted app already rewrote the address bar and threw the
       // coordinates away. Fall back to the last tunnel this browser used.
-      const remembered = readCoordCookie(request);
       if (remembered) {
         connectionId = remembered.connectionId;
         port = remembered.port;
@@ -531,8 +537,8 @@ async function handleProxy(request) {
       'Cross-Origin-Embedder-Policy': 'unsafe-none',
     };
 
-    const requestedSshMode = searchParams.get('sshMode') || request.headers.get('x-ssh-mode') || undefined;
-    const requestedRelay = searchParams.get('preferredRelay') || request.headers.get('x-preferred-relay') || undefined;
+    const requestedSshMode = searchParams.get('sshMode') || request.headers.get('x-ssh-mode') || remembered?.sshMode || undefined;
+    const requestedRelay = searchParams.get('preferredRelay') || request.headers.get('x-preferred-relay') || remembered?.preferredRelay || undefined;
     const sshConfig = await getSshConfig(connectionId, {
       sshMode: requestedSshMode,
       preferredRelay: requestedRelay,
@@ -670,7 +676,11 @@ async function handleProxy(request) {
     }
 
     // Build proxy base URL for HTML rewriting
-    const proxyBase = `/api/agents/webui-proxy?connectionId=${encodeURIComponent(connectionId)}&port=${port}&path=`;
+    const extraProxyParams = [];
+    if (requestedSshMode) extraProxyParams.push(`sshMode=${encodeURIComponent(requestedSshMode)}`);
+    if (requestedRelay) extraProxyParams.push(`preferredRelay=${encodeURIComponent(requestedRelay)}`);
+    const extraProxyQuery = extraProxyParams.length ? `&${extraProxyParams.join('&')}` : '';
+    const proxyBase = `/api/agents/webui-proxy?connectionId=${encodeURIComponent(connectionId)}&port=${port}${extraProxyQuery}&path=`;
 
     // Build response headers — strip headers that block iframe embedding
     const outHeaders = {};
@@ -753,9 +763,10 @@ async function handleProxy(request) {
     // Only documents need to seed the fallback: they are the responses a user
     // can meaningfully refresh or bookmark.
     if (contentType.includes('text/html')) {
+      const cookieVal = [connectionId, port, agentId, requestedSshMode || '', requestedRelay || ''].join('~');
       response.cookies.set({
         name: COORD_COOKIE,
-        value: `${connectionId}~${port}~${agentId}`,
+        value: cookieVal,
         path: '/api/agents/webui-proxy',
         maxAge: 60 * 60 * 24 * 7,
         httpOnly: true,

@@ -897,6 +897,8 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
     if (activeJob && isJobRunning) return;
     let interval = null;
     interval = setInterval(async () => {
+      // Skip when page is hidden (mobile background / screen locked)
+      if (typeof document !== 'undefined' && document.hidden) return;
       try {
         // Find the latest modified rclone cron log across persistent and /tmp paths
         const res = await apiFetch(
@@ -1262,6 +1264,8 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
     if (!autoRefreshHistory || !selectedConnId) return;
 
     const interval = setInterval(() => {
+      // Skip when page is hidden (mobile background / screen locked)
+      if (typeof document !== 'undefined' && document.hidden) return;
       if (activeTab === 'history' || activeTab === 'backup') {
         fetchHistoryRef.current(true);
       }

@@ -754,6 +754,8 @@ export function AppProvider({ children }) {
     let cancelled = false;
 
     const pollHealth = async () => {
+      // Skip while the page is hidden (phone locked / tab backgrounded)
+      if (typeof document !== 'undefined' && document.hidden) return;
       try {
         const res = await fetch('/api/health', {
           signal: AbortSignal.timeout(5000),
