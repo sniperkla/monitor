@@ -2,6 +2,7 @@
  
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useApp } from '@/context/AppContext';
+import { usePageVisibility } from '@/hooks/usePageVisibility';
 import {
   ShieldCheck, ShieldAlert, Play, RefreshCw, Trash2, Bug,
   FileWarning, Clock3, Skull, ArchiveRestore, EyeOff, CircleX,
@@ -74,9 +75,10 @@ function Evidence({ text }) {
 }
 
 /* ---------- Themed modal (replaces window.confirm / window.prompt) ---------- */
+// `key={modal?.inputValue}` resets the component (and its useState) whenever
+// the dialog's default value changes — no need for a setState-in-effect.
 function ConfirmModal({ modal, onClose }) {
-  const [inputVal, setInputVal] = useState('');
-  useEffect(() => { setInputVal(modal?.inputValue ?? ''); }, [modal]);
+  const [inputVal, setInputVal] = useState(modal?.inputValue ?? '');
   if (!modal) return null;
   const submit = () => {
     if (modal.input && !inputVal.trim()) return;
@@ -354,8 +356,10 @@ export default function VirusScannerApp({ windowId }) {
 
   // Poll background scan (tmux) session status — Running / Done badges + notifications
   // Adaptive: 5s while a scan is running, 30s when idle
+  // Pauses automatically when the tab / PWA is in the background.
+  const isPageVisible = usePageVisibility();
   useEffect(() => {
-    if (!selectedConn) return;
+    if (!selectedConn || !isPageVisible) return;
     let cancelled = false;
     let iv = null;
 
@@ -385,7 +389,7 @@ export default function VirusScannerApp({ windowId }) {
     pollSessions();
     scheduleNext(false);
     return () => { cancelled = true; if (iv) clearInterval(iv); };
-  }, [selectedConn, apiFetch]);
+  }, [selectedConn, apiFetch, isPageVisible]);
 
   // Badge states:
   //   running → amber spinner · done → green check · stopped → red x (killed/crashed, results incomplete)
@@ -504,9 +508,9 @@ export default function VirusScannerApp({ windowId }) {
     return () => { cancelled = true; clearInterval(iv); };
   }, [installingEngine, selectedConn, apiFetch, loadEngineStatuses]);
 
-  // Poll while a scan is running
+  // Poll while a scan is running (paused when tab is backgrounded)
   useEffect(() => {
-    if (!scanning) return;
+    if (!scanning || !isPageVisible) return;
     const iv = setInterval(async () => {
       try {
         const res = await apiFetch(`/api/virus-scan?connectionId=${encodeURIComponent(selectedConn)}&_=${Date.now()}`);
@@ -523,7 +527,7 @@ export default function VirusScannerApp({ windowId }) {
       } catch (_) {}
     }, 2000);
     return () => clearInterval(iv);
-  }, [scanning, selectedConn, apiFetch]);
+  }, [scanning, selectedConn, apiFetch, isPageVisible]);
 
   const startScan = async (mode = 'deep') => {
     if (!selectedConn || scanning) return;
@@ -822,11 +826,11 @@ export default function VirusScannerApp({ windowId }) {
             {/* ── Scan action bar (moved out of header for clean layout) ── */}
             <div data-onboarding="vs-run-modes" className="flex items-center gap-2 flex-wrap">
               <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 mr-1">Run scan:</span>
-              <div className="relative group shrink-0" data-onboarding="vs-quick">
+              <div className="relative group flex-1 sm:flex-initial shrink-0" data-onboarding="vs-quick">
                 <button
                   onClick={() => startScan('quick')}
                   disabled={scanning || !selectedConn}
-                  className="w-24 flex items-center justify-center gap-1.5 py-2 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-xs font-medium text-emerald-200 transition-colors disabled:opacity-50"
+                  className="w-full sm:w-24 flex items-center justify-center gap-1.5 py-2 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-xs font-medium text-emerald-200 transition-colors disabled:opacity-50"
                 >
                   {scanningMode === 'quick' ? <LoaderCircle size={13} className="animate-spin" /> : <Zap size={13} />}
                   {scanningMode === 'quick' ? 'Quick…' : 'Quick'}
@@ -844,11 +848,11 @@ export default function VirusScannerApp({ windowId }) {
                   <p className="mt-2 text-[9px] text-slate-500">Also collects results from any finished ClamAV/LMD scan.</p>
                 </div>
               </div>
-              <div className="relative group shrink-0">
+              <div className="relative group flex-1 sm:flex-initial shrink-0">
                 <button
                   onClick={() => startScan('deep')}
                   disabled={scanning || !selectedConn}
-                  className="w-24 flex items-center justify-center gap-1.5 py-2 rounded-lg bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/40 text-xs font-medium text-indigo-200 transition-colors disabled:opacity-50"
+                  className="w-full sm:w-24 flex items-center justify-center gap-1.5 py-2 rounded-lg bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/40 text-xs font-medium text-indigo-200 transition-colors disabled:opacity-50"
                 >
                   {scanningMode === 'deep' ? <LoaderCircle size={13} className="animate-spin" /> : <Play size={13} />}
                   {scanningMode === 'deep' ? 'Deep…' : 'Deep'}
@@ -863,11 +867,11 @@ export default function VirusScannerApp({ windowId }) {
                   </ul>
                 </div>
               </div>
-              <div className="relative group shrink-0">
+              <div className="relative group flex-1 sm:flex-initial shrink-0">
                 <button
                   onClick={() => startScan('full')}
                   disabled={scanning || !selectedConn}
-                  className="w-24 flex items-center justify-center gap-1.5 py-2 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-xs font-medium text-rose-200 transition-colors disabled:opacity-50"
+                  className="w-full sm:w-24 flex items-center justify-center gap-1.5 py-2 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-xs font-medium text-rose-200 transition-colors disabled:opacity-50"
                 >
                   {scanningMode === 'full' ? <LoaderCircle size={13} className="animate-spin" /> : <HardDrive size={13} />}
                   {scanningMode === 'full' ? 'Full…' : 'Full'}
@@ -910,34 +914,36 @@ export default function VirusScannerApp({ windowId }) {
               : scan ? 'bg-emerald-500/[0.07] border-emerald-500/25'
               : 'bg-white/[0.03] border-white/10'
             }`}>
-              <div className="flex items-center gap-4">
-                <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shrink-0 border ${
-                  scanning ? 'bg-indigo-500/15 border-indigo-500/30'
-                  : totalIssues > 0 ? 'bg-rose-500/15 border-rose-500/30'
-                  : scan ? 'bg-emerald-500/15 border-emerald-500/30'
-                  : 'bg-white/[0.04] border-white/10'
-                }`}>
-                  {scanning ? <LoaderCircle size={26} className="text-indigo-300 animate-spin" />
-                    : totalIssues > 0 ? <ShieldAlert size={26} className="text-rose-300" />
-                    : scan ? <ShieldCheck size={26} className="text-emerald-300" />
-                    : <Bug size={26} className="text-slate-600" />}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <h3 className="text-base font-semibold text-slate-100 leading-tight">
-                    {scanning ? 'Scanning in progress…'
-                      : !scan ? 'No scans yet'
-                      : totalIssues > 0 ? `${totalIssues} issue${totalIssues === 1 ? '' : 's'} detected`
-                      : 'All clear'}
-                  </h3>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    {scan?.host ? `${scan.host} · ` : ''}
-                    {scan ? `last scanned ${timeAgo(scan.createdAt)}${scan.durationMs ? ` in ${(scan.durationMs / 1000).toFixed(1)}s` : ''}` : 'run your first scan to check for threats'}
-                  </p>
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 sm:gap-4">
+                <div className="flex items-center gap-4 min-w-0 flex-1">
+                  <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shrink-0 border ${
+                    scanning ? 'bg-indigo-500/15 border-indigo-500/30'
+                    : totalIssues > 0 ? 'bg-rose-500/15 border-rose-500/30'
+                    : scan ? 'bg-emerald-500/15 border-emerald-500/30'
+                    : 'bg-white/[0.04] border-white/10'
+                  }`}>
+                    {scanning ? <LoaderCircle size={26} className="text-indigo-300 animate-spin" />
+                      : totalIssues > 0 ? <ShieldAlert size={26} className="text-rose-300" />
+                      : scan ? <ShieldCheck size={26} className="text-emerald-300" />
+                      : <Bug size={26} className="text-slate-600" />}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <h3 className="text-base font-semibold text-slate-100 leading-tight">
+                      {scanning ? 'Scanning in progress…'
+                        : !scan ? 'No scans yet'
+                        : totalIssues > 0 ? `${totalIssues} issue${totalIssues === 1 ? '' : 's'} detected`
+                        : 'All clear'}
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      {scan?.host ? `${scan.host} · ` : ''}
+                      {scan ? `last scanned ${timeAgo(scan.createdAt)}${scan.durationMs ? ` in ${(scan.durationMs / 1000).toFixed(1)}s` : ''}` : 'run your first scan to check for threats'}
+                    </p>
+                  </div>
                 </div>
                 {scan && !scanning && (
                   <button
                     onClick={() => setTab('findings')}
-                    className="shrink-0 px-3 py-1.5 rounded-lg bg-white/[0.06] hover:bg-white/[0.1] text-xs font-medium text-slate-200 transition-colors"
+                    className="w-full sm:w-auto text-center shrink-0 px-3 py-1.5 rounded-lg bg-white/[0.06] hover:bg-white/[0.1] text-xs font-medium text-slate-200 transition-colors"
                   >
                     View findings →
                   </button>
@@ -1189,7 +1195,7 @@ export default function VirusScannerApp({ windowId }) {
                 </div>
                 <div className="space-y-1.5">
                   {history.map((h, i) => (
-                    <div key={`${h._id}-${i}`} className="flex items-center justify-between px-3.5 py-3 rounded-xl bg-white/[0.02] border border-white/5 hover:border-white/10 transition-colors">
+                    <div key={`${h._id}-${i}`} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-3.5 py-3 rounded-xl bg-white/[0.02] border border-white/5 hover:border-white/10 transition-colors">
                       <span className="inline-flex items-center gap-2 text-xs text-slate-300 min-w-0">
                         <ServerIcon size={12} className="text-slate-600 shrink-0" />
                         <span className="truncate">{h.host || 'server'}</span>
@@ -1204,7 +1210,7 @@ export default function VirusScannerApp({ windowId }) {
                           </span>
                         )}
                       </span>
-                      <span className="inline-flex items-center gap-3 shrink-0">
+                      <span className="inline-flex items-center gap-2 sm:gap-3 shrink-0 flex-wrap">
                         {h.summary?.critical > 0 && <span className="text-[11px] text-rose-300">{h.summary.critical} critical</span>}
                         {h.summary?.high > 0 && <span className="text-[11px] text-orange-300">{h.summary.high} high</span>}
                         {h.summary?.medium > 0 && <span className="text-[11px] text-amber-300">{h.summary.medium} med</span>}
@@ -1212,7 +1218,7 @@ export default function VirusScannerApp({ windowId }) {
                         {!(h.summary?.critical || h.summary?.high || h.summary?.medium || h.summary?.low) && (
                           <span className="inline-flex items-center gap-1 text-[11px] text-emerald-300"><Activity size={10} /> clean</span>
                         )}
-                        <span className="text-[11px] text-slate-600 w-16 text-right">{timeAgo(h.createdAt)}</span>
+                        <span className="text-[11px] text-slate-600 sm:w-16 sm:text-right">{timeAgo(h.createdAt)}</span>
                       </span>
                     </div>
                   ))}

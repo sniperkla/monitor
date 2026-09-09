@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useApp } from '@/context/AppContext';
+import { usePageVisibility } from '@/hooks/usePageVisibility';
 import {
   History, Search, RefreshCw, Trash2, ChevronDown,
   FolderOpen, FolderMinus, UploadCloud, Server, Rocket, DatabaseBackup,
@@ -128,7 +129,8 @@ export default function ActivityApp() {
   }, [apiFetch, category, cursor, search]);
 
   // Initial load + reload on filter change
-  useEffect(() => { load({}); /* eslint-disable-next-line */ }, [category]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { load({}); }, [category]);
 
   // Keep a ref to the current `load` so the 30s auto-refresh below always calls
   // the latest closure. Depending on `load` directly would re-create the interval
@@ -150,8 +152,11 @@ export default function ActivityApp() {
     clearTimeout(searchTimer.current);
     searchTimer.current = setTimeout(() => loadRef.current({}), 350);
     return () => clearTimeout(searchTimer.current);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search]);
+
+  // Pause the 30 s auto-refresh while the tab / PWA is in the background —
+  // no wasted requests when the screen is locked or the user switched apps.
+  const isPageVisible = usePageVisibility();
 
   // Auto-refresh every 30s
   // IMPORTANT: depend ONLY on `category` — `cursor` changes whenever the user
@@ -161,12 +166,12 @@ export default function ActivityApp() {
   // (The previous deps `[category, cursor]` also meant each new interval
   //  overlapped with the one being torn down, producing duplicate requests.)
   useEffect(() => {
+    if (!isPageVisible) return; // skip polling when tab/PWA is backgrounded
     // Call through the ref so the tick uses the CURRENT `load` (latest search /
     // cursor) instead of the first-render closure.
     const iv = setInterval(() => loadRef.current({}), 30_000);
     return () => clearInterval(iv);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [category]);
+  }, [category, isPageVisible]);
 
   const clearAll = async () => {
     if (!confirm('Clear your entire activity history?')) return;
@@ -342,7 +347,7 @@ export default function ActivityApp() {
                     {/* Content */}
                     <div className="flex-1 min-w-0 pt-0.5">
                       <p className="text-[13px] text-slate-200 leading-snug break-words">{item.message}</p>
-                      <div className="flex items-center gap-2 mt-1">
+                      <div className="flex items-center gap-2 mt-1 flex-wrap">
                         <span className={`inline-flex items-center gap-1 text-[11px] ${st.text}`}>
                           <StatusIcon size={11} />
                           {item.status}
@@ -351,7 +356,7 @@ export default function ActivityApp() {
                           {timeAgo(item.createdAt)} · {exactTime(item.createdAt)}
                         </span>
                         {item.target && (
-                          <span className="text-[11px] text-slate-500 truncate max-w-[180px]">· {item.target}</span>
+                          <span className="text-[11px] text-slate-500 truncate max-w-full sm:max-w-[240px]">· {item.target}</span>
                         )}
                       </div>
                     </div>

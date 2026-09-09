@@ -690,8 +690,8 @@ export default function ServerBackupApp({ windowId = 'server-backup', activeTab:
   // backup-type cards to 32px.
   return (
     <div className="@container flex flex-col sm:flex-row h-full bg-[var(--bg-primary)] text-[var(--text-primary)]">
-      <div className="w-full sm:w-52 shrink-0 border-b sm:border-b-0 sm:border-r border-[var(--border-color)] bg-[var(--bg-secondary)]/30 flex flex-col max-h-[42%] sm:max-h-full overflow-y-auto sm:overflow-y-visible">
-        <div className="p-3 border-b border-[var(--border-color)]">
+      <div className="w-full sm:w-52 shrink-0 border-b sm:border-b-0 sm:border-r border-[var(--border-color)] bg-[var(--bg-secondary)]/30 flex flex-col sm:max-h-full">
+        <div className="p-2.5 sm:p-3 border-b border-[var(--border-color)]">
           <div className="flex items-center justify-between gap-2 text-sm font-bold">
             <div className="flex items-center gap-2">
               <HardDrive size={16} className="text-indigo-400" />
@@ -707,20 +707,20 @@ export default function ServerBackupApp({ windowId = 'server-backup', activeTab:
             </button>
           </div>
         </div>
-        <div className="flex-1 p-2 space-y-0.5">
+        <div className="flex flex-row sm:flex-col overflow-x-auto sm:overflow-x-visible p-1.5 sm:p-2 gap-1 sm:gap-0.5 scrollbar-none">
           {TABS.map(tab => (
             <button
               key={tab.id}
               data-onboarding={`tab-${tab.id}`}
               onClick={() => setActiveTab(tab.id)}
-              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold transition-all ${activeTab === tab.id ? 'bg-indigo-500/15 text-indigo-400 border border-indigo-500/30' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] border border-transparent'}`}
+              className={`shrink-0 sm:shrink sm:w-full flex items-center gap-2 px-3 py-1.5 sm:py-2 rounded-lg text-xs font-semibold whitespace-nowrap transition-all ${activeTab === tab.id ? 'bg-indigo-500/15 text-indigo-400 border border-indigo-500/30' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] border border-transparent'}`}
             >
               <tab.icon size={14} />
               {tab.label}
             </button>
           ))}
         </div>
-        <div className="p-3 border-t border-[var(--border-color)]">
+        <div className="p-2.5 sm:p-3 border-t border-[var(--border-color)]">
           <label className="block text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1.5">Server</label>
           <SearchableSelect
             value={connectionId}
@@ -731,12 +731,12 @@ export default function ServerBackupApp({ windowId = 'server-backup', activeTab:
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-5 space-y-5">
+      <div className="flex-1 overflow-y-auto p-3 sm:p-5 space-y-5">
         {activeTab === 'backup' && (
           <>
             <div>
               <h2 className="text-sm font-bold mb-3">Backup Type</h2>
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+              <div className="grid grid-cols-2 xs:grid-cols-3 sm:grid-cols-3 lg:grid-cols-5 gap-2">
                 {BACKUP_TYPES.map(t => (
                   <button
                     key={t.id}

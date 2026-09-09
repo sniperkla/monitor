@@ -235,34 +235,34 @@ export default function DockerLogApp({ initialConnection, initialConnectionId, i
   return (
     <div className="@container flex flex-col h-full bg-[#0d1117] text-gray-300 overflow-hidden font-mono text-xs">
         {/* Header toolbar */}
-        <div className="flex items-center justify-between px-4 h-10 border-b border-white/5 bg-white/5 shrink-0">
-            <div className="flex items-center gap-2 truncate pr-4">
-                <FileText size={14} className="text-emerald-400" />
+        <div className="flex items-center justify-between px-3 sm:px-4 py-1.5 min-h-[40px] h-auto border-b border-white/5 bg-white/5 shrink-0 flex-wrap gap-2">
+            <div className="flex items-center gap-2 min-w-0 max-w-full sm:max-w-xs truncate">
+                <FileText size={14} className="text-emerald-400 shrink-0" />
                 <span className="font-bold text-gray-200 truncate">{containerName || 'Docker Logs'}</span>
-                <span className="text-[10px] text-gray-400 opacity-60 pr-2">{containerId?.substring(0, 12)}</span>
+                <span className="text-[10px] text-gray-400 opacity-60 shrink-0">{containerId?.substring(0, 12)}</span>
             </div>
             
-            <div className="flex items-center gap-4">
-                <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium ${typeof window !== 'undefined' && localStorage.getItem('ssh_monitor_ssh_mode') === 'local' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-blue-500/15 text-blue-400'}`}>
+            <div className="flex items-center gap-2 sm:gap-4 shrink-0 flex-wrap">
+                <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium shrink-0 ${typeof window !== 'undefined' && localStorage.getItem('ssh_monitor_ssh_mode') === 'local' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-blue-500/15 text-blue-400'}`}>
                   {typeof window !== 'undefined' && localStorage.getItem('ssh_monitor_ssh_mode') === 'local' ? '⚡ Local' : '☁ Server'}
                 </span>
                 {/* Find Bar */}
                 <div className="relative group flex items-center">
-                    <div className="absolute left-2.5 text-white/20">
+                    <div className="absolute left-2 text-white/20">
                         <Search size={12} />
                     </div>
                     <input 
                         type="text"
-                        placeholder="Find in logs..."
+                        placeholder="Find..."
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
                         onKeyDown={handleSearchKeyDown}
-                        className="bg-black/40 text-white border border-white/10 rounded-lg pl-8 pr-24 py-1.5 text-[11px] w-48 focus:w-72 focus:border-emerald-500/50 focus:outline-none transition-all placeholder:text-white/30"
+                        className="bg-black/40 text-white border border-white/10 rounded-lg pl-6 sm:pl-8 pr-16 sm:pr-24 py-1 text-[11px] w-28 xs:w-36 sm:w-48 sm:focus:w-72 focus:border-emerald-500/50 focus:outline-none transition-all placeholder:text-white/30"
                     />
                     {searchQuery && (
                         <div className="absolute right-1.5 flex items-center gap-1">
-                            <span className="text-[9px] text-white/30 bg-white/5 px-1.5 py-0.5 rounded border border-white/10 min-w-[50px] text-center">
-                                {matchCount > 0 ? activeMatchIndex + 1 : 0} / {matchCount}
+                            <span className="text-[8px] sm:text-[9px] text-white/30 bg-white/5 px-1 sm:px-1.5 py-0.5 rounded border border-white/10 min-w-[36px] sm:min-w-[50px] text-center">
+                                {matchCount > 0 ? activeMatchIndex + 1 : 0}/{matchCount}
                             </span>
                             <div className="flex flex-col -gap-1">
                                 <button onClick={goToPrevMatch} className="p-0.5 hover:bg-white/10 rounded text-white/40 hover:text-white transition-colors">
@@ -276,12 +276,12 @@ export default function DockerLogApp({ initialConnection, initialConnectionId, i
                     )}
                 </div>
 
-                <div className="w-[1px] h-4 bg-white/10 mx-1" />
+                <div className="w-[1px] h-4 bg-white/10 mx-0.5 hidden sm:block" />
 
                 <button 
                     onClick={fetchLogs}
                     disabled={isLoading}
-                    className="p-1.5 hover:bg-white/10 rounded-lg text-emerald-400 transition-colors disabled:opacity-50"
+                    className="p-1.5 hover:bg-white/10 rounded-lg text-emerald-400 transition-colors disabled:opacity-50 shrink-0"
                     title="Refresh Logs"
                 >
                     <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />

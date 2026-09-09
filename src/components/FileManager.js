@@ -5147,7 +5147,7 @@ export default function FileManager({
                       />
                     ) : (
                       <span
-                        className="text-xs font-medium truncate max-w-[120px] block text-[var(--text-primary)] cursor-text"
+                        className={`text-xs font-medium truncate ${viewMode === 'grid' ? 'max-w-[110px]' : 'max-w-[160px] sm:max-w-xs md:max-w-md'} block text-[var(--text-primary)] cursor-text`}
                         title={file.filename}
                         onDoubleClick={(e) => {
                           e.stopPropagation();
@@ -5158,14 +5158,14 @@ export default function FileManager({
                       </span>
                     )}
                     {file._searchResult && (
-                      <span className="text-[9px] text-[var(--text-muted)] truncate max-w-[120px] block mt-0.5" title={file.dir}>
+                      <span className="text-[9px] text-[var(--text-muted)] truncate max-w-[160px] sm:max-w-xs block mt-0.5" title={file.dir}>
                         {file.dir}
                       </span>
                     )}
                     {viewMode === 'list' && !file._searchResult && (
-                      <div className="flex items-center gap-4 text-[10px] text-[var(--text-muted)]">
+                      <div className="flex items-center gap-3 sm:gap-4 text-[10px] text-[var(--text-muted)] shrink-0">
                         <span>{formatSize(file.attrs.size)}</span>
-                        <span className="w-32 truncate text-right">
+                        <span className="w-24 sm:w-32 truncate text-right hidden sm:inline">
                           {new Date(file.attrs.mtime * 1000).toLocaleDateString()}
                         </span>
                       </div>

@@ -252,6 +252,15 @@ export default function AIAgentsApp({ apiFetch }) {
     return () => clearInterval(interval);
   }, [relayInfo?.connected, forceBypassRelay, checkLocalRelay]);
 
+  // On mobile (phones/tablets without a relay), auto-activate direct cloud/server mode
+  useEffect(() => {
+    const isMobile = typeof navigator !== 'undefined'
+      && (/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '') || (typeof window !== 'undefined' && window.innerWidth < 768));
+    if (isMobile && !relayInfo?.connected && !forceBypassRelay) {
+      bypassRelay();
+    }
+  }, [relayInfo?.connected, forceBypassRelay, bypassRelay]);
+
   // Listen for 'START_WEBUI' postMessage from the embedded diagnostic screen
   useEffect(() => {
     const onMsg = (e) => {
@@ -1144,10 +1153,50 @@ export default function AIAgentsApp({ apiFetch }) {
       '  }, ' + Number(graceMs) + ');',
       '})();',
     ].join('\n');
-    return writeWebUITab(tab, 'Opening Web UI…',
+    const nonce = typeof document !== 'undefined'
+      ? (document.querySelector('script[nonce]')?.nonce
+        || document.querySelector('script[nonce]')?.getAttribute('nonce')
+        || '')
+      : '';
+    const nonceAttr = nonce ? ' nonce="' + escWebUI(nonce) + '"' : '';
+    const written = writeWebUITab(tab, 'Opening Web UI…',
       '<div id="wb-stage" class="card center"><div class="spin"></div>'
       + '<div style="font-size:13px;color:#94a3b8">Opening Web UI…</div></div>'
-      + '<script>' + script + '<\/script>');
+      + '<script' + nonceAttr + '>' + script + '<\/script>');
+    if (directUrl) {
+      try {
+        tab.location.replace(directUrl);
+      } catch {
+        try { tab.location.href = directUrl; } catch { /* blocked */ }
+      }
+    }
+    if (graceMs > 0) {
+      setTimeout(() => {
+        try {
+          if (tab && !tab.closed) {
+            let stillBlank = false;
+            try {
+              const h = tab.location.href;
+              if (!h || h === 'about:blank' || h === window.location.href) {
+                stillBlank = true;
+              }
+            } catch {
+              // Accessing tab.location.href throws cross-origin error when it navigates to target!
+              stillBlank = false;
+            }
+            if (stillBlank) {
+              failWebUITab(tab, {
+                heading: 'Could not reach the Web UI',
+                reason: 'The browser never opened the local address. Chrome blocks this while Local Network Access is on (a public site reaching 127.0.0.1), and 127.0.0.1 only exists on the computer running Local Relay — never on a phone. Opening through the server works from any device.',
+                directUrl,
+                proxyUrl,
+              });
+            }
+          }
+        } catch { /* tab already closed or navigated */ }
+      }, graceMs);
+    }
+    return written || true;
   };
 
   // Open the Web UI through the monitor server instead of this device.
@@ -1974,7 +2023,9 @@ export default function AIAgentsApp({ apiFetch }) {
   }
 
   // ── Force Local Relay Setup: Require Local Relay for optimal speed, 0ms direct WebUI, and no SSH polling latency ──
-  if (!relayInfo?.connected && !forceBypassRelay) {
+  const isMobileClient = typeof navigator !== 'undefined'
+    && (/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '') || (typeof window !== 'undefined' && window.innerWidth < 768));
+  if (!relayInfo?.connected && !forceBypassRelay && !isMobileClient) {
     const selectedConn = connections.find(c => c._id === target) || connections[0];
     const serverOrigin = typeof window !== 'undefined' ? window.location.origin : '';
     const quickCmd = `rm -f ./local-relay.js && curl -fsSL -H 'Cache-Control: no-cache' "${serverOrigin}/local-relay.js" -o ./local-relay.js && node ./local-relay.js --pair --server "${serverOrigin}" && rm -f ./local-relay.js`;

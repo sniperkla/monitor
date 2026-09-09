@@ -13,6 +13,7 @@ import {
 import { useApp } from '@/context/AppContext';
 import { useOS } from '@/context/OSContext';
 import { io } from 'socket.io-client';
+import { usePageVisibility } from '@/hooks/usePageVisibility';
 import AgentSetupWizard from '@/components/AgentSetupWizard';
 import FirewallOnboarding, { hasCompletedFirewallOnboarding, resetFirewallOnboarding } from '@/components/FirewallOnboarding';
 
@@ -465,11 +466,14 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
     }
   }, [activeTab, loadPackets]);
 
+  // Pause polls when the tab / PWA moves to the background — saves battery on mobile.
+  const isPageVisible = usePageVisibility();
+
   useEffect(() => {
-    if (!sniffingActive || activeTab !== 'controls') return undefined;
+    if (!sniffingActive || activeTab !== 'controls' || !isPageVisible) return undefined;
     const timer = window.setInterval(loadPackets, 3000);
     return () => window.clearInterval(timer);
-  }, [activeTab, loadPackets, sniffingActive]);
+  }, [activeTab, loadPackets, sniffingActive, isPageVisible]);
 
   // ── Interactive graph: drag/wheel panning with live-follow (same feel as ServerMonitor charts) ──
   useEffect(() => {
@@ -656,9 +660,10 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
     // the same counters once per second — otherwise we pay for both transports
     // and the poll overwrites stream data with a 10s-old snapshot.
     if (realtimeActive) return undefined;
+    if (!isPageVisible) return undefined; // pause when tab is backgrounded
     const timer = window.setInterval(loadStatus, 10000);
     return () => window.clearInterval(timer);
-  }, [connectionId, loadStatus, status?.blocklist?.active, realtimeActive]);
+  }, [connectionId, loadStatus, status?.blocklist?.active, realtimeActive, isPageVisible]);
 
   const loadSourceStatus = useCallback(async () => {
     if (!connectionId) return;
@@ -675,10 +680,10 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
   useEffect(() => { loadSourceStatus(); }, [loadSourceStatus]);
 
   useEffect(() => {
-    if (!connectionId || !sourceStatus?.running) return undefined;
+    if (!connectionId || !sourceStatus?.running || !isPageVisible) return undefined;
     const timer = window.setInterval(loadSourceStatus, 2000);
     return () => window.clearInterval(timer);
-  }, [connectionId, loadSourceStatus, sourceStatus?.running]);
+  }, [connectionId, loadSourceStatus, sourceStatus?.running, isPageVisible]);
 
   const vpnAlertShownRef = useRef(false);
   const loadCurrentIp = useCallback(async (showError = false) => {
@@ -2128,10 +2133,10 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                           <tr>
                             <th className="p-2.5 pl-3">Time</th>
                             <th className="p-2.5">Attacker Source IP</th>
-                            <th className="p-2.5">Target Port</th>
+                            <th className="p-2.5 hidden sm:table-cell">Target Port</th>
                             <th className="p-2.5">Attack Intent Category</th>
-                            <th className="p-2.5">Kernel Action</th>
-                            <th className="p-2.5 pr-3">Payload Intent</th>
+                            <th className="p-2.5 hidden md:table-cell">Kernel Action</th>
+                            <th className="p-2.5 pr-3 hidden lg:table-cell">Payload Intent</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-white/5">
@@ -2217,7 +2222,7 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                                     </button>
                                   </span>
                                 </td>
-                                <td className="p-2.5 whitespace-nowrap">
+                                <td className="p-2.5 whitespace-nowrap hidden sm:table-cell">
                                   <span className="px-1.5 py-0.5 rounded bg-white/5 border border-white/10 text-white/80">
                                     {pkt.targetPort}/{pkt.protocol}
                                   </span>
@@ -2227,16 +2232,18 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
                                     {pkt.attackType}
                                   </span>
                                 </td>
-                                <td className="p-2.5 whitespace-nowrap">
+                                <td className="p-2.5 whitespace-nowrap hidden md:table-cell">
                                   <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-rose-500/15 text-rose-300 border border-rose-500/30 inline-flex items-center gap-1">
                                     <Ban size={10} /> Silent Drop (0ms)
                                   </span>
                                 </td>
-                                <td className="p-2.5 pr-3 text-white/60 text-[11px] max-w-xs truncate flex items-center justify-between" title={pkt.description}>
-                                  <span>{pkt.description}</span>
-                                  <span className="text-[10px] text-indigo-400 group-hover:text-indigo-300 font-mono underline ml-2 shrink-0">
-                                    Inspect Hex →
-                                  </span>
+                                <td className="p-2.5 pr-3 text-white/60 text-[11px] max-w-xs truncate hidden lg:table-cell" title={pkt.description}>
+                                  <div className="flex items-center justify-between">
+                                    <span className="truncate">{pkt.description}</span>
+                                    <span className="text-[10px] text-indigo-400 group-hover:text-indigo-300 font-mono underline ml-2 shrink-0">
+                                      Inspect Hex →
+                                    </span>
+                                  </div>
                                 </td>
                               </tr>
                             ));

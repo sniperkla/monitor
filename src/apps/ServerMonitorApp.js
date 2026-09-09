@@ -3218,13 +3218,13 @@ export default function ServerMonitorApp() {
                         <thead className="bg-[var(--bg-tertiary)]/70 text-[10px] font-bold uppercase text-[var(--text-muted)] tracking-wider sticky top-0 z-10 border-b border-[var(--border-color)] backdrop-blur-md">
                           <tr>
                             <th className="py-2.5 px-3">PID</th>
-                            <th className="py-2.5 px-3">User</th>
+                            <th className="py-2.5 px-3 hidden md:table-cell">User</th>
                             <th className="py-2.5 px-3 text-right">CPU %</th>
                             <th className="py-2.5 px-3 text-right">MEM %</th>
-                            <th className="py-2.5 px-3 text-right">RAM (RSS)</th>
-                            <th className="py-2.5 px-2 text-center">State</th>
-                            <th className="py-2.5 px-3">Time</th>
-                            <th className="py-2.5 px-3 min-w-[200px]">Process / Command</th>
+                            <th className="py-2.5 px-3 text-right hidden lg:table-cell">RAM (RSS)</th>
+                            <th className="py-2.5 px-2 text-center hidden sm:table-cell">State</th>
+                            <th className="py-2.5 px-3 hidden lg:table-cell">Time</th>
+                            <th className="py-2.5 px-3 min-w-[140px] sm:min-w-[200px]">Process / Command</th>
                             <th className="py-2.5 px-3 text-center">Action</th>
                           </tr>
                         </thead>
@@ -3244,7 +3244,7 @@ export default function ServerMonitorApp() {
                                   {proc.pid}
                                 </td>
 
-                                <td className="py-2 px-3 text-[11px] text-[var(--text-muted)]">
+                                <td className="py-2 px-3 text-[11px] text-[var(--text-muted)] hidden md:table-cell">
                                   <span className="px-1.5 py-0.5 rounded bg-[var(--bg-tertiary)] text-slate-300 font-mono text-[10px]">
                                     {proc.user}
                                   </span>
@@ -3266,17 +3266,17 @@ export default function ServerMonitorApp() {
                                   </span>
                                 </td>
 
-                                <td className="py-2 px-3 text-right font-mono text-[11px] text-slate-300">
+                                <td className="py-2 px-3 text-right font-mono text-[11px] text-slate-300 hidden lg:table-cell">
                                   {formatBytes((proc.rssKb || 0) * 1024)}
                                 </td>
 
-                                <td className="py-2 px-2 text-center">
+                                <td className="py-2 px-2 text-center hidden sm:table-cell">
                                   <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-slate-800 text-slate-400 border border-slate-700/50">
                                     {proc.stat}
                                   </span>
                                 </td>
 
-                                <td className="py-2 px-3 font-mono text-[10px] text-[var(--text-muted)]">
+                                <td className="py-2 px-3 font-mono text-[10px] text-[var(--text-muted)] hidden lg:table-cell">
                                   {proc.time}
                                 </td>
 

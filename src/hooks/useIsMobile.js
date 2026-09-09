@@ -6,21 +6,31 @@ export function useIsMobile(breakpoint = 768) {
   const [isMobile, setIsMobile] = useState(false);
 
   useEffect(() => {
-    // Only run on client
     if (typeof window === 'undefined') return;
 
     const checkIsMobile = () => {
-      setIsMobile(window.innerWidth < breakpoint);
+      const next = window.innerWidth < breakpoint;
+      // Guard against redundant re-renders — only update when value changes
+      setIsMobile(prev => (prev === next ? prev : next));
     };
 
     // Initial check
     checkIsMobile();
 
-    // Add event listener
-    window.addEventListener('resize', checkIsMobile);
+    // Debounce resize handler: orientation changes and zoom gestures fire
+    // dozens of events per second; debouncing to 100ms prevents a re-render
+    // storm that visibly lags the UI on mid-range phones.
+    let debounceTimer;
+    const handleResize = () => {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(checkIsMobile, 100);
+    };
 
-    // Clean up
-    return () => window.removeEventListener('resize', checkIsMobile);
+    window.addEventListener('resize', handleResize);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      clearTimeout(debounceTimer);
+    };
   }, [breakpoint]);
 
   return isMobile;

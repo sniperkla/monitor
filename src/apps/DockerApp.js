@@ -1720,8 +1720,8 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                             </div>
 
                             {/* Filter and Action bar */}
-                            <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-2 overflow-x-auto scrollbar-hide shrink-0 pb-1 max-w-[70%]">
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                                <div className="flex items-center gap-2 overflow-x-auto scrollbar-hide pb-1 w-full sm:max-w-[70%]">
                                     {['all', 'running', 'stopped', ...uniqueStacks].map(f => {
                                       const isActive = containerFilter === f;
                                       const isStack = f.startsWith('stack:');
@@ -1746,7 +1746,7 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                                       );
                                     })}
                                 </div>
-                                <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
                                 {stoppedCount > 0 && (
                                   <button
                                     onClick={handleWakeAllUp}
