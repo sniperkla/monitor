@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
+import { buildRetentionCmd } from '@/lib/rcloneRetention';
 import { logger } from '@/lib/logger';
 import { requireSession } from '@/lib/requireSession';
 
@@ -142,7 +143,7 @@ done
 
         // 3. Fallback options parsing
         if (Object.keys(options).length === 0) {
-          const retMatch = line.match(/--min-age\s+(\d+)d/);
+          const retMatch = line.match(/RET_DAYS=(\d+)/) || line.match(/--min-age\s+(\d+)d/);
           options = {
             useTimestampFolder: line.includes('$(date') || command.includes('$(date'),
             timestampFormat: (line.includes('%b') || command.includes('%b')) ? 'YMD_MMM_HM' : (line.includes('%d-%m-%Y') || command.includes('%d-%m-%Y')) ? 'DMY_HM' : 'YMD_HMS',
@@ -269,7 +270,9 @@ export async function POST(req) {
     if (options.enableRetention && options.retentionDays) {
       const days = parseInt(options.retentionDays, 10) || 7;
       const driveFlag = (options.driveFolderId && options.driveFolderId.trim()) ? `--drive-root-folder-id "${options.driveFolderId.trim()}" ` : '';
-      retentionCmd = `"$RCLONE_BIN" delete --min-age ${days}d "${target}" ${driveFlag}--rmdirs 2>/dev/null || true`;
+      // Retention deletes ENTIRE backup subfolders older than N days (purge),
+      // not individual files — falls back to file cleanup for flat layouts.
+      retentionCmd = buildRetentionCmd({ target, days, driveFlag, logTarget: '"$LOG"' });
     }
 
     const scriptContent = `#!/bin/bash
@@ -436,7 +439,9 @@ export async function PUT(req) {
     if (options.enableRetention && options.retentionDays) {
       const days = parseInt(options.retentionDays, 10) || 7;
       const driveFlag = (options.driveFolderId && options.driveFolderId.trim()) ? `--drive-root-folder-id "${options.driveFolderId.trim()}" ` : '';
-      retentionCmd = `"$RCLONE_BIN" delete --min-age ${days}d "${target}" ${driveFlag}--rmdirs 2>/dev/null || true`;
+      // Retention deletes ENTIRE backup subfolders older than N days (purge),
+      // not individual files — falls back to file cleanup for flat layouts.
+      retentionCmd = buildRetentionCmd({ target, days, driveFlag, logTarget: '"$LOG"' });
     }
 
     let finalTarget = target;

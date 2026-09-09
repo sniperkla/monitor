@@ -3,6 +3,7 @@ import
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
 import { getSshConfig, execCommand } from '@/app/api/server-backup/_ssh';
+import { buildRetentionCmd } from '@/lib/rcloneRetention';
 import { logger } from '@/lib/logger';
 import { auditLog } from '@/lib/auditLog';
 import { shellQuote, shellArg, shellInt } from '@/utils/shellQuote';
@@ -119,14 +120,15 @@ export async function POST(req) {
 
     let cmd = `${envPrefix}"$RCLONE_BIN" ${action} ${quote(source)} ${quote(finalTarget)} ${flags.join(' ')}`;
     
-    // Auto Retention Policy: clean old backups older than X days
+    // Auto Retention Policy: delete ENTIRE backup subfolders older than X days
+    // (purge), falling back to file cleanup only for flat layouts.
     if (options.enableRetention && options.retentionDays) {
       const days = parseInt(options.retentionDays, 10) || 7;
       let driveFlag = '';
       if (options.driveFolderId && options.driveFolderId.trim()) {
         driveFlag = `--drive-root-folder-id=${quote(options.driveFolderId.trim())} `;
       }
-      cmd += `; ${envPrefix}"$RCLONE_BIN" delete --min-age ${days}d ${quote(target)} ${driveFlag}--rmdirs 2>/dev/null || true`;
+      cmd += `; ${envPrefix}${buildRetentionCmd({ target, days, driveFlag, logTarget: '/dev/null' })}`;
     }
 
     const b64Script = Buffer.from(`${cmd}`).toString('base64');
