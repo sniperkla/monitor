@@ -757,6 +757,8 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
   // The uploaded service-account key's email — Drive folders must be shared
   // with it, otherwise the SA only sees its own (empty) Drive.
   const [saClientEmail, setSaClientEmail] = useState(null);
+  // Remote connectivity test (Remote Details modal): raw rclone output
+  const [remoteTest, setRemoteTest] = useState(null); // { name, loading, steps, error }
 
   // Backup History State
   const [historyRuns, setHistoryRuns] = useState([]);
@@ -1601,6 +1603,27 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
     } catch (err) {
       setIsJobRunning(false);
       showAlert(err.message, 'Error');
+    }
+  };
+
+  // Run the read-only rclone diagnostic for a remote and show the raw output.
+  const handleTestRemote = async (name) => {
+    if (!selectedConnId || !name) return;
+    setRemoteTest({ name, loading: true, steps: [], error: null });
+    try {
+      const res = await apiFetch('/api/rclone/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ connectionId: selectedConnId, name }),
+      });
+      const data = await res.json();
+      if (data?.success) {
+        setRemoteTest({ name, loading: false, steps: data.steps || [], error: null });
+      } else {
+        setRemoteTest({ name, loading: false, steps: [], error: data?.error || 'Test failed' });
+      }
+    } catch (err) {
+      setRemoteTest({ name, loading: false, steps: [], error: err.message || 'Test failed' });
     }
   };
 
@@ -2941,6 +2964,31 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
                   </span>
                 </div>
               ))}
+            </div>
+            <div className="px-5 pb-3">
+              <button
+                onClick={() => handleTestRemote(viewingRemoteDetails.name)}
+                disabled={remoteTest?.loading}
+                className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/25 text-emerald-400 text-[11px] font-bold cursor-pointer transition-colors disabled:opacity-50"
+              >
+                {remoteTest?.loading && remoteTest?.name === viewingRemoteDetails.name
+                  ? <><RefreshCw size={12} className="animate-spin" /> Running rclone on the server…</>
+                  : <><Zap size={12} /> Test this remote (runs rclone on the server)</>}
+              </button>
+              {remoteTest && remoteTest.name === viewingRemoteDetails.name && (
+                <div className="mt-2 rounded-xl border border-[var(--border-color)] bg-black/50 overflow-hidden">
+                  {remoteTest.error ? (
+                    <p className="p-3 font-mono text-[11px] text-rose-400 break-words">✗ {remoteTest.error}</p>
+                  ) : (
+                    remoteTest.steps.map((s, i) => (
+                      <div key={i} className="border-b border-[var(--border-color)] last:border-b-0">
+                        <div className="px-3 py-1.5 text-[10px] font-bold text-indigo-400 font-mono bg-[var(--bg-tertiary)]/40">$ {s.title}</div>
+                        <pre className="px-3 py-2 font-mono text-[10px] text-emerald-300 whitespace-pre-wrap break-words max-h-40 overflow-y-auto">{s.output}</pre>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
             </div>
             <div className="flex justify-end px-5 py-4 border-t border-[var(--border-color)]">
               <button onClick={() => setViewingRemoteDetails(null)} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold cursor-pointer">Close</button>
