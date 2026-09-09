@@ -36,9 +36,17 @@ export async function GET(request) {
     const envClientId = process.env.GOOGLE_CLIENT_ID || null;
     const clientIdSource = ownClientId ? 'user' : (envClientId ? 'env' : null);
 
+    // A config linked with the old restrictive `drive.file` scope can't back
+    // up into pre-existing folders ("The caller does not have permission").
+    // Detect it so the UI can prompt a re-link with the full drive scope.
+    const scope = config?.scope || '';
+    const needsRelinkForFullDrive = isConnected && !/auth\/drive($|\s)/.test(scope) && !scope.includes('auth/drive ');
+
     return NextResponse.json({
       success: true,
       connected: isConnected,
+      scope: scope || null,
+      needsRelinkForFullScope: needsRelinkForFullDrive,
       email: config?.email || null,
       name: config?.name || null,
       hasClientId: !!(ownClientId || envClientId),

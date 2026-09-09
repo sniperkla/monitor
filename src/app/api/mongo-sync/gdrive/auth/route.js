@@ -38,7 +38,7 @@ export async function GET(request) {
     // Save temporary redirectUri and client details so callback knows which client secret to use
     // Using a simple cookie or we can just expect it.
     
-    const scope = 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.metadata.readonly email profile';
+    const scope = 'https://www.googleapis.com/auth/drive email profile';
     
     const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?` + 
       `client_id=${clientId}&` +

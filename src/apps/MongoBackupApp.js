@@ -412,6 +412,10 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
   const [clientIdConfigured, setClientIdConfigured] = useState(false);
   // Google OAuth redirect URI (from status API) shown for GCP registration
   const [gdriveRedirectUri, setGdriveRedirectUri] = useState('');
+  // When the linked token was granted before the full-drive OAuth scope fix,
+  // backups into pre-existing folders fail with "The caller does not have
+  // permission" — surface a one-click re-link prompt instead.
+  const [driveNeedsRelink, setDriveNeedsRelink] = useState(false);
   const [driveFolders, setDriveFolders] = useState([]);
   const [driveAllFolders, setDriveAllFolders] = useState([]); // flat list with paths for autocomplete
   const [newFolderName, setNewFolderName] = useState('');
@@ -869,6 +873,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
       const data = await res.json();
       if (data.success) {
         setDriveConnected(data.connected);
+        setDriveNeedsRelink(!!data.needsRelinkForFullScope);
         setDriveEmail(data.email || '');
         setDriveName(data.name || '');
         // A user-owned clientId prefills the field; an env-provided one is
@@ -3142,6 +3147,24 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                             <div className="text-[10px] text-[var(--text-muted)]">{driveEmail} ({driveName})</div>
                           </div>
                         </div>
+                        {driveNeedsRelink && (
+                          <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg space-y-2">
+                            <div className="flex items-start gap-2">
+                              <AlertCircle className="text-amber-400 shrink-0 mt-0.5" size={14} />
+                              <p className="text-[10px] text-amber-300 leading-relaxed">
+                                Your Google account was linked with the older restricted scope. Backups into
+                                existing folders currently fail with <em>&quot;The caller does not have permission&quot;</em>.
+                                Re-link once to grant full Drive access and fix it.
+                              </p>
+                            </div>
+                            <button
+                              onClick={handleLinkDrive}
+                              className="w-full px-4 py-2 bg-amber-500/90 hover:bg-amber-500 text-amber-950 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all"
+                            >
+                              <RefreshCw size={13} /> Re-link Google Drive
+                            </button>
+                          </div>
+                        )}
                         <button
                           onClick={handleDisconnectDrive}
                           className="text-[10px] font-bold text-red-400 hover:text-red-300 transition-colors uppercase tracking-wider block"

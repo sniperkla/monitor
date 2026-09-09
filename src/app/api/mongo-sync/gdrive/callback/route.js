@@ -156,6 +156,7 @@ export async function GET(request) {
       refreshToken: refresh_token || savedConfig.refreshToken, // Google only returns refresh token on prompt=consent
       expiresAt: Date.now() + expires_in * 1000,
       connectedAt: Date.now(),
+      scope: 'https://www.googleapis.com/auth/drive email profile',
       email: userInfo.email || 'linked-account@google.com',
       name: userInfo.name || 'Google Drive Sync',
       picture: userInfo.picture || ''
