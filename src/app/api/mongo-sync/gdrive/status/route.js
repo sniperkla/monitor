@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import { getGoogleDriveConfig, saveGoogleDriveConfig, listGoogleDriveFolders } from '@/lib/gdriveHelper';
+import { resolveGdriveRedirectUri } from '@/lib/gdriveRedirectUri';
 import { maskTail } from '@/utils/pii';
 import { logger } from '@/lib/logger';
 
@@ -45,6 +46,7 @@ export async function GET(request) {
       clientId: ownClientId,
       clientIdMasked: clientIdSource === 'env' ? maskTail(envClientId, 4) : null,
       hasClientSecret: !!(config?.clientSecret || process.env.GOOGLE_CLIENT_SECRET),
+      redirectUri: resolveGdriveRedirectUri(request),
       folders
     });
 

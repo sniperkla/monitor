@@ -410,6 +410,8 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
   // True when a clientId is configured server-side but was not returned to us
   // in the clear (i.e. it comes from the shared server environment).
   const [clientIdConfigured, setClientIdConfigured] = useState(false);
+  // Google OAuth redirect URI (from status API) shown for GCP registration
+  const [gdriveRedirectUri, setGdriveRedirectUri] = useState('');
   const [driveFolders, setDriveFolders] = useState([]);
   const [driveAllFolders, setDriveAllFolders] = useState([]); // flat list with paths for autocomplete
   const [newFolderName, setNewFolderName] = useState('');
@@ -874,6 +876,10 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
         setClientId(data.clientId || (data.clientIdMasked ? `••••${data.clientIdMasked}` : ''));
         setClientIdConfigured(!!data.hasClientId);
         if (data.hasClientSecret) setClientSecret('••••••••••••••••••••');
+        // The exact URI the user must register in Google Cloud Console →
+        // Credentials → Authorized redirect URIs (matches what the auth route
+        // actually uses, including any GDRIVE_REDIRECT_URI override).
+        setGdriveRedirectUri(data.redirectUri || '');
         setDriveFolders(data.folders || []);
         if (data.folders.length > 0) {
           setJobFolderId(data.folders[0].id);
@@ -3019,7 +3025,8 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                           { step: 3, text: 'In the left menu go to', link: 'https://console.cloud.google.com/apis/library/drive.googleapis.com', label: 'APIs & Services → Library', after: ', search for "Google Drive API" and click Enable.' },
                           { step: 4, text: 'Go to', link: 'https://console.cloud.google.com/apis/credentials/consent', label: 'OAuth Consent Screen', after: '. Set User Type to External, fill in your app name, then save.' },
                           { step: 5, text: 'Go to', link: 'https://console.cloud.google.com/apis/credentials', label: 'Credentials', after: ', click + Create Credentials → OAuth Client ID → choose Web application.' },
-                          { step: 6, text: 'Copy the Client ID and Client Secret shown — paste them into the fields below.' },
+                          { step: 6, text: 'In "Authorized redirect URIs", add the exact Redirect URI shown below (click ⧉ to copy it).' },
+                          { step: 7, text: 'Copy the Client ID and Client Secret shown — paste them into the fields below.' },
                         ].map(({ step, text, link, label, after }) => (
                           <div key={step} className="flex items-start gap-3">
                             <span className="shrink-0 w-5 h-5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-400 text-[10px] font-bold flex items-center justify-center mt-0.5">{step}</span>
@@ -3035,6 +3042,18 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
                   </div>
 
                   {/* Credential inputs */}
+                  <div className="flex items-center gap-2 bg-[var(--bg-primary)] rounded-xl px-3 py-2 border border-emerald-500/20">
+                    <span className="text-[9px] font-bold uppercase tracking-wider text-emerald-400 shrink-0">Redirect URI</span>
+                    <code className="text-[11px] font-mono text-emerald-300 flex-1 truncate select-all">
+                      {gdriveRedirectUri || (typeof window !== 'undefined' ? `${window.location.origin}/api/mongo-sync/gdrive/callback` : '/api/mongo-sync/gdrive/callback')}
+                    </code>
+                    <button type="button"
+                      onClick={() => navigator.clipboard.writeText(gdriveRedirectUri || `${window.location.origin}/api/mongo-sync/gdrive/callback`)}
+                      className="shrink-0 text-emerald-400 hover:text-white cursor-pointer p-1 rounded hover:bg-emerald-500/10 transition-colors"
+                      title="Copy redirect URI — paste into Google Cloud Console → Credentials → Authorized redirect URIs">
+                      <Copy size={12} />
+                    </button>
+                  </div>
                   <div className="grid grid-cols-1 @3xl:grid-cols-3 gap-3 items-end">
                     <div>
                       <label className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] block mb-1.5">Client ID</label>

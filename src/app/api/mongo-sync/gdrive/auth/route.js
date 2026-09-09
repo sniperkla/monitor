@@ -4,6 +4,7 @@ import { authOptions } from "@/lib/auth";
 import connectDB from '@/lib/mongodb';
 import { SystemSettingRepository } from '@/lib/repositories/SystemSettingRepository';
 import { logger } from '@/lib/logger';
+import { resolveGdriveRedirectUri } from '@/lib/gdriveRedirectUri';
 
 export async function GET(request) {
   try {
@@ -32,21 +33,7 @@ export async function GET(request) {
     }
 
     // Determine redirect URI: use process.env.GDRIVE_REDIRECT_URI if set, or build from origin
-    let redirectUri = process.env.GDRIVE_REDIRECT_URI;
-    if (!redirectUri) {
-      let origin = process.env.NEXTAUTH_URL;
-      if (!origin || origin.includes('localhost')) {
-        const forwardedProto = request.headers.get('x-forwarded-proto');
-        const forwardedHost = request.headers.get('x-forwarded-host') || request.headers.get('host');
-        if (forwardedHost) {
-          const proto = forwardedProto || (forwardedHost.includes('localhost') ? 'http' : 'https');
-          origin = `${proto}://${forwardedHost}`;
-        } else {
-          origin = request.nextUrl.origin;
-        }
-      }
-      redirectUri = `${origin.replace(/\/$/, '')}/api/mongo-sync/gdrive/callback`;
-    }
+    const redirectUri = resolveGdriveRedirectUri(request);
 
     // Save temporary redirectUri and client details so callback knows which client secret to use
     // Using a simple cookie or we can just expect it.
