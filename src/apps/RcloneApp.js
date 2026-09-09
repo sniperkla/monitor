@@ -2910,6 +2910,15 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
                       {remoteConfig.root_folder_id && (
                         <p className="text-[10px] text-emerald-400 font-mono px-0.5">✓ {remoteConfig.root_folder_id}</p>
                       )}
+                      <label className="flex items-start gap-2 cursor-pointer select-none">
+                        <input type="checkbox"
+                          checked={remoteConfig.shared_with_me === 'true'}
+                          onChange={(e) => setRemoteConfig({ ...remoteConfig, shared_with_me: e.target.checked ? 'true' : '' })}
+                          className="mt-0.5 accent-emerald-500 cursor-pointer" />
+                        <span className="text-[10px] text-[var(--text-muted)] leading-relaxed">
+                          Browse <span className="font-bold text-emerald-400">all folders shared with this service account</span> (sets <span className="font-mono">shared_with_me = true</span>). Use this instead of a single Folder ID when you want the root to list every shared folder. Note: a service account can never see your ENTIRE personal Drive like OAuth does — only what you explicitly share with it.
+                        </span>
+                      </label>
                     </div>
                   )}
                 </div>
