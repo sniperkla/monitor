@@ -1601,8 +1601,11 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
   return (
     <div className="@container flex flex-col h-full min-h-0 bg-transparent text-[var(--text-primary)] overflow-hidden">
         {/* ── Toolbar ── */}
-        <div className="flex items-center justify-between bg-[var(--bg-secondary)] border-b border-[var(--border-color)] px-2 @xl:px-4 h-12 shrink-0 gap-2">
-            <div className="flex items-center gap-2 @xl:gap-4 min-w-0 flex-1 overflow-hidden">
+        {/* Phones stack the toolbar: the action group needs ~328px, so on one
+            row it starved the `flex-1` left group down to 0 and collapsed the
+            tab strip to 4px. `sm:` viewport prefixes keep desktop unchanged. */}
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between bg-[var(--bg-secondary)] border-b border-[var(--border-color)] px-2 @xl:px-4 py-1 sm:py-0 sm:h-12 shrink-0 gap-1 sm:gap-2">
+            <div className="flex items-center gap-2 @xl:gap-4 min-w-0 sm:flex-1 overflow-hidden">
                 <span className="text-xs @xl:text-sm font-bold flex items-center gap-2 shrink-0">
                     <Box size={14} className="text-sky-400" />
                     <span className="truncate max-w-[80px] @xl:max-w-none">{selectedConnection.name}</span>
@@ -1627,8 +1630,11 @@ export default function DockerApp({ initialConnection, initialConnectionId, wind
                     ))}
                 </div>
             </div>
-            <div className="flex items-center gap-1 @xl:gap-3 shrink-0">
-                <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium ${typeof window !== 'undefined' && localStorage.getItem('ssh_monitor_ssh_mode') === 'local' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-blue-500/15 text-blue-400'}`}>
+            {/* On a 320px window this group measured 328px. With `shrink-0` it
+                squeezed the toolbar tabs to 0px and pushed SWITCH off the right
+                edge, so it now shrinks and scrolls until @xl, where it fits. */}
+            <div className="flex items-center gap-1 @xl:gap-3 min-w-0 overflow-x-auto no-scrollbar justify-end sm:justify-start @xl:overflow-visible @xl:shrink-0">
+                <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium shrink-0 ${typeof window !== 'undefined' && localStorage.getItem('ssh_monitor_ssh_mode') === 'local' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-blue-500/15 text-blue-400'}`}>
                   {typeof window !== 'undefined' && localStorage.getItem('ssh_monitor_ssh_mode') === 'local' ? '⚡ Local' : '☁ Server'}
                 </span>
                 {/* Export/Import Buttons like SSH Manager */}

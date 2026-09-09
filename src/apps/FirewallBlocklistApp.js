@@ -1162,7 +1162,9 @@ export default function FirewallBlocklistApp({ windowId } = {}) {
         {/* ==================================================================== */}
         {/* Navigation Tabs with High-Grade Pro Icons */}
         {/* ==================================================================== */}
-        <div className="flex items-center gap-2.5 border-b border-white/10 pb-3.5 overflow-x-auto">
+        {/* Was a 791px row inside a 288px column that only scrolled sideways;
+            on phones the actions now wrap onto multiple lines. */}
+        <div className="flex flex-wrap items-center gap-2.5 border-b border-white/10 pb-3.5">
           {[
             { id: 'manual', onboardingId: 'firewall-tab-manual', label: t('firewall.tabs.manualImport'), desc: 'File or raw IPs', icon: Layers, color: 'text-indigo-400' },
             { id: 'quickblock', onboardingId: 'firewall-tab-quickblock', label: t('firewall.tabs.quickBlock', 'Quick Block'), desc: 'Live IP block / unblock', icon: Ban, color: 'text-rose-400' },

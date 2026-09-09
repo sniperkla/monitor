@@ -179,7 +179,7 @@ function CronBuilder({ value, onChange }) {
         </span>
       </div>
 
-      <div className="grid grid-cols-5 gap-1">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-1">
         {[
           { id: 'everyday', label: 'Everyday' },
           { id: 'weekly',   label: 'Weekly' },
@@ -2048,8 +2048,10 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
     });
   };
 
+  // Phones stack the nav above the content: the 224px `w-56` sidebar left the
+  // content pane just 96px wide at a 320px viewport.
   return (
-    <div className="flex h-full w-full bg-transparent text-[var(--text-primary)] border-[var(--border-color)] overflow-hidden font-sans">
+    <div className="flex flex-col sm:flex-row h-full w-full bg-transparent text-[var(--text-primary)] border-[var(--border-color)] overflow-hidden font-sans">
 
       {/* ── Real-Time Live Restore Progress Modal ──────────────────────────── */}
       <AnimatePresence>
@@ -2604,7 +2606,7 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
 
       {/* Sidebar Navigation */}
 
-      <div className="w-56 border-r border-[var(--border-color)] p-4 flex flex-col shrink-0 h-full bg-[var(--bg-secondary)]/30">
+      <div className="w-full sm:w-56 border-b sm:border-b-0 sm:border-r border-[var(--border-color)] p-4 flex flex-col shrink-0 max-h-[38%] sm:max-h-full sm:h-full overflow-y-auto sm:overflow-y-visible bg-[var(--bg-secondary)]/30">
         <div className="flex items-center gap-2 mb-6 px-1">
           <div className="w-8 h-8 rounded-lg bg-emerald-500/10 flex items-center justify-center border border-emerald-500/20 shadow-inner">
             <Database size={16} className="text-emerald-400" />

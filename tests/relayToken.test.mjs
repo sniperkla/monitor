@@ -147,7 +147,11 @@ test('relay client sends the token as a header when it can', () => {
 });
 
 test('relay-ws and agent-sync both record lastUsed', () => {
-  assert.match(serverSrc, /relayWss\.on\('connection'[\s\S]{0,1400}entry\.lastUsed = Date\.now\(\)/,
+  // The window is deliberately generous. These assertions check that the call
+  // happens inside the relay-ws connection handler, not how many characters of
+  // comments sit in between — a tight bound broke on comment edits alone and
+  // produced a false alarm about a gate that is in fact present.
+  assert.match(serverSrc, /relayWss\.on\('connection'[\s\S]{0,3000}entry\.lastUsed = Date\.now\(\)/,
     'relay WebSocket records usage');
   assert.match(agentSyncSrc, /entry\.lastUsed = Date\.now\(\)/,
     'agent-sync records usage');
@@ -156,7 +160,7 @@ test('relay-ws and agent-sync both record lastUsed', () => {
 test('supporter gate is enforced at the relay WebSocket, not by scope', () => {
   // Guards the corrected understanding: if this check ever moves to depending on
   // entry.scope, an agent-scope token becomes a supporter bypass.
-  assert.match(serverSrc, /relayWss\.on\('connection'[\s\S]{0,1600}isRelaySupporter\(entry\)/,
+  assert.match(serverSrc, /relayWss\.on\('connection'[\s\S]{0,3000}isRelaySupporter\(entry\)/,
     'relay-ws re-checks supporter status on every connect');
   assert.ok(routeSrc.includes('does not by itself gate Local Relay access'),
     'the route documents that scope is not the gate');

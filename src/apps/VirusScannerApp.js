@@ -831,7 +831,7 @@ export default function VirusScannerApp({ windowId }) {
                   {scanningMode === 'quick' ? <LoaderCircle size={13} className="animate-spin" /> : <Zap size={13} />}
                   {scanningMode === 'quick' ? 'Quick…' : 'Quick'}
                 </button>
-                <div className="pointer-events-none absolute left-0 top-full mt-2 w-72 rounded-xl border border-white/10 bg-[#141824] shadow-2xl shadow-black/60 p-3 opacity-0 group-hover:opacity-100 transition-opacity duration-150 z-50">
+                <div className="pointer-events-none absolute left-0 top-full mt-2 w-72 max-w-[calc(100vw-3rem)] rounded-xl border border-white/10 bg-[#141824] shadow-2xl shadow-black/60 p-3 opacity-0 group-hover:opacity-100 transition-opacity duration-150 z-50 hidden sm:block">
                   <p className="text-[11px] font-bold text-emerald-300 mb-1.5">⚡ Quick Scan checks for:</p>
                   <ul className="space-y-1 text-[10px] text-slate-300 leading-relaxed list-disc pl-4">
                     <li>Cryptominer processes</li>
@@ -853,7 +853,7 @@ export default function VirusScannerApp({ windowId }) {
                   {scanningMode === 'deep' ? <LoaderCircle size={13} className="animate-spin" /> : <Play size={13} />}
                   {scanningMode === 'deep' ? 'Deep…' : 'Deep'}
                 </button>
-                <div className="pointer-events-none absolute left-0 top-full mt-2 w-72 rounded-xl border border-white/10 bg-[#141824] shadow-2xl shadow-black/60 p-3 opacity-0 group-hover:opacity-100 transition-opacity duration-150 z-50">
+                <div className="pointer-events-none absolute left-0 top-full mt-2 w-72 max-w-[calc(100vw-3rem)] rounded-xl border border-white/10 bg-[#141824] shadow-2xl shadow-black/60 p-3 opacity-0 group-hover:opacity-100 transition-opacity duration-150 z-50 hidden sm:block">
                   <p className="text-[11px] font-bold text-indigo-300 mb-1.5">🧭 Deep Scan = everything in Quick, plus:</p>
                   <ul className="space-y-1 text-[10px] text-slate-300 leading-relaxed list-disc pl-4">
                     <li>ClamAV antivirus on /tmp, /var/tmp, /dev/shm, /root, /home, /opt, /srv (background)</li>
@@ -872,7 +872,7 @@ export default function VirusScannerApp({ windowId }) {
                   {scanningMode === 'full' ? <LoaderCircle size={13} className="animate-spin" /> : <HardDrive size={13} />}
                   {scanningMode === 'full' ? 'Full…' : 'Full'}
                 </button>
-                <div className="pointer-events-none absolute left-0 top-full mt-2 w-72 rounded-xl border border-white/10 bg-[#141824] shadow-2xl shadow-black/60 p-3 opacity-0 group-hover:opacity-100 transition-opacity duration-150 z-50">
+                <div className="pointer-events-none absolute left-0 top-full mt-2 w-72 max-w-[calc(100vw-3rem)] rounded-xl border border-white/10 bg-[#141824] shadow-2xl shadow-black/60 p-3 opacity-0 group-hover:opacity-100 transition-opacity duration-150 z-50 hidden sm:block">
                   <p className="text-[11px] font-bold text-rose-300 mb-1.5">💾 Full Scan = everything in Deep, but:</p>
                   <ul className="space-y-1 text-[10px] text-slate-300 leading-relaxed list-disc pl-4">
                     <li>ClamAV checks the ENTIRE disk (/) — web roots, /etc, /usr/local, every file</li>
@@ -946,11 +946,11 @@ export default function VirusScannerApp({ windowId }) {
 
               {/* Severity breakdown */}
               {scan && scan.status === 'completed' && (
-                <div className="grid grid-cols-4 gap-2 mt-4">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-4">
                   {(['critical', 'high', 'medium', 'low']).map(sev => {
                     const S = SEVERITY[sev];
                     return (
-                      <div key={sev} className={`rounded-xl border ${S.border} ${S.bg} px-3 py-2.5`}>
+                      <div key={sev} className={`rounded-xl border ${S.border} ${S.bg} px-3 py-2.5 min-w-0`}>
                         <div className="flex items-center gap-1.5">
                           <S.Icon size={12} className={S.color} />
                           <span className={`text-[10px] font-semibold uppercase tracking-wide ${S.color}`}>{S.label}</span>

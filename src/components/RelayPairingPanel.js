@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { KeyRound, LoaderCircle, CircleCheck, TriangleAlert, ArrowRight } from 'lucide-react';
 import { getCsrfToken, refreshCsrfToken } from '@/utils/csrfClient';
+import { requestRelayStatusRefresh } from '@/utils/relayStatus';
 
 /**
  * Approve a relay install without ever seeing a token.
@@ -79,6 +80,10 @@ export default function RelayPairingPanel({ onApproved, onSupporterRequired, com
 
       setApproved(true);
       onApproved?.(data);
+      // The relay still has to redeem the code and connect. Nudge the shared
+      // status watcher so it starts looking right away instead of waiting for
+      // its next scheduled tick.
+      requestRelayStatusRefresh('pairing-approved');
     } catch (err) {
       setError(err.message || 'Network error. Check your connection and try again.');
     } finally {

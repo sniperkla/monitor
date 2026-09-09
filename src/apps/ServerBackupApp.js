@@ -685,9 +685,12 @@ export default function ServerBackupApp({ windowId = 'server-backup', activeTab:
   const addExclude = () => updateConfig('excludes', [...config.excludes, '']);
   const removeExclude = (i) => updateConfig('excludes', config.excludes.filter((_, idx) => idx !== i));
 
+  // Phones stack the tab rail above the content: the 208px `w-52` sidebar left
+  // the content pane only ~112px wide at a 320px viewport, which squeezed the
+  // backup-type cards to 32px.
   return (
-    <div className="@container flex h-full bg-[var(--bg-primary)] text-[var(--text-primary)]">
-      <div className="w-52 shrink-0 border-r border-[var(--border-color)] bg-[var(--bg-secondary)]/30 flex flex-col">
+    <div className="@container flex flex-col sm:flex-row h-full bg-[var(--bg-primary)] text-[var(--text-primary)]">
+      <div className="w-full sm:w-52 shrink-0 border-b sm:border-b-0 sm:border-r border-[var(--border-color)] bg-[var(--bg-secondary)]/30 flex flex-col max-h-[42%] sm:max-h-full overflow-y-auto sm:overflow-y-visible">
         <div className="p-3 border-b border-[var(--border-color)]">
           <div className="flex items-center justify-between gap-2 text-sm font-bold">
             <div className="flex items-center gap-2">
@@ -733,7 +736,7 @@ export default function ServerBackupApp({ windowId = 'server-backup', activeTab:
           <>
             <div>
               <h2 className="text-sm font-bold mb-3">Backup Type</h2>
-              <div className="grid grid-cols-5 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
                 {BACKUP_TYPES.map(t => (
                   <button
                     key={t.id}

@@ -1749,23 +1749,68 @@ body {
     pointer-events: none;
   }
 
-  /* Improve touch targets globally */
+  /* Improve touch targets globally.
+     `min-width` is scoped to buttons and role="button" only: a bare `a` is
+     usually an inline text link, where min-width has no effect anyway but
+     would fight with `truncate` on the few block-level ones. */
   button, a, [role="button"] {
     min-height: 44px;
   }
+  button, [role="button"] {
+    min-width: 44px;
+  }
 
-  /* Form inputs */
+  /* …but the resize-resilience reset above is `.window-container :where(...)
+     > *` at (0,1,0) and is NOT inside a media query, so it wins over the
+     `button` rule for any button that is a direct child of a flex/grid row —
+     which is most toolbar buttons. Re-assert the tap target at a higher
+     specificity here (mobile only) rather than editing the reset, so the
+     desktop cascade is left exactly as it was. */
+  .window-container :where([class*='flex'], [class*='grid']) > button,
+  .window-container :where([class*='flex'], [class*='grid']) > [role="button"] {
+    min-width: 44px;
+  }
+
+  /* Form inputs.
+     `input:not([type])` matters: an <input> with no type attribute still
+     behaves as text but matches none of the [type="…"] selectors, so
+     Activity's search box stayed at 38px. Checkbox/radio/range/file are
+     excluded — forcing 44px would balloon them (a range would draw a 44px
+     track). Checkboxes get a modest bump to their own rule below. */
   input[type="text"],
   input[type="email"],
   input[type="password"],
   input[type="number"],
   input[type="search"],
+  input[type="tel"],
   input[type="url"],
+  input:not([type]),
   select,
   textarea {
     min-height: 44px;
     font-size: 16px; /* prevents iOS zoom on focus */
     padding: 10px 12px !important;
+  }
+
+  /* Checkboxes and radios: 16px is under the tap minimum, but they are sized
+     by `w-4 h-4` utilities and sit next to a clickable label. Grow the box
+     itself rather than the layout. */
+  input[type="checkbox"],
+  input[type="radio"] {
+    min-width: 20px;
+    min-height: 20px;
+  }
+
+  /* Range sliders are `h-1.5` — 6px, far under the tap minimum. They are
+     `appearance-none`, so the visible track is nothing but the element's own
+     background: growing the element to 44px and clipping the background to the
+     content box keeps the 6px track while giving the thumb a 44px hit area. */
+  input[type="range"] {
+    min-height: 44px;
+    padding-top: 19px !important;
+    padding-bottom: 19px !important;
+    background-clip: content-box !important;
+    -webkit-background-clip: content-box !important;
   }
 
   /* Table rows — more tap space */
@@ -2771,10 +2816,36 @@ html.mobile-perf [style*="drop-shadow"] {
     -webkit-overflow-scrolling: touch;
     min-height: 0;
   }
-  /* Split-pane apps (files, terminal+sidebar) stack their panes' scrollbars */
-  .window-container [class*="flex"] {
+  /* Split-pane apps (files, terminal+sidebar) stack their panes' scrollbars.
+     Interactive controls are excluded: `flex-1` and friends match
+     [class*="flex"], and this reset's specificity (0,2,0) beat the global
+     `button { min-height: 44px }` rule above, so every pill and toolbar button
+     rendered ~25px tall on a phone — far under the 44px tap target. */
+  .window-container [class*="flex"]:not(button):not(a):not(input):not(select):not(textarea):not([role="button"]) {
     min-width: 0;
     min-height: 0;
+  }
+
+  /* Icons are flex items, so a crowded toolbar squeezes them to 0px wide and
+     the icon silently disappears (measured: 14px lucide icons rendering at
+     0x14 inside Server Monitor's tab strip). An icon must never shrink — the
+     row should scroll or wrap instead. */
+  .window-container svg {
+    flex-shrink: 0;
+  }
+
+  /* 8px and 9px text is unreadable on a phone. Measured offenders: an 8px
+     "PRO" badge in Settings and five 9px *prose* descriptions in Server
+     Backup ("Source code, configs, public files…") — real sentences, not
+     labels. Bump both to 11px; desktop keeps its designed size because this
+     lives in the mobile block. The class names are Tailwind arbitrary values,
+     so the brackets need escaping in the selector. 10px is left alone on
+     purpose: it is the dense-UI label idiom across ~213 elements, and
+     enlarging all of them risks re-introducing the toolbar overflow above. */
+  .window-container :where(
+    .text-\[6px\], .text-\[7px\], .text-\[8px\], .text-\[9px\], .text-\[9\.5px\]
+  ) {
+    font-size: 11px;
   }
 }
 

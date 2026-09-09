@@ -429,7 +429,7 @@ function DynamicCronPicker({ value, onChange }) {
         </span>
       </div>
 
-      <div className="grid grid-cols-5 gap-1.5">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-1.5">
         {[
           { id: 'everyday', label: 'Every Day' },
           { id: 'weekly',   label: 'Weekly' },

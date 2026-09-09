@@ -1,8 +1,9 @@
 'use client';
 
-import { useState } from 'react';
-import { TriangleAlert, X, RefreshCw, CloudUpload, WifiOff, ArrowRight } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { TriangleAlert, X, RefreshCw, CloudUpload, WifiOff } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
+import { fetchRelayStatus, requestRelayStatusRefresh } from '@/utils/relayStatus';
 
 export default function MongoDeadBanner() {
   const { dispatch, fetchConnections, mongoDown, relayDown, autoSwitchedToServer } = useApp();
@@ -10,11 +11,26 @@ export default function MongoDeadBanner() {
   const [retrying, setRetrying] = useState(false);
   const [retryFailed, setRetryFailed] = useState(null); // { mongoUp, relayUp }
 
+  // A dismissal covers one outage, not every future one. Without this, a
+  // banner dismissed during a blip would stay hidden through the next real
+  // outage — and relay status is now polled, so it can genuinely go down
+  // again later in the same session.
+  const isDown = mongoDown || relayDown;
+  const wasDownRef = useRef(isDown);
+  useEffect(() => {
+    if (isDown && !wasDownRef.current) setDismissed(false);
+    wasDownRef.current = isDown;
+  }, [isDown]);
+
   if ((!mongoDown && !relayDown) || dismissed) return null;
 
-  // If user is already on server mode, relay being down is irrelevant — don't nag
+  // If user is already on server mode, relay being down is irrelevant — don't nag.
+  // This reads the SSH mode key only. It previously fell back to
+  // ssh_monitor_preferred_relay, but that holds a relay *name*, never a mode,
+  // so any user who had once picked a relay was treated as non-server and got
+  // the banner even while deliberately running in server mode.
   const currentMode = typeof window !== 'undefined'
-    ? localStorage.getItem('ssh_monitor_preferred_relay') || localStorage.getItem('ssh_monitor_ssh_mode')
+    ? localStorage.getItem('ssh_monitor_ssh_mode')
     : null;
   const isServerMode = currentMode === 'server' || autoSwitchedToServer;
   if (isServerMode && !mongoDown) return null;
@@ -36,18 +52,33 @@ export default function MongoDeadBanner() {
   const handleRetry = async () => {
     setRetrying(true);
     try {
-      const res = await fetch('/api/health', { signal: AbortSignal.timeout(5000) });
-      const data = await res.json();
+      // MongoDB comes from /api/health, but relay status must NOT: that
+      // endpoint reports whether ANY tenant has a relay attached
+      // (global.__activeRelays.size > 0), so it happily reports "connected"
+      // while this user's own relay is still offline.
+      const [healthRes, relay] = await Promise.all([
+        fetch('/api/health', { signal: AbortSignal.timeout(5000), cache: 'no-store' })
+          .then(r => r.json())
+          .catch(() => ({})),
+        relayDown
+          ? fetchRelayStatus().catch(() => ({ connected: false }))
+          : Promise.resolve({ connected: true }),
+      ]);
+
+      const mongoUp = !!healthRes.mongo?.up;
+      const relayUp = !!relay.connected;
+
       // Only dismiss when EVERYTHING that was reported down is now back up.
       // A failed retry must keep the banner visible.
-      const mongoOk = !mongoDown || !!data.mongo?.up;
-      const relayOk = !relayDown || !!data.relay?.up;
-      if (mongoOk && relayOk) {
+      if ((!mongoDown || mongoUp) && (!relayDown || relayUp)) {
         dispatch({ type: 'SET_HEALTH_STATUS', payload: { mongoDown: false, relayDown: false, autoSwitchedToServer: false } });
         fetchConnections();
+        // Let AppContext's poller pick up the new state now rather than on
+        // its next tick, so every other consumer agrees with this banner.
+        requestRelayStatusRefresh('banner-retry');
         setDismissed(true);
       } else {
-        setRetryFailed({ mongoUp: !!data.mongo?.up, relayUp: !!data.relay?.up });
+        setRetryFailed({ mongoUp, relayUp });
       }
     } catch (_) {
       // Health check itself unreachable — definitely still down

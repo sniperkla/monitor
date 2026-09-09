@@ -3,6 +3,9 @@
 ## Environment
 - Stack: Next.js 16 + custom `server.js` + socket.io; dev port **3030**; prod `https://monitor.eaqdragon.com`.
 - Next build works into a fresh `NEXT_DIST_DIR`; the safe-delete shim fails when cleaning an existing tree. Build output can land in `./tmp/<name>`; move it out, never recursively delete it.
+- **ALWAYS build into `./tmp/<name>`, never a top-level dir like `.next-verify`.** Tailwind v4 auto-detects sources and skips only gitignored paths. `.gitignore` has `/tmp/` and `/.next*/`, but a top-level `.next-verify` is *not* covered by `/.next/` — Tailwind scanned its Turbopack cache, extracted mangled arbitrary-value utilities that failed to parse and 500'd the entire dev server. Cost me a long detour. `/.next*/` is now wildcarded so this can't recur.
+- **Never write a literal mangled Tailwind class into any scanned file** (`.gitignore`, memory notes, docs). Tailwind v4 scans those too and re-extracts it as a real utility, recreating the 500. Describe the bug in words, not with the broken token.
+- Dev-mode breakage is usually a stale/corrupt Turbopack cache: clear `.next/cache/turbopack` (it grows to ~500M). A CSS error citing a line number beyond the source file's length means the *generated* CSS is bad, not the source.
 - Browser verification: use `http://localhost:3030` (not bare IP) and a normal Chrome UA. Headless default UA is blocked by `src/proxy.js`.
 - Tests: `npm test`; per-file eslint should have 0 errors. Project-wide lint has known pre-existing scratch parsing errors.
 
@@ -16,6 +19,11 @@
 - `scripts/build-relay.mjs` is seeded/deterministic and stamps `source-sha256`; `--check` detects drift. `prebuild`, `predev`, CI, and npm `prepack` build/check artifacts. The server serves only the artifact and returns 503 if missing; never falls back to readable source.
 - Token uses `Authorization: Bearer` on `/relay-ws`; `?token=` is legacy fallback. WHATWG `globalThis.WebSocket` ignores extra headers, so use the header-capable WebSocket path.
 - Relay does not self-update; rerun `local-relay --pair` after upgrading npm. Pairing code is single-use and expires in 10 minutes; successful exchange persists the long-lived token to MongoDB with rollback on persistence failure.
+- **Relay liveness must come from `GET /api/relay/token`, never `/api/health`.** The health route reports `global.__activeRelays?.size > 0` — whether *any* tenant has a relay attached — so it is wrong per-user in both directions. Shared client helper: `src/utils/relayStatus.js` (`fetchRelayStatus`, `requestRelayStatusRefresh`, `RELAY_STATUS_EVENT`).
+- **Anything that changes relay state must nudge the poller**, not wait for its tick: pairing approval and the install wizard call `requestRelayStatusRefresh(...)`. `AppContext` owns the only continuous relay poller (5s while missing → 20s after ~2 min, 20s when attached, 60s hidden, immediate on focus/visibility/online). The relay install finishes in the user's terminal, so the browser is never told — one-shot mount reads of `relayInfo` are always stale.
+- `relayDown` is only raised when the browser shows relay *intent* (local mode, a chosen preferred relay, or a relay discovered on 127.0.0.1:48923). Setting it unconditionally nags every server-mode user who never installed one.
+- `MongoDeadBanner` reads `ssh_monitor_ssh_mode` only. It used to `||` in `ssh_monitor_preferred_relay`, but that key holds a relay *name*, never a mode, so it made the banner appear for server-mode users.
+- **`ssh_monitor_ssh_mode` is per-ACCOUNT, not per-device.** `AppContext` auto-pins `local` for *any* browser that sees the user's relay, so a phone (which can never run a relay) still sends `x-ssh-mode: local`. `resolveSshConfig` must therefore treat a missing relay as *fall back to direct* for non-localhost hosts, never as a hard error — otherwise every agent call 500s with "Local Relay Agent is not connected" for public-IP targets the server reaches fine. Localhost hosts MUST still throw (falling back = server dials its own loopback = SSRF). Regression tests in `tests/ai-agents-relay-routing.test.mjs`.
 - WebUI relay ports are hints only; use the `webui:ready` acknowledgement. Preserve WebUI `authorization` headers; cookie may be stripped. Production WebUI relay needs `CSP_ALLOW_LOCAL_RELAY=1`.
 
 ## Monitor Agent / Server-side install

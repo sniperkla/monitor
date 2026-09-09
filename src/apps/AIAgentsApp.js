@@ -121,11 +121,20 @@ function extractWebUISecret(webUIBootstrapPath) {
 }
 
 export default function AIAgentsApp({ apiFetch }) {
-  const { state, connectionsReady, relayInfo, dispatch } = useApp();
+  // `apiFetch` is accepted as a prop for direct mounts, but the window manager
+  // renders every app as `<Component windowId={...} />` with no props, so the
+  // prop is ALWAYS undefined in practice and `apiFetch || fetch` silently fell
+  // back to bare `fetch()`. That dropped the `x-ssh-mode` / `x-preferred-relay`
+  // headers, so agent commands were never routed through the user's Local
+  // Relay — getSshConfig only falls back to the relay for a literal localhost
+  // host or an explicit `sshMode: 'local'`. Measured: /api/agents/hermes sent
+  // neither header while localStorage said local-relay mode. Every other app
+  // (ServerBackup, Docker, Firewall…) pulls apiFetch from useApp() instead.
+  const { state, connectionsReady, relayInfo, dispatch, apiFetch: ctxApiFetch } = useApp();
   const { isSupporter } = useSupporter({ refreshOnFocus: true });
   const { showPrompt } = useOS();
   const [supporterModalOpen, setSupporterModalOpen] = useState(false);
-  const doFetch = apiFetch || fetch;
+  const doFetch = apiFetch || ctxApiFetch || fetch;
   const connections = useMemo(
     () => (state?.connections || []).filter(c => c.type !== 'database'),
     [state?.connections]
@@ -151,6 +160,22 @@ export default function AIAgentsApp({ apiFetch }) {
       return false;
     }
   });
+
+  // "Continue with direct connection" is a real MODE SWITCH, not just a UI
+  // unlock. apiFetch reads `ssh_monitor_ssh_mode` from localStorage on every
+  // call, and AppContext auto-pins it to 'local' whenever it sees a relay — so
+  // simply flipping React state left every request still routed through the
+  // relay the user just asked to bypass (a phone has no relay at all, so every
+  // call then failed). Persist the mode, then announce it exactly the way
+  // AppContext does when it auto-switches, so this survives a remount.
+  const bypassRelay = useCallback(() => {
+    try { localStorage.setItem('ssh_monitor_ssh_mode', 'server'); } catch {}
+    // Tells AppContext's relay poll not to auto-pin this browser back to
+    // 'local' on its next tick — see the relayOptedOut guard there.
+    try { localStorage.setItem('ssh_monitor_relay_optout', '1'); } catch {}
+    try { window.dispatchEvent(new Event('ssh-mode-changed')); } catch {}
+    setForceBypassRelay(true);
+  }, []);
   const [loadError, setLoadError] = useState(null);
   const [checkingRelay, setCheckingRelay] = useState(true);
   const [credsExpanded, setCredsExpanded] = useState(false);
@@ -1757,6 +1782,11 @@ export default function AIAgentsApp({ apiFetch }) {
                 <RelayPairingPanel
                   compact
                   onApproved={async () => {
+                    // Pairing a relay on THIS device is an explicit "I want
+                    // relay mode here", so drop any earlier direct-connection
+                    // opt-out — otherwise AppContext would never pin back to
+                    // local mode and the relay would sit unused.
+                    try { localStorage.removeItem('ssh_monitor_relay_optout'); } catch {}
                     setNotice({ ok: true, text: 'Relay approved! Connecting...' });
                     await checkLocalRelay();
                   }}
@@ -1775,7 +1805,7 @@ export default function AIAgentsApp({ apiFetch }) {
               {/* Bypass option for Cloud / Mobile / Server mode */}
               <div className="pt-2 text-center">
                 <button
-                  onClick={() => setForceBypassRelay(true)}
+                  onClick={bypassRelay}
                   className="w-full py-2.5 px-3 rounded-xl bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30 text-xs font-semibold text-indigo-300 hover:text-indigo-200 transition flex items-center justify-center gap-2 cursor-pointer"
                 >
                   <ServerIcon size={14} className="text-indigo-400" />
@@ -1910,7 +1940,7 @@ export default function AIAgentsApp({ apiFetch }) {
             <button onClick={() => loadDetails()} className={`${btn} bg-rose-500/20 hover:bg-rose-500/30 text-rose-200 border border-rose-500/30 text-xs px-4 py-2`}>
               <RefreshCw size={12} /> Retry Connection
             </button>
-            <button onClick={() => { setForceBypassRelay(true); setTimeout(() => loadDetails(), 50); }} className={`${btn} bg-white/5 hover:bg-white/10 border border-[var(--border-color)] text-xs px-3 py-2 text-[var(--text-muted)] hover:text-white`}>
+            <button onClick={() => { bypassRelay(); setTimeout(() => loadDetails(), 50); }} className={`${btn} bg-white/5 hover:bg-white/10 border border-[var(--border-color)] text-xs px-3 py-2 text-[var(--text-muted)] hover:text-white`}>
               <ServerIcon size={12} /> Force Cloud / Direct Mode
             </button>
           </div>

@@ -2545,7 +2545,9 @@ export default function ServerMonitorApp() {
 
       {/* Tabs */}
       <div className="flex items-center justify-between px-4 py-1.5 border-b border-[var(--border-color)] bg-[var(--bg-secondary)] text-xs">
-        <div className="flex gap-1">
+        {/* The four tabs need ~430px. Phones scroll them instead of squeezing
+            each button until its 14px icon collapses to 0px wide. */}
+        <div className="flex gap-1 min-w-0 overflow-x-auto no-scrollbar">
           {[
             { id: 'overview', label: 'Overview', icon: Activity },
             { id: 'history', label: 'History', icon: TrendingUp },
@@ -2555,7 +2557,7 @@ export default function ServerMonitorApp() {
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md font-medium transition-colors ${
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md font-medium transition-colors shrink-0 ${
                 activeTab === tab.id
                   ? 'bg-[var(--accent-indigo)] text-white shadow-sm'
                   : 'text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]'

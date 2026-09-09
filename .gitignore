@@ -14,7 +14,14 @@
 /coverage
 
 # next.js
-/.next/
+# Wildcard, not just /.next/: Tailwind v4 auto-detects sources and only skips
+# gitignored paths, so a stray build dir like .next-verify gets scanned. Its
+# Turbopack cache yields mangled arbitrary-value utilities that fail to parse
+# and 500 the whole dev server. Always build into ./tmp/<name> instead, and
+# keep this pattern broad.
+# NOTE: never paste a literal example of a mangled utility here. Tailwind v4
+# scans this file too and will extract it as a real class, recreating the bug.
+/.next*/
 /out/
 
 # production

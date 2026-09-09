@@ -16,8 +16,9 @@ const isLocalhost = (host) => /^(localhost|127\.0\.0\.1)$/.test(host);
 
 export async function resolveSshConfig(baseConfig, options = {}) {
   const sshConfig = { ...baseConfig };
+  const hostIsLocal = isLocalhost(sshConfig.host);
 
-  if (isLocalhost(sshConfig.host) || options.sshMode === 'local') {
+  if (hostIsLocal || options.sshMode === 'local') {
     // Relay WebSocket registrations are keyed by the JWT `sub` (the
     // identity embedded in the relay token). Connection ownership is keyed by
     // session.user.id, which is the database id. Keep both identities so a
@@ -30,6 +31,23 @@ export async function resolveSshConfig(baseConfig, options = {}) {
         : null);
     const relay = foundRelay?.relay;
     if (!relay || !relay.ws) {
+      // A relay is only strictly required to reach the user's OWN machine. For
+      // a public host the server can dial it directly — and `ssh_mode` is a
+      // per-ACCOUNT setting, so a browser that has no relay of its own (a
+      // phone, or a second machine while the relay host is asleep) still sends
+      // `local`. Without this fallback every such call failed with a 500 even
+      // though the target was reachable, which is exactly the "AI Agents works
+      // on my MacBook but not on my phone" symptom.
+      //
+      // Deliberately NOT applied to localhost targets: falling back there would
+      // make the server dial its own loopback (SSRF), which is what the throw
+      // below exists to prevent.
+      if (!hostIsLocal) {
+        logger.warn(
+          `[ssh] sshMode=local but no active relay — connecting directly to ${sshConfig.host}:${sshConfig.port || 22}`
+        );
+        return sshConfig;
+      }
       throw new Error('Local Relay Agent is not connected. Please start local-relay.js on your target machine.');
     }
 

@@ -53,6 +53,7 @@ import { useSupporter } from '@/hooks/useSupporter';
 import SupporterModal from '@/components/common/SupporterModal';
 import SupportersAdminPanel from '@/components/common/SupportersAdminPanel';
 import { clearDedupCache } from '@/utils/requestDedup';
+import { requestRelayStatusRefresh } from '@/utils/relayStatus';
 
 import { motion, AnimatePresence } from 'framer-motion';
 import ShortcutInput from '@/components/Desktop/ShortcutInput';
@@ -1441,6 +1442,10 @@ export default function SettingsApp({ windowId = 'settings', initialTab, activeT
       // if it also triggers a fetch, dedupedFetch coalesces the two.)
       fetchConnections();
       window.dispatchEvent(new Event('ssh-mode-changed'));
+      // The wizard has its own 2s poll, but the rest of the app (sidebar
+      // banner, terminal routing) reads relay state from AppContext. Ask it to
+      // re-read now so "Relay not connected" clears without a manual retry.
+      requestRelayStatusRefresh('relay-installed');
     }
   }, [relays, existingRelayIds, relayWaiting, relayModalOpen, relayInstallSuccess, addNotification, fetchConnections]);
 

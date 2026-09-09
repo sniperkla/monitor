@@ -5,8 +5,22 @@ import { useSession, signIn } from 'next-auth/react';
 import { useVault } from '@/context/VaultContext';
 import { getLocalConnections } from '@/utils/localConnections';
 import { dedupedFetch, clearDedupCache } from '@/utils/requestDedup';
+import { fetchRelayStatus, onRelayStatusRefresh } from '@/utils/relayStatus';
 
 const AppContext = createContext();
+
+// Relay status cadence. The relay is installed from a terminal on the user's
+// own machine, so the browser has to go looking for it. Poll briskly while it
+// is missing (that is the window right after an install), relax once it is
+// attached, and go quiet while the tab is hidden — the visibility handler
+// below forces an immediate re-check the moment the tab is looked at again,
+// which is precisely when someone returns from running the installer.
+const RELAY_POLL_WAITING_MS = 5000;   // relay not attached yet
+const RELAY_POLL_CONNECTED_MS = 20000; // relay attached — just watch for drops
+const RELAY_POLL_HIDDEN_MS = 60000;    // tab in the background
+const HEALTH_POLL_MS = 20000;          // MongoDB liveness
+// ~2 minutes of brisk polling after a relay goes missing, then ease off.
+const RELAY_FAST_POLL_TICKS = 24;
 
 const initialState = {
   connections: [],
@@ -385,6 +399,22 @@ export function AppProvider({ children }) {
     dispatch({ type: 'SET_LOADING', payload: false });
   }, [apiFetch]);
 
+  // Stable handle on fetchConnections for the polling loops below. Keying those
+  // effects on the callback itself would tear down and restart the timers on
+  // every dbConfig change, and each restart would look like a fresh "first
+  // reading" — which is precisely the state that must not fire a refetch.
+  const fetchConnectionsRef = useRef(fetchConnections);
+  useEffect(() => { fetchConnectionsRef.current = fetchConnections; }, [fetchConnections]);
+
+  // Mirrors of the health flags, kept in sync from state so the pollers can
+  // skip no-op dispatches. Other code paths (the relayRequired branch in
+  // fetchConnections, the banner's retry) also move these flags, so the mirror
+  // has to follow state rather than being owned by the poller.
+  const relayDownRef = useRef(state.relayDown);
+  useEffect(() => { relayDownRef.current = state.relayDown; }, [state.relayDown]);
+  const mongoDownRef = useRef(state.mongoDown);
+  useEffect(() => { mongoDownRef.current = state.mongoDown; }, [state.mongoDown]);
+
   // 1. Initialize storage mode from localStorage on mount
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -540,68 +570,207 @@ export function AppProvider({ children }) {
     }
   }, []);
 
-  // 5. Fetch relay status once on mount & prioritize local relay if connected
+  // 5. Relay status — user-scoped and CONTINUOUSLY polled.
+  //
+  // This used to fetch /api/relay/token exactly once on mount. The install runs
+  // in a terminal on the user's own machine and the browser is never told it
+  // finished, so every consumer of relayInfo stayed stale: the sidebar kept
+  // saying "Relay not connected / Local relay agent is offline" until something
+  // happened to force a refetch.
+  //
+  // Relay liveness is deliberately NOT taken from /api/health — that endpoint
+  // reports `global.__activeRelays?.size > 0`, i.e. whether ANY tenant has a
+  // relay attached, which is the wrong question on a multi-user server.
   useEffect(() => {
-    fetch('/api/relay/token')
-      .then(r => r.json())
-      .then(data => {
-        const isConnected = data.connected || false;
-        dispatch({
-          type: 'SET_RELAY_INFO',
-          payload: { connected: isConnected, relays: data.relays || [], checkDone: true },
-        });
-        if (isConnected && typeof window !== 'undefined') {
-          const currentMode = localStorage.getItem('ssh_monitor_ssh_mode');
-          if (!currentMode || currentMode !== 'local') {
-            localStorage.setItem('ssh_monitor_ssh_mode', 'local');
-            window.dispatchEvent(new Event('ssh-mode-changed'));
-          }
-        }
-      })
-      .catch(() => {
-        dispatch({ type: 'SET_RELAY_INFO', payload: { connected: false, relays: [], checkDone: true } });
-      });
-  }, []);
+    if (typeof window === 'undefined') return;
+    // Unauthenticated callers get a 401 from /api/relay/token — nothing to poll.
+    if (sessionStatus === 'loading' || sessionStatus === 'unauthenticated') return;
 
-  // 6. Health polling — every 20 seconds, detect MongoDB dead + relay dead, auto-switch
+    let cancelled = false;
+    let timer = null;
+    let inFlight = false;
+    // null = never resolved yet. Distinguishes "first reading" from a real
+    // down -> up transition, which is the only one worth refetching for.
+    let lastConnected = null;
+    // Consecutive "still missing" readings. Drives a gentle backoff: /api/relay/token
+    // costs a DB lookup plus a supporter check, so a tab parked in local mode
+    // with no relay must not poll it every 5s forever.
+    let missingTicks = 0;
+
+    const clearTimer = () => {
+      if (timer) { clearTimeout(timer); timer = null; }
+    };
+
+    const applyStatus = (connected, relays) => {
+      dispatch({
+        type: 'SET_RELAY_INFO',
+        payload: { connected, relays, checkDone: true },
+      });
+
+      if (connected) missingTicks = 0;
+
+      if (!connected) {
+        // "Relay is down" only means something if this browser actually wants
+        // one. Now that this flag is correct per-user (it used to come from
+        // /api/health, whose global count was wrong in both directions),
+        // setting it unconditionally would nag every server-mode user who
+        // never installed a relay. Intent = local mode, an explicitly chosen
+        // relay, or a relay discovered on this machine.
+        const wantsRelay =
+          localStorage.getItem('ssh_monitor_ssh_mode') === 'local' ||
+          !!localStorage.getItem('ssh_monitor_preferred_relay') ||
+          !!localStorage.getItem('ssh_monitor_local_relay');
+        if (wantsRelay && !relayDownRef.current) {
+          relayDownRef.current = true;
+          dispatch({ type: 'SET_HEALTH_STATUS', payload: { relayDown: true } });
+        }
+        missingTicks++;
+        lastConnected = false;
+        return;
+      }
+
+      // Relay (re)attached. Pin this browser to local mode and to the relay
+      // that just appeared, BEFORE any refetch: apiFetch reads both keys from
+      // localStorage at call time, so writing them afterwards would route the
+      // request through the previous relay — or through none at all.
+      let changed = false;
+      // An explicit "continue with direct connection" (cloud server / phone)
+      // outranks auto-pinning. Without this the poll below would flip the mode
+      // straight back to 'local' a few seconds later, undoing the user's choice
+      // — a phone can never run a relay, so it would be stuck on local mode
+      // and every request would keep trying a relay it cannot use.
+      const relayOptedOut = localStorage.getItem('ssh_monitor_relay_optout') === '1';
+      if (!relayOptedOut && localStorage.getItem('ssh_monitor_ssh_mode') !== 'local') {
+        localStorage.setItem('ssh_monitor_ssh_mode', 'local');
+        changed = true;
+      }
+      const first = relays[0] || null;
+      const relayName = first ? (first.relayName || first.relayId) : null;
+      if (relayName && localStorage.getItem('ssh_monitor_preferred_relay') !== relayName) {
+        localStorage.setItem('ssh_monitor_preferred_relay', relayName);
+        changed = true;
+      }
+
+      if (relayDownRef.current) {
+        relayDownRef.current = false;
+        dispatch({
+          type: 'SET_HEALTH_STATUS',
+          payload: { relayDown: false, autoSwitchedToServer: false },
+        });
+      }
+
+      if (changed) window.dispatchEvent(new Event('ssh-mode-changed'));
+
+      // A genuine recovery, or a first reading that changed which relay this
+      // browser should route through. Mount already fetched, so a first
+      // reading that changes nothing must not fire a duplicate request.
+      if (lastConnected === false || changed) fetchConnectionsRef.current();
+
+      lastConnected = true;
+    };
+
+    const tick = async () => {
+      if (cancelled) return;
+      if (inFlight) { schedule(); return; }
+      inFlight = true;
+      try {
+        const { connected, relays } = await fetchRelayStatus();
+        if (!cancelled) applyStatus(connected, relays);
+      } catch (_) {
+        // Transient failure — keep the last known state instead of flapping
+        // the banner on every dropped request.
+      } finally {
+        inFlight = false;
+      }
+      schedule();
+    };
+
+    const schedule = () => {
+      clearTimer();
+      if (cancelled) return;
+      let delay;
+      if (document.hidden) {
+        delay = RELAY_POLL_HIDDEN_MS;
+      } else if (lastConnected) {
+        delay = RELAY_POLL_CONNECTED_MS;
+      } else {
+        // Briskly at first — that is the window right after an install — then
+        // ease off. A tab permanently parked in local mode with no relay must
+        // not poll a DB-backed endpoint every 5s forever.
+        delay = missingTicks < RELAY_FAST_POLL_TICKS
+          ? RELAY_POLL_WAITING_MS
+          : RELAY_POLL_CONNECTED_MS;
+      }
+      timer = setTimeout(tick, delay);
+    };
+
+    tick();
+
+    // Wake up the instant the tab is looked at again — that is exactly when
+    // someone comes back from running the installer in their terminal.
+    const onVisible = () => {
+      if (document.hidden) return;
+      clearTimer();
+      // Coming back to the tab is the likeliest moment an install just
+      // finished, so give it the brisk cadence again rather than whatever
+      // backoff it had decayed to.
+      missingTicks = 0;
+      tick();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onVisible);
+    window.addEventListener('online', onVisible);
+    // Anything that just changed relay state (pairing approval, install
+    // wizard finishing) asks for an immediate re-read.
+    const offRefresh = onRelayStatusRefresh(onVisible);
+
+    return () => {
+      cancelled = true;
+      clearTimer();
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onVisible);
+      window.removeEventListener('online', onVisible);
+      offRefresh();
+    };
+  }, [sessionStatus]);
+
+  // 6. MongoDB liveness — every 20 seconds.
+  //
+  // The interval here was missing entirely: despite the comment, only a single
+  // mount-time call ran, so a mongod that died after startup was never noticed.
+  // Relay health is intentionally absent — see effect 5 for why /api/health's
+  // global relay count is not a usable per-user signal.
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
-    let consecutiveFailures = 0;
-    const MAX_FAILURES_BEFORE_SWITCH = 2; // switch after 2 consecutive failures (~40s)
+    let cancelled = false;
 
     const pollHealth = async () => {
       try {
-        const res = await fetch('/api/health', { signal: AbortSignal.timeout(5000) });
+        const res = await fetch('/api/health', {
+          signal: AbortSignal.timeout(5000),
+          cache: 'no-store',
+        });
         const data = await res.json();
-
+        if (cancelled) return;
         const mongoUp = data.mongo?.up ?? res.ok;
-        const relayUp = data.relay?.up ?? false;
-
-        if (!mongoUp) {
-          consecutiveFailures++;
-          dispatch({ type: 'SET_HEALTH_STATUS', payload: { mongoDown: true } });
-          // NOTE: We do NOT auto-switch SSH mode here — MongoDB downtime is a server-side
-          // issue unrelated to SSH relay mode. Switching would disconnect all active terminals.
-        } else {
-          // MongoDB is back up
-          consecutiveFailures = 0;
-          dispatch({ type: 'SET_HEALTH_STATUS', payload: { mongoDown: false } });
-        }
-
-        if (!relayUp) {
-          dispatch({ type: 'SET_HEALTH_STATUS', payload: { relayDown: true } });
-        } else {
-          dispatch({ type: 'SET_HEALTH_STATUS', payload: { relayDown: false } });
-        }
+        // Only dispatch on an actual change — SET_HEALTH_STATUS always returns
+        // a fresh state object, and doing that on a 20s timer re-renders every
+        // consumer in the tree for nothing.
+        if (mongoUp === !mongoDownRef.current) return;
+        mongoDownRef.current = !mongoUp;
+        dispatch({ type: 'SET_HEALTH_STATUS', payload: { mongoDown: !mongoUp } });
+        // NOTE: we do NOT auto-switch SSH mode here — MongoDB downtime is a
+        // server-side issue unrelated to relay mode. Switching would drop
+        // every active terminal.
       } catch (_) {
-        // /api/health itself unreachable (server down) — don't flip state aggressively
-        consecutiveFailures++;
+        // /api/health itself unreachable (server down) — don't flip state.
       }
     };
 
-    // Check health once on initial mount only
     pollHealth();
+    const id = setInterval(pollHealth, HEALTH_POLL_MS);
+    return () => { cancelled = true; clearInterval(id); };
   }, []);
 
   // 6. Persistence: Save active workspace state to localStorage when it changes

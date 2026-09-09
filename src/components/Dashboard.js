@@ -598,12 +598,15 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
         {connections.length > 0 && (
           <div className="bg-[var(--bg-card)] rounded-2xl border border-[var(--border-color)] overflow-hidden">
             <div className="overflow-x-auto custom-scrollbar">
-              <div className="min-w-[400px]">
-                <div className="grid grid-cols-[1fr_80px_80px_100px] gap-2 px-4 py-2 border-b border-[var(--border-color)] text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">
+              {/* On phones the 4 fixed columns need ~316px but the card is only
+                  ~238px wide at 320px. Drop the Uptime column and tighten the
+                  rest so the table fits instead of scrolling sideways. */}
+              <div className="min-w-0 sm:min-w-[400px]">
+                <div className="grid grid-cols-[1fr_56px_52px] sm:grid-cols-[1fr_80px_80px_100px] gap-2 px-2 sm:px-4 py-2 border-b border-[var(--border-color)] text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">
                   <span>Connection</span>
               <span className="text-center">Status</span>
               <span className="text-center">Latency</span>
-              <span className="text-center">Uptime</span>
+              <span className="text-center hidden sm:block">Uptime</span>
             </div>
             {connections.filter(c => c.storage !== 'manual').map((conn, idx) => {
               const uptime = getUptime(conn._id);
@@ -616,7 +619,7 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
                   key={conn._id || idx}
                   className="border-b border-[var(--border-color)]/30 last:border-0"
                 >
-                  <div className="grid grid-cols-[1fr_80px_80px_100px] gap-2 px-4 py-2.5 items-center hover:bg-[var(--bg-card-hover)] transition-colors">
+                  <div className="grid grid-cols-[1fr_56px_52px] sm:grid-cols-[1fr_80px_80px_100px] gap-2 px-2 sm:px-4 py-2.5 items-center hover:bg-[var(--bg-card-hover)] transition-colors">
                     <div className="flex items-center gap-2 min-w-0">
                       <div className="w-2 h-2 rounded-full shrink-0" style={{ background: conn.color || '#6366f1' }} />
                       <span className="text-xs font-medium text-[var(--text-primary)] truncate">{conn.name}</span>
@@ -643,7 +646,7 @@ export default function Dashboard({ onNewConnection, onEditConnection }) {
                         <span className="text-xs text-[var(--text-muted)]">—</span>
                       )}
                     </div>
-                    <div className="flex items-center justify-center gap-2">
+                    <div className="hidden sm:flex items-center justify-center gap-2">
                       {uptime !== null ? (
                         <>
                           <div className="flex-1 h-1.5 rounded-full bg-[var(--bg-tertiary)] overflow-hidden max-w-[50px]">
