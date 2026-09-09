@@ -2870,6 +2870,9 @@ export default function RcloneApp({ windowId = 'rclone', activeTab: propActiveTa
                                 ? <> Share your folders with <span className="font-mono text-amber-200 break-all">{saClientEmail}</span> (Editor), or use a Shared Drive.</>
                                 : <> Share folders with the key&apos;s <span className="font-mono text-amber-200">client_email</span> address, or use a Shared Drive.</>}
                             </p>
+                            <p className="text-[10px] text-amber-300/90 leading-relaxed mt-1">
+                              Then paste the shared folder&apos;s URL into <span className="font-bold">Folder URL/ID</span> below — sharing alone does NOT make the folder appear in the SA root; rclone can only reach it by its folder ID.
+                            </p>
                           </div>
                         </>
                       )}
