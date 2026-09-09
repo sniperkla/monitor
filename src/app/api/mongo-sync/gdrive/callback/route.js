@@ -5,6 +5,72 @@ import connectDB from '@/lib/mongodb';
 import { SystemSettingRepository } from '@/lib/repositories/SystemSettingRepository';
 import { logger } from '@/lib/logger';
 
+// Emit the OAuth outcome back to the opener window (postMessage) AND write it
+// to localStorage as a same-origin relay, then attempt to close the popup.
+// The opener closes the popup too, so the flow completes even if
+// window.close() is blocked or the app tab reloaded mid-flow.
+function notifyScript(payload) {
+  const json = JSON.stringify(payload).replace(/</g, '\\u003c');
+  return `<script>
+  (function () {
+    var payload = ${json};
+    try { localStorage.setItem('gdrive_oauth_pending', JSON.stringify(payload)); } catch (e) {}
+    try { if (window.opener) window.opener.postMessage({ gdriveOauthResult: payload }, window.location.origin); } catch (e) {}
+    setTimeout(function () { try { window.close(); } catch (e) {} }, 800);
+  })();
+</script>`;
+}
+
+function escHtml(str) {
+  return String(str).replace(/[<>&"']/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function polishPage(title, bodyHtml, scriptHtml = '') {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${escHtml(title)}</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: #0f172a; color: #f8fafc;
+      display: flex; align-items: center; justify-content: center;
+      min-height: 100vh; margin: 0; text-align: center; padding: 1rem;
+    }
+    .card {
+      background: rgba(30, 41, 59, 0.7); border: 1px solid rgba(99, 102, 241, 0.2);
+      padding: 2.5rem; border-radius: 1.5rem;
+      box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.5);
+      backdrop-filter: blur(12px); max-width: 420px;
+    }
+    h1 { margin-bottom: 1rem; font-size: 1.5rem; }
+    h1.ok { color: #10b981; }
+    h1.err { color: #f87171; }
+    p { color: #94a3b8; font-size: 0.9rem; line-height: 1.5; margin-bottom: 1.5rem; word-break: break-word; }
+    .spinner { border: 3px solid rgba(16, 185, 129, 0.1); width: 36px; height: 36px; clear: both;
+      margin: 0.5rem auto; border-top-color: #10b981; border-radius: 50%; animation: spin 1s infinite linear; }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    small { color: #475569; }
+  </style>
+</head>
+<body>
+  <div class="card">${bodyHtml}</div>
+  ${scriptHtml}
+</body>
+</html>`;
+}
+
+function errorPage(message) {
+  const html = polishPage('Google Drive Link Failed',
+    `<h1 class="err">Google Drive Link Failed</h1>
+     <p>${escHtml(message || 'Unknown error')}</p>
+     <p><small>This window will close — return to the app for details.</small></p>`,
+    notifyScript({ success: false, error: message || 'Unknown error' }));
+  return new NextResponse(html, { headers: { 'Content-Type': 'text/html' } });
+}
+
 export async function GET(request) {
   try {
     const session = await getServerSession(authOptions);
@@ -18,9 +84,7 @@ export async function GET(request) {
 
     const code = request.nextUrl.searchParams.get('code');
     if (!code) {
-      return new NextResponse('<h1>Authorization failed: missing auth code</h1>', {
-        headers: { 'Content-Type': 'text/html' }
-      });
+      return errorPage('Authorization failed: missing auth code');
     }
 
     const db = await connectDB();
@@ -33,9 +97,7 @@ export async function GET(request) {
     const clientSecret = savedConfig?.clientSecret || process.env.GOOGLE_CLIENT_SECRET;
 
     if (!clientId || !clientSecret) {
-      return new NextResponse('<h1>Configuration Error: Client ID or Secret missing</h1>', {
-        headers: { 'Content-Type': 'text/html' }
-      });
+      return errorPage('Configuration Error: Client ID or Secret missing. Save them in the app first.');
     }
 
     let redirectUri = process.env.GDRIVE_REDIRECT_URI;
@@ -69,9 +131,7 @@ export async function GET(request) {
 
     const tokenData = await tokenRes.json();
     if (tokenData.error) {
-      return new NextResponse(`<h1>Token exchange failed: ${tokenData.error_description || tokenData.error}</h1>`, {
-        headers: { 'Content-Type': 'text/html' }
-      });
+      return errorPage(`Token exchange failed: ${tokenData.error_description || tokenData.error}`);
     }
 
     const { access_token, refresh_token, expires_in } = tokenData;
@@ -104,75 +164,15 @@ export async function GET(request) {
     // Update in DB (using upsert logic)
     await settingRepo.upsert('google_drive_config', driveConfig);
 
-    // Return a success page that auto-closes
-    const html = `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <title>Google Drive Authorized</title>
-        <style>
-          body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            background-color: #0f172a;
-            color: #f8fafc;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            height: 100vh;
-            margin: 0;
-            text-align: center;
-          }
-          .card {
-            background: rgba(30, 41, 59, 0.7);
-            border: 1px solid rgba(99, 102, 241, 0.2);
-            padding: 2.5rem;
-            border-radius: 1.5rem;
-            box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.5);
-            backdrop-filter: blur(12px);
-            max-width: 400px;
-          }
-          h1 {
-            color: #10b981;
-            margin-bottom: 1rem;
-            font-size: 1.5rem;
-          }
-          p {
-            color: #94a3b8;
-            font-size: 0.9rem;
-            line-height: 1.5;
-            margin-bottom: 2rem;
-          }
-          .spinner {
-            border: 3px solid rgba(16, 185, 129, 0.1);
-            width: 36px;
-            height: 36px;
-            clear: both;
-            margin: 0.5rem auto;
-            border-top-color: #10b981;
-            border-radius: 50%;
-            animation: spin 1s infinite linear;
-          }
-          @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-          }
-        </style>
-      </head>
-      <body>
-        <div class="card">
-          <h1>Google Drive Linked!</h1>
-          <p>Your Google Drive account has been connected successfully as <strong>${driveConfig.email.replace(/[<>&"']/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' }[c]))}</strong>.</p>
-          <div class="spinner"></div>
-          <p style="margin-top: 1.5rem; font-size: 0.8rem; color: #64748b;">This window will close automatically...</p>
-        </div>
-        <script>
-          setTimeout(() => {
-            window.close();
-          }, 2000);
-        </script>
-      </body>
-      </html>
-    `;
+    // Success page: notifies the opener (postMessage + localStorage relay) so
+    // the app window can close the popup and refresh the connected state, then
+    // also attempts to close itself as a backstop.
+    const html = polishPage('Google Drive Authorized',
+      `<h1 class="ok">Google Drive Linked!</h1>
+       <p>Your Google Drive account has been connected successfully as <strong>${escHtml(driveConfig.email)}</strong>.</p>
+       <div class="spinner"></div>
+       <p><small>This window will close automatically...</small></p>`,
+      notifyScript({ success: true, email: driveConfig.email, name: driveConfig.name }));
 
     return new NextResponse(html, {
       headers: { 'Content-Type': 'text/html' }
@@ -180,8 +180,6 @@ export async function GET(request) {
 
   } catch (error) {
     logger.error('Google Drive Callback error:', error);
-    return new NextResponse(`<h1>Internal Server Error: ${error.message}</h1>`, {
-      headers: { 'Content-Type': 'text/html' }
-    });
+    return errorPage(`Internal Server Error: ${error.message}`);
   }
 }

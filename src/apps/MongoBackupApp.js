@@ -1256,8 +1256,11 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
   const handleLinkDrive = () => {
     const width = 600;
     const height = 650;
-    const left = window.screen.width / 2 - width / 2;
-    const top = window.screen.height / 2 - height / 2;
+    const left = Math.max(0, (window.screen.width || window.innerWidth || 800) / 2 - width / 2);
+    const top = Math.max(0, (window.screen.height || window.innerHeight || 600) / 2 - height / 2);
+
+    // Clear any stale pending marker from a previous incomplete attempt.
+    try { localStorage.removeItem('gdrive_oauth_pending'); } catch (_) {}
 
     const win = window.open(
       '/api/mongo-sync/gdrive/auth',
@@ -1265,9 +1268,56 @@ export default function MongoBackupApp({ windowId = 'mongo-backup', activeTab: p
       `width=${width},height=${height},top=${top},left=${left},resizable=yes,scrollbars=yes`
     );
 
-    const checkClosed = setInterval(() => {
+    if (!win) {
+      addNotification({ title: 'Popup blocked', message: 'Allow popups for this site to link Google Drive.', type: 'error' });
+      return;
+    }
+
+    let finished = false;
+    let checkClosed = null;
+    let pendingPoll = null;
+
+    const finish = (result) => {
+      if (finished) return;
+      finished = true;
+      clearInterval(checkClosed);
+      clearInterval(pendingPoll);
+      window.removeEventListener('message', onOAuthMessage);
+      try { localStorage.removeItem('gdrive_oauth_pending'); } catch (_) {}
+      try { if (win && !win.closed) win.close(); } catch (_) {}
+      fetchGDriveStatus();
+      if (result && result.success) {
+        addNotification({ title: 'Google Drive Linked', message: result.email ? `Connected as ${result.email}.` : 'Google Drive connected successfully.', type: 'success' });
+      } else if (result && !result.success) {
+        addNotification({ title: 'Google Drive Link Failed', message: result.error || 'Unknown error during linking.', type: 'error' });
+      }
+    };
+
+    const onOAuthMessage = (event) => {
+      if (event.origin !== window.location.origin) return;
+      const { gdriveOauthResult } = event.data || {};
+      if (!gdriveOauthResult) return;
+      finish(gdriveOauthResult);
+    };
+    window.addEventListener('message', onOAuthMessage);
+
+    // localStorage relay — works even if postMessage is unavailable or the app
+    // tab reloaded mid-flow (popup writes and the opener polls).
+    pendingPoll = setInterval(() => {
+      if (finished) return;
+      let raw = null;
+      try { raw = localStorage.getItem('gdrive_oauth_pending'); } catch (_) {}
+      if (raw) {
+        try { finish(JSON.parse(raw)); } catch (_) { try { localStorage.removeItem('gdrive_oauth_pending'); } catch (e2) {} }
+      }
+    }, 500);
+
+    // Last-resort: popup closed by the user/browser → refresh status anyway.
+    checkClosed = setInterval(() => {
+      if (finished) return;
       if (!win || win.closed) {
-        clearInterval(checkClosed);
+        clearInterval(pendingPoll);
+        window.removeEventListener('message', onOAuthMessage);
         fetchGDriveStatus();
       }
     }, 1000);
