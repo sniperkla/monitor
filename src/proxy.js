@@ -186,7 +186,7 @@ function buildCsp(nonce) {
     // fall back to default-src, so a list without 'self' blocks every
     // same-origin iframe with "This content is blocked. Contact the site
     // owner to fix the issue." in Chromium.
-    "frame-src 'self' blob: data: http://127.0.0.1:* http://localhost:*",
+    "frame-src 'self' blob: data: https: http://127.0.0.1:* http://localhost:*",
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self' https://accounts.google.com",

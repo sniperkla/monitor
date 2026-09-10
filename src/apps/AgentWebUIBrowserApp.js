@@ -72,10 +72,10 @@ const EXPLORE_BOOKMARKS = [
 ];
 
 const SEARCH_ENGINES = [
-  { id: 'duckduckgo', name: 'DuckDuckGo', queryUrl: 'https://duckduckgo.com/?q=' },
+  { id: 'duckduckgo', name: 'DuckDuckGo', queryUrl: 'https://html.duckduckgo.com/html/?q=' },
+  { id: 'wikipedia', name: 'Wikipedia', queryUrl: 'https://en.m.wikipedia.org/w/index.php?search=' },
   { id: 'google', name: 'Google', queryUrl: 'https://www.google.com/search?q=' },
   { id: 'bing', name: 'Bing', queryUrl: 'https://www.bing.com/search?q=' },
-  { id: 'wikipedia', name: 'Wikipedia', queryUrl: 'https://en.m.wikipedia.org/w/index.php?search=' },
 ];
 
 /**
@@ -338,6 +338,11 @@ export default function AgentWebUIBrowserApp({
       tabTitle = `${raw} - Search`;
     }
 
+    // Route external web pages through our in-app proxy to bypass X-Frame-Options blocking
+    const proxyFrameUrl = (destinationUrl.startsWith('http://') || destinationUrl.startsWith('https://'))
+      ? `/api/browser/proxy?url=${encodeURIComponent(destinationUrl)}`
+      : destinationUrl;
+
     setShowIframeNotice(true);
     setTabs((prev) =>
       prev.map((t) =>
@@ -347,7 +352,7 @@ export default function AgentWebUIBrowserApp({
               type: 'web',
               title: tabTitle,
               url: destinationUrl,
-              frameSrc: destinationUrl,
+              frameSrc: proxyFrameUrl,
               phase: 'ready',
             }
           : t
@@ -407,7 +412,7 @@ export default function AgentWebUIBrowserApp({
     try {
       const targetUrl = activeTab?.type === 'webui'
         ? (typeof window !== 'undefined' ? `${window.location.origin}${activeTab.frameSrc || activeTab.url}` : activeTab.url)
-        : (activeTab?.frameSrc || activeTab?.url || window.location.href);
+        : (activeTab?.url || window.location.href);
       await navigator.clipboard?.writeText(targetUrl);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
@@ -417,7 +422,7 @@ export default function AgentWebUIBrowserApp({
   const handleExternal = () => {
     const targetUrl = activeTab?.type === 'webui'
       ? (activeTab.frameSrc || activeTab.url)
-      : (activeTab?.frameSrc || activeTab?.url);
+      : activeTab?.url;
 
     if (activeTab?.type === 'webui' && onOpenExternal) {
       onOpenExternal();
