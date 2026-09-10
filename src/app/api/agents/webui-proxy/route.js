@@ -277,18 +277,16 @@ function rewriteHtml(html, proxyBase, currentPath, port, connectionId, agentId =
     var str = String(u);
     var parsed = null;
     try { parsed = new URL(str, location.href); } catch(e) {}
-    if (parsed && parsed.host === location.host && (parsed.pathname === '/api/agents/webui-proxy' || parsed.pathname === '/api/agents/webui-ws-proxy')) return str;
-    var WS_LOOPBACK_RE = new RegExp('^(wss?):\\/\\/(?:localhost|127\\.0\\.0\\.1|0\\.0\\.0\\.0|\\[::1\\])(?::' + TUNNELED_PORT + ')?(\\/[^#]*)?');
+    if (parsed && parsed.host === location.host) {
+      if (parsed.pathname === '/api/agents/webui-proxy' || parsed.pathname === '/api/agents/webui-ws-proxy') return str;
+      if (ASSET_PREFIX && parsed.pathname.indexOf(ASSET_PREFIX) === 0) {
+        return proxyWsUrl((parsed.pathname.slice(ASSET_PREFIX.length) || '/') + parsed.search);
+      }
+      return proxyWsUrl((parsed.pathname || '/') + parsed.search);
+    }
+    var WS_LOOPBACK_RE = new RegExp('^(wss?):\\/\\/(?:localhost|127\\.0\\.0\\.1|0\\.0\\.0\\.0|\\[::1\\])(?::' + TUNNELED_PORT + ')?(?=\\/|$)(.*)');
     var wsMatch = str.match(WS_LOOPBACK_RE);
     if (wsMatch) return proxyWsUrl(wsMatch[2] || '/');
-    // Hermes' dashboard builds its channel URLs from its basename, which the
-    // served HTML sets to ASSET_PREFIX — so its sockets arrive as
-    // <host><ASSET_PREFIX>/api/ws?token=... Strip the keyed prefix so the
-    // handler receives the remote's own channel path.
-    if (parsed && parsed.host === location.host && ASSET_PREFIX && parsed.pathname.indexOf(ASSET_PREFIX) === 0) {
-      return proxyWsUrl((parsed.pathname.slice(ASSET_PREFIX.length) || '/') + parsed.search);
-    }
-    if (parsed && parsed.host === location.host) return proxyWsUrl((parsed.pathname || '/') + parsed.search);
     return str;
   }
   window.WebSocket = function ProxiedWebSocket(url, protocols) {

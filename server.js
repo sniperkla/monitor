@@ -5010,7 +5010,9 @@ fi'`;
             const cookieHeader = req.headers.cookie || '';
             req.cookies = Object.fromEntries(cookieHeader.split(/;\s*/).filter(Boolean).map(c => {
               let [k, ...v] = c.split('=');
-              return [k?.trim(), decodeURIComponent(v.join('='))];
+              let val = v.join('=');
+              try { val = decodeURIComponent(val); } catch (_) {}
+              return [k?.trim(), val];
             }));
           }
           const secret = process.env.NEXTAUTH_SECRET || process.env.AUTH_SECRET || process.env.ENCRYPTION_KEY;
@@ -5044,36 +5046,56 @@ fi'`;
               String(connDoc.userId) !== String(actingUserId) &&
               String(connDoc.userId) !== String(token.sub || '')) return destroy();
 
-          let sshCfg = null;
-          try {
-            const { getSshConfig } = await import('./src/app/api/server-backup/_ssh.js');
-            sshCfg = await getSshConfig(connectionId, {
-              userId: actingUserId,
-              sshMode: u.searchParams.get('sshMode') || undefined,
-              preferredRelay: u.searchParams.get('preferredRelay') || undefined,
-            });
-          } catch (err) {
-            dbg('getSshConfig err, using direct fallback:', err?.message);
+          const sshCfg = {
+            host: connDoc.host,
+            port: connDoc.port || 22,
+            username: connDoc.username || 'root',
+            readyTimeout: 20000,
+            keepaliveInterval: 10000,
+            keepaliveCountMax: 12,
+          };
+          if (connDoc.authType === 'password' && connDoc.password) {
+            let dec = decrypt(connDoc.password);
+            if (dec && dec.includes(':') && dec.length > 40) { const t = decrypt(dec); if (t && !t.includes(':')) dec = t; }
+            sshCfg.password = dec;
+          } else if (connDoc.authType === 'privateKey' && connDoc.privateKey) {
+            let dec = decrypt(connDoc.privateKey);
+            if (dec && dec.includes(':') && dec.length > 40) { const t = decrypt(dec); if (t && !t.includes(':')) dec = t; }
+            sshCfg.privateKey = dec;
+            if (connDoc.passphrase) {
+              let pdec = decrypt(connDoc.passphrase);
+              if (pdec && pdec.includes(':') && pdec.length > 40) { const t = decrypt(pdec); if (t && !t.includes(':')) dec = t; }
+              sshCfg.passphrase = pdec;
+            }
+          } else {
+            return destroy();
           }
-          if (!sshCfg) {
-            sshCfg = {
-              host: connDoc.host,
-              port: connDoc.port || 22,
-              username: connDoc.username || 'root',
-              readyTimeout: 20000,
-              keepaliveInterval: 10000,
-              keepaliveCountMax: 12,
-            };
-            if (connDoc.authType === 'password' && connDoc.password) {
-              let dec = decrypt(connDoc.password);
-              if (dec && dec.includes(':') && dec.length > 40) { const t = decrypt(dec); if (t && !t.includes(':')) dec = t; }
-              sshCfg.password = dec;
-            } else if (connDoc.authType === 'privateKey' && connDoc.privateKey) {
-              let dec = decrypt(connDoc.privateKey);
-              if (dec && dec.includes(':') && dec.length > 40) { const t = decrypt(dec); if (t && !t.includes(':')) dec = t; }
-              sshCfg.privateKey = dec;
-              if (connDoc.passphrase) sshCfg.passphrase = decrypt(connDoc.passphrase);
-            } else {
+
+          // Local relay forwarder resolution (for localhost or local mode)
+          const isLocalhost = (h) => /^(localhost|127\.0\.0\.1)$/.test(h);
+          const hostIsLocal = isLocalhost(sshCfg.host);
+          const effectiveSshMode = u.searchParams.get('sshMode') || connDoc.sshMode;
+          const preferredRelay = u.searchParams.get('preferredRelay') || connDoc.preferredRelay;
+
+          if (hostIsLocal || effectiveSshMode === 'local') {
+            const dialHost = (sshCfg.host && !isLocalhost(sshCfg.host)) ? sshCfg.host : 'localhost';
+            const dialPort = parseInt(sshCfg.port, 10) || 22;
+            const relayUserId = (actingUserId && global.__activeRelays?.has(actingUserId)) ? actingUserId
+              : (token.sub && global.__activeRelays?.has(token.sub)) ? token.sub
+              : (global.__activeRelays?.size === 1 ? global.__activeRelays.keys().next().value : null);
+
+            if (relayUserId && typeof global.__requestRelayForwarder === 'function') {
+              try {
+                const fwd = await global.__requestRelayForwarder(relayUserId, preferredRelay || null, dialHost, dialPort);
+                sshCfg.host = '127.0.0.1';
+                sshCfg.port = fwd.port;
+                delete sshCfg.sock;
+              } catch (err) {
+                dbg('forwarder request failed:', err?.message);
+                if (hostIsLocal) return destroy();
+              }
+            } else if (hostIsLocal) {
+              dbg('localhost target but no relay available');
               return destroy();
             }
           }
@@ -5148,7 +5170,7 @@ fi'`;
       }
 
       // Intercept HTTP upgrades — /relay-ws for local relay, /agent-ws for monitor agents
-      server.on('upgrade', (req, sock, head) => {
+      server.prependListener('upgrade', (req, sock, head) => {
         const cleanUrl = (req.url || '').replace(/^\/+/, '/');
         if (cleanUrl.startsWith('/relay-ws')) {
           relayWss.handleUpgrade(req, sock, head, (ws) => relayWss.emit('connection', ws, req));

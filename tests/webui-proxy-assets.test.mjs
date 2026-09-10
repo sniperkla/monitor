@@ -191,8 +191,9 @@ test('WebSocket proxy upgrade in server.js handles path-keyed URLs and auth cred
   assert.match(wsHandler, /process\.env\.NEXTAUTH_SECRET \|\| process\.env\.AUTH_SECRET \|\| process\.env\.ENCRYPTION_KEY/);
   assert.match(wsHandler, /secureCookie: true/);
   assert.match(wsHandler, /secureCookie: false/);
-  // SSH config resolution via getSshConfig
-  assert.match(wsHandler, /getSshConfig\(connectionId/);
+  // SSH config resolution — native inline (avoids ESM @/lib crash in CJS server.js).
+  // Credentials are read directly from mongoose.connection.db.collection('connections').
+  assert.match(wsHandler, /mongoose\.connection\.db\.collection\('connections'\)/);
   // Forwards non-monitor cookies and authorization
   assert.match(wsHandler, /clientCookies/);
   assert.match(wsHandler, /Cookie: \$\{clientCookies\}/);
