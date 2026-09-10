@@ -9,6 +9,16 @@ import ThemeSelect from '@/components/common/ThemeSelect';
 import RelayPairingPanel from '@/components/RelayPairingPanel';
 import { io } from 'socket.io-client';
 import { createRelayPeer, DC } from '@/lib/webrtc-relay';
+import WebUIOpenChoiceModal from '@/components/WebUIOpenChoiceModal';
+import AgentWebUIView from '@/components/AgentWebUIView';
+import {
+  readWebUIOpenMode,
+  writeWebUIOpenMode,
+  openExternalUrl,
+  isMobileLikeBrowser,
+  WEBUI_OPEN_MODE_IN_APP,
+  WEBUI_OPEN_MODE_EXTERNAL,
+} from '@/utils/webuiOpenMode';
 
 /**
  * AIAgentsApp — dedicated app for installing and managing AI agents on servers.
@@ -195,6 +205,28 @@ export default function AIAgentsApp({ apiFetch }) {
   const startingWebUIRef = useRef(false);
   const handleStartWebUIRef = useRef(null);
   const [stoppingWebUI, setStoppingWebUI] = useState(false);
+  // ── How the Web UI opens on THIS device ────────────────────────────────
+  //
+  // 'in-app'   → framed inside monitor over the same-origin proxy. No popup,
+  //              no loopback jump, no relay on this device. This is the route
+  //              that works on a phone in standard mobile mode.
+  // 'external' → a real browser tab.
+  //
+  // Empty means "ask". The preference lives in localStorage (per device: a
+  // phone and a desktop legitimately want different answers) and is read on
+  // mount so the first render is not a hydration mismatch.
+  const [webUIOpenMode, setWebUIOpenMode] = useState('');
+  const [webUIChoiceOpen, setWebUIChoiceOpen] = useState(false);
+  // Non-null while the in-app view is open: { url, title, subtitle }.
+  const [webUIView, setWebUIView] = useState(null);
+  // Both are read after mount, never during render: the server has no
+  // localStorage and no navigator, so reading them in the render pass would
+  // make the first client render disagree with the server's HTML.
+  const [isMobileForWebUI, setIsMobileForWebUI] = useState(false);
+  useEffect(() => {
+    setWebUIOpenMode(readWebUIOpenMode());
+    setIsMobileForWebUI(isMobileLikeBrowser());
+  }, []);
   const [forceBypassRelay, setForceBypassRelay] = useState(() => {
     try {
       return typeof window !== 'undefined' && localStorage.getItem('ssh_monitor_ssh_mode') === 'server';
@@ -868,11 +900,14 @@ export default function AIAgentsApp({ apiFetch }) {
     if (startingWebUIRef.current) return;
     startingWebUIRef.current = true;
     setStartingWebUI(true);
-    // Claim the browser tab NOW, synchronously. The whole point is that
-    // window.open() after an await loses the user-gesture token and gets
-    // blocked — so we take the tab first and navigate it once the gateway
-    // is actually up.
-    const startTab = openBlankWebUITab();
+    // Claim the browser tab NOW, synchronously, and only if we are actually
+    // going to need one. window.open() after an await loses the user-gesture
+    // token and gets blocked — so when the external route is the user's
+    // choice we take the tab first and navigate it once the gateway is up.
+    // Claiming one for the in-app route (or before the user has chosen)
+    // would just leave a stray blank tab behind.
+    const prefMode = webUIOpenMode || readWebUIOpenMode() || '';
+    const startTab = prefMode === WEBUI_OPEN_MODE_EXTERNAL ? openBlankWebUITab() : null;
     try {
       // Same stranded-tab protection as openWebUIInTab: if the start round trip
       // never settles, the claimed tab would sit on "Opening Web UI…" forever.
@@ -911,7 +946,15 @@ export default function AIAgentsApp({ apiFetch }) {
         // The tab itself was already created synchronously below, so this
         // delay doesn't cost us the user-gesture token.
         await new Promise((res) => setTimeout(res, 1000));
-        await openWebUIInTab(r?.webUIBootstrapPath, startTab);
+        if (prefMode === WEBUI_OPEN_MODE_IN_APP) {
+          openEmbeddedWebUI();
+        } else if (prefMode === WEBUI_OPEN_MODE_EXTERNAL) {
+          await openWebUIInTab(r?.webUIBootstrapPath, startTab);
+        } else {
+          // Nothing remembered — ask. The modal's own click handler still owns
+          // a user gesture, so either option can open a tab from there.
+          setWebUIChoiceOpen(true);
+        }
       } else {
         // The tab is already open on "Opening Web UI…" and nothing is coming.
         // callAction also returns `undefined` when it throws, so this branch is
@@ -1022,13 +1065,14 @@ export default function AIAgentsApp({ apiFetch }) {
       }
       if (mobileUrl) {
         if (!preopenedTab) {
-          try {
-            const directTab = window.open(mobileUrl, '_blank');
-            if (directTab) {
-              setNotice({ ok: true, text: viaServer ? 'Opened the Web UI through the server.' : `Opened the Web UI directly — ${mobileUrl}` });
-              return;
-            }
-          } catch { /* popup blocked */ }
+          // openExternalUrl() also fires a synthetic <a target="_blank"> click,
+          // which is what still opens a tab on mobile Safari / iOS standalone
+          // where window.open is refused. That refusal is why "open in a new
+          // tab" looked broken on phones in standard mobile mode.
+          if (openExternalUrl(mobileUrl)) {
+            setNotice({ ok: true, text: viaServer ? 'Opened the Web UI through the server.' : `Opened the Web UI directly — ${mobileUrl}` });
+            return;
+          }
         }
         const tab = preopenedTab || openBlankWebUITab();
         if (tab) {
@@ -1253,13 +1297,13 @@ export default function AIAgentsApp({ apiFetch }) {
       setNotice({ ok: false, text: 'Select a server before opening the Web UI.' });
       return;
     }
-    try {
-      const directTab = window.open(url, '_blank');
-      if (directTab) {
-        setNotice({ ok: true, text: 'Opened the Web UI through the server.' });
-        return;
-      }
-    } catch { /* blocked */ }
+    // openExternalUrl() falls back to a synthetic <a target="_blank"> click,
+    // which is the only thing that still opens a tab on mobile Safari and in
+    // iOS standalone/PWA mode where window.open is refused.
+    if (openExternalUrl(url)) {
+      setNotice({ ok: true, text: 'Opened the Web UI through the server.' });
+      return;
+    }
     const tab = openBlankWebUITab();
     if (tab) {
       try {
@@ -1271,6 +1315,61 @@ export default function AIAgentsApp({ apiFetch }) {
     }
     try { navigator.clipboard?.writeText(url); } catch { /* ignore */ }
     setNotice({ ok: true, text: `Popup blocked — URL copied to clipboard: ${url}` });
+  };
+
+  // ── The two-openings fork ──────────────────────────────────────────────
+  //
+  // Every "open the Web UI" entry point converges here so the choice is
+  // offered exactly once and remembered consistently:
+  //
+  //   • remembered 'in-app'   → frame it inside monitor
+  //   • remembered 'external' → real browser tab (existing flow)
+  //   • nothing remembered    → ask, then do whichever was picked
+  //
+  // requestOpenWebUI must stay SYNCHRONOUS up to the point where the external
+  // route claims its tab — window.open() only escapes the popup blocker inside
+  // a live user gesture.
+  const resolvedWebUIOpenMode = () => webUIOpenMode || readWebUIOpenMode() || '';
+
+  const openEmbeddedWebUI = () => {
+    const url = webUIProxyUrl();
+    if (!url) {
+      setNotice({ ok: false, text: 'Select a server before opening the Web UI.' });
+      return;
+    }
+    const curTarget = targetRef.current || target;
+    const conn = connectionsRef.current?.find((c) => c._id === curTarget)
+      || connections.find((c) => c._id === curTarget);
+    setWebUIView({
+      url,
+      title: `${agentRef.current?.name || agent.name} Web UI`,
+      subtitle: `${conn?.name || conn?.host || 'agent'} · port ${webUIPort()} · via monitor server`,
+    });
+  };
+
+  const requestOpenWebUI = () => {
+    const mode = resolvedWebUIOpenMode();
+    if (mode === WEBUI_OPEN_MODE_IN_APP) {
+      openEmbeddedWebUI();
+      return;
+    }
+    if (mode === WEBUI_OPEN_MODE_EXTERNAL) {
+      openWebUIInTab();
+      return;
+    }
+    setWebUIChoiceOpen(true);
+  };
+
+  // Called from the choice modal. Runs inside the option's click handler, so
+  // the external branch still owns a valid user-gesture token.
+  const handleWebUIOpenChoice = (mode, remember) => {
+    if (remember && mode) {
+      writeWebUIOpenMode(mode);
+      setWebUIOpenMode(mode);
+    }
+    setWebUIChoiceOpen(false);
+    if (mode === WEBUI_OPEN_MODE_IN_APP) openEmbeddedWebUI();
+    else openWebUIInTab();
   };
 
   const act = async (label, fn) => {
@@ -2734,21 +2833,42 @@ export default function AIAgentsApp({ apiFetch }) {
                           )}
                         </button>
                       )}
-                      <button
-                        onClick={() => openWebUIInTab()}
-                        className={`px-3 py-1.5 rounded-xl font-bold text-xs flex items-center gap-1.5 border transition cursor-pointer ${
-                          relayInfo?.connected
-                            ? 'bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 hover:text-sky-200 border-sky-500/30'
-                            : 'bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 hover:text-amber-200 border-amber-500/30'
-                        }`}
-                        title={relayInfo?.connected ? "Open directly via Local Relay (http://127.0.0.1:18791)" : "Local Relay is required for Web UI"}
-                      >
-                        {relayInfo?.connected ? (
-                          <><ExternalLink size={12} /> Open in New Tab</>
-                        ) : (
-                          <><Cable size={12} /> Local Relay Required</>
-                        )}
-                      </button>
+                      {/* Opening now forks: in-app (framed over the same-origin
+                          proxy — the route that works on a phone in standard
+                          mobile mode) or a real browser tab. A remembered
+                          choice goes straight there; the caret re-opens the
+                          chooser so the other route is one click away. */}
+                      <div className="flex items-stretch rounded-xl border border-sky-500/30 overflow-hidden">
+                        <button
+                          data-open-webui-btn
+                          onClick={requestOpenWebUI}
+                          className="px-3 py-1.5 bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 hover:text-sky-200 font-bold text-xs flex items-center gap-1.5 transition cursor-pointer"
+                          title={
+                            webUIOpenMode === WEBUI_OPEN_MODE_IN_APP
+                              ? 'Open the Web UI inside monitor (works on any device)'
+                              : webUIOpenMode === WEBUI_OPEN_MODE_EXTERNAL
+                              ? 'Open the Web UI in a browser tab' + (relayInfo?.connected ? ' — direct via Local Relay' : ' — through the monitor server')
+                              : 'Open the Web UI — choose in app or browser tab'
+                          }
+                        >
+                          {webUIOpenMode === WEBUI_OPEN_MODE_IN_APP ? (
+                            <><MonitorSmartphone size={12} /> Open in App</>
+                          ) : webUIOpenMode === WEBUI_OPEN_MODE_EXTERNAL ? (
+                            <><ExternalLink size={12} /> Open in New Tab</>
+                          ) : (
+                            <><ExternalLink size={12} /> Open Web UI</>
+                          )}
+                        </button>
+                        <button
+                          data-open-webui-mode-btn
+                          onClick={() => setWebUIChoiceOpen(true)}
+                          className="px-1.5 flex items-center justify-center bg-sky-500/20 hover:bg-sky-500/40 text-sky-300 hover:text-sky-200 border-l border-sky-500/30 transition cursor-pointer"
+                          title="Choose how the Web UI opens (in app or browser tab)"
+                          aria-label="Choose how the Web UI opens"
+                        >
+                          <ChevronDown size={12} />
+                        </button>
+                      </div>
                       {/* "Via server" only makes sense for a Web UI bound to
                           LOOPBACK (127.0.0.1) on the target server — that is
                           exactly what the proxy dials over SSH. When the UI is
@@ -4399,6 +4519,33 @@ export default function AIAgentsApp({ apiFetch }) {
       <SupporterModal
         open={supporterModalOpen}
         onClose={() => setSupporterModalOpen(false)}
+      />
+
+      {/* ── In-app Web UI view ─────────────────────────────────────────────
+          Portal'd to <body> so it escapes the window container's overflow and
+          transform (a fixed child of a transformed ancestor is not really
+          fixed). Frames the same-origin proxy, which is what makes it work
+          from a phone, a tablet and a desktop alike. */}
+      <AgentWebUIView
+        open={!!webUIView}
+        url={webUIView?.url || ''}
+        title={webUIView?.title || 'Web UI'}
+        subtitle={webUIView?.subtitle || ''}
+        onClose={() => setWebUIView(null)}
+        onOpenExternal={() => openWebUIInTab()}
+      />
+
+      {/* ── "How do you want to open it?" ──────────────────────────────────
+          Shown whenever no mode is remembered for this device, and on demand
+          from the caret next to the Open button. */}
+      <WebUIOpenChoiceModal
+        open={webUIChoiceOpen}
+        agentName={agent.name}
+        port={details?.webUIPort || webUIPort()}
+        isMobile={isMobileForWebUI}
+        relayActive={!!(relayConnectedRef.current || relayInfo?.connected)}
+        onChoose={handleWebUIOpenChoice}
+        onClose={() => setWebUIChoiceOpen(false)}
       />
     </div>
   );

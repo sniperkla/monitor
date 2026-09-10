@@ -148,7 +148,7 @@ function httpOverSocket(socket, remotePort, reqPath, reqMethod, reqHeaders, reqB
  * Rewrite URLs in HTML so that relative paths and AJAX/fetch calls continue
  * to go through this proxy endpoint rather than hitting the real domain.
  */
-function rewriteHtml(html, proxyBase, currentPath, port, connectionId, agentId = 'nanobot') {
+function rewriteHtml(html, proxyBase, currentPath, port, connectionId, agentId = 'nanobot', extraProxyQuery = '') {
   // Folder for relative resolution (e.g. /app/ -> /app/, /index.html -> /)
   const folder = currentPath.substring(0, currentPath.lastIndexOf('/') + 1) || '/';
 
@@ -162,24 +162,44 @@ function rewriteHtml(html, proxyBase, currentPath, port, connectionId, agentId =
   var TUNNELED_PORT = ${JSON.stringify(String(port))};
   var TUNNEL_ID = ${JSON.stringify(String(connectionId || ''))};
   var WEBUI_AGENT = ${JSON.stringify(String(agentId || 'nanobot'))};
+  var EXTRA_WS_PARAMS = ${JSON.stringify(extraProxyQuery || '')};
   function proxyWsUrl(p) {
     // Dedicated WS path (no Next.js route behind it): if the WS URL pointed at
     // /api/agents/webui-proxy, Next's upgradeHandler would treat the upgrade as
     // hitting an API route and socket.end() it mid-tunnel.
-    return (location.protocol === 'https:' ? 'wss' : 'ws') + '://' + location.host + '/api/agents/webui-ws-proxy?connectionId=' + encodeURIComponent(TUNNEL_ID) + '&port=' + encodeURIComponent(TUNNELED_PORT) + '&path=' + encodeURIComponent(p);
+    return (location.protocol === 'https:' ? 'wss' : 'ws') + '://' + location.host + '/api/agents/webui-ws-proxy?connectionId=' + encodeURIComponent(TUNNEL_ID) + '&port=' + encodeURIComponent(TUNNELED_PORT) + EXTRA_WS_PARAMS + '&path=' + encodeURIComponent(p);
+  }
+  function proxyHttpUrl(p) {
+    // Fetch/XHR has to preserve the method, body and headers while changing
+    // only the URL. The query-form proxy route is the compatible path for
+    // those requests; it forwards the original remote path unchanged.
+    return PROXY_BASE + encodeURIComponent(p || '/');
   }
   function rewriteUrl(u) {
     if (!u || typeof u !== 'string') return u;
     if (u.startsWith('//') || u.startsWith('http://') || u.startsWith('https://') || u.startsWith('data:') || u.startsWith('blob:') || u.startsWith('javascript:')) return u;
     if (u.startsWith('/api/agents/webui-proxy')) return u;
+    // Hermes' dashboard API is root-relative (/api/hermes/..., /v1/..., etc.)
+    // but the monitor only proxies the Web UI document/assets. In the external
+    // tab those URLs are handled by Hermes itself; in the embed they would hit
+    // monitor.eaqdragon.com and fail, which leaves the green shell while every
+    // ChatPage chunk reports a resource error. Route root-relative requests
+    // through the same HTTP tunnel; the remote dashboard receives the original
+    // Hermes API path, not the monitor path.
     var p = u.startsWith('/') ? u : (CURRENT_FOLDER + u.replace(/^\\.\\//, ''));
-    return PROXY_BASE + encodeURIComponent(p);
+    return proxyHttpUrl(p);
   }
   // Absolute URLs that point at the tunneled loopback service must be pulled
   // back inside the proxy — navigating to them would leave the SSH tunnel and
   // make the BROWSER dial localhost:<port> on the visitor's own machine
   // ("localhost refused to connect").
   var LOOPBACK_RE = new RegExp('^https?://(?:localhost|127\\\\.0\\\\.0\\\\.1|0\\\\.0\\\\.0\\\\.0|\\\\[::1\\\\])(:' + TUNNELED_PORT + ')?(/.*)?$', 'i');
+  // See fixSubresource(): heals React Router's '/'+dep protocol-relative
+  // artifact. MUST be the RegExp-constructor string form — a regex literal in
+  // this template literal has its backslash-slash escapes collapsed and the
+  // unescaped double-slash after "https?:" ends the literal, breaking the
+  // whole helper's parse.
+  var API_HOST_RE = new RegExp('^https?://api(?=/agents/webui-proxy(/|$))', 'i');
   function rewriteLoopback(u) {
     if (!u || typeof u !== 'string') return null;
     var m = u.match(LOOPBACK_RE);
@@ -209,13 +229,38 @@ function rewriteHtml(html, proxyBase, currentPath, port, connectionId, agentId =
       return origOpen.apply(this, [method, url].concat(Array.prototype.slice.call(arguments, 2)));
     };
   }
-  // Anchors: intercept clicks on links that point at the tunneled loopback
+  // Socket.IO in Hermes connects to /chat-run, not the monitor's socket.io
+  // namespace. Route that WebSocket through the dedicated raw tunnel; the
+  // proxy server rebuilds the remote upgrade request and preserves the path.
+  // Without this, the shell/assets load but ChatPage cannot connect or stream.
+  var origEventSource = window.EventSource;
+  if (origEventSource) {
+    window.EventSource = function(url, config) {
+      return new origEventSource(rewriteUrl(url), config);
+    };
+    window.EventSource.prototype = origEventSource.prototype;
+  }
+  // Anchors: intercept clicks on links that point at the tunneled loopback,
+  // and — the case that actually bit — on links that point at a BARE same-origin
+  // path. A hosted app served from its own root links to "/chat/<id>" or
+  // "/sessions"; under the proxy that path is not the tunnel, so following it
+  // navigates to a route the monitor does not have and the page 404s (or, in a
+  // framed embed, renders the monitor's own not-found page). pushState is
+  // contained below, but a real link click never reaches it.
+  // Modifier clicks and any target other than _self are left alone: those mean
+  // "open elsewhere" and hijacking them would break the user's own gesture.
   document.addEventListener('click', function(e) {
+    if (e.defaultPrevented || e.button !== 0) return;
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
     var el = e.target;
     while (el && el !== document && !(el.tagName === 'A' && el.getAttribute('href'))) el = el.parentElement;
     if (!el || el === document) return;
-    var proxied = rewriteLoopback(el.getAttribute('href'));
-    if (proxied) { e.preventDefault(); window.location.href = proxied; }
+    if (el.target && el.target !== '_self') return;
+    var href = el.getAttribute('href');
+    var proxied = rewriteLoopback(href);
+    if (proxied) { e.preventDefault(); window.location.href = proxied; return; }
+    var contained = containInTunnel(href);
+    if (contained && contained !== href) { e.preventDefault(); window.location.href = contained; }
   }, true);
   var origWindowOpen = window.open;
   window.open = function(u) {
@@ -236,13 +281,21 @@ function rewriteHtml(html, proxyBase, currentPath, port, connectionId, agentId =
     var WS_LOOPBACK_RE = new RegExp('^(wss?):\\/\\/(?:localhost|127\\.0\\.0\\.1|0\\.0\\.0\\.0|\\[::1\\])(?::' + TUNNELED_PORT + ')?(\\/[^#]*)?');
     var wsMatch = str.match(WS_LOOPBACK_RE);
     if (wsMatch) return proxyWsUrl(wsMatch[2] || '/');
-    if (parsed && parsed.host === location.host) return proxyWsUrl(parsed.pathname + parsed.search);
+    // Hermes' dashboard builds its channel URLs from its basename, which the
+    // served HTML sets to ASSET_PREFIX — so its sockets arrive as
+    // <host><ASSET_PREFIX>/api/ws?token=... Strip the keyed prefix so the
+    // handler receives the remote's own channel path.
+    if (parsed && parsed.host === location.host && ASSET_PREFIX && parsed.pathname.indexOf(ASSET_PREFIX) === 0) {
+      return proxyWsUrl((parsed.pathname.slice(ASSET_PREFIX.length) || '/') + parsed.search);
+    }
+    if (parsed && parsed.host === location.host) return proxyWsUrl((parsed.pathname || '/') + parsed.search);
     return str;
   }
-  window.WebSocket = function(url, protocols) {
+  window.WebSocket = function ProxiedWebSocket(url, protocols) {
     var n = tunnelWsUrl(url);
     return protocols === undefined ? new NativeWS(n) : new NativeWS(n, protocols);
   };
+  Object.setPrototypeOf(window.WebSocket, NativeWS);
   window.WebSocket.prototype = NativeWS.prototype;
   ['CONNECTING','OPEN','CLOSING','CLOSED'].forEach(function(k){ window.WebSocket[k] = NativeWS[k]; });
   // Hide the proxy's own query params (connectionId/port/path) from the hosted
@@ -277,6 +330,25 @@ function rewriteHtml(html, proxyBase, currentPath, port, connectionId, agentId =
   var TUNNEL_PREFIX = '/api/agents/webui-proxy';
   function fixSubresource(u) {
     if (!u || typeof u !== 'string') return u;
+    // React Router's preload helper prepends '/' to each lazy-chunk dep. When
+    // a dep is already root-absolute that yields '//api/agents/...' — a
+    // protocol-relative URL whose HOST is "api" — or, after
+    // import.meta.resolve(), 'http://api/agents/...'. Either way the browser
+    // tries to DNS-resolve the host "api" and every lazy chunk fails with
+    // net::ERR_NAME_NOT_RESOLVED. Fold the duplicated slash back into the
+    // keyed tunnel path BEFORE the generic guards below.
+    //
+    // NOTE: this regex must be built via the RegExp-constructor string form.
+    // A regex literal written directly in the template literal has its
+    // backslash-slash escapes collapsed to plain slashes by the template
+    // itself, so a literal /https?:\/\/api/ arrives as /https?://api/ — the
+    // unescaped double-slash ENDS the regex and the rest of the helper fails
+    // to parse ("Unexpected token '?'"), which silently disabled the ENTIRE
+    // injected patch layer.
+    if (u.indexOf('//' + TUNNEL_PREFIX) === 0) u = u.slice(1);
+    if (API_HOST_RE.test(u)) {
+      u = '/api' + u.slice(u.indexOf('/agents/webui-proxy'));
+    }
     if (u.indexOf('//') === 0 || u.indexOf('data:') === 0 || u.indexOf('blob:') === 0 ||
         u.indexOf('javascript:') === 0 || /^[a-z][a-z0-9+.-]*:/i.test(u)) return u;
     if (u.indexOf(TUNNEL_PREFIX) === 0) return u;
@@ -427,14 +499,24 @@ function rewriteHtml(html, proxyBase, currentPath, port, connectionId, agentId =
  */
 function rewriteRootAssetRefs(text, connectionId, port) {
   const prefix = assetPathPrefix(connectionId, port);
-  // Hermes' Vite preload map stores lazy chunks as `assets/foo.js` and later
-  // turns them into root-relative URLs. Once the BrowserRouter moves from the
-  // entry page to /chat or /skills, those URLs escape the keyed tunnel and hit
-  // the monitor origin as /assets/foo.js. Carry the prefix into the bundle
-  // itself so dynamic imports remain tunneled too.
+  // Hermes' Vite preload map stores lazy chunks as `assets/foo.js`. Two
+  // consumers read `/assets/...`-shaped strings out of the bundles, and they
+  // need DIFFERENT forms once rewritten:
+  //
+  // 1. The `__vite__mapDeps` array (relative `assets/foo.js` entries). React
+  //    Router's preload helper prepends a '/' to every dep
+  //    (`Xt = e => "/" + e`) before `import.meta.resolve()`. Rewriting the
+  //    entry WITH a leading slash therefore produced '//api/agents/...' —
+  //    a protocol-relative URL whose HOST is "api" — and every lazily
+  //    imported ChatPage/xterm/clipboard chunk died with
+  //    net::ERR_NAME_NOT_RESOLVED. Map deps must be rewritten WITHOUT the
+  //    leading slash so the helper's own '/' completes the keyed path.
+  // 2. Root-absolute refs ("/assets/foo.css") consumed directly. Those keep
+  //    the keyed prefix with its leading slash.
+  const relPrefix = prefix.replace(/^\//, '');
   return String(text)
-    .replace(/(["'`])\/assets\//g, (_m, quote) => `${quote}${prefix}/assets/`)
-    .replace(/(["'`])assets\//g, (_m, quote) => `${quote}${prefix}/assets/`);
+    .replace(/(["'`])assets\//g, (_m, quote) => `${quote}${relPrefix}/assets/`)
+    .replace(/(["'`])\/assets\//g, (_m, quote) => `${quote}${prefix}/assets/`);
 }
 
 function rewriteAbsoluteSelfUrls(text, proxyBase, port) {
@@ -718,13 +800,19 @@ async function handleProxy(request) {
     if (contentType.includes('text/html')) {
       let html = body.toString('utf8');
       html = rewriteAbsoluteSelfUrls(html, proxyBase, port);
-      html = rewriteHtml(html, proxyBase, remotePath, port, connectionId, agentId);
-      // Hermes' BrowserRouter must strip the keyed proxy prefix before route
-      // matching; otherwise every navigation sees `/m/<cid>/<port>/chat` and
-      // redirects back to `/sessions`.
+      html = rewriteHtml(html, proxyBase, remotePath, port, connectionId, agentId, extraProxyQuery);
+      // Hermes' dashboard uses a hash router (routes are /hermes/chat,
+      // /hermes/history, etc.). Do not overwrite its base-path marker with the
+      // keyed proxy path: that makes the dashboard render its dark/green shell
+      // but fail to resolve route chunks and the chat view when embedded. The
+      // path-keyed proxy already handles asset URLs, and the hash remains
+      // client-side.
+      //
+      // Keep compatibility for an explicitly empty marker, but never replace
+      // a non-empty value from the dashboard.
       html = html.replace(
-        /window\.__HERMES_BASE_PATH__\s*=\s*(['"])[^'"\\]*\1/g,
-        (_match) => `window.__HERMES_BASE_PATH__=${JSON.stringify(assetPathPrefix(connectionId, port))}`
+        /window\.__HERMES_BASE_PATH__\s*=\s*(['"])\1/g,
+        (_match, quote) => `window.__HERMES_BASE_PATH__=${quote}${assetPathPrefix(connectionId, port)}${quote}`
       );
       body = Buffer.from(html, 'utf8');
       outHeaders['content-length'] = String(body.length);

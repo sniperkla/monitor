@@ -4965,19 +4965,36 @@ fi'`;
         const dbg = (...a) => { if (process.env.WS_PROXY_DEBUG === '1') console.log('[webui-proxy-ws]', ...a); };
         const destroy = () => { try { sock.destroy(); } catch {} };
         try {
-          const u = new URL(req.url, 'http://localhost');
-          const connectionId = u.searchParams.get('connectionId');
-          const port = parseInt(u.searchParams.get('port'), 10);
-          dbg('upgrade hit', req.url, 'cid=', connectionId, 'port=', port);
+          try {
+            sock.setTimeout(0);
+            sock.setNoDelay(true);
+            sock.setKeepAlive(true, 10000);
+            sock.resume();
+          } catch {}
+
+          const u = new URL((req.url || '').replace(/^\/+/, '/'), 'http://localhost');
+          let connectionId = u.searchParams.get('connectionId');
+          let port = parseInt(u.searchParams.get('port'), 10);
+          let remotePath = (u.searchParams.get('path') || '').split('#')[0];
+
+          // Support path-keyed variant: /api/agents/webui-[ws-]proxy/m/<connectionId>/<port>/<path>
+          const pathMatch = u.pathname.match(/^\/api\/agents\/webui-(?:ws-)?proxy\/m\/([^/]+)\/(\d+)(?:\/(.*))?$/);
+          if (pathMatch) {
+            if (!connectionId) connectionId = decodeURIComponent(pathMatch[1]);
+            if (!port) port = parseInt(pathMatch[2], 10);
+            if (!remotePath) remotePath = pathMatch[3] ? '/' + pathMatch[3] : '/';
+          }
+          if (!remotePath) remotePath = '/';
+
+          dbg('upgrade hit', req.url, 'cid=', connectionId, 'port=', port, 'path=', remotePath);
           if (!connectionId || !port || port < 1 || port > 65535) return destroy();
 
           // Rebuild the REMOTE request target. req.url is the monitor-side proxy
           // URL (/api/agents/webui-proxy?...), which the remote service would
           // reject. The path the browser actually wants is the `path` query
           // param, with any extra params merged in.
-          let remotePath = (u.searchParams.get('path') || '/').split('#')[0];
           const extraParams = new URLSearchParams(u.searchParams);
-          for (const k of ['connectionId', 'port', 'path', '_base']) extraParams.delete(k);
+          for (const k of ['connectionId', 'port', 'path', '_base', 'agent', 'sshMode', 'preferredRelay']) extraParams.delete(k);
           if (remotePath.includes('?')) {
             const qIdx = remotePath.indexOf('?');
             for (const [k, v] of new URLSearchParams(remotePath.slice(qIdx + 1))) {
@@ -4991,15 +5008,26 @@ fi'`;
           const { getToken } = require('next-auth/jwt');
           if (!req.cookies) {
             const cookieHeader = req.headers.cookie || '';
-            req.cookies = Object.fromEntries(cookieHeader.split('; ').filter(Boolean).map(c => {
-              const i = c.indexOf('=');
-              return [c.slice(0, i).trim(), decodeURIComponent(c.slice(i + 1))];
+            req.cookies = Object.fromEntries(cookieHeader.split(/;\s*/).filter(Boolean).map(c => {
+              let [k, ...v] = c.split('=');
+              return [k?.trim(), decodeURIComponent(v.join('='))];
             }));
           }
-          const token = await getToken({ req, secret: process.env.NEXTAUTH_SECRET });
+          const secret = process.env.NEXTAUTH_SECRET || process.env.AUTH_SECRET || process.env.ENCRYPTION_KEY;
+          let token = null;
+          if (secret) {
+            try {
+              token = await getToken({ req, secret });
+              if (!token) token = await getToken({ req, secret, secureCookie: true });
+              if (!token) token = await getToken({ req, secret, secureCookie: false });
+            } catch (err) {
+              dbg('token decode error', err?.message);
+            }
+          }
           dbg('token', !!token, '| mongo readyState', mongoose.connection.readyState);
           if (!token) return destroy();
-          const actingUserId = token.dbId || token.sub || null;
+          const actingUserId = token.dbId || token.id || token.sub || null;
+          const actingUserRole = token.role || null;
 
           if (mongoose.connection.readyState !== 1) return destroy();
           const { decrypt } = require('./src/utils/encryption');
@@ -5011,29 +5039,43 @@ fi'`;
           dbg('connDoc', !!connDoc);
           if (!connDoc) return destroy();
           // Ownership — mirror getSshConfig: an owned connection is only
-          // reachable by its owner (db id or relay/google subject).
-          if (connDoc.userId && actingUserId &&
+          // reachable by its owner (db id or relay/google subject) unless admin.
+          if (connDoc.userId && actingUserId && actingUserRole !== 'admin' &&
               String(connDoc.userId) !== String(actingUserId) &&
               String(connDoc.userId) !== String(token.sub || '')) return destroy();
 
-          const sshCfg = {
-            host: connDoc.host,
-            port: connDoc.port || 22,
-            username: connDoc.username || 'root',
-            readyTimeout: 20000,
-            keepaliveInterval: 10000,
-          };
-          if (connDoc.authType === 'password' && connDoc.password) {
-            let dec = decrypt(connDoc.password);
-            if (dec && dec.includes(':') && dec.length > 40) { const t = decrypt(dec); if (t && !t.includes(':')) dec = t; }
-            sshCfg.password = dec;
-          } else if (connDoc.authType === 'privateKey' && connDoc.privateKey) {
-            let dec = decrypt(connDoc.privateKey);
-            if (dec && dec.includes(':') && dec.length > 40) { const t = decrypt(dec); if (t && !t.includes(':')) dec = t; }
-            sshCfg.privateKey = dec;
-            if (connDoc.passphrase) sshCfg.passphrase = decrypt(connDoc.passphrase);
-          } else {
-            return destroy();
+          let sshCfg = null;
+          try {
+            const { getSshConfig } = await import('./src/app/api/server-backup/_ssh.js');
+            sshCfg = await getSshConfig(connectionId, {
+              userId: actingUserId,
+              sshMode: u.searchParams.get('sshMode') || undefined,
+              preferredRelay: u.searchParams.get('preferredRelay') || undefined,
+            });
+          } catch (err) {
+            dbg('getSshConfig err, using direct fallback:', err?.message);
+          }
+          if (!sshCfg) {
+            sshCfg = {
+              host: connDoc.host,
+              port: connDoc.port || 22,
+              username: connDoc.username || 'root',
+              readyTimeout: 20000,
+              keepaliveInterval: 10000,
+              keepaliveCountMax: 12,
+            };
+            if (connDoc.authType === 'password' && connDoc.password) {
+              let dec = decrypt(connDoc.password);
+              if (dec && dec.includes(':') && dec.length > 40) { const t = decrypt(dec); if (t && !t.includes(':')) dec = t; }
+              sshCfg.password = dec;
+            } else if (connDoc.authType === 'privateKey' && connDoc.privateKey) {
+              let dec = decrypt(connDoc.privateKey);
+              if (dec && dec.includes(':') && dec.length > 40) { const t = decrypt(dec); if (t && !t.includes(':')) dec = t; }
+              sshCfg.privateKey = dec;
+              if (connDoc.passphrase) sshCfg.passphrase = decrypt(connDoc.passphrase);
+            } else {
+              return destroy();
+            }
           }
 
           const ssh = new Client();
@@ -5045,24 +5087,46 @@ fi'`;
               dbg('forwardOut ok, rawUrl=', rawUrl);
               // Node consumed the client's request bytes — rebuild the
               // upgrade request for the remote service.
-              const skip = new Set(['host', 'connection', 'upgrade', 'cookie', 'authorization', 'origin']);
+              const skip = new Set(['host', 'connection', 'upgrade', 'cookie', 'origin']);
               let raw = `${req.method} ${rawUrl} HTTP/1.1\r\n`;
               raw += `Host: 127.0.0.1:${port}\r\n`;
               // Origin must match the tunneled origin — some WS servers reject
               // handshakes whose Origin is a foreign host.
               raw += `Origin: http://127.0.0.1:${port}\r\n`;
               for (const [k, v] of Object.entries(req.headers)) {
-                if (skip.has(k)) continue;
+                if (skip.has(k.toLowerCase())) continue;
                 raw += `${k}: ${Array.isArray(v) ? v.join(', ') : v}\r\n`;
+              }
+              // Forward non-monitor cookies (e.g. agent session cookies / tokens)
+              const clientCookies = (req.headers.cookie || '')
+                .split(/;\s*/)
+                .filter(c => !c.startsWith('next-auth.') && !c.startsWith('__Secure-next-auth.') && !c.startsWith('mp_webui_coords='))
+                .join('; ');
+              if (clientCookies) {
+                raw += `Cookie: ${clientCookies}\r\n`;
               }
               raw += 'Connection: Upgrade\r\nUpgrade: websocket\r\n\r\n';
               dbg('sending raw len', raw.length + (head ? head.length : 0));
               stream.write(raw);
               if (head && head.length) stream.write(head);
-              // Explicit bidirectional forwarding. (pipe() would also work; manual
-              // handlers keep each direction debuggable.)
-              stream.on('data', (d) => { if (sock.destroyed) return dbg('dropping remote bytes (sock gone)'); try { sock.write(d); } catch {} });
-              sock.on('data', (d) => { try { stream.write(d); } catch {} });
+              // Explicit bidirectional forwarding with backpressure handling
+              stream.on('data', (d) => {
+                if (sock.destroyed) return dbg('dropping remote bytes (sock gone)');
+                if (!sock.write(d)) {
+                  try { stream.pause(); } catch {}
+                }
+              });
+              sock.on('drain', () => {
+                try { stream.resume(); } catch {}
+              });
+              sock.on('data', (d) => {
+                if (!stream.write(d)) {
+                  try { sock.pause(); } catch {}
+                }
+              });
+              stream.on('drain', () => {
+                try { sock.resume(); } catch {}
+              });
               stream.on('close', () => { dbg('ssh stream closed'); cleanup(); });
               stream.on('error', (e) => { dbg('ssh stream err', e.message); cleanup(); });
               sock.on('close', () => { dbg('client sock closed'); cleanup(); });
@@ -5075,7 +5139,7 @@ fi'`;
               }
             });
           });
-          ssh.on('error', () => destroy());
+          ssh.on('error', (err) => { dbg('ssh conn err', err?.message); destroy(); });
           ssh.connect(sshCfg);
         } catch (e) {
           console.error('[webui-proxy] WS upgrade error:', e?.message);
@@ -5085,11 +5149,12 @@ fi'`;
 
       // Intercept HTTP upgrades — /relay-ws for local relay, /agent-ws for monitor agents
       server.on('upgrade', (req, sock, head) => {
-        if (req.url && req.url.startsWith('/relay-ws')) {
+        const cleanUrl = (req.url || '').replace(/^\/+/, '/');
+        if (cleanUrl.startsWith('/relay-ws')) {
           relayWss.handleUpgrade(req, sock, head, (ws) => relayWss.emit('connection', ws, req));
-        } else if (req.url && req.url.startsWith('/agent-ws')) {
+        } else if (cleanUrl.startsWith('/agent-ws')) {
           agentWss.handleUpgrade(req, sock, head, (ws) => agentWss.emit('connection', ws, req));
-        } else if (req.url && (req.url.startsWith('/api/agents/webui-proxy') || req.url.startsWith('/api/agents/webui-ws-proxy'))) {
+        } else if (cleanUrl.startsWith('/api/agents/webui-proxy') || cleanUrl.startsWith('/api/agents/webui-ws-proxy')) {
           handleWebUIProxyUpgrade(req, sock, head);
         }
       });
