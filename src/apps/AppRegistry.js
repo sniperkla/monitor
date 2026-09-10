@@ -23,6 +23,11 @@ import AgentWebUIBrowserApp from '@/apps/AgentWebUIBrowserApp';
 
 // Add other apps here as needed
 export const AppRegistry = {
+  'browser': {
+    component: AgentWebUIBrowserApp,
+    icon: Globe,
+    defaultTitle: 'Web Browser'
+  },
   'agent-webui': {
     component: AgentWebUIBrowserApp,
     icon: Globe,

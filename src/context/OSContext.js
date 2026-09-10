@@ -478,9 +478,9 @@ function osReducer(state, action) {
         } else if (typeof w.id === 'string' && w.id.startsWith('standalone-db-')) {
           Component = AppRegistry['database-browser']?.component;
           Icon = AppRegistry['database-browser']?.icon;
-        } else if (typeof w.id === 'string' && (w.id.startsWith('agent-webui-') || w.id.startsWith('webui-'))) {
-          Component = AppRegistry['agent-webui']?.component;
-          Icon = AppRegistry['agent-webui']?.icon;
+        } else if (typeof w.id === 'string' && (w.id.startsWith('agent-webui-') || w.id.startsWith('webui-') || w.id === 'browser')) {
+          Component = AppRegistry['agent-webui']?.component || AppRegistry['browser']?.component;
+          Icon = AppRegistry['agent-webui']?.icon || AppRegistry['browser']?.icon;
         }
 
         if (!Component) return null;
