@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { BrainCircuit, Server as ServerIcon, RefreshCw, Loader2, CheckCircle2, XCircle, AlertCircle, Settings2, Puzzle, Trash2, Play, Square, RotateCw, Plus, ExternalLink, Send, Search, Sparkles, Check, FileText, Copy, Lock, Radio, Zap, Shield, ShieldOff, UserX, Cable, ChevronRight, Flame, Heart, Terminal, ChevronDown, ChevronUp, X, Minus, Maximize2, Minimize2, GripHorizontal, Eye, EyeOff, ArrowUpCircle, DownloadCloud, MonitorSmartphone, ChevronLeft, KeyRound } from 'lucide-react';
+import { BrainCircuit, Server as ServerIcon, RefreshCw, Loader2, CheckCircle2, XCircle, AlertCircle, Settings2, Puzzle, Trash2, Play, Square, RotateCw, Plus, ExternalLink, Send, Search, Sparkles, Check, FileText, Copy, Lock, Radio, Zap, Shield, ShieldOff, UserX, Cable, ChevronRight, Flame, Heart, Terminal, ChevronDown, ChevronUp, X, Minus, Maximize2, Minimize2, GripHorizontal, Eye, EyeOff, ArrowUpCircle, DownloadCloud, MonitorSmartphone, ChevronLeft, KeyRound, Globe } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 import { useOS } from '@/context/OSContext';
 import { useSupporter } from '@/hooks/useSupporter';
@@ -11,6 +11,7 @@ import { io } from 'socket.io-client';
 import { createRelayPeer, DC } from '@/lib/webrtc-relay';
 import WebUIOpenChoiceModal from '@/components/WebUIOpenChoiceModal';
 import AgentWebUIView from '@/components/AgentWebUIView';
+import AgentWebUIBrowserApp from '@/apps/AgentWebUIBrowserApp';
 import {
   readWebUIOpenMode,
   writeWebUIOpenMode,
@@ -184,7 +185,7 @@ export default function AIAgentsApp({ apiFetch }) {
   // (ServerBackup, Docker, Firewall…) pulls apiFetch from useApp() instead.
   const { state, connectionsReady, relayInfo, dispatch, apiFetch: ctxApiFetch } = useApp();
   const { isSupporter } = useSupporter({ refreshOnFocus: true });
-  const { showPrompt } = useOS();
+  const { showPrompt, openWindow } = useOS();
   const [supporterModalOpen, setSupporterModalOpen] = useState(false);
   const doFetch = apiFetch || ctxApiFetch || fetch;
   const connections = useMemo(
@@ -1340,11 +1341,49 @@ export default function AIAgentsApp({ apiFetch }) {
     const curTarget = targetRef.current || target;
     const conn = connectionsRef.current?.find((c) => c._id === curTarget)
       || connections.find((c) => c._id === curTarget);
-    setWebUIView({
-      url,
-      title: `${agentRef.current?.name || agent.name} Web UI`,
-      subtitle: `${conn?.name || conn?.host || 'agent'} · port ${webUIPort()} · via monitor server`,
-    });
+    const curAgentName = agentRef.current?.name || agent.name;
+    const curPort = webUIPort();
+    const winTitle = `${curAgentName} Web UI`;
+    const winId = `agent-webui-${agent.id}-${curTarget || 'local'}`;
+
+    if (openWindow) {
+      openWindow(
+        winId,
+        winTitle,
+        <AgentWebUIBrowserApp
+          windowId={winId}
+          url={url}
+          agentId={agent.id}
+          agentName={curAgentName}
+          connectionId={curTarget}
+          connectionName={conn?.name || conn?.host || 'agent'}
+          port={curPort}
+          onOpenExternal={() => openWebUIInTab()}
+        />,
+        Globe,
+        {
+          initialWidth: 1100,
+          initialHeight: 760,
+          minWidth: 480,
+          minHeight: 360,
+          appType: 'agent-webui',
+          props: {
+            url,
+            agentId: agent.id,
+            agentName: curAgentName,
+            connectionId: curTarget,
+            connectionName: conn?.name || conn?.host || 'agent',
+            port: curPort,
+          },
+        }
+      );
+    } else {
+      setWebUIView({
+        url,
+        title: winTitle,
+        subtitle: `${conn?.name || conn?.host || 'agent'} · port ${curPort} · via monitor server`,
+      });
+    }
   };
 
   const requestOpenWebUI = () => {

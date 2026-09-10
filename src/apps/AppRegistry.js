@@ -1,4 +1,4 @@
-import { Terminal, Settings, Monitor, Database, Folder, AlertCircle, StickyNote, Book, MonitorPlay, Server, FileText, GitBranch, CloudSync, Rocket, HardDrive, CloudCog, ShieldCheck, ShieldAlert, Activity, BrickWallShield, History, Bug, BrainCircuit } from 'lucide-react';
+import { Terminal, Settings, Monitor, Database, Folder, AlertCircle, StickyNote, Book, MonitorPlay, Server, FileText, GitBranch, CloudSync, Rocket, HardDrive, CloudCog, ShieldCheck, ShieldAlert, Activity, BrickWallShield, History, Bug, BrainCircuit, Globe } from 'lucide-react';
 
 import TerminalApp from '@/apps/TerminalApp';
 import SettingsApp from '@/apps/SettingsApp';
@@ -19,9 +19,15 @@ import FirewallBlocklistApp from '@/apps/FirewallBlocklistApp';
 import ActivityApp from '@/apps/ActivityApp';
 import VirusScannerApp from '@/apps/VirusScannerApp';
 import AIAgentsApp from '@/apps/AIAgentsApp';
+import AgentWebUIBrowserApp from '@/apps/AgentWebUIBrowserApp';
 
 // Add other apps here as needed
 export const AppRegistry = {
+  'agent-webui': {
+    component: AgentWebUIBrowserApp,
+    icon: Globe,
+    defaultTitle: 'Web UI Browser'
+  },
   'ai-agents': {
     component: AIAgentsApp,
     icon: BrainCircuit,

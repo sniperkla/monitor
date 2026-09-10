@@ -12,6 +12,7 @@
 //     re-enforce it on restore-from-minimize and hydration.
 
 export const APP_ENDPOINTS = {
+  'agent-webui':       { width: 1100, height: 760, minWidth: 480, minHeight: 360 },
   'ssh-manager':       { width: 1400, height: 820, minWidth: 860, minHeight: 520 },
   'terminal':          { width: 1100, height: 700, minWidth: 640, minHeight: 380 },
   'files':             { width: 900,  height: 600, minWidth: 620, minHeight: 400 },

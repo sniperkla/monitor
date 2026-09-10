@@ -118,8 +118,8 @@ export default function WebUIOpenChoiceModal({
                 )}
               </div>
               <p className="text-[11px] text-[var(--text-muted)] leading-relaxed mt-1">
-                Embeds the Web UI inside monitor. No popup to block, no loopback
-                address to reach — works on phones, tablets and desktop.
+                Opens as a standalone browser app inside monitor. Stays running independently
+                when closing AI Agents — works on phones, tablets and desktop.
               </p>
             </button>
 
