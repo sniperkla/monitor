@@ -5071,34 +5071,39 @@ fi'`;
             return destroy();
           }
 
-          // Local relay forwarder resolution (for localhost or local mode)
+          // Local relay forwarder resolution.
+          // A relay is only required to reach targets whose host is localhost/127.0.0.1
+          // (i.e. services running on the user's own machine). Remote/public SSH hosts
+          // (like fc-fedora40) are always dialled directly from the monitor server —
+          // routing them through the user's relay agent makes no sense and causes timeouts.
           const isLocalhost = (h) => /^(localhost|127\.0\.0\.1)$/.test(h);
           const hostIsLocal = isLocalhost(sshCfg.host);
-          const effectiveSshMode = u.searchParams.get('sshMode') || connDoc.sshMode;
-          const preferredRelay = u.searchParams.get('preferredRelay') || connDoc.preferredRelay;
 
-          if (hostIsLocal || effectiveSshMode === 'local') {
-            const dialHost = (sshCfg.host && !isLocalhost(sshCfg.host)) ? sshCfg.host : 'localhost';
-            const dialPort = parseInt(sshCfg.port, 10) || 22;
+          if (hostIsLocal) {
+            // Must go through the relay — find the active relay for this user
+            const effectiveSshMode = u.searchParams.get('sshMode') || connDoc.sshMode;
+            const preferredRelay = u.searchParams.get('preferredRelay') || connDoc.preferredRelay;
             const relayUserId = (actingUserId && global.__activeRelays?.has(actingUserId)) ? actingUserId
               : (token.sub && global.__activeRelays?.has(token.sub)) ? token.sub
-              : (global.__activeRelays?.size === 1 ? global.__activeRelays.keys().next().value : null);
+              : (global.__activeRelays?.size >= 1 ? global.__activeRelays.keys().next().value : null);
 
             if (relayUserId && typeof global.__requestRelayForwarder === 'function') {
               try {
-                const fwd = await global.__requestRelayForwarder(relayUserId, preferredRelay || null, dialHost, dialPort);
+                const fwd = await global.__requestRelayForwarder(relayUserId, preferredRelay || null, 'localhost', parseInt(sshCfg.port, 10) || 22);
                 sshCfg.host = '127.0.0.1';
                 sshCfg.port = fwd.port;
                 delete sshCfg.sock;
+                dbg('using relay forwarder port', fwd.port, 'for localhost:' + (connDoc.port || 22));
               } catch (err) {
-                dbg('forwarder request failed:', err?.message);
-                if (hostIsLocal) return destroy();
+                dbg('forwarder request failed for localhost target:', err?.message);
+                return destroy();
               }
-            } else if (hostIsLocal) {
+            } else {
               dbg('localhost target but no relay available');
               return destroy();
             }
           }
+          // else: non-localhost host → dial connDoc.host:connDoc.port directly (already set in sshCfg)
 
           const ssh = new Client();
           dbg('connecting ssh', sshCfg.host, sshCfg.port, sshCfg.username);
