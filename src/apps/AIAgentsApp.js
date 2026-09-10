@@ -1033,12 +1033,20 @@ export default function AIAgentsApp({ apiFetch }) {
         const tab = preopenedTab || openBlankWebUITab();
         if (tab) {
           try {
-            if (preopenedTab && typeof navigateWebUITab === 'function') {
-              navigateWebUITab(tab, mobileUrl, proxyUrl);
+            // For a preopenedTab the URL is always a same-origin proxy URL (not
+            // a 127.0.0.1 loopback address), so navigateWebUITab's LNA watchdog
+            // is inappropriate here. On mobile Chrome, calling document.write()
+            // a second time on the about:blank spinner tab fails silently,
+            // leaving the old spinner in place while the watchdog fires after 9s
+            // and replaces it with an error card — causing the "stuck" symptom.
+            // A plain location.replace is the right primitive for this case.
+            if (preopenedTab) {
+              try { tab.location.replace(mobileUrl); } catch {
+                try { tab.location.href = mobileUrl; } catch { /* blocked */ }
+              }
             } else {
               try { tab.location.replace(mobileUrl); } catch {}
             }
-            tab.location.href = mobileUrl;
             setNotice({ ok: true, text: viaServer ? 'Opened the Web UI through the server.' : `Opened the Web UI directly — ${mobileUrl}` });
             return;
           } catch { /* fall through — popup may have been blocked */ }
