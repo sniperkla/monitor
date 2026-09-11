@@ -93,10 +93,25 @@ test('server.js and next.config.mjs share one COEP value for shell and proxies',
   }
 });
 
-test('AgentWebUIBrowserApp routes external URLs through proxy and supports localhost directly', () => {
+test('ordinary external URLs open directly in a real browser tab', () => {
   const appSrc = readFileSync('src/apps/AgentWebUIBrowserApp.js', 'utf8');
-  assert.match(appSrc, /isLocalHostOrIp/);
-  assert.match(appSrc, /\/api\/browser\/proxy\?url=/);
+  assert.match(appSrc, /const openDirectWebsite = useCallback/);
+  assert.match(appSrc, /window\.monitorDesktop/);
+  assert.match(appSrc, /desktopApi\.openWebview\(\{ url: target/);
+  assert.match(appSrc, /openExternalUrl\(target\)/);
+  assert.match(appSrc, /test\(destinationUrl\)/);
+  assert.match(appSrc, /openDirectWebsite\(destinationUrl\)/);
+  assert.doesNotMatch(
+    appSrc.match(/const navigateAddress = \(input\) => \{[\s\S]*?\n  \};/)[0],
+    /proxyFrameUrl|setShowIframeNotice\(true\)/,
+    'ordinary navigation must not route website content through the central proxy'
+  );
+});
+
+test('agent shortcuts use the existing external Local Relay flow when available', () => {
+  const appSrc = readFileSync('src/apps/AgentWebUIBrowserApp.js', 'utf8');
+  assert.match(appSrc, /if \(onOpenExternal && agId === agentId\)/);
+  assert.match(appSrc, /onOpenExternal\(\)/);
 });
 
 /**
@@ -302,4 +317,35 @@ test('form submission is proxied for GET and refused with an explanation for POS
   // A proxied page must not be able to open browser tabs on its own; the notice
   // points at the toolbar button instead of offering its own link.
   assert.doesNotMatch(routeSrc, /'external'/, 'no page-triggered external opens');
+});
+
+test('opaque-origin failures explain themselves instead of leaving a blank frame', () => {
+  const routeSrc = readFileSync('src/app/api/browser/proxy/route.js', 'utf8');
+
+  // The diagnosis must survive a target app replacing document.body during boot.
+  assert.match(routeSrc, /document\.documentElement \|\| document\.body\)\.appendChild\(box\)/);
+  assert.match(routeSrc, /function explainUnrenderable\(\)/);
+  assert.match(routeSrc, /This page needs a real browser/);
+  assert.match(routeSrc, /storage or network access that the in-app browser blocks/);
+  assert.match(routeSrc, /scheduleUnrenderableCheck\(\);/);
+
+  // A JS-only search fallback is not the same as a totally blank app, but it is
+  // the same user-visible limitation and gets a more useful suggestion.
+  assert.match(routeSrc, /jsRequiredFallback/);
+  assert.match(routeSrc, /This search needs a real browser/);
+  assert.match(routeSrc, /DuckDuckGo Lite/);
+  assert.match(routeSrc, /window\.open = function\(url, target\)/);
+  assert.doesNotMatch(routeSrc, /goto\(String\(url\), 'newtab'\)/,
+    'programmatic popups must not create tabs without a user click');
+});
+
+test('self-navigation auth failures render an explanation for iframe navigations', () => {
+  const routeSrc = readFileSync('src/app/api/browser/proxy/route.js', 'utf8');
+
+  assert.match(routeSrc, /function unauthenticatedResponse\(request\)/);
+  assert.match(routeSrc, /dest === 'iframe' && mode === 'navigate'/);
+  assert.match(routeSrc, /Navigation Blocked/);
+  assert.match(routeSrc, /This page tried to navigate itself/);
+  assert.match(routeSrc, /return new NextResponse\('Unauthorized', \{ status: 401 \}\)/);
+  assert.match(routeSrc, /unauthenticatedResponse\(request\)/);
 });

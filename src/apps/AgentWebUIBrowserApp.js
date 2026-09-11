@@ -62,16 +62,12 @@ const WEB_FRAME_SANDBOX =
 /** postMessage channel between the proxied page and this window. */
 const WEB_FRAME_MSG = '__mpBrowser';
 
-/** Our in-app web proxy endpoint. */
-const WEB_PROXY_PATH = '/api/browser/proxy';
-
 /**
- * Wrap a real destination in the proxy.
- *
- * Kept RELATIVE on purpose: it is assigned to an iframe `src` from OUR document,
- * so it resolves against the app origin. (The proxied page itself must never
- * build this path — its `<base href>` points at the target origin.)
+ * Legacy in-app web proxy endpoint. New ordinary-site navigation is direct to a
+ * real browser tab; these helpers remain only so already-open legacy web tabs
+ * can be reloaded safely during a live upgrade.
  */
+const WEB_PROXY_PATH = '/api/browser/proxy';
 const proxyUrlFor = (target) => `${WEB_PROXY_PATH}?url=${encodeURIComponent(target)}`;
 
 /** Hostname of a URL, falling back to whatever title we already had. */
@@ -173,6 +169,7 @@ export default function AgentWebUIBrowserApp({
   const [searchEngine, setSearchEngine] = useState('duckduckgo');
   const [copied, setCopied] = useState(false);
   const [showIframeNotice, setShowIframeNotice] = useState(false);
+  const [directOpenNotice, setDirectOpenNotice] = useState('');
 
   const abortRef = useRef(null);
   const frameRef = useRef(null);
@@ -341,15 +338,36 @@ export default function AgentWebUIBrowserApp({
     }
   };
 
+  // Open ordinary websites in a real browser tab. This is deliberately a
+  // client-only path: no HTML is fetched, rewritten, or rendered by Monitor.
+  // The user's browser keeps the real site origin, cookies, storage, service
+  // workers, JavaScript, and network identity. AI-agent Web UI shortcuts remain
+  // on the existing Local Relay flow below.
+  const openDirectWebsite = useCallback((target) => {
+    if (!target) return;
+    const opened = openExternalUrl(target);
+    setDirectOpenNotice(opened
+      ? 'Opened in a real browser tab.'
+      : 'The browser blocked the new tab. Use the Tab button or allow pop-ups for Monitor.');
+    setTimeout(() => setDirectOpenNotice(''), 5000);
+  }, []);
+
   // Address Bar submission (URL or Search)
   const navigateAddress = (input) => {
     const raw = (input || '').trim();
     if (!raw) return;
 
-    // Check for agent shortcuts
+    // Check for agent shortcuts. When this browser is hosted by AIAgentsApp,
+    // hand the selected agent to its existing real-tab + Local Relay flow.
+    // Keep the old in-app fallback for standalone/browser-app contexts that do
+    // not provide that callback.
     if (raw.startsWith('agent://') || raw.includes(':9119') || raw.includes(':8765')) {
       const agId = raw.includes('nano') ? 'nanobot' : 'hermes';
       const agPort = agId === 'nanobot' ? 8765 : 9119;
+      if (onOpenExternal && agId === agentId) {
+        onOpenExternal();
+        return;
+      }
       const targetConn = connectionId || 'local';
       const proxyUrl = `/api/agents/webui-proxy/m/${encodeURIComponent(targetConn)}/${agPort}`;
       setTabs((prev) =>
@@ -396,33 +414,18 @@ export default function AgentWebUIBrowserApp({
       tabTitle = `${raw} - Search`;
     }
 
-    // Route external web pages through our in-app proxy to bypass X-Frame-Options blocking.
-    // Localhost / 127.0.0.1 destinations are framed directly so local development servers work without proxy SSRF blocks.
-    const isLocalDirect = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/.*)?$/i.test(destinationUrl);
-    const proxyFrameUrl = isLocalDirect
-      ? destinationUrl
-      : (destinationUrl.startsWith('http://') || destinationUrl.startsWith('https://'))
-        ? `/api/browser/proxy?url=${encodeURIComponent(destinationUrl)}`
-        : destinationUrl;
+    // Ordinary websites use a real browser tab. Do not send public content
+    // through /api/browser/proxy: that route intentionally sandboxes arbitrary
+    // pages, which breaks sites that need real cookies, storage, service
+    // workers, or a non-opaque origin. Opening the actual destination keeps the
+    // full browser environment on the client and keeps website bytes off the
+    // Monitor server.
+    if (/^https?:\/\//i.test(destinationUrl)) {
+      openDirectWebsite(destinationUrl);
+      return;
+    }
 
-    setShowIframeNotice(true);
-    setTabs((prev) =>
-      prev.map((t) =>
-        t.id === activeTabId
-          ? {
-              ...t,
-              type: 'web',
-              title: tabTitle,
-              url: destinationUrl,
-              frameSrc: proxyFrameUrl,
-              phase: 'ready',
-              // Fresh navigation restarts the tab's history.
-              history: [destinationUrl],
-              historyIndex: 0,
-            }
-          : t
-      )
-    );
+    setDirectOpenNotice(`Could not open ${tabTitle}.`);
   };
 
   const handleAddressKeyDown = (e) => {
@@ -878,7 +881,7 @@ export default function AgentWebUIBrowserApp({
       {showIframeNotice && activeTab?.type === 'web' && (
         <div className="bg-amber-500/15 border-b border-amber-500/30 px-3 py-1.5 flex items-center justify-between text-xs text-amber-200">
           <span className="truncate pr-2">
-            💡 Browsing external site: If a site restricts embedding via security headers, you can open it in a real browser tab.
+            External pages are opened in a real browser tab for full compatibility.
           </span>
           <div className="flex items-center gap-2 shrink-0">
             <button
@@ -894,6 +897,11 @@ export default function AgentWebUIBrowserApp({
               <X size={13} />
             </button>
           </div>
+        </div>
+      )}
+      {directOpenNotice && (
+        <div className="bg-emerald-500/15 border-b border-emerald-500/30 px-3 py-1.5 text-xs text-emerald-200">
+          {directOpenNotice}
         </div>
       )}
 
@@ -1029,7 +1037,7 @@ export default function AgentWebUIBrowserApp({
           </div>
         )}
 
-        {/* 4. Active Iframe View (for WebUI or External Web) */}
+        {/* 4. Active Iframe View (for WebUI or explicit in-app WebUI) */}
         {((activeTab?.type === 'webui' && activeTab?.phase === 'ready') || activeTab?.type === 'web') && (
           <iframe
             ref={frameRef}

@@ -121,10 +121,10 @@ export async function GET(request) {
     try {
       const token = await getToken({ req: request, secret });
       if (!token) {
-        return new NextResponse('Unauthorized', { status: 401 });
+        return unauthenticatedResponse(request);
       }
     } catch {
-      return new NextResponse('Unauthorized', { status: 401 });
+      return unauthenticatedResponse(request);
     }
   }
 
@@ -271,6 +271,29 @@ export async function GET(request) {
   // Note the <base href> below makes the document base the TARGET origin. A
   // root-relative proxy path therefore resolves against the target site, so
   // URLs must be resolved to absolute before being handed over.
+  //
+  // The sandbox above has a price, and it is worth stating plainly because it
+  // is NOT fixable from in here. Measured in this frame:
+  //   - document.cookie, localStorage, sessionStorage, caches and
+  //     navigator.serviceWorker all THROW on access (SecurityError), and
+  //   - every cross-origin fetch/XHR/script is refused, because this document's
+  //     origin is the opaque string "null" and the target sends no CORS header.
+  //
+  // The first group CAN be faked with in-memory stand-ins, and that was built,
+  // measured, and then removed. It stops the crash but rescues nothing, because
+  // the second group is what actually kills a JS-required site: youtube.com
+  // with the stand-ins installed built a 997 KB DOM and still rendered zero
+  // visible characters, and bbc.com/news dies on "Access to script ... from
+  // origin 'null' blocked by CORS" followed by a React error, which no stand-in
+  // can help. Worse, the fake cookie jar let Google Search believe it had a
+  // session and self-navigate into a dead end. So the honest answer is to SAY
+  // so (see explainUnrenderable), not to simulate an environment the site
+  // cannot actually use. The sandbox itself is not negotiable: this route
+  // serves a stranger's HTML from OUR origin, so same-origin would let their
+  // script run as the monitor app.
+  var _sandboxed = false;
+  try { window.localStorage.getItem('__mp_probe'); } catch (_) { _sandboxed = true; }
+
   function goto(u, kind) {
     try {
       var abs = new URL(u, document.baseURI).href;
@@ -335,9 +358,10 @@ export async function GET(request) {
     HTMLFormElement.prototype.submit = function() { handleSubmit(this, null); };
   } catch (_) {}
 
-  // Deliberately no external-open link here: a proxied page must not be able to
-  // trigger browser-tab opens on its own. The toolbar already has that button.
-  function explainBlockedSubmit() {
+  // Shared by every "the in-app browser cannot do this" message. Deliberately
+  // no external-open link inside: a proxied page must not be able to trigger
+  // browser-tab opens on its own. The toolbar already has that button.
+  function showNotice(title, body) {
     try {
       var id = '__mpBlockedNotice';
       var old = document.getElementById(id);
@@ -347,35 +371,113 @@ export async function GET(request) {
       box.id = id;
       box.setAttribute('style', 'position:fixed;z-index:2147483647;left:50%;bottom:24px;transform:translateX(-50%);max-width:520px;padding:14px 18px;border-radius:12px;background:#18181b;color:#f4f4f5;border:1px solid #3f3f46;box-shadow:0 10px 30px rgba(0,0,0,.35);font:13px/1.5 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;text-align:left');
 
-      var title = document.createElement('div');
-      title.setAttribute('style', 'font-weight:500;margin-bottom:4px');
-      title.textContent = 'Form submission is not supported in the in-app browser';
+      var titleEl = document.createElement('div');
+      titleEl.setAttribute('style', 'font-weight:500;margin-bottom:4px');
+      titleEl.textContent = title;
 
-      var body = document.createElement('div');
-      body.setAttribute('style', 'color:#a1a1aa');
-      body.textContent = 'This page tried to submit a form. Use the open-externally button in the toolbar to continue in a real browser tab.';
+      var bodyEl = document.createElement('div');
+      bodyEl.setAttribute('style', 'color:#a1a1aa');
+      bodyEl.textContent = body;
 
-      box.appendChild(title);
-      box.appendChild(body);
-      document.body.appendChild(box);
+      box.appendChild(titleEl);
+      box.appendChild(bodyEl);
+      // Keep the notice outside the target page's body. JS-heavy apps often
+      // replace body wholesale during boot, which would otherwise erase the
+      // only explanation we gave the user.
+      (document.documentElement || document.body).appendChild(box);
       setTimeout(function() {
         if (box.parentNode) box.parentNode.removeChild(box);
       }, 12000);
     } catch (_) {}
   }
 
-  // Intercept programmatic JS navigation (location.href = ..., replace(), assign())
+  function clearNotice() {
+    try {
+      var old = document.getElementById('__mpBlockedNotice');
+      if (old && old.parentNode) old.parentNode.removeChild(old);
+    } catch (_) {}
+  }
+
+  function explainBlockedSubmit() {
+    showNotice(
+      'Form submission is not supported in the in-app browser',
+      'This page tried to submit a form. Use the open-externally button in the toolbar to continue in a real browser tab.'
+    );
+  }
+
+  // A JS-required site that cannot run here does not fail loudly — it renders an
+  // empty shell, which just reads as "the browser is broken". Measured:
+  // youtube.com builds roughly 1 MB of DOM and paints zero characters. Say so
+  // rather than leaving a blank frame. Guarded three ways so a genuinely empty
+  // page is not mislabelled: we are in the opaque sandbox, the document shipped
+  // scripts, and nothing rendered. Checked twice, and withdrawn if content turns
+  // up late, so a slow page is not accused of being broken.
+  function explainUnrenderable() {
+    try {
+      if (!_sandboxed) return;
+      if (!document.body) return;
+      if (document.querySelectorAll('script').length === 0) return;
+      var text = (document.body.innerText || '').replace(/\s+/g, '');
+      var noScript = document.querySelector('noscript');
+      var jsRequiredFallback = noScript && /http-equiv\s*=\s*["']?refresh/i.test(noScript.innerHTML || '')
+        && /trouble accessing|not redirected/i.test(noScript.textContent || '');
+      if (text.length > 40 && !jsRequiredFallback) { clearNotice(); return; }
+      showNotice(
+        jsRequiredFallback ? 'This search needs a real browser' : 'This page needs a real browser',
+        jsRequiredFallback
+          ? 'This search engine returned a JavaScript-only page, so the in-app browser cannot show its results. Use DuckDuckGo Lite or the open-externally button in the toolbar.'
+          : 'Its scripts need storage or network access that the in-app browser blocks for safety, so it rendered nothing. Use the open-externally button in the toolbar to open it in a real tab.'
+      );
+    } catch (_) {}
+  }
+
+  function scheduleUnrenderableCheck() {
+    setTimeout(explainUnrenderable, 3000);
+    setTimeout(explainUnrenderable, 8000);
+    setTimeout(explainUnrenderable, 15000);
+  }
+  // Do not wait only for load: some JS-heavy pages keep the document in a
+  // loading state while they rebuild the shell, and the useful diagnosis is
+  // needed before that work finishes.
+  scheduleUnrenderableCheck();
+
+  // ── programmatic navigation ────────────────────────────────────────────────
+  // replace() and assign() live on Location.prototype and CAN be replaced.
+  // href/search/hash/pathname CANNOT: Location's attributes are
+  // [LegacyUnforgeable] — own, non-configurable properties of the location
+  // object. Measured in this frame: the descriptor for location.href reports
+  // { configurable: false }, and every defineProperty attempt fails with
+  // "TypeError: Cannot redefine property". An earlier version of this block
+  // tried to patch Location.prototype.href and silently did nothing, because
+  // that prototype carries only constructor/replace/assign here.
+  //
+  // So assigning location.href or location.search always escapes us. What
+  // they produce is a self-navigation to this frame's OWN proxy URL, which is
+  // cross-site (the origin is opaque), so the session cookie is withheld and the
+  // proxy answers 401. Measured on google.com AND bing.com search result pages,
+  // both of which reload themselves with an extra param. That 401 is now handled
+  // honestly server-side (see the iframe-navigation branch in the route) instead
+  // of pretending it can be intercepted here.
   try {
-    var _locDesc = Object.getOwnPropertyDescriptor(Location.prototype, 'href');
-    if (_locDesc && _locDesc.set) {
-      Object.defineProperty(Location.prototype, 'href', {
-        get: _locDesc.get,
-        set: function(v) { goto(String(v)); },
-        configurable: true,
-      });
-    }
     Location.prototype.replace = function(url) { goto(String(url)); };
     Location.prototype.assign = function(url) { goto(String(url)); };
+  } catch (_) {}
+
+  // window.open is not covered by the Location patches, and its default '_self'
+  // target navigates this frame — straight into the same cross-site 401. Route
+  // same-frame targets through the parent like any other link. Deliberately
+  // refuse named/_blank popups: a proxied page must not be able to open tabs on
+  // its own. Returns null, which is the standard "popup blocked" answer pages
+  // already handle.
+  try {
+    window.open = function(url, target) {
+      if (url == null || url === '') return null;
+      var t = target == null ? '' : String(target);
+      if (t === '' || t === '_self' || t === '_parent' || t === '_top') {
+        goto(String(url));
+      }
+      return null;
+    };
   } catch (_) {}
 
   // ── client-side routing (SPAs) ─────────────────────────────────────────────
@@ -462,6 +564,49 @@ export async function GET(request) {
       },
     });
   }
+}
+
+// ---------------------------------------------------------------------------
+// Unauthenticated response
+// ---------------------------------------------------------------------------
+/**
+ * A proxied page can navigate ITSELF, and it will: assigning location.href or
+ * location.search cannot be intercepted from inside the sandbox (Location's
+ * attributes are unforgeable, so defineProperty fails), and the frame ends up
+ * requesting its OWN proxy URL. Because the frame's origin is opaque, that
+ * request is cross-site, the SameSite=Lax session cookie is withheld, and this
+ * route cannot authenticate it. Measured on google.com AND bing.com search
+ * result pages — both reload themselves with an extra param.
+ *
+ * Never answer that with a bare "Unauthorized": the frame just reads as a broken
+ * app. Answer the navigation with a page that explains itself. Deliberately no
+ * target URL is echoed — at this point it has not been validated, and an href
+ * built from it could carry a javascript: URL. API callers still get a plain 401.
+ */
+function unauthenticatedResponse(request) {
+  const dest = request.headers.get('sec-fetch-dest');
+  const mode = request.headers.get('sec-fetch-mode');
+
+  if (dest === 'iframe' && mode === 'navigate') {
+    return new NextResponse(
+      buildErrorPage(
+        'Navigation Blocked',
+        'This page tried to navigate itself, and the in-app browser cannot follow that. Use the open-externally button in the toolbar to load the site in a real browser tab.'
+      ),
+      {
+        status: 401,
+        headers: {
+          'Content-Type': 'text/html; charset=utf-8',
+          'X-Frame-Options': 'SAMEORIGIN',
+          'Content-Security-Policy': "frame-ancestors 'self'",
+          'Cross-Origin-Resource-Policy': 'cross-origin',
+          'Cross-Origin-Embedder-Policy': 'credentialless',
+        },
+      }
+    );
+  }
+
+  return new NextResponse('Unauthorized', { status: 401 });
 }
 
 // ---------------------------------------------------------------------------
