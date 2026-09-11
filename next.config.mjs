@@ -2,7 +2,17 @@
 // something: `credentialless` makes cross-origin no-cors subresources (avatars,
 // CDN images) load without cookies. Nothing in this app needs that, but if a
 // future embed does, set COEP=unsafe-none to drop just this header.
-const COEP = process.env.COEP === 'unsafe-none' ? 'unsafe-none' : 'credentialless';
+//
+// It is also the header that decides whether our own same-origin iframes are
+// allowed to render at all: Chromium refuses any nested document that declares
+// `unsafe-none` (or omits COEP) while the embedder says `credentialless`, even
+// same-origin. So the proxied routes below must emit the SAME value — hence
+// the shared constant rather than a literal per rule.
+const COEP = ['unsafe-none', '0', 'false', 'off', 'no'].includes(
+  String(process.env.COEP ?? '').trim().toLowerCase()
+)
+  ? 'unsafe-none'
+  : 'credentialless';
 
 const nextConfig = {
   // Lets CI/security verification build into an isolated directory without
@@ -65,7 +75,21 @@ const nextConfig = {
           { key: 'X-Frame-Options', value: 'SAMEORIGIN' },
           { key: 'Content-Security-Policy', value: "frame-ancestors 'self'" },
           { key: 'Cross-Origin-Resource-Policy', value: 'cross-origin' },
-          { key: 'Cross-Origin-Embedder-Policy', value: 'unsafe-none' },
+          // MUST match the shell's COEP. Chromium refuses a nested document that
+          // declares `unsafe-none` under a `credentialless` embedder, even when
+          // it is same-origin (ERR_BLOCKED_BY_RESPONSE /
+          // coep-frame-resource-needs-coep-header). Opting the proxied frames
+          // out of COEP is not a thing the browser allows.
+          { key: 'Cross-Origin-Embedder-Policy', value: COEP },
+        ],
+      },
+      {
+        source: '/api/browser/proxy',
+        headers: [
+          { key: 'X-Frame-Options', value: 'SAMEORIGIN' },
+          { key: 'Content-Security-Policy', value: "frame-ancestors 'self'" },
+          { key: 'Cross-Origin-Resource-Policy', value: 'cross-origin' },
+          { key: 'Cross-Origin-Embedder-Policy', value: COEP },
         ],
       },
     ];

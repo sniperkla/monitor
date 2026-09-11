@@ -614,7 +614,10 @@ async function handleProxy(request) {
       'X-Frame-Options': 'SAMEORIGIN',
       'Content-Security-Policy': "frame-ancestors 'self'",
       'Cross-Origin-Resource-Policy': 'cross-origin',
-      'Cross-Origin-Embedder-Policy': 'unsafe-none',
+      // Must MATCH the app shell's COEP, not opt out of it — see the note in
+      // server.js. `unsafe-none` here gets the iframe refused by Chromium with
+      // coep-frame-resource-needs-coep-header, even though it is same-origin.
+      'Cross-Origin-Embedder-Policy': 'credentialless',
     };
 
     const requestedSshMode = searchParams.get('sshMode') || request.headers.get('x-ssh-mode') || remembered?.sshMode || undefined;
@@ -782,7 +785,8 @@ async function handleProxy(request) {
     outHeaders['x-frame-options'] = 'SAMEORIGIN';
     outHeaders['content-security-policy'] = "frame-ancestors 'self'";
     outHeaders['cross-origin-resource-policy'] = 'cross-origin';
-    outHeaders['cross-origin-embedder-policy'] = 'unsafe-none';
+    // Same reasoning as frameHeaders above: must match the shell's COEP.
+    outHeaders['cross-origin-embedder-policy'] = 'credentialless';
     // Never let the browser reuse a stale copy of the tunneled page — an old
     // copy can carry pre-fix helper scripts or stale absolute URLs.
     outHeaders['cache-control'] = 'no-store, max-age=0';

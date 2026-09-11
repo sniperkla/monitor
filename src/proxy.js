@@ -122,8 +122,19 @@ function generateNonce() {
  *    attribute selectors (e.g. input[value^="a"] { background: url(...) }) but
  *    cannot execute script. The script-src nonce is the control that matters.
  */
-function buildCsp(nonce) {
+function buildCsp(nonce, requestUrl) {
   const isProd = process.env.NODE_ENV === "production";
+  // upgrade-insecure-requests and block-all-mixed-content are HTTPS-only directives.
+  // When the app runs over plain HTTP (localhost dev) they cause Chrome to upgrade
+  // same-origin http://localhost iframe navigations to https://localhost, which has
+  // no TLS server — producing ERR_CONNECTION_REFUSED inside every browser-proxy
+  // iframe. Only emit them when the request itself arrived over HTTPS.
+  const isHttps = (() => {
+    try {
+      return requestUrl && (new URL(requestUrl)).protocol === 'https:';
+    } catch { return false; }
+  })();
+  const isServedOverHttps = isHttps || process.env.NEXTAUTH_URL?.startsWith('https://');
 
   const scriptSrc = isProd
     ? `script-src 'self' 'nonce-${nonce}' 'wasm-unsafe-eval'`
@@ -191,8 +202,11 @@ function buildCsp(nonce) {
     "base-uri 'self'",
     "form-action 'self' https://accounts.google.com",
     "frame-ancestors 'none'",
-    "upgrade-insecure-requests",
-    "block-all-mixed-content",
+    // upgrade-insecure-requests / block-all-mixed-content are only meaningful on
+    // HTTPS origins. On HTTP (localhost dev) they cause the browser to upgrade
+    // same-origin http://localhost iframe navigation requests to https://localhost,
+    // which has no TLS listener → ERR_CONNECTION_REFUSED inside every iframe.
+    ...(isServedOverHttps ? ["upgrade-insecure-requests", "block-all-mixed-content"] : []),
   ].join("; ");
 }
 
@@ -356,7 +370,7 @@ export default async function wrappedProxy(req) {
   // the CSP — including the sign-in page and 401s. The login page is exactly
   // where credentials are typed, so it must not be the one response left bare.
   const nonce = generateNonce();
-  const csp = buildCsp(nonce);
+  const csp = buildCsp(nonce, req.url);
 
   const pathname = req.nextUrl.pathname;
   const externalDeployTrigger = isExternalDeployTrigger(req);
@@ -599,6 +613,6 @@ export const config = {
     // both now receive the middleware auth gate, CSP, and CSRF. External deploy
     // hooks with a signed token/webhook_token are handled by the narrow
     // isExternalDeployTrigger() exception above, then validated in-route.
-    "/((?!api/auth/signin|api/auth/callback|api/auth/session|api/auth/signout|api/auth/csrf|api/auth/providers|api/csrf|api/health|api/deploy/webhook|api/agents/webui-proxy|_next/static|_next/image|favicon.ico|manifest\\.json|icon\\.svg|sw\\.js|monitor-agent\\.min\\.js|monitor-agent\\.js|local-relay\\.min\\.js|local-relay\\.js|agents/.*).*)"
+    "/((?!api/auth/signin|api/auth/callback|api/auth/session|api/auth/signout|api/auth/csrf|api/auth/providers|api/csrf|api/health|api/deploy/webhook|api/agents/webui-proxy|api/browser/proxy|_next/static|_next/image|favicon.ico|manifest\\.json|icon\\.svg|sw\\.js|monitor-agent\\.min\\.js|monitor-agent\\.js|local-relay\\.min\\.js|local-relay\\.js|agents/.*).*)"
   ],
 };

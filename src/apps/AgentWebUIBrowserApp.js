@@ -34,6 +34,51 @@ import { openExternalUrl } from '@/utils/webuiOpenMode';
 
 const PROBE_TIMEOUT_MS = 30_000;
 
+/**
+ * Sandbox for the *external web* viewport only — never for `webui` tabs.
+ *
+ * `/api/browser/proxy` fetches arbitrary third-party HTML and serves it from
+ * OUR origin. Without this, a proxied page's JavaScript runs as our origin: it
+ * can read our DOM, our localStorage, and call same-origin APIs with the
+ * user's cookies attached. Dropping `allow-same-origin` gives the frame an
+ * opaque origin, so none of that is reachable.
+ *
+ * Deliberately absent:
+ *   - allow-same-origin   — the entire point of the sandbox.
+ *   - allow-top-navigation — a proxied page must never navigate the app away.
+ *   - allow-downloads      — no silent downloads out of a browsing proxy.
+ *
+ * Verified COEP-neutral: Chromium's nested-document COEP rule only inspects the
+ * response header, so a sandboxed frame still loads under the shell's
+ * `credentialless` policy (see scratch/coep-isolate.mjs).
+ *
+ * Consequence: the parent can no longer touch `contentWindow` (location,
+ * history). Navigation is bridged with postMessage instead — see
+ * `WEB_FRAME_MSG` and the injected script in the proxy route.
+ */
+const WEB_FRAME_SANDBOX =
+  'allow-scripts allow-forms allow-popups allow-modals';
+
+/** postMessage channel between the proxied page and this window. */
+const WEB_FRAME_MSG = '__mpBrowser';
+
+/** Our in-app web proxy endpoint. */
+const WEB_PROXY_PATH = '/api/browser/proxy';
+
+/**
+ * Wrap a real destination in the proxy.
+ *
+ * Kept RELATIVE on purpose: it is assigned to an iframe `src` from OUR document,
+ * so it resolves against the app origin. (The proxied page itself must never
+ * build this path — its `<base href>` points at the target origin.)
+ */
+const proxyUrlFor = (target) => `${WEB_PROXY_PATH}?url=${encodeURIComponent(target)}`;
+
+/** Hostname of a URL, falling back to whatever title we already had. */
+function hostnameOf(target, fallback = '') {
+  try { return new URL(target).hostname || fallback; } catch { return fallback; }
+}
+
 // Curated explore bookmarks for dev & AI productivity
 const EXPLORE_BOOKMARKS = [
   {
@@ -144,7 +189,10 @@ export default function AgentWebUIBrowserApp({
         : `agent://${activeTab.agentId || 'webui'}`;
       setAddressInput(display);
     } else {
-      setAddressInput(activeTab?.frameSrc || activeTab?.url || '');
+      // `url` is the real destination; `frameSrc` is our internal
+      // `/api/browser/proxy?url=…` wrapper. Showing the wrapper in the omnibox
+      // was leaking the plumbing into the address bar.
+      setAddressInput(activeTab?.url || activeTab?.frameSrc || '');
     }
   }, [activeTabId, activeTab?.type, activeTab?.url, activeTab?.frameSrc, activeTab?.port, activeTab?.connectionName, activeTab?.agentId]);
 
@@ -242,8 +290,11 @@ export default function AgentWebUIBrowserApp({
   }, [activeTab?.id, activeTab?.type, activeTab?.phase, activeTab?.url]);
 
   // Tab management
-  const handleNewTab = (initialProps = {}) => {
+  // Stable identity so the sandbox bridge effect can depend on it without
+  // re-subscribing on every render.
+  const handleNewTab = useCallback((initialProps = {}) => {
     const newId = `tab-${nextTabNumRef.current++}`;
+    const isWeb = initialProps.type === 'web';
     const newTab = {
       id: newId,
       title: initialProps.title || 'New Tab',
@@ -258,10 +309,13 @@ export default function AgentWebUIBrowserApp({
       phase: initialProps.type === 'webui' ? 'loading' : 'ready',
       status: 0,
       error: '',
+      // A web tab needs a history stack from birth, or Back has nothing to pop.
+      history: isWeb && initialProps.url ? [initialProps.url] : [],
+      historyIndex: isWeb && initialProps.url ? 0 : -1,
     };
     setTabs((prev) => [...prev, newTab]);
     setActiveTabId(newId);
-  };
+  }, []);
 
   const handleCloseTab = (e, tabId) => {
     e.stopPropagation();
@@ -318,8 +372,9 @@ export default function AgentWebUIBrowserApp({
       return;
     }
 
-    // Check if user entered a URL or domain
+    // Check if user entered a URL, IP/localhost, or domain
     const isDomain = /^([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(:\d+)?(\/.*)?$/.test(raw);
+    const isLocalHostOrIp = /^(localhost|\d{1,3}(\.\d{1,3}){3})(:\d+)?(\/.*)?$/i.test(raw);
     const hasProtocol = /^https?:\/\//i.test(raw);
 
     let destinationUrl = '';
@@ -328,6 +383,9 @@ export default function AgentWebUIBrowserApp({
     if (hasProtocol) {
       destinationUrl = raw;
       try { tabTitle = new URL(raw).hostname; } catch (_) {}
+    } else if (isLocalHostOrIp) {
+      destinationUrl = `http://${raw}`;
+      try { tabTitle = new URL(destinationUrl).host; } catch (_) {}
     } else if (isDomain) {
       destinationUrl = `https://${raw}`;
       try { tabTitle = new URL(destinationUrl).hostname; } catch (_) {}
@@ -338,10 +396,14 @@ export default function AgentWebUIBrowserApp({
       tabTitle = `${raw} - Search`;
     }
 
-    // Route external web pages through our in-app proxy to bypass X-Frame-Options blocking
-    const proxyFrameUrl = (destinationUrl.startsWith('http://') || destinationUrl.startsWith('https://'))
-      ? `/api/browser/proxy?url=${encodeURIComponent(destinationUrl)}`
-      : destinationUrl;
+    // Route external web pages through our in-app proxy to bypass X-Frame-Options blocking.
+    // Localhost / 127.0.0.1 destinations are framed directly so local development servers work without proxy SSRF blocks.
+    const isLocalDirect = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/.*)?$/i.test(destinationUrl);
+    const proxyFrameUrl = isLocalDirect
+      ? destinationUrl
+      : (destinationUrl.startsWith('http://') || destinationUrl.startsWith('https://'))
+        ? `/api/browser/proxy?url=${encodeURIComponent(destinationUrl)}`
+        : destinationUrl;
 
     setShowIframeNotice(true);
     setTabs((prev) =>
@@ -354,6 +416,9 @@ export default function AgentWebUIBrowserApp({
               url: destinationUrl,
               frameSrc: proxyFrameUrl,
               phase: 'ready',
+              // Fresh navigation restarts the tab's history.
+              history: [destinationUrl],
+              historyIndex: 0,
             }
           : t
       )
@@ -374,12 +439,96 @@ export default function AgentWebUIBrowserApp({
     }
   };
 
+  /**
+   * Send the active web tab to a new destination.
+   *
+   * The sandboxed frame cannot navigate itself: its opaque origin makes its own
+   * requests cross-site, so the session cookie is withheld and the proxy
+   * answers 401. A navigation initiated from THIS document carries the cookie,
+   * so all web navigation goes through here — assigning `frameSrc` and letting
+   * React drive the iframe.
+   *
+   * Also owns the tab's history stack, because `contentWindow.history` is
+   * unreachable across the sandbox boundary.
+   */
+  const navigateTab = useCallback((target) => {
+    let parsed;
+    try { parsed = new URL(target); } catch { return; }
+    if (!['http:', 'https:'].includes(parsed.protocol)) return;
+    const href = parsed.href;
+
+    setTabs((prev) =>
+      prev.map((t) => {
+        if (t.id !== activeTabId) return t;
+        const past = Array.isArray(t.history) ? t.history : [];
+        const idx = typeof t.historyIndex === 'number' ? t.historyIndex : -1;
+        // Drop anything ahead of the cursor, then append (browsers do the same).
+        const history = past.slice(0, idx + 1);
+        if (history[history.length - 1] !== href) history.push(href);
+        return {
+          ...t,
+          type: 'web',
+          url: href,
+          frameSrc: proxyUrlFor(href),
+          title: hostnameOf(href, t.title),
+          history,
+          historyIndex: history.length - 1,
+          phase: 'ready',
+        };
+      })
+    );
+  }, [activeTabId]);
+
+  /** Move within the tab's own history stack (sandboxed frames cannot). */
+  const stepHistory = useCallback((delta) => {
+    setTabs((prev) =>
+      prev.map((t) => {
+        if (t.id !== activeTabId) return t;
+        const history = Array.isArray(t.history) ? t.history : [];
+        const idx = typeof t.historyIndex === 'number' ? t.historyIndex : 0;
+        const next = idx + delta;
+        if (next < 0 || next >= history.length) return t;
+        const target = history[next];
+        return {
+          ...t,
+          historyIndex: next,
+          url: target,
+          frameSrc: proxyUrlFor(target),
+          title: hostnameOf(target, t.title),
+        };
+      })
+    );
+  }, [activeTabId]);
+
+  /**
+   * Open a link in a new in-app tab.
+   *
+   * A sandboxed page's `target="_blank"` would otherwise become a native popup
+   * that inherits the frame's opaque origin — the target site, logged out, in a
+   * separate OS window outside this app's tab bar. Since we already have tabs,
+   * honour `_blank` the way a real browser does and keep it in-app.
+   */
+  const openWebTab = useCallback((target) => {
+    let parsed;
+    try { parsed = new URL(target); } catch { return; }
+    if (!['http:', 'https:'].includes(parsed.protocol)) return;
+    const href = parsed.href;
+    handleNewTab({
+      type: 'web',
+      url: href,
+      frameSrc: proxyUrlFor(href),
+      title: hostnameOf(href, 'New Tab'),
+    });
+  }, [handleNewTab]);
+
   // Browser navigation
   const handleBack = () => {
+    if (activeTab?.type === 'web') return stepHistory(-1);
     try { frameRef.current?.contentWindow?.history?.back(); } catch (_) {}
   };
 
   const handleForward = () => {
+    if (activeTab?.type === 'web') return stepHistory(1);
     try { frameRef.current?.contentWindow?.history?.forward(); } catch (_) {}
   };
 
@@ -387,7 +536,12 @@ export default function AgentWebUIBrowserApp({
     if (activeTab?.type === 'webui') {
       probeTab(activeTab.id, activeTab.url);
     } else if (frameRef.current) {
-      try { frameRef.current.src = activeTab?.frameSrc || activeTab?.url; } catch (_) {}
+      // Re-assigning `src` always re-navigates, and because the assignment
+      // comes from this document the reload still carries the session cookie.
+      // Never fall back to the bare `url` — that would send the frame straight
+      // to the target origin, outside the proxy.
+      const src = activeTab?.frameSrc || (activeTab?.url ? proxyUrlFor(activeTab.url) : '');
+      if (src) { try { frameRef.current.src = src; } catch (_) { /* frame gone */ } }
     }
   };
 
@@ -430,6 +584,86 @@ export default function AgentWebUIBrowserApp({
       openExternalUrl(targetUrl);
     }
   };
+
+  /**
+   * Point the active tab at the page the frame actually landed on.
+   *
+   * The address bar is not written here — the sync effect mirrors `tab.url`
+   * into the omnibox, so there is exactly one source of truth for it.
+   */
+  const applyFrameUrl = useCallback((href) => {
+    let urlParam = null;
+    try {
+      const u = new URL(href, window.location.origin);
+      if (u.pathname !== '/api/browser/proxy') return;
+      urlParam = u.searchParams.get('url');
+    } catch { return; }
+    if (!urlParam) return;
+
+    setTabs((prev) =>
+      prev.map((t) => {
+        if (t.id !== activeTabId || t.url === urlParam) return t;
+        return { ...t, url: urlParam, title: hostnameOf(urlParam, t.title) };
+      })
+    );
+  }, [activeTabId]);
+
+  /**
+   * Point the active tab at a real destination URL reported by an SPA's
+   * client-side router.
+   *
+   * NOT `applyFrameUrl`: that one unwraps a `/api/browser/proxy?url=…` wrapper
+   * and bails on anything else. A router reports the bare target URL, so it
+   * needs its own handler. Display-only — no history push, because a cosmetic
+   * state change and a real route change look identical from here.
+   */
+  const applyPushedRoute = useCallback((href) => {
+    let parsed;
+    try { parsed = new URL(href); } catch { return; }
+    if (!['http:', 'https:'].includes(parsed.protocol)) return;
+    const target = parsed.href;
+    setTabs((prev) =>
+      prev.map((t) => {
+        if (t.id !== activeTabId || t.url === target) return t;
+        return { ...t, url: target, title: hostnameOf(target, t.title) };
+      })
+    );
+  }, [activeTabId]);
+
+  /**
+   * The bridge from a sandboxed page (see the script injected by
+   * /api/browser/proxy):
+   *
+   *   'goto'   — the page wants to navigate but must not do it itself, so we
+   *              perform it from here where the session cookie still applies.
+   *   'newtab' — a target="_blank" click. Opened as a tab, not an OS popup.
+   *   'nav'    — the page reporting where it actually landed (used when the
+   *              proxy resolved a server-side redirect).
+   *   'push'   — an SPA's client-side route change. The opaque frame cannot
+   *              really pushState, so this is display-only: the omnibox follows
+   *              the route, but we do NOT touch the history stack.
+   *
+   * `event.source` is checked so no other window can drive this tab.
+   */
+  useEffect(() => {
+    if (activeTab?.type !== 'web') return undefined;
+    const onMessage = (e) => {
+      if (e.source !== frameRef.current?.contentWindow) return;
+      const data = e.data;
+      if (!data || typeof data !== 'object') return;
+      if (data[WEB_FRAME_MSG] === 'goto' && typeof data.url === 'string') {
+        navigateTab(data.url);
+      } else if (data[WEB_FRAME_MSG] === 'newtab' && typeof data.url === 'string') {
+        openWebTab(data.url);
+      } else if (data[WEB_FRAME_MSG] === 'nav' && typeof data.href === 'string') {
+        applyFrameUrl(data.href);
+      } else if (data[WEB_FRAME_MSG] === 'push' && typeof data.href === 'string') {
+        applyPushedRoute(data.href);
+      }
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [activeTab?.type, applyFrameUrl, navigateTab, openWebTab, applyPushedRoute]);
 
   return (
     <div className="flex flex-col w-full h-full bg-[var(--bg-primary)] overflow-hidden select-none">
@@ -801,6 +1035,10 @@ export default function AgentWebUIBrowserApp({
             ref={frameRef}
             src={activeTab?.frameSrc || activeTab?.url}
             title={activeTab?.title || 'Browser'}
+            // Only the external web view is sandboxed. `webui` tabs are our own
+            // trusted agent UI and need same-origin access (the WebSocket proxy
+            // and asset rewriting depend on it). See WEB_FRAME_SANDBOX.
+            sandbox={activeTab?.type === 'web' ? WEB_FRAME_SANDBOX : undefined}
             allow="clipboard-read; clipboard-write; microphone; camera; display-capture"
             className="w-full h-full border-0 select-auto"
           />

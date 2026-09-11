@@ -43,6 +43,24 @@ const handle = app.getRequestHandler();
 
 const shellQuote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
 
+/**
+ * The one COEP value the app ever emits.
+ *
+ * Chromium requires a nested document to declare a COEP at least as strict as
+ * its embedder's: under a `credentialless` shell, a child that says
+ * `unsafe-none` — or says nothing — is refused outright with
+ * `coep-frame-resource-needs-coep-header`, even when it is same-origin. The
+ * proxied routes therefore cannot opt out; they must match. Only an explicit
+ * opt-out of the whole policy (`COEP=unsafe-none`, or the boolean forms the
+ * docs used to advertise) drops it everywhere.
+ */
+function coepValue() {
+  const raw = String(process.env.COEP ?? '').trim().toLowerCase();
+  return ['unsafe-none', '0', 'false', 'off', 'no'].includes(raw)
+    ? 'unsafe-none'
+    : 'credentialless';
+}
+
 // MongoDB connection — use MONGODB_URI from .env only
 let MONGODB_URI = null;
 if (process.env.MONGODB_URI) {
@@ -553,7 +571,7 @@ app.prepare().then(async () => {
       // against the currently-deployed build, and next.config.mjs keeps them
       // correct after the next `next build`.
       const isNextInternal = req.url.startsWith('/_next/') || req.url.includes('/favicon.ico');
-      const isWebUIProxy = req.url.startsWith('/api/agents/webui-proxy');
+      const isWebUIProxy = req.url.startsWith('/api/agents/webui-proxy') || req.url.startsWith('/api/browser/proxy');
 
       if (!isNextInternal) {
         // NOTE: Content-Security-Policy is intentionally NOT set here for general pages.
@@ -561,8 +579,8 @@ app.prepare().then(async () => {
         // nonce. Two CSP headers are enforced as an intersection, which would
         // silently break nonce-based script loading and the blob:/data: iframe
         // used by the file preview.
-        // For the agent Web UI proxy, we must permit same-origin framing so the
-        // embedded browser window can render the agent interface.
+        // For the agent Web UI and in-app browser proxy, we must permit same-origin
+        // framing so the embedded browser window can render the target interface.
         if (isWebUIProxy) {
           res.setHeader('X-Frame-Options', 'SAMEORIGIN');
           res.setHeader('Content-Security-Policy', "frame-ancestors 'self'");
@@ -583,7 +601,17 @@ app.prepare().then(async () => {
 
         // ── Cross-origin isolation / resource containment ───────────────────
         res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
-        res.setHeader('Cross-Origin-Embedder-Policy', isWebUIProxy ? 'unsafe-none' : (process.env.COEP === 'unsafe-none' ? 'unsafe-none' : 'credentialless'));
+        // COEP on the proxied documents must MATCH the shell's COEP, not opt out
+        // of it. Chromium rejects a nested document whose COEP is `unsafe-none`
+        // (or absent) whenever the embedder is `credentialless` — the frame dies
+        // with ERR_BLOCKED_BY_RESPONSE / blockedReason
+        // `coep-frame-resource-needs-coep-header`, same-origin or not. That is
+        // what made every Web Browser tab and the in-app agent Web UI render a
+        // blank "refused to connect" frame. `credentialless` still lets the
+        // proxied page pull cross-origin assets (they are simply fetched without
+        // credentials), so it does not break third-party sites the way
+        // `require-corp` would.
+        res.setHeader('Cross-Origin-Embedder-Policy', coepValue());
         res.setHeader('Cross-Origin-Resource-Policy', isWebUIProxy ? 'cross-origin' : 'same-origin');
         res.setHeader('X-Permitted-Cross-Domain-Policies', 'none');
       }
