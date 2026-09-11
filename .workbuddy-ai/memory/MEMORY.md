@@ -1,103 +1,45 @@
 # Project memory — monitor
 
-## Environment
-- Stack: Next.js 16 + custom `server.js` + socket.io; dev port **3030**; prod `https://monitor.eaqdragon.com`.
-- Next build works into a fresh `NEXT_DIST_DIR`; the safe-delete shim fails when cleaning an existing tree. Build output can land in `./tmp/<name>`; move it out, never recursively delete it.
-- **ALWAYS build into `./tmp/<name>`, never a top-level dir like `.next-verify`.** Tailwind v4 auto-detects sources and skips only gitignored paths. `.gitignore` has `/tmp/` and `/.next*/`, but a top-level `.next-verify` is *not* covered by `/.next/` — Tailwind scanned its Turbopack cache, extracted mangled arbitrary-value utilities that failed to parse and 500'd the entire dev server. Cost me a long detour. `/.next*/` is now wildcarded so this can't recur.
-- **Never write a literal mangled Tailwind class into any scanned file** (`.gitignore`, memory notes, docs). Tailwind v4 scans those too and re-extracts it as a real utility, recreating the 500. Describe the bug in words, not with the broken token.
-- Dev-mode breakage is usually a stale/corrupt Turbopack cache: clear `.next/cache/turbopack` (it grows to ~500M). A CSS error citing a line number beyond the source file's length means the *generated* CSS is bad, not the source.
-- Browser verification: use `http://localhost:3030` (not bare IP) and a normal Chrome UA. Headless default UA is blocked by `src/proxy.js`.
-- Tests: `npm test`; per-file eslint should have 0 errors. Project-wide lint has known pre-existing scratch parsing errors.
+Next.js 16 + custom `server.js` + socket.io. Dev port **3030** (`npm run dev` = `node server.js`). Prod `https://monitor.eaqdragon.com`. Logs hold detail. **Injected cap is 8000 chars — keep it lean.**
+
+## Build / verify
+
+- **Build into `./tmp/<name>`, never a top-level dir** — Tailwind v4 scans non-gitignored paths, and a stray top-level build dir's Turbopack cache 500s the dev server. Gitignored: `/tmp/`, `/.next*/`, `scratch/`.
+- **Never put a literal mangled Tailwind class in any scanned file** (incl. these notes) — Tailwind re-extracts it and re-breaks the server. Most dev breakage is a stale `.next/cache/turbopack`.
+- **Verify without disturbing the running server**: `NEXT_DIST_DIR=tmp/<n> PORT=3031 nohup npm run dev &`; kill via `lsof -nP -iTCP:3031 -sTCP:LISTEN -t`; move the distDir out after, never `rm -rf` it.
+- Browser checks: `http://localhost:3030` + a normal Chrome UA (the headless default is blocked by `src/proxy.js`); `npm test` (489) + per-file eslint 0 errors. **Never substring-match a package name against a command line** — a random temp dir containing `ws` flaked `relay-agent-pair`.
+- Auth-gated routes test without credentials — recipe in the `embedded-frame-diagnose` skill.
+
+## In-app frames: COEP + the browser-proxy sandbox (2026-09-11)
+
+- **COEP nesting rule.** Under a `COEP: credentialless` embedder, a nested document must send `credentialless` or `require-corp`; `unsafe-none`/absent is refused with `ERR_BLOCKED_BY_RESPONSE` / `coep-frame-resource-needs-coep-header`, **even same-origin** — a blank frame saying "refused to connect" is usually this. Shared value: `coepValue()` in `server.js`, `COEP` in `next.config.mjs`, both route handlers; opt-out `COEP=unsafe-none`.
+- **Sandbox.** `/api/browser/proxy` serves third-party HTML from OUR origin, so an unsandboxed frame's JS would run as monitor.eaqdragon.com. External-web frames are sandboxed **without `allow-same-origin`** (`WEB_FRAME_SANDBOX`); `webui` tabs are NOT — they need same-origin.
+- **The PARENT drives navigation; only it builds proxy URLs.** The injected script intercepts clicks/forms/history and posts `{__mpBrowser:'goto'|'newtab'|'push'|'nav'}`; the parent assigns `frameSrc`, echoes `'nav'` for redirects, and owns the per-tab `history` stack (`stepHistory(±1)`). `handleNewTab` must stay a `useCallback` (else the bridge effect re-subscribes each render). Never build a proxy URL in-page — `<base href>` is the TARGET origin. `frameSrc` = proxy wrapper, `url` = real destination. **`'push'` vs `'nav'` need different handlers**: `applyFrameUrl` unwraps a proxy wrapper and drops a bare destination; `applyPushedRoute` takes a real target URL.
+- **Opaque origin, measured.** `document.cookie`/`localStorage`/`indexedDB`/`serviceWorker` throw SecurityError. `pushState` to a different path throws inside the page's own click handler → SPA routers die; push/replaceState are swallowed and posted as `'push'`. A non-GET form submit navigates the frame to the target origin → tab dies with `corp-not-same-origin-after-defaulted-to-same-origin-by-coep`; non-GET is refused in-page and `HTMLFormElement.prototype.submit` patched (`form.submit()` fires no submit event). `target="_blank"` would open a logged-out OS popup in the opaque origin → posts `'newtab'`.
+- Assets load **direct** via `<base href>` — no CORS, no limiter cost; only a page's own *relative* `fetch`/XHR fails. **Proxying fetch/XHR is deliberately NOT done** (reasons in the 09-11 log).
+- **The injected script is one JS template literal** — a backtick inside it (comments are the easy way in) terminates it early and 500s the route. `tests/browser-proxy.test.mjs` guards this.
 
 ## Architecture
-- `FileManager.js` owns the only socket pool; new handlers must be listed in `FM_SOCKET_EVENTS` and guarded by `disposedRef`.
-- Relay registrations are keyed by JWT `sub`; connections are owned by `session.user.id`.
-- `server.js` accepts Local Relay at `/relay-ws` and Monitor Agent at `/agent-ws`.
+
+- `FileManager.js` owns the only socket pool; new handlers go in `FM_SOCKET_EVENTS` + `disposedRef` guard. Relay registrations keyed by JWT `sub`; connections owned by `session.user.id`.
+- `server.js` sets security headers, but next.config `headers()` apply on top and win — change a value in **both**. It serves `/relay-ws` (Local Relay) and `/agent-ws` (Monitor Agent).
+- `src/proxy.js` **excludes `/api/agents/webui-proxy` and `/api/browser/proxy`**, so those routes' own framing headers apply. `upgrade-insecure-requests` is HTTPS-only (it upgrades same-origin iframes to https://localhost on plain http).
+- Monitor Agent: `public/monitor-agent.js` → `.min.js` via `AgentSetupWizard.js`, dials `/agent-ws` with a one-time `--claim` code; `WEBUI_START_AGENTS=['nanobot','hermes']` (8765 / 9119). `scripts/relay-install-audit.mjs` audits the artifact — re-pin bytes/hash on change.
 
 ## Local Relay
-- Source: `public/local-relay.js`; built artifact: `public/local-relay.min.js`; installed copy: `~/.ssh-monitor-relay/`; macOS service: `com.ssh-monitor.relay`.
-- `scripts/build-relay.mjs` is seeded/deterministic and stamps `source-sha256`; `--check` detects drift. `prebuild`, `predev`, CI, and npm `prepack` build/check artifacts. The server serves only the artifact and returns 503 if missing; never falls back to readable source.
-- Token uses `Authorization: Bearer` on `/relay-ws`; `?token=` is legacy fallback. WHATWG `globalThis.WebSocket` ignores extra headers, so use the header-capable WebSocket path.
-- Relay does not self-update; rerun `local-relay --pair` after upgrading npm. Pairing code is single-use and expires in 10 minutes; successful exchange persists the long-lived token to MongoDB with rollback on persistence failure.
-- **Relay liveness must come from `GET /api/relay/token`, never `/api/health`.** The health route reports `global.__activeRelays?.size > 0` — whether *any* tenant has a relay attached — so it is wrong per-user in both directions. Shared client helper: `src/utils/relayStatus.js` (`fetchRelayStatus`, `requestRelayStatusRefresh`, `RELAY_STATUS_EVENT`).
-- **Anything that changes relay state must nudge the poller**, not wait for its tick: pairing approval and the install wizard call `requestRelayStatusRefresh(...)`. `AppContext` owns the only continuous relay poller (5s while missing → 20s after ~2 min, 20s when attached, 60s hidden, immediate on focus/visibility/online). The relay install finishes in the user's terminal, so the browser is never told — one-shot mount reads of `relayInfo` are always stale.
-- `relayDown` is only raised when the browser shows relay *intent* (local mode, a chosen preferred relay, or a relay discovered on 127.0.0.1:48923). Setting it unconditionally nags every server-mode user who never installed one.
-- `MongoDeadBanner` reads `ssh_monitor_ssh_mode` only. It used to `||` in `ssh_monitor_preferred_relay`, but that key holds a relay *name*, never a mode, so it made the banner appear for server-mode users.
-- **`ssh_monitor_ssh_mode` is stored per-device (localStorage) but converges per-ACCOUNT.** `AppContext` auto-pins `local` + `ssh_monitor_preferred_relay` for *any* browser that sees the user's relay, so a phone (which can never run a relay) still sends `x-ssh-mode: local` and gets routed through the Mac's relay. `ssh_monitor_relay_optout === '1'` ("Continue with direct connection") blocks that auto-pin; pairing a relay clears it. `resolveSshConfig` must therefore treat a missing relay as *fall back to direct* for non-localhost hosts, never as a hard error — otherwise every agent call 500s with "Local Relay Agent is not connected" for public-IP targets the server reaches fine. Localhost hosts MUST still throw (falling back = server dials its own loopback = SSRF). Regression tests in `tests/ai-agents-relay-routing.test.mjs`.
-- WebUI relay ports are hints only; use the `webui:ready` acknowledgement. Preserve WebUI `authorization` headers; cookie may be stripped. Production WebUI relay needs `CSP_ALLOW_LOCAL_RELAY=1`.
-- **`webui-proxy` never routes through a relay.** `route.js:534` calls `getSshConfig(connectionId)` with NO options, so `sshMode` is undefined and `conn.sshMode` is never persisted → `resolveSshConfig` returns the plain config → direct server→target SSH. Every other route passes `x-ssh-mode` / `x-preferred-relay` from headers. Consequence: "Via server" works only when the Next.js box can reach the target directly; it cannot reuse the user's relay for hosts only the relay can see.
-- **`relay-start` tunnels to 127.0.0.1 on the RELAY HOST, not the caller.** The gateway lands on the Mac, so the returned `http://127.0.0.1:<port>` is only usable from that Mac. Direct Web UI can therefore never work from a phone or another machine (and Chrome 142+ LNA blocks public→loopback anyway).
 
-## Opening the agent Web UI (AIAgentsApp)
-- **The claimed tab must never be left on "Opening Web UI…".** It is opened
-  synchronously (popup-blocker requirement) and navigated later, so every
-  failure path in between strands a tab the user is staring at. All of them now
-  write the reason INTO the tab (`failWebUITab`) and offer the same-origin
-  server route. Regression tests: `tests/ai-agents-webui-open.test.mjs`.
-- **The tab has to watch ITSELF — the opener cannot.** Measured in Chrome: an
-  about:blank popup reports the OPENER's URL as `location.href` (about:blank
-  inherits the creator's URL), and once it really navigates, reading `href`
-  throws. Both opener-side "did it move?" checks are blind; don't reintroduce
-  them. `navigateWebUITab()` instead writes a script into the tab that calls
-  `location.replace(direct)` and renders the fallback card if the document is
-  still alive at the deadline.
-- **Direct mode (`http://127.0.0.1:<port>`) is fundamentally device-local**: it
-  only works on the machine running the relay, so it can never work on a phone.
-  Chrome's Local Network Access (default-on since 142) additionally blocks
-  public-origin → loopback. The relay's PNA OPTIONS preflight mitigation is
-  obsolete — Chrome put PNA on hold, and top-level navigations never preflight.
-  When the jump is refused Chrome commits an error page, so even the in-tab
-  card can't help there; the **"Via server" button** is the deterministic route
-  for those devices.
-- `relay-start` must FAIL (504) when the relay never acks `webui:ready`. It used
-  to return `success:true` with a guessed port, sending the browser to a dead
-  address. `handleWebuiForward` swallows its errors, so failures currently cost
-  the full 20s ack timeout — adding a `webui:fail` message is still open
-  (needs a relay rebuild + reinstall).
-- The relay's own log is `~/Library/Logs/ssh-monitor-relay.log` (no timestamps) —
-  grep it for `[Relay WebUI]` before theorising about Web UI failures. The
-  installed relay at `~/.ssh-monitor-relay/local-relay.js` is byte-identical to
-  the obfuscated `public/local-relay.min.js`, so plain-text greps for its
-  strings find nothing; that is NOT evidence the code is missing.
+- `public/local-relay.js` → `.min.js` → `~/.ssh-monitor-relay/`; service `com.ssh-monitor.relay`. `scripts/build-relay.mjs` is deterministic, `--check` detects drift. Server serves only the artifact (503 if missing). Token via `Authorization: Bearer` on `/relay-ws` (`?token=` legacy) — WHATWG `WebSocket` ignores headers. No self-update: rerun `local-relay --pair` after upgrading npm; pair code single-use, 10 min.
+- **Liveness is `GET /api/relay/token`, never `/api/health`** (health ≠ your relay). Helper `src/utils/relayStatus.js`; relay-state changes must call `requestRelayStatusRefresh(...)`; `AppContext` owns the only poller — one-shot mount reads of `relayInfo` are always stale. `relayDown` only when the browser shows relay *intent*. `MongoDeadBanner` reads `ssh_monitor_ssh_mode` only.
+- **`ssh_monitor_ssh_mode` is per-device but converges per-ACCOUNT** — AppContext auto-pins `local` for any browser seeing the user's relay; `ssh_monitor_relay_optout=1` blocks that, pairing clears it. So `resolveSshConfig` must treat a missing relay as *fall back to direct* for non-localhost hosts (localhost MUST still throw). Tests: `tests/ai-agents-relay-routing.test.mjs`.
+- **`relay-start` tunnels to 127.0.0.1 on the RELAY HOST, not the caller.** Chrome LNA also blocks public→loopback. Log `~/Library/Logs/ssh-monitor-relay.log`; the installed copy is obfuscated. Ack contract: `webui:ready`(port) vs `webui:fail`(reason) — a relay-reported failure is a 502 quoting it, a timeout is the 504 that blames a missing relay. Tests: `tests/webui-forward-ack.test.mjs`.
 
-## Monitor Agent / Server-side install
-- `public/monitor-agent.js` → `public/monitor-agent.min.js`; installed on a remote target by `AgentSetupWizard.js` / `/api/server-monitor/agent`; connects outbound to `/agent-ws` and can run as `server-monitor-agent.service`.
-- This is distinct from Local Relay: **Server Monitor Agent** runs on the remote target; **Desktop Relay** runs on the user’s own computer; **Direct Server Connection** installs nothing.
-- Agent setup uses a one-time `--claim` code. Keep the target wording explicit: “Run this on the target server.”
-- `WEBUI_START_AGENTS=['nanobot','hermes']`; nanobot 8765, Hermes 9119.
+## Agent Web UI / WebUI proxy
 
-## WebUI proxy (`/api/agents/webui-proxy`)
-- **Tunnel coordinates go in the PATH, never the query**: sub-resources are
-  rewritten to `/api/agents/webui-proxy/m/<connectionId>/<port>/<remote-path>`.
-  A bundler resolves relative imports against `import.meta.url`, and RFC 3986
-  relative resolution drops the base URL's query — `?connectionId=&port=` on the
-  entry module makes every lazy chunk 400 and the SPA never leaves its boot
-  splash. See `tests/webui-proxy-assets.test.mjs`.
-- The injected `<head>` script patches fetch/XHR/WebSocket and, since the escape
-  fix, also root-absolute `src`/`href` set post-load (property setters,
-  `setAttribute`, `insertAdjacentHTML`, `innerHTML`, MutationObserver net) —
-  Hermes' router `pushState`s to `/sessions` and moves the document base.
-- **The URL must stay replayable.** It must never be normalised to
-  `location.pathname + location.hash` — that is what produced
-  `400 connectionId required` on every refresh of a chat session. The script
-  rewrites to `ASSET_PREFIX + '/?agent=' + WEBUI_AGENT + location.hash`, and
-  patches `pushState`/`replaceState` (`containInTunnel`) to keep same-origin
-  navigation under the proxy prefix. Bare URLs fall back to the
-  `mp_webui_coords` cookie (7d, httpOnly) for links minted by older builds.
-- That injected script lives INSIDE a JS template literal: a backtick in its
-  comments terminates the literal and 500s the whole route.
-- `remotePath` has `?agent=…` appended by the extraParams loop, so it is never
-  exactly `'/'` for the entry document.
-- Debugging an agent WebUI: reproduce locally (`localhost:3030`) with a
-  `next-auth/jwt`-minted session cookie, puppeteer-core + local Chrome, and log
-  `pageerror` plus every response >= 400. "Loading nanobot…" / a blank coloured
-  screen is the SPA's static `#root` fallback = JS never executed.
-
-## Distribution
-- `packages/local-relay/` publishes npm `ssh-monitor-relay`; `prepack.mjs` copies the built artifact into `dist/`. Published 1.0.4 hash: `ae6c768f...`, 196,100 bytes. Trusted Publishing remains to be registered; then revoke the bypass-2FA token.
-- `scripts/relay-install-audit.mjs` audits the artifact and source behaviour; re-pin bytes/hash when artifact changes.
-- Installer UI uses `relayInstallMethod` (`npm` default) and shared `InstallMethodToggle` in both card and modal.
+- `AIAgentsApp` Open offers a chooser: **in-app** (`AgentWebUIView`, frames the same-origin proxy) or **browser tab**; preference in `localStorage['ssh_monitor_webui_open_mode']` (`src/utils/webuiOpenMode.js`). Tests: `tests/ai-agents-webui-open*.test.mjs`. **In-app works on a phone in standard mobile mode** (same-origin → no popup, no LNA, no relay on device); it probes before mounting (failure = retryable card).
+- The in-app panel is a real window (floating / docked / maximised) — drag+resize must use **pointer events, never mouse events** (the mouse trio is dead on touchscreens); minimise hides rather than unmounts — unmounting drops the socket and any half-typed message.
+- `openExternalUrl()` = `window.open` then a synthetic `<a target="_blank">` click (the anchor is the only thing that opens a tab on mobile Safari / iOS standalone); never pass a `features` string. The tab must **watch ITSELF** — an about:blank popup reports the OPENER's URL as `location.href`. `relay-start` must FAIL (504) if the relay never acks `webui:ready`.
+- WebUI proxy: **tunnel coordinates go in the PATH, never the query** — relative imports resolve against `import.meta.url` and RFC 3986 drops the base query, so `?connectionId=&port=` 400s every lazy chunk; bare URLs fall back to the `mp_webui_coords` cookie. **Hermes uses Vue Router `createWebHashHistory()`** — never treat its hash routes like a BrowserRouter basename; preserve `window.__HERMES_BASE_PATH__`. Tests: `tests/webui-proxy-assets.test.mjs`.
 
 ## Security / open work
-- See `SECURITY_ROADMAP_A_TO_A_PLUS.md` and `THREAT_MODEL.md`; do not re-fix completed rate limiting, CSP, RBAC, vault crypto, WebAuthn clone detection, or audit logging.
-- Open: OAuth PKCE; npm Trusted Publisher; dead `relay-v1.0.1` tag; relay `--update`; redundant npm dependency install.
+
+- See `SECURITY_ROADMAP_A_TO_A_PLUS.md` / `THREAT_MODEL.md`; do not re-fix completed rate limiting, CSP, RBAC, vault crypto, WebAuthn clone detection, audit logs.
