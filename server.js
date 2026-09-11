@@ -744,12 +744,12 @@ global.__webuiForwardWaiters = new Map(); // forwardId → { resolve, timer }
 global.__waitForWebuiForward = function waitForWebuiForward(forwardId, timeoutMs = 15000) {
   return new Promise((resolve) => {
     let timer = null;
-    const finish = (port) => {
+    const finish = (result) => {
       if (timer) clearTimeout(timer);
       global.__webuiForwardWaiters.delete(forwardId);
-      resolve(port);
+      resolve(result);
     };
-    timer = setTimeout(() => finish(null), timeoutMs);
+    timer = setTimeout(() => finish({ port: null, error: null, timedOut: true }), timeoutMs);
     global.__webuiForwardWaiters.set(forwardId, { resolve: finish, timer });
   });
 };
@@ -5515,7 +5515,24 @@ fi'`;
                 if (port) {
                   console.log(`🌐 [Relay WebUI] gateway ack: ${msg.forwardId} → 127.0.0.1:${port}`);
                 }
-                waiter.resolve(port);
+                waiter.resolve({ port, error: null, timedOut: false });
+              }
+              return;
+            }
+            if (msg.type === 'webui:fail') {
+              // The relay hit a real error before it could bind or verify the
+              // tunnel (SSH refused, agent Web UI port dead, port range
+              // exhausted). Resolve the waiter NOW, carrying the reason:
+              // otherwise the route waits out its full timeout and then blames
+              // a missing relay, which is both wrong and unactionable when the
+              // relay is connected and healthy.
+              const waiter = global.__webuiForwardWaiters?.get(String(msg.forwardId));
+              if (waiter) {
+                const error = (typeof msg.error === 'string' && msg.error)
+                  ? msg.error.slice(0, 300)
+                  : 'Local Relay could not open the Web UI tunnel';
+                console.log(`⚠️ [Relay WebUI] gateway failed: ${msg.forwardId} → ${error}`);
+                waiter.resolve({ port: null, error, timedOut: false });
               }
               return;
             }

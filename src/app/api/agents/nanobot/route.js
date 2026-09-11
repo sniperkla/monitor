@@ -1279,15 +1279,31 @@ if [ ${cursor} -gt 0 ] && [ ${cursor} -le $SZ ]; then tail -c +$((cursor + 1)) "
         }
         // The relay opens the SSH tunnel before it can bind the local listener,
         // so this usually takes a second or two.
-        const ackedPort = await ackPromise;
-        const localPort = Number(ackedPort) || 0;
-        // No ack means the relay never got the tunnel up (SSH refused, the
-        // agent's Web UI port is dead, or the relay predates `webui:ready`).
+        const ack = await ackPromise;
+        const localPort = Number(ack?.port) || 0;
+        // No port means the relay never got the tunnel up. That is two very
+        // different situations, and they used to be conflated into a single 504
+        // telling the user to check whether Local Relay was running:
+        //   • 'webui:fail' — the relay IS connected and told us why it failed
+        //     (SSH refused, the agent's Web UI port dead, ports exhausted).
+        //     Blaming its absence here is actively misleading, so answer 502
+        //     and surface the relay's own words.
+        //   • a genuine timeout — no relay at all, or one too old to answer.
+        //     504, and the "check that Local Relay is running" text is correct.
         // This used to answer `success` with a GUESSED port, which sent the
         // browser to a dead address while the tab sat on "Opening Web UI…".
         // Fail loudly instead, so the tab can explain itself and offer the
         // same-origin proxy route.
         if (!localPort) {
+          if (ack?.error) {
+            log.push(`✗ [webui] Local Relay could not open the tunnel: ${ack.error}`);
+            return NextResponse.json({
+              success: false,
+              portConfirmed: false,
+              error: `Local Relay could not open the Web UI tunnel: ${ack.error}`,
+              log,
+            }, { status: 502 });
+          }
           log.push('✗ [webui] Local Relay never confirmed the tunnel (timed out)');
           return NextResponse.json({
             success: false,
@@ -1301,7 +1317,7 @@ if [ ${cursor} -gt 0 ] && [ ${cursor} -le $SZ ]; then tail -c +$((cursor + 1)) "
           success: true, active: true, relay: true, localPort,
           // True when the relay reported its own port; false means we fell back
           // to the default (older relay build) and the port may be wrong.
-          portConfirmed: !!ackedPort,
+          portConfirmed: !!localPort,
           log,
         });
       }

@@ -172,7 +172,10 @@ test('relay-start fails instead of handing the browser a guessed port', () => {
     // The old code did `Number(ackedPort) || 18790` and returned success:true —
     // sending the tab to an address nobody was listening on.
     assert.doesNotMatch(block, new RegExp(`Number\\(ackedPort\\) \\|\\| ${fallbackPort}`), `${name} still guesses a port`);
-    assert.match(block, /Number\(ackedPort\) \|\| 0/);
+    // The waiter resolves an object now, so a failure can carry its reason as
+    // well as a port (see tests/webui-forward-ack.test.mjs). Same intent: take
+    // the port from the ack, and treat "no port" as a failure.
+    assert.match(block, /Number\(ack\?\.port\) \|\| 0/);
     assert.match(block, /if \(!localPort\)/);
     assert.match(block, /success: false/);
     assert.match(block, /status: 504/);

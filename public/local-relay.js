@@ -689,7 +689,7 @@ function connect() {
 
       // ── SSH ──
       case 'ssh:connect':     handleSshConnect(ws, msg); break;
-      case 'webui:forward':   handleWebuiForward(msg).catch(err => console.error(`✗ [Relay WebUI] ${err.message}`)); break;
+      case 'webui:forward':   handleWebuiForward(msg).catch(err => reportWebuiFailure(msg, err)); break;
       case 'ssh:exec':        handleSshExec(ws, msg);    break;
       case 'ssh:disconnect':  cleanupSsh(msg.connId);    break;
       case 'ai:chat':         handleAiChat(ws, msg);     break;
@@ -837,6 +837,30 @@ async function webuiEnsureSsh(gw) {
   gw.sshDead = false;
   gw.ssh = await webuiSshConnect(gw);
   return gw.ssh;
+}
+
+/**
+ * Tell the monitor that a `webui:forward` failed, instead of only logging it here.
+ *
+ * Without this the server cannot distinguish "no relay is connected" from "the
+ * relay is connected but the tunnel failed". It therefore sits out its full ack
+ * timeout (~20 s) and then reports the former — which is wrong and unactionable
+ * when the real cause was, say, SSH auth or a dead agent port. The user is told
+ * to check that Local Relay is running while it is running perfectly well.
+ *
+ * Best-effort by design: if the socket is gone the server's timeout still
+ * covers us, so a throw here must never mask the original error.
+ */
+function reportWebuiFailure(msg, err) {
+  const forwardId = msg && msg.forwardId;
+  const message = (err && err.message) ? err.message : String(err);
+  console.error(`✗ [Relay WebUI] ${message}`);
+  if (!forwardId) return;
+  try {
+    if (activeWs && activeWs.readyState === 1) {
+      activeWs.send(JSON.stringify({ type: 'webui:fail', forwardId, error: message }));
+    }
+  } catch (_) { /* best effort */ }
 }
 
 async function handleWebuiForward(msg) {
