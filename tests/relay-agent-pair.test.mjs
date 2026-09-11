@@ -267,12 +267,25 @@ test('dependency install is split and bounded — optional P2P cannot stall the 
 
   const npmCalls = out.split('\n').filter((l) => l.includes('[stub npm]'));
   assert.ok(npmCalls.length >= 2, `npm must be invoked more than once:\n${out}`);
+  // `--cache <dir>` carries a random temp path (runAgent mints an id from
+  // Math.random), and that path routinely contains "ws" or "ssh" as a
+  // substring — e.g. .../relay-agent-JlwsDd/... . Matching package names as
+  // bare substrings over the whole line therefore fails at random. Strip the
+  // flag values and match whole tokens instead.
+  const pkgTokens = (l) =>
+    l
+      .replace(/--cache\s+\S+/g, '')
+      .split(/\s+/)
+      .filter((t) => t && !t.startsWith('-'));
   assert.ok(
     npmCalls.some((l) => /ssh2 ws(?!.*node-datachannel)/.test(l)),
     `core packages must be installed on their own:\n${npmCalls.join('\n')}`
   );
   assert.ok(
-    npmCalls.some((l) => l.includes('node-datachannel') && !/ssh2|ws/.test(l.replace('node-datachannel', ''))),
+    npmCalls.some((l) => {
+      const tokens = pkgTokens(l);
+      return tokens.includes('node-datachannel') && !tokens.includes('ssh2') && !tokens.includes('ws');
+    }),
     `the optional native package must be installed separately:\n${npmCalls.join('\n')}`
   );
 
