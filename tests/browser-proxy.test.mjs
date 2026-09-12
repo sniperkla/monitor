@@ -24,8 +24,13 @@ test('next.config.mjs specifies framing headers for /api/browser/proxy', () => {
   const nextConfigSrc = readFileSync('next.config.mjs', 'utf8');
   assert.match(
     nextConfigSrc,
-    /source:\s*'\/api\/browser\/proxy'/,
-    'next.config.mjs must contain a header rule for /api/browser/proxy'
+    /source:\s*'\/api\/browser\/proxy(\/:path\*)?'/,
+    'next.config.mjs must contain a header rule for /api/browser/proxy (exact or path-keyed)'
+  );
+  assert.match(
+    nextConfigSrc,
+    /source:\s*'\/api\/agents\/webui-proxy(\/:path\*)?'/,
+    'next.config.mjs must contain a header rule for /api/agents/webui-proxy'
   );
 });
 

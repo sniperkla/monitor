@@ -70,7 +70,7 @@ const nextConfig = {
         ],
       },
       {
-        source: '/api/agents/webui-proxy',
+        source: '/api/agents/webui-proxy/:path*',
         headers: [
           { key: 'X-Frame-Options', value: 'SAMEORIGIN' },
           { key: 'Content-Security-Policy', value: "frame-ancestors 'self'" },
@@ -84,7 +84,7 @@ const nextConfig = {
         ],
       },
       {
-        source: '/api/browser/proxy',
+        source: '/api/browser/proxy/:path*',
         headers: [
           { key: 'X-Frame-Options', value: 'SAMEORIGIN' },
           { key: 'Content-Security-Policy', value: "frame-ancestors 'self'" },
