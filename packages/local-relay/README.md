@@ -198,6 +198,16 @@ service are not granted. No warranty of any kind.
 
 ## Version note
 
+- **1.1.0** — the in-app browser web proxy: the relay now hosts a loopback web
+  proxy (`http://127.0.0.1:<port>/p/<encoded-origin>/…`) that renders ordinary
+  websites inside the monitor's Web Browser app from the user's own machine —
+  pages, assets, GET/POST forms, fetch/XHR, dynamic media element sources
+  (`el.src`), absolute link clicks, JS navigation (`location.assign/replace`,
+  `location.href=`) and byte-range video streaming all route through it, with
+  the real site's Referer reconstructed upstream and an injected bridge that
+  repairs un-prefixed navigations (cookie + referer + keep-alive socket
+  tracking). Same-origin enforcement stays: no cookie jar, no upstream
+  Set-Cookie, no inbound ports.
 - **1.0.16** — mobile & Termux stability improvements: automatic startup
   wake-lock detection on Termux, resilient 12s keepalive interval to prevent
   cellular carrier NAT timeouts, and active 28s pong watchdog to instantly

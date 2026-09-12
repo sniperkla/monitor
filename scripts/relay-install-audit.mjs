@@ -123,9 +123,9 @@ const PINNED = {
   //      through the relay; relative links remain untouched.
   // The shipped artifact: public/local-relay.min.js
   bytes: 219055,
-  sha256: '38a16d66de7962c907f4a502e8cc5fafb057c6cfdb92b3c58771b66ac716bfc3',
+  sha256: '483bfe1b8c194d4368e063c968758685f296b6c8abfe86241e186ff1d4fc1571',
   // The readable source it must be built from: public/local-relay.js
-  sourceSha256: '54c3ac89ed3568267e789dd854a790996ee1ac69772201b4d508e11d918429ed',
+  sourceSha256: '8945e43194bea80991477e8d795d7c5177efbb7b80ce6a3188b2d773cae11a67',
 
   /**
    * Loopback listeners. Not secrets, but they ARE the relay's local attack

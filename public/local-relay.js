@@ -302,7 +302,7 @@ async function pairAndGetToken({ client, scope }) {
 const savedConfig = loadConfig();
 let SERVER = args.server || savedConfig.server || process.env.RELAY_SERVER || '';
 let TOKEN  = args.token  || savedConfig.token  || process.env.RELAY_TOKEN  || '';
-const RELAY_VERSION = '1.0.16';
+const RELAY_VERSION = '1.1.0';
 const RELAY_NAME = args.name || savedConfig.name || os.hostname();
 
 // -- Install/uninstall handling (unchanged from original) --
