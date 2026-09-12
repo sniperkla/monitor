@@ -229,6 +229,11 @@ export async function GET(request) {
           capabilities: relay.capabilities || { ssh: false, sftp: false, docker: false },
           version: relay.version || null,
           relayName: relay.relayName || relayId,
+          // Loopback port of the relay's web proxy, used by the in-app browser to
+          // render ordinary sites on the user's own machine. `null` for older
+          // relays and for ones that have not finished binding — callers must
+          // treat it as optional and fall back to the server proxy.
+          webProxyPort: Number(relay.webProxyPort) > 0 ? Number(relay.webProxyPort) : null,
           // Lets the dashboard pause/resume the exact credential behind
           // this relay row without guessing by name.
           tokenId: relay.tokenId || null,
@@ -241,7 +246,7 @@ export async function GET(request) {
     return Response.json({
       success: true,
       connected: !!relay,
-      relays: relay ? [{ relayId: relay.relayName || 'default', connected: true, localPort: relay.localPort, capabilities: relay.capabilities || { ssh: false, sftp: false, docker: false }, version: relay.version || null, relayName: relay.relayName || 'default' }] : [],
+      relays: relay ? [{ relayId: relay.relayName || 'default', connected: true, localPort: relay.localPort, capabilities: relay.capabilities || { ssh: false, sftp: false, docker: false }, version: relay.version || null, relayName: relay.relayName || 'default', webProxyPort: Number(relay.webProxyPort) > 0 ? Number(relay.webProxyPort) : null }] : [],
       supporter,
       tokens,
     });

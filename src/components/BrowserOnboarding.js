@@ -1,0 +1,629 @@
+'use client';
+
+// ── Web Browser onboarding tour ────────────────────────────────────
+// Structural clone of DockerOnboarding (the repo's canonical tour shape):
+// full-screen welcome, then a bottom step panel whose spotlight tracks a
+// `[data-onboarding]` target through window drags/resizes, then a done screen.
+// Copy lives in i18n under `browser.onboarding.*` (en + th). One self-contained
+// file per app is the established pattern — only the SVG spotlight itself
+// (OnboardingSpotlight) is shared.
+
+import OnboardingSpotlight from '@/components/OnboardingSpotlight';
+
+import { createPortal } from 'react-dom';
+
+import { useState, useEffect, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
+import {
+  X, ChevronRight, ChevronLeft, Sparkles,
+  Globe, Search, ArrowLeft, Plus, ExternalLink, ShieldCheck,
+  CircleCheckBig, Zap
+} from 'lucide-react';
+import { useOnboardingLayout } from '@/hooks/useOnboardingLayout';
+
+const STORAGE_KEY = 'browser-onboarding-completed';
+
+const STEPS = [
+  {
+    id: 'welcome',
+    icon: Globe,
+    color: '#10b981',
+    accentColor: '#34d399',
+    spotlight: null,
+    side: null,
+    hasTip: false,
+    isDone: false,
+  },
+  {
+    id: 'omnibox',
+    icon: Search,
+    color: '#0ea5e9',
+    accentColor: '#38bdf8',
+    spotlight: 'omnibox',
+    side: 'bottom',
+    hasTip: true,
+    isDone: false,
+  },
+  {
+    id: 'nav',
+    icon: ArrowLeft,
+    color: '#6366f1',
+    accentColor: '#818cf8',
+    spotlight: 'nav-back',
+    side: 'bottom',
+    hasTip: true,
+    isDone: false,
+  },
+  {
+    id: 'tabs',
+    icon: Plus,
+    color: '#8b5cf6',
+    accentColor: '#a78bfa',
+    spotlight: 'new-tab-btn',
+    side: 'bottom',
+    hasTip: true,
+    isDone: false,
+  },
+  {
+    id: 'relay',
+    icon: ShieldCheck,
+    color: '#10b981',
+    accentColor: '#34d399',
+    spotlight: 'external-btn',
+    side: 'bottom',
+    hasTip: true,
+    isDone: false,
+  },
+  {
+    id: 'done',
+    icon: Zap,
+    color: '#10b981',
+    accentColor: '#34d399',
+    spotlight: null,
+    side: null,
+    hasTip: false,
+    isDone: true,
+  },
+];
+
+// Floating particles component
+function FloatingParticles({ color, count = 20 }) {
+  const particles = Array.from({ length: count }, (_, i) => ({
+    id: i,
+    x: Math.random() * 100,
+    y: Math.random() * 100,
+    size: Math.random() * 4 + 2,
+    duration: Math.random() * 20 + 10,
+    delay: Math.random() * 5,
+  }));
+
+  return (
+    <div style={{
+      position: 'absolute',
+      inset: 0,
+      overflow: 'hidden',
+      pointerEvents: 'none',
+      zIndex: 1,
+    }}>
+      {particles.map(p => (
+        <div
+          key={p.id}
+          style={{
+            position: 'absolute',
+            left: `${p.x}%`,
+            top: `${p.y}%`,
+            width: p.size,
+            height: p.size,
+            borderRadius: '50%',
+            background: `radial-gradient(circle, ${color}40, transparent)`,
+            animation: `ob-float ${p.duration}s ease-in-out infinite`,
+            animationDelay: `${p.delay}s`,
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
+// Animated typing text
+function TypedText({ text, speed = 30, delay = 0, style }) {
+  const [displayed, setDisplayed] = useState('');
+  const [started, setStarted] = useState(false);
+
+  useEffect(() => {
+    const startTimer = setTimeout(() => setStarted(true), delay);
+    return () => clearTimeout(startTimer);
+  }, [delay]);
+
+  useEffect(() => {
+    if (!started) return;
+    let i = 0;
+    const timer = setInterval(() => {
+      if (i <= text.length) {
+        setDisplayed(text.slice(0, i));
+        i++;
+      } else {
+        clearInterval(timer);
+      }
+    }, speed);
+    return () => clearInterval(timer);
+  }, [text, speed, started]);
+
+  return <span style={style}>{displayed}<span style={{ animation: 'ob-blink 1s step-end infinite', opacity: 0.8 }}>|</span></span>;
+}
+
+// Circular progress ring
+function ProgressRing({ progress, color, size = 44, strokeWidth = 3 }) {
+  const radius = (size - strokeWidth) / 2;
+  const circumference = radius * 2 * Math.PI;
+  const offset = circumference - (progress / 100) * circumference;
+
+  return (
+    <svg width={size} height={size} style={{ transform: 'rotate(-90deg)' }}>
+      <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth={strokeWidth} />
+      <circle
+        cx={size / 2} cy={size / 2} r={radius}
+        fill="none" stroke={color} strokeWidth={strokeWidth}
+        strokeDasharray={circumference} strokeDashoffset={offset}
+        strokeLinecap="round"
+        style={{ transition: 'stroke-dashoffset 0.5s ease' }}
+      />
+    </svg>
+  );
+}
+
+// Spotlight hook
+// ── Dynamic focus ── tracks the target live (poll + resize) so the spotlight
+// follows it through window drags/resizes/minimize-restore at ANY window size.
+// If a scrollable ancestor clips the target, it is scrolled into view first.
+function useSpotlightRect(target) {
+  const [measured, setMeasured] = useState(null);
+  useEffect(() => {
+    if (!target) { setMeasured(null); return; }
+    let scrolled = false; // one smooth scroll per step — repeating restarts animation
+    const measure = () => {
+      const el = document.querySelector(`[data-onboarding="${target}"]`);
+      if (!el) { scrolled = false; setMeasured(null); return; }
+      if (!scrolled) {
+        // Walk up to the nearest scrollable ancestor actually clipping the target
+        let node = el.parentElement;
+        while (node && node !== document.body) {
+          const st = window.getComputedStyle(node);
+          if (/(auto|scroll)/.test(st.overflowY) || /(auto|scroll)/.test(st.overflow)) {
+            const cr = node.getBoundingClientRect();
+            const er = el.getBoundingClientRect();
+            if (er.top < cr.top || er.bottom > cr.bottom) {
+              scrolled = true;
+              el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+            break;
+          }
+          node = node.parentElement;
+        }
+      }
+      const r = el.getBoundingClientRect();
+      setMeasured({ top: r.top, left: r.left, width: r.width, height: r.height });
+    };
+    const raf = requestAnimationFrame(() => { setTimeout(measure, 50); });
+    const id = setInterval(measure, 150);
+    window.addEventListener('resize', measure);
+    return () => { cancelAnimationFrame(raf); clearInterval(id); window.removeEventListener('resize', measure); };
+  }, [target]);
+  return measured;
+}
+
+// Main center panel
+function ImmersiveCenterPanel({ step, meta, total, contentStep, contentTotal, onNext, onPrev, onDismiss, show }) {
+  const R = useOnboardingLayout();
+  const { t } = useTranslation();
+  const isWelcome = meta.id === 'welcome';
+  const isLast = step === STEPS.length - 1;
+
+  if (isWelcome) {
+    return (
+      <div style={{
+        position: 'fixed', inset: 0, zIndex: 999997,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: R.overlayPad,
+        pointerEvents: show ? 'auto' : 'none',
+        opacity: show ? 1 : 0,
+        transition: 'opacity 0.5s ease',
+      }}>
+        <FloatingParticles color={meta.color} count={30} />
+        <div style={{
+          maxWidth: 880, width: '100%', textAlign: 'center',
+          transform: show ? 'translateY(0) scale(1)' : 'translateY(40px) scale(0.95)',
+          transition: 'transform 0.6s cubic-bezier(0.34, 1.3, 0.64, 1)',
+        }}>
+          <div style={{ marginBottom: 40 }}>
+            <div style={{
+              display: 'inline-flex', alignItems: 'center', gap: 8,
+              padding: '8px 16px', borderRadius: 999,
+              background: `${meta.color}15`, border: `1px solid ${meta.color}30`, marginBottom: 24,
+            }}>
+              <Sparkles size={14} style={{ color: meta.color }} />
+              <span style={{ fontSize: 12, fontWeight: 600, color: meta.color, textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+                Web Browser Quick Start
+              </span>
+            </div>
+            <h1 style={{
+              margin: '0 0 16px', fontSize: R.heroSize, fontWeight: 800,
+              background: `linear-gradient(135deg, #fff, ${meta.accentColor})`,
+              WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
+              backgroundClip: 'text', lineHeight: 1.1,
+            }}>
+              {t(`browser.onboarding.steps.${meta.id}.title`)}
+            </h1>
+            <p style={{ margin: '0 auto', maxWidth: 520, fontSize: 16, color: '#94a3b8', lineHeight: 1.6 }}>
+              <TypedText text={t(`browser.onboarding.steps.${meta.id}.description`)} speed={15} delay={300} />
+            </p>
+          </div>
+
+          {/* Feature Grid */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(200px, 100%), 1fr))', gap: 16, marginBottom: 40 }}>
+            {[
+              { icon: Search, title: t('browser.onboarding.features.omnibox.title'), desc: t('browser.onboarding.features.omnibox.desc') },
+              { icon: ArrowLeft, title: t('browser.onboarding.features.nav.title'), desc: t('browser.onboarding.features.nav.desc') },
+              { icon: Plus, title: t('browser.onboarding.features.tabs.title'), desc: t('browser.onboarding.features.tabs.desc') },
+              { icon: ExternalLink, title: t('browser.onboarding.features.relay.title'), desc: t('browser.onboarding.features.relay.desc') },
+            ].map((feature, i) => (              <div key={i} style={{
+                padding: R.cardPad, borderRadius: 16,
+                background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)',
+                textAlign: 'left',
+                opacity: show ? 1 : 0,
+                transform: show ? 'translateY(0)' : 'translateY(20px)',
+                transition: `all 0.5s ease ${i * 0.1}s`,
+              }}>
+                <feature.icon size={24} style={{ color: meta.color, marginBottom: 12 }} />
+                <h4 style={{ margin: '0 0 4px', fontSize: 14, fontWeight: 700, color: '#f1f5f9' }}>{feature.title}</h4>
+                <p style={{ margin: 0, fontSize: 12, color: '#64748b' }}>{feature.desc}</p>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12 }}>
+            <button onClick={onDismiss} style={{
+              padding: '12px 24px', borderRadius: 12,
+              background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.18)',
+              color: '#94a3b8', fontSize: 14, fontWeight: 600, cursor: 'pointer', transition: 'all 0.2s',
+            }}
+              onMouseEnter={e => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.28)'; e.currentTarget.style.color = '#cbd5e1'; }}
+              onMouseLeave={e => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.18)'; e.currentTarget.style.color = '#94a3b8'; }}
+            >
+              Skip Tour
+            </button>
+            <button onClick={onNext} style={{
+              display: 'inline-flex', alignItems: 'center', gap: 8,
+              padding: '14px 28px', borderRadius: 14,
+              background: `linear-gradient(135deg, ${meta.color}, ${meta.accentColor})`,
+              border: 'none', color: '#fff', fontSize: 15, fontWeight: 700, cursor: 'pointer',
+              boxShadow: `0 8px 32px ${meta.color}40`, transition: 'all 0.2s',
+            }}
+              onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.05)'; e.currentTarget.style.boxShadow = `0 12px 40px ${meta.color}60`; }}
+              onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)'; e.currentTarget.style.boxShadow = `0 8px 32px ${meta.color}40`; }}
+            >
+              Start Tour
+              <ChevronRight size={18} />
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (isLast) {
+    return (
+      <div style={{
+        position: 'fixed', inset: 0, zIndex: 999997,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: R.overlayPad,
+        pointerEvents: show ? 'auto' : 'none',
+        opacity: show ? 1 : 0, transition: 'opacity 0.5s ease',
+      }}>
+        <FloatingParticles color={meta.color} count={40} />
+        <div style={{
+          maxWidth: 480, width: '100%', textAlign: 'center',
+          transform: show ? 'translateY(0) scale(1)' : 'translateY(40px) scale(0.95)',
+          transition: 'transform 0.6s cubic-bezier(0.34, 1.3, 0.64, 1)',
+        }}>
+          <div style={{
+            width: 100, height: 100, margin: '0 auto 24px', borderRadius: '50%',
+            background: `radial-gradient(circle, ${meta.color}30, transparent)`,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            animation: 'ob-pulse-glow 2s ease-in-out infinite',
+          }}>
+            <div style={{
+              width: 72, height: 72, borderRadius: '50%',
+              background: `linear-gradient(135deg, ${meta.color}, ${meta.accentColor})`,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              boxShadow: `0 8px 40px ${meta.color}60`,
+            }}>
+              <CircleCheckBig size={36} style={{ color: '#fff' }} />
+            </div>
+          </div>
+          <h1 style={{ margin: '0 0 12px', fontSize: 32, fontWeight: 800, color: '#f1f5f9' }}>
+            {t(`browser.onboarding.steps.${meta.id}.title`)}
+          </h1>
+          <p style={{ margin: '0 0 32px', fontSize: 15, color: '#94a3b8', lineHeight: 1.6 }}>
+            {t(`browser.onboarding.steps.${meta.id}.description`)}
+          </p>
+          <button onClick={onNext} style={{
+            display: 'inline-flex', alignItems: 'center', gap: 8,
+            padding: '16px 32px', borderRadius: 14,
+            background: `linear-gradient(135deg, ${meta.color}, ${meta.accentColor})`,
+            border: 'none', color: '#fff', fontSize: 16, fontWeight: 700, cursor: 'pointer',
+            boxShadow: `0 8px 32px ${meta.color}40`, transition: 'all 0.2s',
+          }}
+            onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.05)'; e.currentTarget.style.boxShadow = `0 12px 40px ${meta.color}60`; }}
+            onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)'; e.currentTarget.style.boxShadow = `0 8px 32px ${meta.color}40`; }}
+          >
+            <Sparkles size={18} />
+            Get Started
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Regular step panel
+  return (
+    <div style={{
+      position: 'fixed', bottom: R.panelBottom, left: '50%',
+      transform: `translateX(-50%) ${show ? 'translateY(0)' : 'translateY(120px)'}`,
+      zIndex: 999997,
+      opacity: show ? 1 : 0,
+      transition: 'all 0.5s cubic-bezier(0.34, 1.3, 0.64, 1)',
+      pointerEvents: show ? 'auto' : 'none',
+    }}>
+      <div style={{
+        width: R.panelWidth, maxWidth: 720,
+        background: 'linear-gradient(165deg, rgba(15,23,42,0.98) 0%, rgba(8,12,24,0.99) 100%)',
+        border: `1px solid ${meta.color}35`,
+        borderRadius: 24, display: 'flex', flexDirection: 'column', overflow: 'hidden', maxHeight: R.panelMaxHeight,
+        boxShadow: `0 8px 48px rgba(0,0,0,0.5), 0 0 80px ${meta.color}15`,
+        backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)',
+      }}>
+        {/* Progress bar */}
+        <div style={{ height: 2, background: 'rgba(255,255,255,0.05)' }}>
+          <div style={{
+            height: '100%', width: `${(contentStep / contentTotal) * 100}%`,
+            background: `linear-gradient(90deg, ${meta.color}, ${meta.accentColor})`,
+            transition: 'width 0.5s ease',
+          }} />
+        </div>
+
+        <div style={{ padding: R.contentPad, flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden' }}>
+          {/* Header */}
+          <div style={{ display: 'flex', flexDirection: R.stackHeader ? 'column' : 'row', alignItems: 'flex-start', gap: R.headerGap, marginBottom: 20 }}>
+            <div style={{ position: 'relative', width: 64, height: 64, flexShrink: 0 }}>
+              <div style={{
+                position: 'absolute', inset: 0, borderRadius: 18,
+                background: `linear-gradient(135deg, ${meta.color}20, ${meta.color}05)`,
+                border: `1px solid ${meta.color}40`,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>
+                <meta.icon size={28} style={{ color: meta.color }} />
+              </div>
+              <div style={{ position: 'absolute', top: -4, right: -4 }}>
+                <ProgressRing progress={(contentStep / contentTotal) * 100} color={meta.color} size={32} strokeWidth={2} />
+                <span style={{
+                  position: 'absolute', inset: 0,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 10, fontWeight: 700, color: '#f1f5f9',
+                }}>{contentStep}</span>
+              </div>
+            </div>
+
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                <span style={{
+                  fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 999,
+                  background: `${meta.color}15`, border: `1px solid ${meta.color}30`,
+                  color: meta.color, textTransform: 'uppercase', letterSpacing: '0.08em',
+                }}>
+                  {t('browser.onboarding.stepOf', { step: contentStep, total: contentTotal })}
+                </span>
+              </div>
+              <h3 style={{ margin: '0 0 8px', fontSize: 20, fontWeight: 800, color: '#f1f5f9', lineHeight: 1.2 }}>
+                {t(`browser.onboarding.steps.${meta.id}.title`)}
+              </h3>
+              <p style={{ margin: 0, fontSize: 14, color: '#94a3b8', lineHeight: 1.6 }}>
+                <TypedText text={t(`browser.onboarding.steps.${meta.id}.description`)} speed={10} delay={100} />
+              </p>
+              {meta.hasTip && (
+                <div style={{
+                  marginTop: 14, display: 'flex', alignItems: 'flex-start', gap: 10,
+                  padding: '12px 16px', borderRadius: 12,
+                  background: `${meta.color}08`, border: `1px solid ${meta.color}20`,
+                }}>
+                  <ChevronRight size={14} style={{ color: meta.color, flexShrink: 0, marginTop: 2 }} />
+                  <span style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.5 }}>
+                    {t(`browser.onboarding.steps.${meta.id}.tip`)}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            <button onClick={onDismiss} style={{
+              flexShrink: 0, width: 32, height: 32, borderRadius: 10,
+              background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.16)',
+              color: '#94a3b8', cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.2s',
+            }}
+              onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.14)'; e.currentTarget.style.color = '#f1f5f9'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.08)'; e.currentTarget.style.color = '#94a3b8'; }}
+            >
+              <X size={14} />
+            </button>
+          </div>
+
+          {/* Footer */}
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: 12,
+            position: 'sticky',
+            bottom: 0,
+            paddingTop: 20,
+            paddingBottom: R.footerPad,
+            background: 'rgb(10,15,28)', borderTop: '1px solid rgba(255,255,255,0.05)',
+          }}>
+            {/* Step dots */}
+            <div style={{ display: 'flex', gap: 6 }}>
+              {STEPS.slice(1, -1).map((s, i) => (
+                <div key={i} style={{
+                  width: i + 1 === step ? 24 : 8, height: 8, borderRadius: 4,
+                  background: i + 1 === step
+                    ? `linear-gradient(90deg, ${meta.color}, ${meta.accentColor})`
+                    : i + 1 < step ? `${meta.color}40` : 'rgba(255,255,255,0.1)',
+                  transition: 'all 0.3s ease',
+                  boxShadow: i + 1 === step ? `0 0 12px ${meta.color}60` : 'none',
+                }} />
+              ))}
+            </div>
+
+            {/* Buttons */}
+            <div style={{ display: 'flex', gap: 8 }}>
+              {step > 1 && (
+                <button onClick={onPrev} style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 4,
+                  padding: '10px 16px', borderRadius: 10,
+                  background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.18)',
+                  color: '#cbd5e1', fontSize: 13, fontWeight: 600, cursor: 'pointer', transition: 'all 0.2s',
+                }}
+                  onMouseEnter={e => { e.currentTarget.style.color = '#f1f5f9'; e.currentTarget.style.background = 'rgba(255,255,255,0.14)'; }}
+                  onMouseLeave={e => { e.currentTarget.style.color = '#cbd5e1'; e.currentTarget.style.background = 'rgba(255,255,255,0.08)'; }}
+                >
+                  <ChevronLeft size={14} />
+                  Back
+                </button>
+              )}
+              <button onClick={onDismiss} style={{
+                padding: '10px 16px', borderRadius: 10,
+                background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.12)',
+                color: '#94a3b8', fontSize: 13, fontWeight: 600, cursor: 'pointer', transition: 'all 0.2s',
+              }}
+                onMouseEnter={e => { e.currentTarget.style.color = '#cbd5e1'; e.currentTarget.style.background = 'rgba(255,255,255,0.08)'; }}
+                onMouseLeave={e => { e.currentTarget.style.color = '#94a3b8'; e.currentTarget.style.background = 'rgba(255,255,255,0.04)'; }}
+              >
+                Skip
+              </button>
+              <button onClick={onNext} style={{
+                display: 'inline-flex', alignItems: 'center', gap: 4,
+                padding: '10px 20px', borderRadius: 10,
+                background: `linear-gradient(135deg, ${meta.color}, ${meta.accentColor})`,
+                border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer',
+                boxShadow: `0 4px 16px ${meta.color}40`, transition: 'all 0.2s',
+              }}
+                onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.02)'; e.currentTarget.style.boxShadow = `0 6px 24px ${meta.color}60`; }}
+                onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)'; e.currentTarget.style.boxShadow = `0 4px 16px ${meta.color}40`; }}
+              >
+                Next
+                <ChevronRight size={14} />
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Main Onboarding Component
+export default function BrowserOnboarding({ onComplete }) {
+  const { t } = useTranslation();
+  const [step, setStep] = useState(0);
+  const [isVisible, setIsVisible] = useState(true);
+  const meta = STEPS[step];
+  const total = STEPS.length;
+  const contentTotal = total - 2; // exclude welcome (index 0) and done (last)
+  const contentStep = step;       // step 1 = content step 1, step 2 = content step 2, etc.
+  const spotlightRect = useSpotlightRect(meta.spotlight);
+
+  const handleNext = useCallback(() => {
+    if (step === total - 1) {
+      localStorage.setItem(STORAGE_KEY, 'true');
+      setIsVisible(false);
+      setTimeout(() => { if (onComplete) onComplete(); }, 300);
+    } else {
+      setStep(s => s + 1);
+    }
+  }, [step, total, onComplete]);
+
+  const handlePrev = useCallback(() => {
+    if (step > 0) setStep(s => s - 1);
+  }, [step]);
+
+  const handleDismiss = useCallback(() => {
+    localStorage.setItem(STORAGE_KEY, 'true');
+    setIsVisible(false);
+    setTimeout(() => { if (onComplete) onComplete(); }, 300);
+  }, [onComplete]);
+
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (!isVisible) return;
+      if (e.key === 'ArrowRight' || e.key === 'Enter') handleNext();
+      else if (e.key === 'ArrowLeft') handlePrev();
+      else if (e.key === 'Escape') handleDismiss();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isVisible, handleNext, handlePrev, handleDismiss]);
+
+  if (!isVisible) return null;
+
+  // Portal to document.body: guarantees true full-screen coverage and correct
+  // spotlight coordinates regardless of transformed ancestors inside the app
+  // window (framer-motion scale + backdrop-filter create containing blocks).
+  return createPortal(
+    <>
+      {!spotlightRect && (
+        <div style={{
+          position: 'fixed', inset: 0,
+          background: 'rgba(0, 0, 0, 0.75)',
+          backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)',
+          zIndex: 999990,
+        }} />
+      )}
+
+      <OnboardingSpotlight rect={spotlightRect} color={meta.color} />
+
+
+      <ImmersiveCenterPanel
+        step={step} meta={meta} total={total}
+        contentStep={contentStep} contentTotal={contentTotal}
+        onNext={handleNext} onPrev={handlePrev} onDismiss={handleDismiss}
+        show={isVisible}
+      />
+
+      <style jsx global>{`
+        @keyframes ob-float {
+          0%, 100% { transform: translateY(0) rotate(0deg); opacity: 0.5; }
+          50% { transform: translateY(-20px) rotate(180deg); opacity: 1; }
+        }
+        @keyframes ob-blink {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0; }
+        }
+        @keyframes ob-spotlight-pulse {
+          0%, 100% { box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.72), 0 0 20px ${meta.color}60; }
+          50% { box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.72), 0 0 40px ${meta.color}90; }
+        }
+        @keyframes ob-pulse-glow {
+          0%, 100% { transform: scale(1); opacity: 1; }
+          50% { transform: scale(1.1); opacity: 0.8; }
+        }
+      `}</style>
+    </>,
+      document.body
+  );
+}
+
+export function hasCompletedBrowserOnboarding() {
+  if (typeof window === 'undefined') return false;
+  return localStorage.getItem(STORAGE_KEY) === 'true';
+}
+
+export function resetBrowserOnboarding() {
+  if (typeof window === 'undefined') return;
+  localStorage.removeItem(STORAGE_KEY);
+}

@@ -93,21 +93,94 @@ test('server.js and next.config.mjs share one COEP value for shell and proxies',
   }
 });
 
-test('ordinary external URLs open directly in a real browser tab', () => {
+/**
+ * Reversed 2026-09-11: ordinary sites used to be handed to a real browser tab
+ * (`openDirectWebsite` → `openExternalUrl`), which was honest but was not what
+ * the app is for. They now render IN-APP, through the relay's loopback proxy —
+ * which is now REQUIRED: without a relay the tab shows the "Local Relay
+ * required" state instead of the old same-origin server-proxy fallback.
+ *
+ * The external tab still exists, but only as an explicit escape hatch the user
+ * takes — the un-embeddable banner. It must never be the default again.
+ */
+test('ordinary external URLs render in-app, not in a real browser tab', () => {
   const appSrc = readFileSync('src/apps/AgentWebUIBrowserApp.js', 'utf8');
-  assert.match(appSrc, /const openDirectWebsite = useCallback/);
-  assert.match(appSrc, /window\.monitorDesktop/);
-  assert.match(appSrc, /desktopApi\.openWebview\(\{ url: target/);
-  assert.match(appSrc, /openExternalUrl\(target\)/);
-  assert.match(appSrc, /test\(destinationUrl\)/);
-  assert.match(appSrc, /openDirectWebsite\(destinationUrl\)/);
-  assert.doesNotMatch(
-    appSrc.match(/const navigateAddress = \(input\) => \{[\s\S]*?\n  \};/)[0],
-    /proxyFrameUrl|setShowIframeNotice\(true\)/,
-    'ordinary navigation must not route website content through the central proxy'
-  );
+
+  // One helper decides the renderer, so no call site can drift.
+  assert.match(appSrc, /const webTabFrame = useCallback/, 'framing must go through one helper');
+  assert.match(appSrc, /frameFor\(relayProxyPort, target\)/, 'the relay is preferred');
+  assert.match(appSrc, /return \{ proxyKind: 'relay-required', frameSrc: '' \}/,
+    'a browser without a relay must demand one, not fall back to the server proxy');
+
+  // The external-first path must be gone, not merely bypassed.
+  assert.doesNotMatch(appSrc, /const openDirectWebsite/, 'the external-first path must be deleted');
+
+  // And ordinary address-bar navigation must stay in-app.
+  const navigateBody = appSrc.match(/const navigateAddress = \(input\) => \{[\s\S]*?\n  \};/)[0];
+  assert.match(navigateBody, /webTabFrame\(destinationUrl\)/, 'navigation must render in-app');
+  assert.doesNotMatch(navigateBody, /openExternalUrl|openDirectWebsite/,
+    'ordinary navigation must not open a real browser tab');
 });
 
+/**
+ * The Web Browser REQUIRES the Local Relay (2026-09-12): a tab without one
+ * shows an explicit "Local Relay required" state with install guidance and a
+ * re-check action, rather than silently rendering through the same-origin
+ * server proxy. A relay that appears must re-point the required tab to a live
+ * frame (self-healing), and a relay that dies gates the tab instead of
+ * downgrading it.
+ */
+test('the Web Browser requires the Local Relay — no silent server-proxy fallback', () => {
+  const appSrc = readFileSync('src/apps/AgentWebUIBrowserApp.js', 'utf8');
+
+  // The required state is stated unambiguously, with the install command.
+  assert.match(appSrc, /Local Relay Required/, 'the gate must name what is missing');
+  assert.match(appSrc, /npm install -g ssh-monitor-relay/,
+    'the gate must show how to install the relay');
+
+  // The re-check action nudges the relay status poller, whose subscription
+  // re-reads the port and re-points the tab — one fetch, no duplicate.
+  assert.match(appSrc, /requestRelayStatusRefresh\('browser-required'\)/,
+    'the gate re-check must go through the relay status refresh event');
+
+  // No server-proxy rendering path may remain selectable for web tabs.
+  assert.doesNotMatch(appSrc, /proxyKind: 'server'/,
+    'the server proxy must not be a selectable web renderer');
+});
+/**
+ * Back/Forward used to be DELEGATED to the relay frame via postMessage, and
+ * both directions appeared dead to the user (2026-09-12). Two measured causes:
+ *   1. the postMessage succeeds unconditionally — even when the frame has no
+ *      entry to traverse — so the parent's own stack was never consulted;
+ *   2. a cross-origin frame's history.back() traverses the JOINT session
+ *      history: under it the probe's whole app UI vanished (the top page went
+ *      back).
+ * The parent must own Back/Forward outright, which requires the stack to also
+ * include the navigations the frame made by ITSELF (relative links through
+ * <base href> never ask the parent) — applyPushedRoute records those.
+ */
+test('Back/Forward are parent-driven and the stack includes frame-native navigations', () => {
+  const appSrc = readFileSync('src/apps/AgentWebUIBrowserApp.js', 'utf8');
+
+  // No history delegation into the cross-origin frame may remain.
+  assert.doesNotMatch(appSrc, /commandRelayFrame\('(?:back|forward)'\)/,
+    'Back/Forward must not delegate to the frame — the ask is a silent no-op or worse, a joint-history traversal');
+
+  // Web tabs step the parent stack; the frame-delegation fallback is gone.
+  const back = appSrc.match(/const handleBack = \(\) => \{[\s\S]*?\n  \};/)[0];
+  const forward = appSrc.match(/const handleForward = \(\) => \{[\s\S]*?\n  \};/)[0];
+  assert.match(back, /return stepHistory\(-1\)/, 'Back must step the parent stack');
+  assert.match(forward, /return stepHistory\(1\)/, 'Forward must step the parent stack');
+
+  // The frame's own navigations land in the stack, or Back/Forward skip them.
+  const pushed = appSrc.match(/const applyPushedRoute = useCallback\([\s\S]*?\n  \}, \[\]\);/)[0];
+  assert.match(pushed, /t\.proxyKind !== 'relay'/,
+    'relay frame reports must be distinguished');
+  assert.match(pushed, /history\.push\(target\)/,
+    'a frame-native navigation must be recorded in the parent stack');
+  assert.match(pushed, /historyIndex: history\.length - 1/,
+    'and the cursor must move with it');
+});
 test('agent shortcuts use the existing external Local Relay flow when available', () => {
   const appSrc = readFileSync('src/apps/AgentWebUIBrowserApp.js', 'utf8');
   assert.match(appSrc, /if \(onOpenExternal && agId === agentId\)/);
@@ -134,12 +207,43 @@ test('external web frames are sandboxed without allow-same-origin', () => {
   assert.doesNotMatch(value, /allow-downloads/, 'no silent downloads out of a browsing proxy');
   assert.match(value, /allow-scripts/, 'the page still needs to run its own JS');
 
-  // Applied to external web only — the trusted agent Web UI needs same-origin.
+  // Applied to external web only — the trusted agent Web UI needs same-origin,
+  // and the relay-rendered frame is cross-origin to us so it needs no sandbox
+  // (and must not have one: an opaque origin breaks storage).
+  //
+  // Every tab's frame is rendered from the same map now, so the condition reads
+  // the per-tab `tab` rather than `activeTab`: sandboxing must follow the tab
+  // that OWNS the frame, not whichever tab happens to be on screen.
   assert.match(
     appSrc,
-    /sandbox=\{activeTab\?\.type === 'web' \? WEB_FRAME_SANDBOX : undefined\}/,
+    /sandbox=\{[^}]*tab\.type === 'web'[^}]*WEB_FRAME_SANDBOX[^}]*\}/,
     'sandbox must be conditional on the external-web tab type'
   );
+});
+
+/**
+ * The relay-proxied frame must NOT be sandboxed, and that is a functional
+ * requirement rather than a style choice.
+ *
+ * A sandbox without `allow-same-origin` gives the page an OPAQUE origin, and an
+ * opaque origin cannot touch localStorage — measured: on youtube.com the frame
+ * painted its grey skeleton and stopped. The relay exists precisely so the page
+ * gets a real origin instead. Measured through the relay: localStorage is
+ * writable and youtube.com renders its full home page.
+ *
+ * The safety argument is unchanged: the relay frame is a DIFFERENT ORIGIN
+ * (127.0.0.1:<port>) from the app, so it cannot reach our DOM, storage or
+ * same-origin APIs with the user's cookies. Cross-origin, not sandboxed.
+ */
+test('relay-rendered frames are not sandboxed, because an opaque origin breaks storage', () => {
+  const appSrc = readFileSync('src/apps/AgentWebUIBrowserApp.js', 'utf8');
+  assert.match(
+    appSrc,
+    /sandbox=\{[^}]*proxyKind !== 'relay'[^}]*\}/,
+    'the relay frame must be exempt from the sandbox'
+  );
+  // Both branches must still exist: the server-proxied frame IS sandboxed.
+  assert.match(appSrc, /WEB_FRAME_SANDBOX/, 'the server-proxied frame must stay sandboxed');
 });
 
 /**
@@ -173,8 +277,18 @@ test('sandboxed web frames hand navigation to the parent instead of self-navigat
 
   // A sandboxed frame is cross-origin: reading its location throws, so the
   // address bar can only be kept in step by the page reporting itself.
-  assert.match(appSrc, /e\.source !== frameRef\.current\?\.contentWindow/,
-    'the message handler must check event.source so another window cannot drive the tab');
+  //
+  // The sender is resolved by matching `event.source` against the frame that
+  // owns it, rather than against a single "current" frame: every tab's frame
+  // stays mounted, so a message can legitimately arrive from a hidden tab and
+  // must be credited to THAT tab.
+  assert.match(
+    appSrc,
+    /for \(const \[id, el\] of frameRefsRef\.current\)[\s\S]{0,160}el\.contentWindow === e\.source/,
+    'the message handler must identify the sending tab so another window cannot drive the tab'
+  );
+  assert.doesNotMatch(appSrc, /e\.source !== frameRef\.current\?\.contentWindow/,
+    'attribution must not assume the message came from the active tab');
   assert.match(routeSrc, /post\(\{ \[MSG\]: 'nav', href: location\.href \}\)/, 'the page must report its location');
 
   // Never fall back to the bare target URL: that bypasses the proxy entirely.
@@ -214,7 +328,10 @@ test('target="_blank" opens a new in-app tab instead of an OS popup', () => {
   // The parent opens it as a first-class web tab: proxied, titled, with history.
   assert.match(appSrc, /const openWebTab = useCallback/, 'the parent must own new-tab creation');
   assert.match(appSrc, /data\[WEB_FRAME_MSG\] === 'newtab'/, 'the bridge must handle newtab');
-  assert.match(appSrc, /frameSrc: proxyUrlFor\(href\)/, 'the new tab must go through the proxy');
+  // The new tab goes through the same renderer choice as everything else, so a
+  // _blank click gets the relay too — not the server proxy by accident.
+  assert.match(appSrc, /frameSrc: webTabFrame\(href\)\.frameSrc|webTabFrame\(href\)/,
+    'the new tab must go through the shared renderer choice');
   assert.match(appSrc, /const handleNewTab = useCallback/,
     'handleNewTab must be stable or the bridge effect re-subscribes every render');
   assert.match(appSrc, /history: isWeb && initialProps\.url/,
@@ -348,4 +465,115 @@ test('self-navigation auth failures render an explanation for iframe navigations
   assert.match(routeSrc, /This page tried to navigate itself/);
   assert.match(routeSrc, /return new NextResponse\('Unauthorized', \{ status: 401 \}\)/);
   assert.match(routeSrc, /unauthenticatedResponse\(request\)/);
+});
+
+/**
+ * The relay re-binds to `18780 + n` when the port is taken (EADDRINUSE retry —
+ * a second relay on the same machine is enough) and disappears entirely when it
+ * stops. A port read ONCE at mount therefore goes stale, and the next
+ * navigation in an already-open tab fails with
+ * **"127.0.0.1 refused to connect"** — while the tab still looks fine, because
+ * an already-loaded document needs no further connections.
+ *
+ * Measured on the user's own relay: it was re-paired mid-session, so this is a
+ * live condition rather than a hypothetical.
+ */
+test('the relay web-proxy port is re-read when relay status changes', () => {
+  const appSrc = readFileSync('src/apps/AgentWebUIBrowserApp.js', 'utf8');
+
+  // It must subscribe, not just read once — that was the bug.
+  assert.match(appSrc, /import \{[^}]*onRelayStatusRefresh[^}]*\} from '@\/utils\/relayStatus'/,
+    'the app must subscribe to relay status changes');
+  assert.match(appSrc, /return onRelayStatusRefresh\(\(\) => \{ refreshRelayPort\(\); \}\)/,
+    'the mount read must be re-run on every relay status refresh');
+
+  // And re-point the relay tabs it owns, through the same pure helper the rest
+  // of the app uses, so a new port cannot produce a differently-shaped URL.
+  const body = appSrc.match(/const refreshRelayPort = useCallback\(async \(\) => \{[\s\S]*?\n  \}, \[\]\);/)[0];
+  assert.match(body, /fetchRelayStatus\(\)/, 'the read must ask for the current port');
+  assert.match(body, /port = Number\(status\.webProxyPort\) \|\| 0/,
+    'the port must be coerced, with 0 meaning "no relay"');
+  assert.match(body, /if \(port === relayPortRef\.current\) return 0;/,
+    'an unchanged port must not touch the tabs');
+  assert.match(body, /frameFor\(port, t\.url\)/, 'relay tabs must be re-pointed at the new port');
+  assert.match(body, /const wantsRelay = t\.proxyKind === 'relay' \|\| t\.proxyKind === 'relay-required'/,
+    'relay tabs AND relay-required tabs must be re-pointed when the port changes');
+
+  // A transient failure must keep the port we have: tearing down working frames
+  // on a blip is worse than a stale port.
+  assert.match(body, /catch \{[\s\S]*?return 0;\n    \}/,
+    'a failed status read must not clear the port');
+
+  // A silent relay restart fires NO refresh event, so the mount/status
+  // subscription alone cannot cover the reported failure. The probe re-reads
+  // the port when a relay frame fails, which is the case that actually happens.
+  const probe = appSrc.match(/const armRelayProbe = useCallback\(\(tabId\) => \{[\s\S]*?\n  \}, \[[^\]]*\]\);/)[0];
+  assert.match(probe, /const movedTo = await refreshRelayPort\(\)/,
+    'a failed relay frame must re-read the port before being demoted');
+  assert.match(probe, /if \(movedTo > 0\) return;/,
+    'a relay that merely moved must be followed, not demoted to the server proxy');
+  assert.match(probe, /proxyKind: 'relay-required'/, 'and a genuinely dead relay puts the tab on the required state');
+});
+
+/**
+ * Switching tabs used to reload the page every time, because the viewport
+ * rendered only the active tab's frame — so the switch changed `src`.
+ *
+ * Real browsers keep background tabs alive; so does this now. That is what
+ * makes a half-filled form, a scroll position or a playing video survive.
+ */
+test('every tab frame stays mounted so a tab switch does not reload the page', () => {
+  const appSrc = readFileSync('src/apps/AgentWebUIBrowserApp.js', 'utf8');
+
+  // The viewport maps over the tabs, not over the active one.
+  // The viewport maps over the tabs, not over the active one. The map body
+  // starts with the relay-required gate, then derives per-tab showability.
+  assert.match(appSrc, /\{tabs\.map\(\(tab\) => \{/, 'the viewport must render one frame per tab');
+  assert.match(appSrc, /const showable = \(tab\.type === 'webui' && tab\.phase === 'ready'\) \|\| tab\.type === 'web';/,
+    'the viewport must derive showability per tab');
+  assert.doesNotMatch(appSrc, /src=\{activeTab\?\.frameSrc \|\| activeTab\?\.url\}/,
+    'the frame src must come from the tab being rendered, not from the active tab');
+
+  // Inactive frames are hidden, not unmounted. `hidden` alone can be beaten by
+  // a display utility, so visibility is set too.
+  assert.match(appSrc, /hidden=\{!isActive\}/, 'the inactive frame must be hidden');
+  assert.match(appSrc, /style=\{isActive \? undefined : \{ visibility: 'hidden' \}\}/,
+    'and visibility-hidden, so a display utility cannot stack two pages');
+
+  // `frameRef` can no longer be a `ref` prop (that would point at whichever
+  // frame mounted last) — it has to be re-pointed at the active tab's frame.
+  assert.match(appSrc, /frameRef\.current = frameRefsRef\.current\.get\(activeTabId\) \|\| null/,
+    'the active frame must be resolved from the mounted-frame map');
+  assert.doesNotMatch(appSrc, /ref=\{frameRef\}/,
+    'a single ref prop cannot identify the active frame any more');
+
+  // Every frame registers itself so the message bridge can attribute senders.
+  assert.match(appSrc, /frameRefsRef\.current\.set\(tab\.id, el\)/, 'frames must register by tab id');
+  assert.match(appSrc, /frameRefsRef\.current\.delete\(tab\.id\)/, 'and deregister on unmount');
+});
+
+/**
+ * The consequence of keeping frames mounted: a relay frame announces itself
+ * ('ready') exactly ONCE, at document parse. If the fallback probe were re-armed
+ * on every tab switch it would time out 6s later and demote a perfectly good
+ * relay page to the sandboxed server proxy — a regression that only shows up
+ * after the second visit to a tab.
+ */
+test('an already-loaded relay frame is not re-probed when its tab is revisited', () => {
+  const appSrc = readFileSync('src/apps/AgentWebUIBrowserApp.js', 'utf8');
+
+  assert.match(appSrc, /const relayReadyRef = useRef\(new Map\(\)\)/,
+    'readiness must be tracked per tab');
+  // Keyed by the src that reported ready, so it self-invalidates on a port
+  // change, a new address, or a Back — no call site has to remember to clear it.
+  assert.match(appSrc, /relayReadyRef\.current\.set\(tabId, tab\.frameSrc\)/,
+    'readiness must be keyed by the frame src that proved it');
+  assert.match(appSrc, /if \(relayReadyRef\.current\.get\(activeTab\.id\) === activeTab\.frameSrc\) return;/,
+    'a tab whose frame already answered must not be probed again');
+  assert.match(appSrc, /activeTab\?\.frameSrc, armRelayProbe/,
+    'a changed frame src must re-run the probe decision');
+
+  // A dead tab must not put its banner on a healthy one: the flag is per tab.
+  assert.match(appSrc, /const relayUnrenderable = relayDeadTabs\.has\(activeTabId\)/,
+    'the banner must be scoped to the tab that died');
 });

@@ -52,8 +52,14 @@ export async function fetchRelayStatus({ signal } = {}) {
   });
   if (!res.ok) throw new Error(`relay status ${res.status}`);
   const data = await res.json().catch(() => ({}));
+  const relays = Array.isArray(data?.relays) ? data.relays : [];
   return {
     connected: !!data?.connected,
-    relays: Array.isArray(data?.relays) ? data.relays : [],
+    relays,
+    // Loopback port of the relay's own web proxy, or 0 when there is none.
+    // The in-app browser renders ordinary sites from here so the page bytes
+    // never touch the monitor server; a relay too old to host one reports
+    // nothing and the caller falls back to the server proxy.
+    webProxyPort: Number(relays.find((r) => Number(r?.webProxyPort) > 0)?.webProxyPort) || 0,
   };
 }

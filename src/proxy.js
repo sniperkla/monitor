@@ -203,9 +203,18 @@ function buildCsp(nonce, requestUrl) {
     "form-action 'self' https://accounts.google.com",
     "frame-ancestors 'none'",
     // upgrade-insecure-requests / block-all-mixed-content are only meaningful on
-    // HTTPS origins. On HTTP (localhost dev) they cause the browser to upgrade
-    // same-origin http://localhost iframe navigation requests to https://localhost,
-    // which has no TLS listener → ERR_CONNECTION_REFUSED inside every iframe.
+    // HTTPS origins, so they are added only there.
+    //
+    // An earlier note here claimed they "upgrade same-origin http://localhost
+    // iframe requests to https://localhost → ERR_CONNECTION_REFUSED". That was
+    // MEASURED and is not what happens: loopback is a potentially-trustworthy
+    // origin, so neither directive touches it. Measured with Chrome 140 against
+    // a CSP carrying both directives — `http://127.0.0.1:<port>/` and
+    // `http://localhost:<port>/`, framed both cross-origin and same-origin,
+    // every request stayed http and the frame URL was never rewritten
+    // (scratch/uir-loopback-probe.mjs, scratch/uir-host-matrix.mjs,
+    // scratch/uir-sameorigin-probe.mjs). Keep the gating for the reason above,
+    // not for that one: a loopback frame is not what these directives affect.
     ...(isServedOverHttps ? ["upgrade-insecure-requests", "block-all-mixed-content"] : []),
   ].join("; ");
 }

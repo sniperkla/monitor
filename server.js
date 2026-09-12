@@ -5536,6 +5536,20 @@ fi'`;
               }
               return;
             }
+            if (msg.type === 'webproxy:ready') {
+              // The relay's loopback web proxy reports the port it actually
+              // bound (the requested one is only a hint — see startWebProxy).
+              // Arrives after `init` because the listener binds asynchronously,
+              // so it is stored separately rather than folded into capabilities.
+              const port = Number(msg.port) || 0;
+              if (port > 0) {
+                const userRelays = global.__activeRelays?.get(userId);
+                const entry = userRelays && ws.__relayId ? userRelays.get(ws.__relayId) : null;
+                if (entry) entry.webProxyPort = port;
+                console.log(`🌐 [Relay WebProxy] ack: 127.0.0.1:${port} (in-app browser)`);
+              }
+              return;
+            }
             if (msg.type === 'init') {
               // Relay agent reports capabilities and target
               const userRelays = global.__activeRelays.get(userId);
@@ -5545,6 +5559,11 @@ fi'`;
                   r.targetHost = msg.targetHost || 'localhost';
                   r.targetPort = Number(msg.targetPort) || 27017;
                   r.capabilities = msg.capabilities || { ssh: false, sftp: false, docker: false };
+                  // The relay's loopback web proxy, used by the in-app browser to
+                  // render ordinary sites from the user's OWN machine (see
+                  // startWebProxy in public/local-relay.js). Absent on older
+                  // relays, which is why every consumer treats it as optional.
+                  if (Number(msg.webProxyPort) > 0) r.webProxyPort = Number(msg.webProxyPort);
                   r.version = typeof msg.version === 'string' ? msg.version.slice(0, 32) : null;
                   r.ws = ws;
                   if (msg.relayName && msg.relayName !== ws.__relayId) {

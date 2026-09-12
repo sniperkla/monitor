@@ -561,6 +561,702 @@ function startDiscoveryServer(relayName) {
   } catch (_) {}
 }
 
+// ── Loopback web proxy (the in-app browser's client-side renderer) ────────
+//
+// WHY THIS IS ON THE RELAY AT ALL
+// The in-app browser used to render ordinary websites through the monitor
+// server's browser-proxy route, which serves a stranger's HTML from the
+// MONITOR origin. That forces the frame to be sandboxed WITHOUT
+// `allow-same-origin` — otherwise the target's JavaScript would run as
+// monitor.eaqdragon.com — and an opaque origin cannot touch localStorage,
+// indexedDB or serviceWorker. Measured: on youtube.com the frame paints its
+// grey skeleton and stops, because `localStorage` throws SecurityError inside
+// it. Google, which needs no storage, renders fine.
+//
+// Serving the same bytes from a DIFFERENT origin removes the need for the
+// sandbox entirely: the frame is still cross-origin to the app (so it cannot
+// reach it) but same-origin with itself, so storage works. The relay is the
+// natural host — it already runs on the user's own machine, so the page bytes
+// never pass through the monitor server.
+//
+// SHAPE:  /p/<base64url(origin)>/<path>?<query>  →  <origin><path>?<query>
+//
+// Encoding the ORIGIN (not the whole URL) is what makes this stateless, and it
+// is why no click interception or injected bridge is needed: the document's
+// `<base href>` is the same `/p/<enc>/` prefix, so every relative link,
+// stylesheet, image and — the part that actually matters — every relative
+// fetch/XHR the page makes comes back here and is forwarded. Nothing ever
+// navigates off the proxy path, so there is nothing to intercept.
+//
+// Honest limits, because they are the reason this is not just "a browser":
+//   • no cookie jar — upstream `Set-Cookie` is dropped and the frame's own
+//     cookies would be shared by every proxied site on one loopback port, so
+//     logged-in sites render logged-out;
+//   • absolute URLs still go straight to the target (as in any browser), so a
+//     site whose API lives on another host still needs its own CORS headers;
+//   • WebSocket upgrades are not proxied.
+const WEB_PROXY_PORT = 18780;
+const WEB_PROXY_UA =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36';
+const WEB_PROXY_TIMEOUT_MS = 30000;
+const WEB_PROXY_MAX_BODY = 8 * 1024 * 1024;
+
+let webProxyServer = null;
+let webProxyPort = 0;
+
+// Hop-by-hop plus anything that must not cross a trust boundary. `cookie` and
+// `authorization` are dropped on the way OUT: this proxy holds no jar for the
+// target, and the frame's cookies live on 127.0.0.1:<port> shared by every
+// proxied site, so forwarding them would leak one site's session to another.
+const WEB_PROXY_DROP_REQ = new Set([
+  'host', 'connection', 'keep-alive', 'proxy-connection', 'transfer-encoding',
+  'content-length', 'accept-encoding', 'cookie', 'authorization', 'origin',
+  'referer', 'upgrade-insecure-requests',
+]);
+
+// On the way IN, an ALLOWLIST rather than a drop list. A proxy that forwards
+// headers it does not understand forwards bugs: YouTube's response carries
+// `origin-trial`, `document-policy`, `reporting-endpoints`, `p3p` and a
+// `permissions-policy` naming `ch-ua-*` client hints — and with those passed
+// through, Chromium accepted the 200 and then refused to commit the document in
+// a frame, leaving a `chrome-error` page and requesting no subresources at all.
+// Forward only what a page needs to render, and drop the target's framing and
+// isolation policy (it is being framed by us, deliberately).
+const WEB_PROXY_ALLOW_RES = new Set([
+  'content-type', 'content-language', 'cache-control', 'etag', 'last-modified',
+  'expires', 'location', 'content-disposition', 'accept-ranges', 'content-range',
+  'vary', 'link',
+]);
+
+/**
+ * Headers every response that can BECOME a frame document must carry.
+ *
+ * The app shell embeds this loopback origin with `COEP: credentialless`, and
+ * Chromium's nested-document rule cascades: a frame document must declare a
+ * COEP at least as strict as its embedder, and a credentialless COEP defaults
+ * CORP to `same-origin` — so the document must also state
+ * `cross-origin-resource-policy: cross-origin` or it is refused with
+ * `corp-not-same-origin-after-defaulted-to-same-origin-by-coep`.
+ *
+ * That is why this must cover EVERY branch that answers a frame navigation —
+ * not just the `/p/` HTML. Measured 2026-09-12: the un-prefixed 302 repair
+ * response lacked it, a root-relative link click on an embedded page was
+ * refused in the browser exactly there, and the frame ended on a chrome-error
+ * even though the redirect TARGET was served correctly.
+ */
+const WEB_PROXY_FRAME_HEADERS = {
+  'cross-origin-embedder-policy': 'credentialless',
+  'cross-origin-resource-policy': 'cross-origin',
+};
+
+function webProxyEncode(value) {
+  return Buffer.from(String(value), 'utf8').toString('base64url');
+}
+
+function webProxyDecode(value) {
+  try {
+    return Buffer.from(String(value), 'base64url').toString('utf8');
+  } catch (_) {
+    return '';
+  }
+}
+
+/** Name of the cookie remembering the last target this listener proxied. */
+const WEB_PROXY_COOKIE = 'mp_proxy_target';
+
+/** Read one cookie out of a raw Cookie header. */
+function readCookie(header, name) {
+  if (!header) return '';
+  for (const part of String(header).split(';')) {
+    const eq = part.indexOf('=');
+    if (eq < 0) continue;
+    if (part.slice(0, eq).trim() === name) return decodeURIComponent(part.slice(eq + 1).trim());
+  }
+  return '';
+}
+
+/**
+ * Recover the proxied target from a same-origin navigation's Referer.
+ *
+ * Used instead of the cookie when the cookie is unavailable — see the
+ * root-absolute note in handleWebProxyHttp. Only the `/p/<enc>/` prefix is
+ * read, so a referer pointing anywhere else yields nothing.
+ */
+function webProxyTargetFromReferer(referer) {
+  if (!referer) return '';
+  try {
+    const url = new URL(String(referer));
+    const match = /^\/p\/([A-Za-z0-9_-]+)/.exec(url.pathname);
+    return match ? webProxyDecode(match[1]) : '';
+  } catch (_) {
+    return '';
+  }
+}
+
+function webProxyIndexHtml(proxyOrigin) {
+  return `<!doctype html><meta charset="utf-8"><title>Relay web proxy</title>
+<body style="font:13px/1.6 -apple-system,system-ui,sans-serif;padding:24px;color:#ddd;background:#18181b">
+<p>Relay web proxy is running.</p>
+<p>Address a page as <code>${proxyOrigin}/p/&lt;base64url(origin)&gt;/&lt;path&gt;</code>.</p>
+<p style="color:#a1a1aa">This listener is bound to 127.0.0.1 and exists to render the in-app
+browser inside monitor. It holds no cookie jar and is not a general-purpose proxy.</p>`;
+}
+
+async function handleWebProxyHttp(req, res) {
+  const proxyOrigin = `http://${req.headers.host || `127.0.0.1:${webProxyPort}`}`;
+
+  // Local/Private Network Access. The monitor app is a PUBLIC https origin and
+  // this listener is on loopback, so Chrome can send a PNA preflight for
+  // requests it initiates — exactly as it does for the WebUI gateway, which
+  // answers the same way. Without this the frame is blocked before it loads.
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204, {
+      'access-control-allow-origin': req.headers.origin || '*',
+      'access-control-allow-methods': 'GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS',
+      'access-control-allow-headers': req.headers['access-control-request-headers'] || '*',
+      'access-control-allow-private-network': 'true',
+      'access-control-max-age': '86400',
+    });
+    res.end();
+    return;
+  }
+  if (req.url === '/__web_proxy_ping') {
+    res.writeHead(200, { 'content-type': 'text/plain', 'access-control-allow-origin': '*' });
+    res.end('pong');
+    return;
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(req.url, proxyOrigin);
+  } catch (_) {
+    res.writeHead(400, { 'content-type': 'text/plain' });
+    res.end('bad request');
+    return;
+  }
+
+  const match = /^\/p\/([A-Za-z0-9_-]+)(\/.*)?$/.exec(parsed.pathname);
+  if (!match) {
+    // ── the root-absolute problem ──────────────────────────────────────────
+    // A page served at `/p/<enc>/` has a document URL that does NOT look like
+    // the target's, and `location.href = '/watch'` resolves against the
+    // document's URL — not against `<base href>`. So any script that navigates
+    // with a root-absolute path lands on THIS origin's root and, without this,
+    // gets the informational page instead of the site. Measured: that is
+    // exactly how youtube.com died in-app — the document loaded fine, then
+    // YouTube's own JS navigated to '/' and the frame ended on chrome-error.
+    //
+    // So remember the last target per listener and send un-prefixed paths back
+    // through the proxy. Three sources, tried in order, because none is
+    // reliable on its own:
+    //   1. our own cookie — first choice, but this listener is a THIRD-PARTY
+    //      origin relative to the app that frames it, and Chrome blocks (or
+    //      partitions) third-party cookies, so it is often simply absent;
+    //   2. the Referer header — stateless, and for a same-origin navigation the
+    //      default referrer policy sends the FULL previous URL, which still
+    //      carries the `/p/<enc>/` prefix. Survives cookie blocking; fails only
+    //      if the page sets `no-referrer`.
+    //
+    // Known cost: all three are per listener, not per tab, so two tabs showing
+    // different sites can redirect each other's un-prefixed paths. Prefixed
+    // paths — everything a normally-behaving page uses — are unaffected.
+    const remembered = webProxyDecode(readCookie(req.headers.cookie, WEB_PROXY_COOKIE))
+      || webProxyTargetFromReferer(req.headers.referer)
+      || req.socket?.____mpLastTarget || '';
+    if (remembered && /^https?:\/\//.test(remembered)) {
+      const back = `/p/${webProxyEncode(remembered)}${parsed.pathname}${parsed.search}`;
+      console.log(`↪ [Relay WebProxy] un-prefixed ${parsed.pathname} → ${back.slice(0, 60)}…`);
+      // FRAME-EMBEDDING headers: this redirect is itself the response to a
+      // frame navigation, and the app shell embeds with COEP: credentialless.
+      // Chromium then defaults CORP to same-origin, and ANY response missing
+      // `cross-origin-resource-policy: cross-origin` is refused with
+      // corp-not-same-origin-after-defaulted-to-same-origin-by-coep — measured
+      // 2026-09-12 on a wikipedia relative link: the /p/ HTML that would have
+      // rendered sat behind an un-prefixed 302 without these headers, and the
+      // frame ended on a chrome-error even though the redirect target itself
+      // was served correctly. See WEB_PROXY_FRAME_HEADERS.
+      res.writeHead(302, { location: back, 'cache-control': 'no-store', ...WEB_PROXY_FRAME_HEADERS });
+      res.end();
+      return;
+    }
+    console.log(`✗ [Relay WebProxy] un-prefixed ${parsed.pathname} — no target known (cookie, referer and socket all empty); serving the info page`);
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', ...WEB_PROXY_FRAME_HEADERS });
+    res.end(webProxyIndexHtml(proxyOrigin));
+    return;
+  }
+
+  let target;
+  try {
+    target = new URL(webProxyDecode(match[1]));
+  } catch (_) {
+    target = null;
+  }
+  if (!target || !['http:', 'https:'].includes(target.protocol)) {
+    res.writeHead(400, { 'content-type': 'text/plain' });
+    res.end('target must be an absolute http(s) origin');
+    return;
+  }
+
+  // Stamp the keep-alive connection with the target being served. This is the
+  // third repair source for un-prefixed paths (see the repair branch above):
+  // a same-origin navigation almost always reuses this connection, so its
+  // stamp survives both cookie blocking AND a site suppressing the referer.
+  if (req.socket) req.socket.____mpLastTarget = target.origin;
+
+  const upstreamUrl = `${target.origin}${match[2] || '/'}${parsed.search}`;
+
+  // Request body (POST/PUT/PATCH). Read it before fetching — the stream cannot
+  // be replayed once fetch() has consumed it.
+  let body;
+  if (!['GET', 'HEAD'].includes(req.method)) {
+    const chunks = [];
+    let size = 0;
+    for await (const chunk of req) {
+      size += chunk.length;
+      if (size > WEB_PROXY_MAX_BODY) {
+        res.writeHead(413, { 'content-type': 'text/plain' });
+        res.end('request body too large');
+        return;
+      }
+      chunks.push(chunk);
+    }
+    body = Buffer.concat(chunks);
+  }
+
+  const headers = {};
+  for (const [key, value] of Object.entries(req.headers)) {
+    const k = key.toLowerCase();
+    if (WEB_PROXY_DROP_REQ.has(k) || k.startsWith('sec-') || k.startsWith('proxy-')) continue;
+    headers[k] = value;
+  }
+  headers['user-agent'] = WEB_PROXY_UA;
+  headers['accept-language'] = headers['accept-language'] || 'en-US,en;q=0.9';
+  // Let fetch negotiate its own compression; undici decompresses and we strip
+  // the encoding headers on the way back out.
+  headers['accept-encoding'] = 'gzip, deflate, br';
+  // The frame's real referer names this loopback proxy and is dropped above —
+  // but sending NO referer breaks subresources just as hard: media CDNs gate
+  // playback on the referer naming the site that embedded the file (hotlink
+  // checks), and some pages 403 any referer-less asset. Reconstruct what the
+  // real site would have sent: the embedding page's origin, decoded from the
+  // proxy-form referer when one exists, otherwise the target origin itself.
+  // Only the origin is sent — never the proxy's own URL, and never a cookie.
+  const embeddedFrom = webProxyTargetFromReferer(req.headers.referer);
+  let upstreamReferer = '';
+  if (embeddedFrom) {
+    try { upstreamReferer = `${new URL(embeddedFrom).origin}/`; } catch (_) { upstreamReferer = ''; }
+  }
+  headers['referer'] = upstreamReferer || `${target.origin}/`;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), WEB_PROXY_TIMEOUT_MS);
+  let upstream;
+  try {
+    upstream = await fetch(upstreamUrl, {
+      method: req.method,
+      headers,
+      body,
+      redirect: 'follow',
+      signal: controller.signal,
+    });
+  } catch (error) {
+    clearTimeout(timer);
+    // undici reports every transport failure as the same opaque "fetch failed";
+    // the reason that matters — DNS, TLS, connect timeout, reset — is on
+    // `cause`. Logging only the wrapper made two unrelated failures look
+    // identical in this log, so add the cause.
+    const cause = error?.cause?.code || error?.cause?.message;
+    const reason = error?.name === 'AbortError'
+      ? `timed out after ${WEB_PROXY_TIMEOUT_MS / 1000}s`
+      : `${error?.message || 'fetch failed'}${cause ? ` (${cause})` : ''}`;
+    console.error(`⚠ [Relay WebProxy] ${upstreamUrl} → ${reason}`);
+    res.writeHead(502, { 'content-type': 'text/html; charset=utf-8', ...WEB_PROXY_FRAME_HEADERS });
+    res.end(`<!doctype html><meta charset="utf-8"><title>Proxy error</title>
+<body style="font:13px/1.6 -apple-system,system-ui,sans-serif;padding:24px;color:#ddd;background:#18181b">
+<h2 style="font-size:15px">Could not load this page</h2>
+<p style="color:#a1a1aa">${reason}</p></body>`);
+    return;
+  } finally {
+    clearTimeout(timer);
+  }
+
+  const outHeaders = {};
+  for (const [key, value] of upstream.headers) {
+    const k = key.toLowerCase();
+    if (!WEB_PROXY_ALLOW_RES.has(k)) continue;
+    outHeaders[k] = value;
+  }
+  // A nested document under the app shell's `credentialless` embedder must
+  // declare a COEP at least as strict, or Chromium refuses it outright
+  // (`coep-frame-resource-needs-coep-header`). And because this document is
+  // CROSS-origin to that embedder, COEP makes the default CORP `same-origin`,
+  // so CORP must be stated explicitly or the frame is refused with
+  // `corp-not-same-origin-after-defaulted-to-same-origin-by-coep`. Both were
+  // measured; see MEMORY.md.
+  outHeaders['cache-control'] = 'no-store';
+  Object.assign(outHeaders, WEB_PROXY_FRAME_HEADERS);
+  if (req.headers.origin) {
+    outHeaders['access-control-allow-origin'] = req.headers.origin;
+    outHeaders['access-control-allow-private-network'] = 'true';
+  }
+
+  const contentType = String(upstream.headers.get('content-type') || '');
+
+  if (contentType.includes('text/html')) {
+    let html = await upstream.text();
+    if (html.length > WEB_PROXY_MAX_BODY) {
+      res.writeHead(502, { 'content-type': 'text/plain' });
+      res.end('response too large to proxy');
+      return;
+    }
+
+    // The base must be the FINAL URL — origin AND directory.
+    //
+    // Origin, because fetch followed redirects and a relative URL on the landed
+    // page belongs to where it landed, not where we asked: without it a
+    // bare-domain address that redirects to its www host resolves every
+    // relative asset back to the pre-redirect host.
+    //
+    // Directory, because `<base href>` OVERRIDES the document URL for relative
+    // resolution. Serving `…/p/<enc>/html/page.html` with a base of
+    // `…/p/<enc>/` does not merely fail to help — it breaks what would
+    // otherwise have worked, since the document URL already carries the right
+    // path. Measured: a page at `/html/…` whose `<video>` used the relative
+    // `mov_bbb.mp4` had it resolved to `/mov_bbb.mp4` upstream, a 404, and the
+    // media element ended `NETWORK_NO_SOURCE` with `readyState: 0`. Sites built
+    // on root-absolute paths are unaffected either way, which is why this
+    // survived: the breakage is invisible until a page uses document-relative
+    // URLs for an asset or a media source.
+    //
+    // Root-absolute URLs still resolve against this origin's root and take the
+    // un-prefixed path below, so they are unaffected by the directory.
+    // (Deliberately written without literal URLs: relay-install-audit.mjs scans
+    // this source for them and would report them as calls the relay makes.)
+    let finalOrigin = target.origin;
+    let finalDir = (match[2] || '/').replace(/[^/]*$/, '');
+    try {
+      if (upstream.url) {
+        const landed = new URL(upstream.url);
+        finalOrigin = landed.origin;
+        finalDir = landed.pathname.replace(/[^/]*$/, '');
+      }
+    } catch (_) { /* keep the requested origin and directory */ }
+    if (!finalDir) finalDir = '/';
+
+    const base = `${proxyOrigin}/p/${webProxyEncode(finalOrigin)}${finalDir}`;
+
+    // Absolute media sources bypass `<base href>` entirely: `<video
+    // src="https://cdn.other/v.mp4">` makes the browser fetch the CDN
+    // DIRECTLY, from a document whose origin is this loopback proxy — exactly
+    // the request those CDNs reject (measured 2026-09-12: a video CDN answered
+    // 470 to every posture when the referer/origin was not the real site).
+    // Route media through this proxy so the fetch happens here, with the
+    // embedding site's referer (see the header assembly above). Same-origin
+    // absolute URLs are rewritten too: they would otherwise leave the proxy
+    // and lose the same referer treatment.
+    const proxifyAbsolute = (u) => {
+      try {
+        const abs = new URL(u, finalOrigin);
+        if (!['http:', 'https:'].includes(abs.protocol)) return u;
+        if (abs.origin === proxyOrigin) return u;
+        return `${proxyOrigin}/p/${webProxyEncode(abs.origin)}${abs.pathname}${abs.search}${abs.hash}`;
+      } catch (_) { return u; }
+    };
+    html = html.replace(
+      /(<(?:video|audio|source|track|img)\b[^>]*?\b(?:src|poster)=)(["'])(https?:\/\/[^"']+)\2/gi,
+      (m, pre, q, u) => `${pre}${q}${proxifyAbsolute(u)}${q}`
+    );
+    // The only script injected. It exists because the parent frames a loopback
+    // origin it cannot touch: `contentWindow` is cross-origin, so the toolbar
+    // has no other way to drive or observe this document.
+    //   • 'ready' — proof the frame actually rendered. Chrome can refuse the
+    //     loopback load outright (Local/Private Network Access from a public
+    //     origin) and a refused frame still fires `load` on the iframe, so the
+    //     parent needs a signal from INSIDE the document before it can trust it.
+    //   • 'alive' — a heartbeat, so the parent can tell a merely slow page from
+    //     one whose document has been REPLACED (its own JS navigated to an
+    //     origin that refuses framing, leaving a chrome-error page). 'ready'
+    //     cannot distinguish those; it only proves the document parsed. The
+    //     interval dies with the document, so the heartbeat stopping IS the
+    //     signal — a cross-origin frame offers the parent no other one.
+    //     Measured NOT to fire for youtube.com, which renders fine.
+    //   • 'url'   — keeps the omnibox honest while the page navigates itself
+    //     (relative links go back through this proxy, so the parent never sees
+    //     them otherwise).
+    //   • the command listener gives the toolbar working Back/Forward/Reload,
+    //     which `contentWindow.history` cannot provide across origins.
+    // ── bot-check pages deserve an explanation, not a mystery ────────────────
+    // Google (and other engines) answer cookie-less automated-feeling searches
+    // with their "unusual traffic" reCAPTCHA wall. The request SUCCEEDED — the
+    // target simply refuses to serve results. Two things make the wall a dead
+    // end here, and both are by design: the page carries no cookies (the relay
+    // holds no jar — one shared loopback origin cannot leak one site's session
+    // to another), and the reCAPTCHA widget is domain-bound to the target, so
+    // it cannot render from this proxy origin at all (measured: "Localhost is
+    // not in the list of supported domains for this site key"). Injecting an
+    // explanation into the page beats leaving the user staring at a broken
+    // captcha. Deliberately narrow (both markers) so a page that merely
+    // MENTIONS captchas is not flagged.
+    let botCheckBanner = '';
+    if (/unusual traffic/i.test(html) && /recaptcha/i.test(html)) {
+      botCheckBanner =
+        '<div style="position:fixed;top:0;left:0;right:0;z-index:2147483647;' +
+        'background:#1c1917;color:#fde68a;font:12px/1.5 system-ui,sans-serif;' +
+        'padding:10px 14px;border-bottom:1px solid #78716c">' +
+        '<strong>This is a bot-check page served by the site itself, not a proxy error.</strong> ' +
+        'Proxied pages carry no cookies, and the captcha widget cannot run from ' +
+        'the proxy origin. Use the <em>Tab</em> button in the toolbar to open this page in your ' +
+        'real browser, or try a different search engine.</div>';
+    }
+    const injected = `<base href="${base}">` +
+      botCheckBanner +
+      `<script>(function(){` +
+      `function post(m){try{parent.postMessage(m,'*')}catch(e){}}` +
+      `function report(){post({__mpProxy:'url',href:location.href})}` +
+      `post({__mpProxy:'ready'});` +
+      `try{setInterval(function(){post({__mpProxy:'alive'})},2000)}catch(e){}` +
+      `try{addEventListener('load',report);addEventListener('popstate',report)}catch(e){}` +
+      `addEventListener('message',function(e){var d=e.data;if(!d||typeof d!=='object')return;` +
+      `try{if(d.__mpProxyCmd==='back')history.back();` +
+      `else if(d.__mpProxyCmd==='forward')history.forward();` +
+      `else if(d.__mpProxyCmd==='reload')location.reload()}catch(e){}});` +
+      // Some search result pages navigate with location.assign/replace or
+      // window.open instead of a normal anchor click. Those navigations would
+      // leave the relay origin and commonly become "127.0.0.1 refused to
+      // connect" inside the iframe. Route same-frame programmatic navigation
+      // through the parent just like absolute anchor clicks.
+      `function go(u,k){try{post({__mpBrowser:k||'goto',url:new URL(String(u),document.baseURI).href})}catch(e){}}` +
+      `try{Location.prototype.assign=function(u){go(u,'goto')};Location.prototype.replace=function(u){go(u,'goto')}}catch(e){}` +
+      `try{window.open=function(u,t){if(u==null||u==='')return null;go(u,t==null||t===''||t==='_self'?'goto':'newtab');return null}}catch(e){}` +
+      // GET forms (especially Google Search) must be parent-driven too. Native
+      // submission resolves root-relative actions against the relay listener;
+      // a fast redirect can then race the port repair and show a refused frame.
+      // Serialize the form and send the final absolute URL through the parent.
+      `try{addEventListener('submit',function(e){var f=e.target;if(!f||String(f.method||'get').toLowerCase()!=='get')return;` +
+      `var u=new URL(f.action||location.href,document.baseURI),p=new URLSearchParams(u.search),d=new FormData(f);` +
+      `for(var x of d.entries())p.append(x[0],x[1]);u.search=p.toString();e.preventDefault();go(u.href,'goto')},true)}catch(e){}` +
+      // form.submit() fires NO submit event, so the listener above cannot see
+      // it — and JS-heavy sites call exactly that (measured: Google's search
+      // box does, which is how the user's GET escaped to the relay root as an
+      // un-prefixed /search and hit the info page). Patch the method itself:
+      // a GET form goes through the parent like every other navigation; a
+      // non-GET form (or a top-level page with no parent to ask) falls back to
+      // the native method.
+      `try{var __mpOrigSubmit=HTMLFormElement.prototype.submit;HTMLFormElement.prototype.submit=function(){` +
+      `if(parent===window||String(this.method||'get').toLowerCase()!=='get')return __mpOrigSubmit.apply(this,arguments);` +
+      `try{var u=new URL(this.action||location.href,document.baseURI),p=new URLSearchParams(u.search),d=new FormData(this);` +
+      `for(var x of d.entries())p.append(x[0],x[1]);u.search=p.toString();go(u.href,'goto')}catch(e){return __mpOrigSubmit.apply(this,arguments)}}}catch(e){}` +
+      // ── the one case <base> cannot cover for SUBRESOURCES: absolute fetch/XHR ─
+      // Video players rarely set <video src> directly any more: they FETCH the
+      // media endpoint (often on the site's own origin, redirecting to a CDN)
+      // and feed the bytes to MSE. An absolute URL ignores <base href>, so the
+      // request leaves the proxy as a CROSS-ORIGIN fetch from this loopback
+      // origin — and the target's CORS answer names ITS site, never ours, so
+      // Chromium kills it and the player sticks on "loading" forever (measured
+      // 2026-09-12 on a video site: "Access to fetch … blocked by CORS policy",
+      // player logs "MP4 failed", video never starts). Rewrite absolute
+      // http(s) URLs through this proxy: same-origin from the page's view, and
+      // the relay fetches upstream with the site's own referer.
+      `function mpRewrite(u){try{` +
+      `var s=(u&&typeof u==='object'&&u.url)?String(u.url):String(u==null?'':u);` +
+      `var abs=new URL(s,document.baseURI);` +
+      // A protocol check avoids the fragile /^https?:\\/\\// escape dance inside
+      // a template literal: [literal slash] and [+] in a CHARACTER CLASS need no
+      // backslashes at all, so this survives the minifier and re-stringify.
+      `if(abs.protocol!=='http:'&&abs.protocol!=='https:')return u;` +
+      `if(abs.origin===location.origin)return u;` +
+      `var b=btoa(abs.origin).replace(/[+]/g,'-').replace(/[/]/g,'_').replace(/=+$/,'');` +
+      `return location.origin+'/p/'+b+abs.pathname+abs.search+abs.hash;` +
+
+      `}catch(e){return u}}` +
+      `try{var __mpFetch=window.fetch;window.fetch=function(u,o){try{` +
+      `var s=(u&&typeof u==='object'&&u.url)?String(u.url):String(u);` +
+      `var r=mpRewrite(s);` +
+      `if(r===s)return __mpFetch.apply(window,arguments);` +
+      `if(u&&typeof u==='object'&&u.url)return __mpFetch.call(window,new Request(r,u),o);` +
+      `return __mpFetch.call(window,r,o);` +
+      `}catch(e){return __mpFetch.apply(window,arguments)}}}catch(e){}` +
+      `try{var __mpOpen=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u){` +
+      `arguments[1]=mpRewrite(u);return __mpOpen.apply(this,arguments)}}catch(e){}` +
+      // ── the last frontier: DYNAMIC element src ───────────────────────────
+      // The MGP player does not put the video in HTML and does not use
+      // fetch(): it assigns el.src = <absolute CDN url> at play time
+      // (measured 2026-09-12 on the user's video site). A cross-origin media
+      // element request dies on the CDN's hotlink check (referer/origin are
+      // this loopback proxy, not the site). Route it through the relay like
+      // fetch/XHR by shadowing the src setters — the value is rewritten the
+      // same way, and a value already on this origin passes through.
+      `try{var __mv=Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype,'src');` +
+      `if(__mv&&__mv.set){var __mvo=__mv.set;Object.defineProperty(HTMLMediaElement.prototype,'src',{configurable:true,` +
+      `enumerable:__mv.enumerable,get:__mv.get,set:function(v){try{v=mpRewrite(v)}catch(e){}__mvo.call(this,v)}})}` +
+      `}catch(e){}` +
+      `try{var __ms=Object.getOwnPropertyDescriptor(HTMLSourceElement.prototype,'src');` +
+      `if(__ms&&__ms.set){var __mso=__ms.set;Object.defineProperty(HTMLSourceElement.prototype,'src',{configurable:true,` +
+      `enumerable:__ms.enumerable,get:__ms.get,set:function(v){try{v=mpRewrite(v)}catch(e){}__mso.call(this,v)}})}` +
+      `}catch(e){}` +
+      // Some sites navigate with location.href = <absolute url> (JS, not a
+      // link click and not .assign/.replace, so NONE of the hooks above see
+      // it) — treat an external href write like any external navigation.
+      `try{var __ml=Object.getOwnPropertyDescriptor(Location.prototype,'href');` +
+      `if(__ml&&__ml.set){var __mlo=__ml.set;Object.defineProperty(Location.prototype,'href',{configurable:true,` +
+      `enumerable:__ml.enumerable,get:__ml.get,set:function(v){try{` +
+      `var u=new URL(String(v),document.baseURI);` +
+      `if((u.protocol==='http:'||u.protocol==='https:')&&u.origin!==location.origin)return go(u.href,'goto')` +
+      `}catch(e){}__mlo.call(this,v)}})}` +
+      `}catch(e){}` +
+      // ── the one case the base cannot cover: an ABSOLUTE link ──────────────
+      // A relative href resolves through <base href> and stays inside the
+      // proxy, which is why nothing else here intercepts clicks. An absolute
+      // href does not: it resolves to the real origin, the frame navigates
+      // there, and a site that refuses framing (x-frame-options,
+      // frame-ancestors) turns the frame into a chrome error — one click and
+      // the page is gone. Measured on a relay-rendered page: the frame ended on
+      // the target's own help page, having left the proxy entirely.
+      //
+      // So intercept ONLY clicks that would leave the proxy, and hand the real
+      // destination to the parent. The parent owns navigation (it re-points the
+      // frame through the proxy and keeps the tab's history), and it already
+      // handles these messages for the server-side proxy.
+      //
+      // Two deliberate bail-outs:
+      //   • top level (parent === window) — there is no parent to ask, and
+      //     swallowing the click would break the page for anyone who opened
+      //     this URL directly;
+      //   • anything already on the proxy origin — relative links, and the
+      //     un-prefixed fallback's redirects. Passing one of those up would
+      //     have the parent wrap a proxy URL in another proxy URL, i.e. point
+      //     the relay at itself.
+      `addEventListener('click',function(e){try{` +
+      `if(parent===window)return;` +
+      `if(e.defaultPrevented||e.button!==0)return;` +
+      `var a=e.target;while(a&&a.tagName!=='A')a=a.parentElement;` +
+      `if(!a||!a.href||a.hasAttribute('download'))return;` +
+      `var u=new URL(a.href,document.baseURI);` +
+      `if(u.protocol!=='http:'&&u.protocol!=='https:')return;` +
+      `if(u.origin===location.origin)return;` +
+      `e.preventDefault();` +
+      `post({__mpBrowser:(a.target==='_blank'||e.metaKey||e.ctrlKey||e.shiftKey)?'newtab':'goto',url:u.href});` +
+      `}catch(x){}},true);` +
+      `})()</script>`;
+    if (/<head[^>]*>/i.test(html)) html = html.replace(/<head([^>]*)>/i, `<head$1>${injected}`);
+    else html = injected + html;
+
+    const buf = Buffer.from(html, 'utf8');
+    outHeaders['content-length'] = String(buf.length);
+    // Remember where this listener is currently pointed, so an un-prefixed
+    // navigation (see the root-absolute note above) can be sent back through
+    // the proxy instead of hitting the informational page. Our own cookie, not
+    // the target's — upstream Set-Cookie is dropped above.
+    outHeaders['set-cookie'] =
+      `${WEB_PROXY_COOKIE}=${encodeURIComponent(webProxyEncode(finalOrigin))}; Path=/; SameSite=Lax`;
+    res.writeHead(upstream.status, outHeaders);
+    res.end(buf);
+    return;
+  }
+
+  // ── everything that is not HTML: STREAM it, do not buffer ────────────────
+  //
+  // The HTML branch above buffers because it must (it rewrites the document),
+  // and it is bounded by WEB_PROXY_MAX_BODY. Nothing bounded this branch, and
+  // the case that matters is media: a `<video>` opens with `Range: bytes=0-`,
+  // which a range-capable origin answers with the WHOLE file in a single 206.
+  // So the relay held the entire video in memory and the player saw nothing
+  // until all of it had arrived — a long video was slow to start, and a very
+  // large one could take the relay down with it. That matters because a dead
+  // listener is the one failure the app shows as a REFUSED CONNECTION rather
+  // than as this proxy's own error page.
+  //
+  // `content-length` must not simply be forwarded. undici decodes the body
+  // transparently but leaves `content-encoding` and the COMPRESSED length in
+  // place (measured: 2667 gzip bytes against 8329 decoded), so a forwarded
+  // length truncates the response. Forward it only when nothing was decoded;
+  // otherwise omit it and let the response be chunked, which is honest.
+  const decoded = upstream.headers.get('content-encoding');
+  const upstreamLength = upstream.headers.get('content-length');
+  if (!decoded && upstreamLength) outHeaders['content-length'] = upstreamLength;
+
+  res.writeHead(upstream.status, outHeaders);
+
+  if (!upstream.body) { res.end(); return; }
+
+  // A player cancels range requests constantly — every seek abandons one. Stop
+  // pulling from upstream the moment the frame stops listening, or the relay
+  // keeps downloading a file nobody is waiting for.
+  //
+  // Aborting the FETCH is what works here, not cancelling the body: the body is
+  // already locked by the iteration below, and `cancel()` on a locked stream
+  // throws `ERR_INVALID_STATE` — which is unhandled inside a 'close' listener
+  // and takes the whole relay process down. Measured, the hard way.
+  let gone = false;
+  res.on('close', () => {
+    if (res.writableEnded) return;
+    gone = true;
+    try { controller.abort(); } catch (_) { /* already finished */ }
+  });
+
+  const waitDrain = () => new Promise((resolve) => {
+    const done = () => { res.off('drain', done); res.off('close', done); resolve(); };
+    res.on('drain', done);
+    res.on('close', done);
+  });
+
+  try {
+    for await (const chunk of upstream.body) {
+      if (gone || res.destroyed || res.writableEnded) break;
+      if (!res.write(chunk)) await waitDrain();
+    }
+  } catch (_) {
+    // The frame went away or upstream died mid-body. Both are normal for media;
+    // the response simply ends, which is what a truncated range looks like to
+    // the player, and the player retries.
+  }
+  if (!res.writableEnded && !res.destroyed) res.end();
+}
+
+function startWebProxy() {
+  if (webProxyServer) return;
+  const server = http.createServer((req, res) => {
+    handleWebProxyHttp(req, res).catch((error) => {
+      console.error(`✗ [Relay WebProxy] ${error.message}`);
+      try { res.writeHead(502); res.end('proxy error'); } catch (_) {}
+    });
+  });
+  // WebSocket upgrades are not proxied: a relative `ws://` inside a proxied page
+  // would otherwise hang. Refuse loudly rather than half-open.
+  server.on('upgrade', (req, socket) => {
+    try { socket.destroy(); } catch (_) {}
+  });
+
+  let port = WEB_PROXY_PORT;
+  let attempts = 0;
+  const tryListen = () => {
+    server.once('error', (error) => {
+      if (attempts < 10 && error.code === 'EADDRINUSE') {
+        attempts += 1;
+        port += 1;
+        tryListen();
+        return;
+      }
+      console.error(`✗ [Relay WebProxy] ${error.message}`);
+    });
+    server.listen(port, '127.0.0.1', () => {
+      webProxyServer = server;
+      webProxyPort = port;
+      console.log(`🌐 [Relay WebProxy] in-app browser proxy on http://127.0.0.1:${port}`);
+      // Tell the monitor where it landed. The requested port is only a hint —
+      // another listener may already own it, which is why the real one is
+      // reported rather than assumed.
+      try {
+        if (activeWs && activeWs.readyState === 1) {
+          activeWs.send(JSON.stringify({ type: 'webproxy:ready', port }));
+        }
+      } catch (_) { /* best effort */ }
+    });
+  };
+  tryListen();
+}
+
 // ── Main connection loop ──────────────────────────────────────────────────
 let activeWs = null;
 function connect() {
@@ -633,9 +1329,19 @@ function connect() {
     switch (msg.type) {
       // ── TCP relay ──
       case 'ready':
-        ws.send(JSON.stringify({ type: 'init', relayName: RELAY_NAME, version: RELAY_VERSION, capabilities: { ssh: !!ssh2, sftp: !!ssh2, docker: true, ai: true } }));
+        ws.send(JSON.stringify({ type: 'init', relayName: RELAY_NAME, version: RELAY_VERSION, capabilities: { ssh: !!ssh2, sftp: !!ssh2, docker: true, ai: true }, webProxyPort: webProxyPort || null }));
         console.log(`\n✅ Relay ready! Name: ${RELAY_NAME}, Capabilities: SSH=${!!ssh2}, SFTP=${!!ssh2}, Docker=true, AI=true`);
         startDiscoveryServer(RELAY_NAME);
+        // The in-app browser's client-side renderer. Started on every (re)connect
+        // because a reconnect is exactly when the monitor has forgotten the port:
+        // `startWebProxy` is a no-op once bound, and the announce below re-sends
+        // the port for the new socket instead of waiting for a rebind.
+        startWebProxy();
+        try {
+          if (webProxyPort && ws.readyState === 1) {
+            ws.send(JSON.stringify({ type: 'webproxy:ready', port: webProxyPort }));
+          }
+        } catch (_) { /* best effort */ }
         break;
 
       case 'open': {

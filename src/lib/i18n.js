@@ -819,6 +819,65 @@ const resources = {
           },
         },
       },
+      browser: {
+        onboarding: {
+          stepOf: "Step {{step}} of {{total}}",
+          complete: "Complete",
+          back: "Back",
+          skip: "Skip",
+          next: "Next",
+          getStarted: "Get Started",
+          startTour: "Start the tour",
+          features: {
+            omnibox: {
+              title: "Address & Search",
+              desc: "Type a URL or a search — one bar does both.",
+            },
+            nav: {
+              title: "Back, Forward, Reload",
+              desc: "Full history navigation for every tab.",
+            },
+            tabs: {
+              title: "Tabs",
+              desc: "Background tabs stay alive — switching never reloads.",
+            },
+            relay: {
+              title: "Local Relay Powered",
+              desc: "Pages are fetched from YOUR machine — they never pass through the server.",
+            },
+          },
+          steps: {
+            welcome: {
+              title: "Welcome to Web Browser",
+              description: "Browse the web inside the app. Pages render through the Local Relay on your machine, with real tabs, history, and bookmarks.",
+            },
+            omnibox: {
+              title: "One Bar for Everything",
+              description: "Type an address (example.com), an IP, or just words to search. Search engine is selectable from the start page.",
+              tip: "💡 Press Enter to go — shortcuts like agent://hermes open agent Web UIs.",
+            },
+            nav: {
+              title: "Full History Navigation",
+              description: "Back and Forward walk the tab's whole history — typed addresses, link clicks, and in-page navigations alike.",
+              tip: "💡 Reload re-fetches the current page; Home returns to the explore start page.",
+            },
+            tabs: {
+              title: "Tabs That Stay Alive",
+              description: "Open as many tabs as you like. Background tabs keep running — a video or a half-typed form survives a tab switch.",
+              tip: "💡 Right-click nothing needed — the × closes, the + opens.",
+            },
+            relay: {
+              title: "Private by Design",
+              description: "Websites load through the Local Relay on your machine, so requests come from your own connection — and the Tab button opens the current page in a real browser tab when a site refuses to be embedded.",
+              tip: "💡 The in-app browser REQUIRES the Local Relay — install it from Settings if pages ask for it.",
+            },
+            done: {
+              title: "You're all set!",
+              description: "Type an address or pick a bookmark on the start page. Re-open this guide anytime from the Tour button.",
+            },
+          },
+        },
+      },
       tmux: {
         onboarding: {
           stepOf: "Step {{step}} of {{total}}",
@@ -871,6 +930,63 @@ const resources = {
         }
       },
       ai: {
+      onboarding: {
+        stepOf: "Step {{step}} of {{total}}",
+        complete: "Complete",
+        back: "Back",
+        skip: "Skip",
+        next: "Next",
+        getStarted: "Get Started",
+        startTour: "Start the tour",
+        features: {
+          agents: {
+            title: "Agent Catalog",
+            desc: "Pick an agent — Hermes or Nanobot — to install on your server.",
+          },
+          server: {
+            title: "Server Connection",
+            desc: "The dropdown lists every server you've added — pick the one that should run the agent.",
+          },
+          tabs: {
+            title: "Everything in Tabs",
+            desc: "Overview, Skills, Personality & Prompt, Config, Env, and live Logs.",
+          },
+          relay: {
+            title: "Local Relay",
+            desc: "With the relay connected, control traffic goes straight from this machine to your server.",
+          },
+        },
+        steps: {
+          welcome: {
+            title: "Welcome to AI Agents",
+            description: "Install and manage autonomous AI agents on your servers — one-click setup, gateway control, skills, prompts, and live logs.",
+          },
+          agents: {
+            title: "Pick Your Agent",
+            description: "Each card is an agent you can install: Hermes and Nanobot today, more coming. Click a card to select it.",
+            tip: "💡 The selected card is highlighted — everything below acts on that agent.",
+          },
+          server: {
+            title: "Choose a Server",
+            description: "The dropdown lists every server you've added in SSH Manager. Pick the one that should run the agent — the panel below then shows that server's live agent state.",
+            tip: "💡 No server in the list? Add a connection in SSH Manager and it appears here automatically.",
+          },
+          tabs: {
+            title: "Agent Control Tabs",
+            description: "Overview shows health and version. Skills installs capabilities, Personality & Prompt tunes behaviour, Config and Env edit settings, Logs streams live output.",
+            tip: "💡 Logs is live — open it while restarting the gateway to watch output stream in.",
+          },
+          relay: {
+            title: "Local Relay (optional, recommended)",
+            description: "The badge shows whether the Local Relay on THIS machine is connected. With it active, agent control is direct and serverless.",
+            tip: "💡 Not connected? Click the badge to re-check — and see Settings for install steps.",
+          },
+          done: {
+            title: "You're all set!",
+            description: "Select a server, pick an agent, and install it. Re-open this guide anytime from the Tour button.",
+          },
+        },
+      },
         title: "AI Assistant",
         manual: "Manual",
         auto: "Auto",
@@ -2522,6 +2638,64 @@ const resources = {
         }
       },
       ai: {
+      onboarding: {
+        stepOf: "ধাপ {{step}} / {{total}}",
+        complete: "সম্পন্ন",
+        back: "পেছনে",
+        skip: "এড়িয়ে যান",
+        next: "পরবর্তী",
+        getStarted: "শুরু করুন",
+        startTour: "ট্যুর শুরু করুন",
+        features: {
+          agents: {
+            title: "এজেন্ট ক্যাটালগ",
+            desc: "Hermes বা Nanobot — আপনার সার্ভারে ইনস্টল করার জন্য একটি এজেন্ট বেছে নিন।",
+          },
+          server: {
+            title: "সার্ভার বাছাই",
+            desc: "ড্রপ-ডাউনে আপনার যোগ করা সব সার্ভার দেখায় — কোনটিতে এজেন্ট চলবে তা এখানে ঠিক করুন।",
+          },
+          tabs: {
+            title: "সবকিছু ট্যাবে",
+            desc: "Overview, Skills, Personality & Prompt, Config, Env আর লাইভ Logs — সব এক জায়গায়।",
+          },
+          relay: {
+            title: "Local Relay",
+            desc: "রিলে সংযুক্ত থাকলে নিয়ন্ত্রণ আপনার কম্পিউটার থেকে সরাসরি আপনার সার্ভারে যায়।",
+          },
+        },
+        steps: {
+          welcome: {
+            title: "AI এজেন্টে আপনাকে স্বাগতম",
+            description: "আপনার সার্ভারে স্বয়ংক্রিয় AI এজেন্ট ইনস্টল ও পরিচালনা করুন — এক ক্লিকে সেটআপ, গেটওয়ে নিয়ন্ত্রণ, দক্ষতা, প্রম্পট আর লাইভ লগ।",
+          },
+          agents: {
+            title: "আপনার এজেন্টটি বেছে নিন",
+            description: "প্রতিটি কার্ড একটি ইনস্টল করা যায় এমন এজেন্ট: এখন আছে Hermes আর Nanobot, আরও আসছে। বেছে নিতে কার্ডে ক্লিক করুন।",
+            tip: "বাছাই করা কার্ড হাইলাইট থাকে — নিচের সব কাজই সেই এজেন্ট নিয়ে হবে।",
+          },
+          server: {
+            title: "কোন সার্ভারে চলবে",
+            description: "ড্রপ-ডাউন দেখায় আপনি কোন সার্ভারগুলো যুক্ত করেছেন। এজেন্টটি যে সার্ভারে ইনস্টল ও চলবে সেটি বেছে নিন — নিচের প্যানেল সেখানকার এজেন্ট অবস্থা দেখায়।",
+            tip: "তালিকায় সার্ভার নেই? SSH ম্যানেজারে একটি সংযোগ যোগ করুন — এটি এখানে নিজে থেকেই আসবে।",
+          },
+          tabs: {
+            title: "এজেন্ট নিয়ন্ত্রণের ট্যাব",
+            description: "Overview স্বাস্থ্য ও সংস্করণ দেখায়; Skills দক্ষতা ইনস্টল করে; Personality & Prompt আচরণ ঠিক করে; Config ও Env সেটিংস বদলায়; Logs লাইভ আউটপুট দেখায়।",
+            tip: "গেটওয়ে পুনরায় চালু করার সময় Logs খোলা রাখুন — আউটপুট লাইভ দেখতে পাবেন।",
+          },
+          relay: {
+            title: "Local Relay (ঐচ্ছিক, প্রস্তাবিত)",
+            description: "এটি দেখায় আপনার কম্পিউটারে Local Relay সংযুক্ত আছে কিনা। সক্রিয় থাকলে এজেন্ট নিয়ন্ত্রণ সরাসরি চলে — সার্ভারের ঘুরপথ ছাড়াই।",
+            tip: "সংযুক্ত নয়? ব্যাজে ক্লিক করে আবার পরীক্ষা করুন; ইনস্টল পদ্ধতির জন্য Settings দেখুন।",
+          },
+          done: {
+            title: "সব প্রস্তুত!",
+            description: "সার্ভার বেছে নিন, এজেন্ট বেছে নিন, তারপর ইনস্টল করুন। যেকোনো সময় Tour বোতাম থেকে গাইডটি আবার খুলতে পারবেন।",
+          },
+        },
+      },
+
         title: "ผู้ช่วย AI",
         manual: "แมนนวล",
         auto: "อัตโนมัติ",
@@ -3078,6 +3252,65 @@ const resources = {
             },
           },
         },
+      },
+      browser: {
+      onboarding: {
+        stepOf: "ধাপ {{step}} / {{total}}",
+        complete: "সম্পন্ন",
+        back: "পেছনে",
+        skip: "এড়িয়ে যান",
+        next: "পরবর্তী",
+        getStarted: "শুরু করুন",
+        startTour: "ট্যুর শুরু করুন",
+        features: {
+          omnibox: {
+            title: "ঠিকানা ও খোঁজা",
+            desc: "URL লিখুন বা খোঁজুন — একটি বারই দুটো কাজ করে।",
+          },
+          nav: {
+            title: "পেছনে, সামনে, রিলোড",
+            desc: "প্রতিটি ট্যাবের পুরো ইতিহাস ঘোরা যায়।",
+          },
+          tabs: {
+            title: "ট্যাব",
+            desc: "পেছনের ট্যাব জীবন্ত থাকে — স্যুইচ করলে রিলোড হয় না।",
+          },
+          relay: {
+            title: "Local Relay চালিত",
+            desc: "পাতাগুলো আপনারই মেশিন থেকে আসে — সার্ভার দিয়ে যায় না।",
+          },
+        },
+        steps: {
+          welcome: {
+            title: "Web ব্রাউজারে আপনাকে স্বাগতম",
+            description: "অ্যাপের ভেতরেই ইন্টারনেট ব্রাউজ করুন। পাতা আপনার মেশিনের Local Relay দিয়ে দেখায়, সাথে সত্যিকারের ট্যাব, ইতিহাস আর বুকমার্ক।",
+          },
+          omnibox: {
+            title: "সবকিছুর জন্য একটি বার",
+            description: "ঠিকানা লিখুন (example.com), IP লিখুন, অথবা শুধু কিছু শব্দ দিয়ে খুঁজুন। সার্চ ইঞ্জিন বেছে নেওয়া যায় শুরু পাতায়।",
+            tip: "Enter চাপলে চলে যাবে — agent://hermes-এর মতো শর্টকাট দিয়ে এজেন্ট Web UI খোলা যায়।",
+          },
+          nav: {
+            title: "সম্পূর্ণ ইতিহাস ঘোরা",
+            description: "পেছনে ও সামনে বোতাম ট্যাবের সব ইতিহাস ঘোরায় — টাইপ করা ঠিকানা, লিংক ক্লিক, আর পাতার ভেতরের নেভিগেশন সবই।",
+            tip: "Reload বর্তমান পাতা আবার আনে; Home শুরু পৃষ্ঠায় ফেরায়।",
+          },
+          tabs: {
+            title: "জীবন্ত ট্যাব",
+            description: "চাইলে অনেকগুলো ট্যাব খুলুন। পেছনের ট্যাব চলতেই থাকে — ভিডিও বা অর্ধেক লেখা ফর্ম ট্যাব বদলালে হারায় না।",
+            tip: "বন্ধ করতে ×, নতুন ট্যাবের জন্য + চাপুন।",
+          },
+          relay: {
+            title: "নকশাতেই গোপনীয়তা",
+            description: "ওয়েবসাইট আপনার মেশিনের Local Relay দিয়ে লোড হয়, তাই অনুরোধ আপনারই সংযোগ থেকে যায়। কোনো সাইট এমবেড হতে না চাইলে Tab বোতাম দিয়ে সেটি সত্যিকারের ট্যাবে খুলুন।",
+            tip: "অ্যাপের ব্রাউজারে অবশ্যই Local Relay লাগবে — পাতায় চাইলে Settings থেকে ইনস্টল করুন।",
+          },
+          done: {
+            title: "সব প্রস্তুত!",
+            description: "ঠিকানা লিখুন অথবা শুরু পৃষ্ঠায় বুকমার্ক বেছে নিন। যেকোনো সময় Tour বোতাম থেকে গাইডটি আবার খুলতে পারবেন।",
+          },
+        },
+      },
       },
       tmux: {
         onboarding: {

@@ -59,7 +59,45 @@ test('fetchRelayStatus reads the user-scoped endpoint and normalises the shape',
   assert.deepEqual(status, {
     connected: true,
     relays: [{ relayId: 'a', relayName: 'studio' }],
+    // No relay advertised a web proxy, so there is none — and 0 (not null,
+    // not undefined) is what every caller tests against.
+    webProxyPort: 0,
   });
+});
+
+test('fetchRelayStatus surfaces the relay web proxy port the in-app browser needs', async () => {
+  // The Browser app frames ordinary sites through the relay's own loopback
+  // proxy when one exists, so the port has to survive the trip from the relay
+  // row to the client. Without it every navigation silently falls back to the
+  // server proxy — and its sandbox breaks storage-dependent sites.
+  globalThis.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      success: true,
+      connected: true,
+      relays: [
+        { relayId: 'old', relayName: 'pre-upgrade' },
+        { relayId: 'new', relayName: 'upgraded', webProxyPort: 18780 },
+      ],
+    }),
+  });
+
+  const { fetchRelayStatus } = await import('../src/utils/relayStatus.js');
+  const status = await fetchRelayStatus();
+  assert.equal(status.webProxyPort, 18780, 'a relay that reports a port must be used');
+
+  // An older relay reports null and must not be mistaken for port 0 meaning
+  // "use it" — the fallback stays on the server proxy.
+  globalThis.fetch = async () => ({
+    ok: true,
+    json: async () => ({
+      success: true,
+      connected: true,
+      relays: [{ relayId: 'old', relayName: 'pre-upgrade', webProxyPort: null }],
+    }),
+  });
+  const older = await fetchRelayStatus();
+  assert.equal(older.webProxyPort, 0, 'a pre-upgrade relay must yield no port, not a bogus one');
 });
 
 test('fetchRelayStatus throws on a non-ok response so callers can avoid flapping', async () => {
@@ -73,7 +111,7 @@ test('fetchRelayStatus tolerates a body that is missing relays', async () => {
   globalThis.fetch = async () => ({ ok: true, json: async () => ({ success: true, connected: false }) });
 
   const { fetchRelayStatus } = await import('../src/utils/relayStatus.js');
-  assert.deepEqual(await fetchRelayStatus(), { connected: false, relays: [] });
+  assert.deepEqual(await fetchRelayStatus(), { connected: false, relays: [], webProxyPort: 0 });
 });
 
 test('the status event bus notifies subscribers and can be unsubscribed', async () => {

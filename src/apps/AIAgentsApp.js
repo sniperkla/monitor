@@ -12,6 +12,7 @@ import { createRelayPeer, DC } from '@/lib/webrtc-relay';
 import WebUIOpenChoiceModal from '@/components/WebUIOpenChoiceModal';
 import AgentWebUIView from '@/components/AgentWebUIView';
 import AgentWebUIBrowserApp from '@/apps/AgentWebUIBrowserApp';
+import AIAgentsOnboarding, { hasCompletedAIAgentsOnboarding, resetAIAgentsOnboarding } from '@/components/AIAgentsOnboarding';
 import {
   readWebUIOpenMode,
   writeWebUIOpenMode,
@@ -194,6 +195,21 @@ export default function AIAgentsApp({ apiFetch }) {
   );
 
   const [agentId, setAgentId] = useState('hermes');
+
+  // Onboarding: show on first visit, hide once completed. Same deferred-mount
+  // pattern as RcloneApp — a beat of delay lets the window finish opening so
+  // the spotlight measures settled geometry.
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => {
+      if (!hasCompletedAIAgentsOnboarding()) setShowOnboarding(true);
+    }, 400);
+    return () => clearTimeout(t);
+  }, []);
+  const replayOnboarding = useCallback(() => {
+    resetAIAgentsOnboarding();
+    setShowOnboarding(true);
+  }, []);
   const [target, setTarget] = useState('');
   const [tab, setTab] = useState('overview'); // overview | config | skills
   const [details, setDetails] = useState(null);
@@ -2417,6 +2433,11 @@ export default function AIAgentsApp({ apiFetch }) {
           <button onClick={() => loadDetails()} disabled={loading || !target} className={`${btn} bg-white/5 border border-[var(--border-color)] text-[var(--text-muted)] hover:text-white`}>
             {loading ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />} Refresh
           </button>
+          <button onClick={replayOnboarding} data-onboarding="help-btn"
+            className={`${btn} bg-white/5 border border-[var(--border-color)] text-[var(--text-muted)] hover:text-white`}
+            title="Show tutorial">
+            <Sparkles size={12} /> Tour
+          </button>
         </div>
       </div>
 
@@ -2424,7 +2445,7 @@ export default function AIAgentsApp({ apiFetch }) {
       <div className="rounded-xl border border-[var(--border-color)] bg-[var(--bg-secondary)] p-4">
         <div className="flex items-center justify-between mb-1">
           <label className="text-[10px] uppercase tracking-wider font-bold text-[var(--text-muted)]">Server</label>
-          <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5" data-onboarding="relay-status">
             {relayInfo?.connected ? (
               <span className="flex items-center gap-1 text-[10px] text-pink-300 font-bold bg-pink-500/10 px-2 py-0.5 rounded-full border border-pink-500/20 shadow-[0_0_10px_rgba(236,72,153,0.15)]" title="Local Relay active: Direct communication with zero server hops">
                 <Cable size={10} className="text-pink-400" /> Local Relay Active
@@ -2444,18 +2465,20 @@ export default function AIAgentsApp({ apiFetch }) {
             )}
           </div>
         </div>
-        <ThemeSelect
-          value={target}
-          onChange={setTarget}
-          options={connections.map(c => ({ value: c._id, label: `${c.name || c.host} (${c.host})` }))}
-          placeholder="— select a server —"
-          icon={ServerIcon}
-          size="sm"
-          className="mt-1 w-full"
-        />
+        <div data-onboarding="server-select" className="mt-1 w-full">
+          <ThemeSelect
+            value={target}
+            onChange={setTarget}
+            options={connections.map(c => ({ value: c._id, label: `${c.name || c.host} (${c.host})` }))}
+            placeholder="— select a server —"
+            icon={ServerIcon}
+            size="sm"
+            className="w-full"
+          />
+        </div>
 
         {/* Agent catalog */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-3">
+        <div data-onboarding="agent-catalog" className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-3">
           {AGENTS.map(a => (
             <button
               key={a.id}
@@ -2645,7 +2668,7 @@ export default function AIAgentsApp({ apiFetch }) {
             </div>
           )}
 
-          <div className="flex gap-1 px-3 pt-3 bg-black/10 overflow-x-auto scrollbar-hide shrink-0" style={{ WebkitOverflowScrolling: 'touch' }}>
+          <div data-onboarding="agent-tabs" className="flex gap-1 px-3 pt-3 bg-black/10 overflow-x-auto scrollbar-hide shrink-0" style={{ WebkitOverflowScrolling: 'touch' }}>
             {[
               ['overview', 'Overview'],
               ['skills', `Skills (${(details.skills || []).length})`],
@@ -4586,6 +4609,11 @@ export default function AIAgentsApp({ apiFetch }) {
         onChoose={handleWebUIOpenChoice}
         onClose={() => setWebUIChoiceOpen(false)}
       />
+
+      {/* First-time onboarding overlay */}
+      {showOnboarding && (
+        <AIAgentsOnboarding onComplete={() => setShowOnboarding(false)} />
+      )}
     </div>
   );
 }

@@ -84,7 +84,7 @@ import process from 'node:process';
  * ═════════════════════════════════════════════════════════════════════════ */
 
 const PINNED = {
-  auditDate: '2026-09-07',
+  auditDate: '2026-09-11',
   // Bumped 2026-09-06 three times:
   //   1. F7 — the relay deleted its own executable. Adds isDisposableScript().
   //   2. F1–F6 — the relay token moved to an Authorization header with a
@@ -98,11 +98,59 @@ const PINNED = {
   //      was gated on `if (!TOKEN)`, and TOKEN is seeded from the saved
   //      config, so re-pairing printed no code at all — only the success
   //      line. `--uninstall` "fixed" it by deleting the config.
+  //   6. The in-app browser web proxy (loopback, user-chosen URLs) landed on
+  //      the relay, together with the injected 'ready'/'alive' heartbeat the
+  //      app uses to tell a live page from a replaced one. See `listeners`.
+  //   7. Bumped 2026-09-11 — two web-proxy fixes, both measured against a real
+  //      page in a real browser:
+  //        a. the injected `<base href>` now carries the document's DIRECTORY,
+  //           not just its origin. It overrides the document URL for relative
+  //           resolution, so an origin-only base broke every document-relative
+  //           URL on a page below the root — a `<video src="clip.mp4">` on a
+  //           page at /html/ was requested as /clip.mp4 upstream, 404'd, and
+  //           the element ended NETWORK_NO_SOURCE.
+  //        b. non-HTML responses are STREAMED instead of buffered whole. A
+  //           `<video>` opens with `Range: bytes=0-`, which a range-capable
+  //           origin answers with the entire file in one 206, so the relay used
+  //           to hold the whole video in memory and the player saw nothing
+  //           until all of it had arrived. `content-length` is forwarded only
+  //           when undici did not decode the body (it leaves the COMPRESSED
+  //           length in place, so forwarding it truncates).
+  //   8. Bumped again for the absolute-link escape hatch. `<base href>` can
+  //      keep relative URLs inside the relay, but absolute links bypass it and
+  //      can navigate a frame to a target that refuses framing. The injected
+  //      bridge now intercepts only those links and asks the parent to re-point
+  //      through the relay; relative links remain untouched.
   // The shipped artifact: public/local-relay.min.js
-  bytes: 196386,
-  sha256: '4f18eb0514dcaf2deeaa14ac6db85240969f853f976bdf652cd91597a3bf4a42',
+  bytes: 219055,
+  sha256: '38a16d66de7962c907f4a502e8cc5fafb057c6cfdb92b3c58771b66ac716bfc3',
   // The readable source it must be built from: public/local-relay.js
-  sourceSha256: 'e0300da481d545f86f81c306cfb7aef29f8338b98a4dd3ffb60df09407f61c43',
+  sourceSha256: '54c3ac89ed3568267e789dd854a790996ee1ac69772201b4d508e11d918429ed',
+
+  /**
+   * Loopback listeners. Not secrets, but they ARE the relay's local attack
+   * surface, so they are listed rather than left implicit.
+   */
+  listeners: [
+    '127.0.0.1:48923  — discovery (relay name for the dashboard)',
+    '127.0.0.1:18790+ — WebUI gateway, one per forwarded agent dashboard',
+    '127.0.0.1:18780+ — in-app browser web proxy (see below)',
+  ],
+
+  /**
+   * The in-app browser web proxy is the one part of the relay that fetches
+   * URLs the USER chooses, rather than ones the server hands it. Stated plainly
+   * because it widens what the relay does:
+   *   • it is bound to 127.0.0.1 only, and is reachable from no other host;
+   *   • it holds NO cookie jar — upstream Set-Cookie is dropped, and request
+   *     cookies are never forwarded, so it cannot act on the user's behalf on
+   *     any site;
+   *   • it exists so that pages render on the user's own machine instead of
+   *     being fetched by the monitor server (see startWebProxy in the source);
+   *   • any local process could use it as an open HTTP relay. That is accepted:
+   *     the machine is the user's, and such a process could fetch the same URLs
+   *     directly.
+   */
 
   /** Every outbound network call the relay makes. {server} = the --server URL. */
   network: [
