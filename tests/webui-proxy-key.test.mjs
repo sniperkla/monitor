@@ -86,3 +86,22 @@ test('the catch-all consumes the key instead of hardcoding it', () => {
   assert.match(catchAll, /segments\[0\] === ASSET_KEY/);
   assert.doesNotMatch(catchAll, /segments\[0\] === '/);
 });
+
+test('server.js and next.config.mjs route the proxy by prefix, never by key', () => {
+  // server.js decides whether a request is the WebUI proxy (HTTP + the WS
+  // upgrade) from the path PREFIX, and next.config.mjs scopes its framing
+  // headers with a `:path*` wildcard. Both must stay key-agnostic: if either
+  // hardcoded the marker segment, bumping the key would silently stop the
+  // WebSocket proxy from upgrading — the HTTP side would keep working, so the
+  // failure would look like "the agent UI loads but nothing streams".
+  for (const file of ['server.js', 'next.config.mjs']) {
+    const src = readFileSync(file, 'utf8');
+    const hardcoded = [...src.matchAll(KEY_SITE_RE)].map((m) => m[1]);
+    assert.equal(
+      hardcoded.length,
+      0,
+      `${file} must not name the key (found ${hardcoded.join(', ')}); use the prefix or a :path* wildcard`,
+    );
+    assert.match(src, /webui-proxy/, `${file} should still route the proxy by prefix`);
+  }
+});
