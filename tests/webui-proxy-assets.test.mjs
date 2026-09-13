@@ -208,3 +208,37 @@ test('route.js forwards relay/ssh options to proxyWsUrl and inherits WebSocket p
   assert.match(proxy, /Object\.setPrototypeOf\(window\.WebSocket, NativeWS\)/);
 });
 
+
+test('Cloudflare /cdn-cgi/* must NEVER be tunneled to the agent (RUM beacon 405 + module MIME fix)', () => {
+  // The client-side bridge guards every rewrite path that touches /cdn-cgi/*.
+  // Cloudflare injects its RUM analytics (a script + a POST beacon to
+  // /cdn-cgi/rum) into HTML responses at the edge. Tunneling those paths made
+  // the agent server answer 405/HTML, which the browser then reported as
+  // "Failed to load module script: … MIME text/html" (green screen) plus a
+  // "POST …/cdn-cgi/rum 405" console error — only on production, which is
+  // behind Cloudflare. They must resolve to the CDN directly, never the tunnel.
+  assert.ok(proxy.includes("function isCloudflareInfra(u)"));
+  assert.match(proxy, /if \(isCloudflareInfra\(u\)\) return u;/);            // rewriteUrl()
+  assert.match(proxy, /if \(isCloudflareInfra\(resolved\.pathname\)\) return u;/); // containInTunnel()
+  assert.match(proxy, /if \(isCloudflareInfra\('\/' \+ path\)\) return m;/);        // fixMarkup()
+  // Server-side attribute & url() rewrites must leave /cdn-cgi alone too.
+  assert.match(proxy, /path === 'cdn-cgi' \|\| path\.startsWith\('cdn-cgi\/'\)/);
+  // handleProxy must short-circuit a stale /cdn-cgi/ request at the origin
+  // instead of forwarding it into the SSH tunnel (302 back to the CDN edge).
+  assert.match(proxy, /\/\^\\\/cdn-cgi\\\/\/\.test\(remotePath\)/);
+  assert.match(proxy, /NextResponse\.redirect\(new URL\(remotePath, request\.url\), 302\)/);
+});
+
+test('immutable cache only when the tunnel REALLY returned a JS/CSS binary', () => {
+  // Stamping Cache-Control: immutable from the requested PATH alone is wrong:
+  // if a relay restart made the first request for a hashed chunk come back as
+  // an HTML error page, a shared cache (Cloudflare in front of production)
+  // would store that HTML under the .js URL for a year — "module script served
+  // MIME text/html" on every later load. Cache-control must describe the
+  // actual status + content-type of the response.
+  const cacheSection = section(proxy, 'Cache-control must describe the response', 'let body = resp.body;');
+  assert.match(cacheSection, /statusOk = resp\.status === 200 \|\| resp\.status === 206/);
+  assert.match(cacheSection, /isJsCss = \/\(\?:javascript\|wasm\|css\)\/\.test\(contentType\)/);
+  assert.match(cacheSection, /statusOk && \/\\\/assets\\\/\[\^\?\]\*-\[A-Za-z0-9_-\]\{8,\}\D\.\(\?:js\|mjs\|css\)\$\/i\.test\(assetPath\) && isJsCss/);
+  assert.match(cacheSection, /isBinary = /);
+});

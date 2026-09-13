@@ -159,8 +159,21 @@ function rewriteHtml(html, proxyBase, currentPath, port, connectionId, agentId =
     // those requests; it forwards the original remote path unchanged.
     return PROXY_BASE + encodeURIComponent(p || '/');
   }
+  // Cloudflare (and only Cloudflare) ALSO serves this page through its edge,
+  // and injects its own infrastructure into every HTML response it passes:
+  // the RUM analytics script and its POST beacon, challenge pages, etc. Those
+  // live at /cdn-cgi/* on the EDGE — the same origin as this iframe but NOT
+  // on the tunneled app machine. Routing them through the SSH tunnel makes
+  // the agent server answer them (405/404 HTML), which surfaces as
+  // "POST .../cdn-cgi/rum 405" plus "Failed to load module script: ... served
+  // MIME text/html" while the app sits on its green shell. They must resolve
+  // to the CDN directly, never through the tunnel.
+  function isCloudflareInfra(u) {
+    return typeof u === 'string' && (u === '/cdn-cgi' || u.indexOf('/cdn-cgi/') === 0 || u.indexOf('cdn-cgi/') === 0);
+  }
   function rewriteUrl(u) {
     if (!u || typeof u !== 'string') return u;
+    if (isCloudflareInfra(u)) return u;
     if (u.startsWith('//') || u.startsWith('http://') || u.startsWith('https://') || u.startsWith('data:') || u.startsWith('blob:') || u.startsWith('javascript:')) return u;
     if (u.startsWith('/api/agents/webui-proxy')) return u;
     // Hermes' dashboard API is root-relative (/api/hermes/..., /v1/..., etc.)
@@ -312,6 +325,9 @@ function rewriteHtml(html, proxyBase, currentPath, port, connectionId, agentId =
   var TUNNEL_PREFIX = '/api/agents/webui-proxy';
   function fixSubresource(u) {
     if (!u || typeof u !== 'string') return u;
+    // Cloudflare-edge infrastructure (RUM analytics etc.) must keep resolving
+    // against the CDN, not the tunneled app. Skip it before any rewrite below.
+    if (isCloudflareInfra(u)) return u;
     // React Router's preload helper prepends '/' to each lazy-chunk dep. When
     // a dep is already root-absolute that yields '//api/agents/...' — a
     // protocol-relative URL whose HOST is "api" — or, after
@@ -346,6 +362,7 @@ function rewriteHtml(html, proxyBase, currentPath, port, connectionId, agentId =
     if (!markup || typeof markup !== 'string') return markup;
     if (markup.indexOf('=') < 0) return markup;
     return markup.replace(/(src|href)=(["'])\\/(?!\\/)([^"']*)\\2/gi, function(m, attr, q, path) {
+if (isCloudflareInfra('/' + path)) return m;
       if (path.indexOf(TUNNEL_PREFIX.slice(1)) === 0) return m;
       return attr + '=' + q + ASSET_PREFIX + '/' + path + q;
     });
@@ -362,6 +379,7 @@ function rewriteHtml(html, proxyBase, currentPath, port, connectionId, agentId =
     try {
       var resolved = new URL(String(u), location.href);
       if (resolved.origin !== location.origin) return u;
+      if (isCloudflareInfra(resolved.pathname)) return u;
       if (resolved.pathname.indexOf(TUNNEL_PREFIX) === 0) return u;
       var q = resolved.search || ('?agent=' + encodeURIComponent(WEBUI_AGENT));
       return ASSET_PREFIX + resolved.pathname + q + resolved.hash;
@@ -460,13 +478,23 @@ function rewriteHtml(html, proxyBase, currentPath, port, connectionId, agentId =
   // (/api/agents/webui-proxy/m/<cid>/<port>/assets/x.js) — handled by the
   // [...path] catch-all route. See assetPathPrefix() for why the coordinates
   // are carried in the path rather than the query.
+  // NOTE: /cdn-cgi/* is Cloudflare-edge infrastructure (RUM analytics etc.).
+  // It exists on the CDN in front of THIS origin, not on the tunneled app
+  // machine, so it must stay un-tunneled even if a reference appears in the
+  // HTML (Cloudflare injects its beacon into responses it passes through).
   const pathProxyBase = assetPathPrefix(connectionId, port);
   res = res.replace(/(src|href|action)=(["'])\/((?!\/)[^"']*)(["'])/gi,
-    (_, attr, q, path, q2) => `${attr}=${q}${pathProxyBase}${encodeProxyPath('/' + path)}${q2}`);
+    (m, attr, q, path, q2) => {
+      if (path === 'cdn-cgi' || path.startsWith('cdn-cgi/')) return m;
+      return `${attr}=${q}${pathProxyBase}${encodeProxyPath('/' + path)}${q2}`;
+    });
 
   // Rewrite url('/...') in style blocks
   res = res.replace(/url\((["']?)\/((?!\/)[^)]*?)(["']?)\)/gi,
-    (_, q, path, q2) => `url(${q}${pathProxyBase}${encodeProxyPath('/' + path)}${q2})`);
+    (m, q, path, q2) => {
+      if (path === 'cdn-cgi' || path.startsWith('cdn-cgi/')) return m;
+      return `url(${q}${pathProxyBase}${encodeProxyPath('/' + path)}${q2})`;
+    });
 
   return res;
 }
@@ -566,6 +594,16 @@ async function handleProxy(request) {
     // Strip hash fragment from remote HTTP request (fragments are client-side only per RFC 7230)
     if (remotePath.includes('#')) {
       remotePath = remotePath.split('#')[0] || '/';
+    }
+    // /cdn-cgi/* is Cloudflare-edge infrastructure (RUM analytics beacon,
+    // challenge pages, email obfuscation, …). It exists ONLY on the CDN in
+    // front of THIS origin, never on the tunneled agent box. A stale injected
+    // page (or an old cached bundle) can still send one of these here; answer
+    // it from the edge origin itself instead of forwarding the request into
+    // the SSH tunnel, where the agent server would answer 405/HTML and the
+    // browser would report "module script served as MIME text/html".
+    if (/^\/cdn-cgi\//.test(remotePath)) {
+      return NextResponse.redirect(new URL(remotePath, request.url), 302);
     }
 
     const remembered = readCoordCookie(request);
@@ -782,15 +820,25 @@ async function handleProxy(request) {
     // first into ZERO tunnel traffic for assets (each used to cost an SSH
     // round-trip). Un-hashed binaries get a short cache as a middle ground.
     const assetPath = (remotePath.split('?')[0] || '');
-    if (/\/assets\/[^?]*-[A-Za-z0-9_-]{8,}\.(?:js|mjs|css)$/i.test(assetPath)) {
+    // Cache-control must describe the response we are ACTUALLY about to send.
+    // The immutable branch is only valid when the tunnel returned a real
+    // JS/CSS binary — if a relay restart or Hermes hiccup made the FIRST
+    // request for a hashed chunk come back as an HTML error page, stamping
+    // `immutable` on that would make shared caches (Cloudflare sits in front
+    // of production) store the HTML error under the .js URL for a year,
+    // surfacing later as "Failed to load module script: … MIME text/html".
+    const contentType = (resp.headers['content-type'] || '').toLowerCase();
+    const statusOk = resp.status === 200 || resp.status === 206;
+    const isJsCss = /(?:javascript|wasm|css)/.test(contentType);
+    const isBinary = /\.(?:woff2?|ttf|otf|png|jpe?g|gif|svg|webp|avif|ico)$/i.test(assetPath) && !contentType.includes('text/html');
+    if (statusOk && /\/assets\/[^?]*-[A-Za-z0-9_-]{8,}\.(?:js|mjs|css)$/i.test(assetPath) && isJsCss) {
       outHeaders['cache-control'] = 'public, max-age=31536000, immutable';
-    } else if (/\.(?:woff2?|ttf|otf|png|jpe?g|gif|svg|webp|avif|ico)$/i.test(assetPath)) {
+    } else if (statusOk && isBinary) {
       outHeaders['cache-control'] = 'public, max-age=300';
     } else {
       outHeaders['cache-control'] = 'no-store, max-age=0';
     }
 
-    const contentType = (resp.headers['content-type'] || '').toLowerCase();
     let body = resp.body;
 
     // Rewrite HTML to keep navigation inside the proxy. ORDER MATTERS: the
