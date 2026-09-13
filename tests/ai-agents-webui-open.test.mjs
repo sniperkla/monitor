@@ -155,7 +155,7 @@ test('the server route is offered as a real button, not only inside failure card
 
 test('the proxy URL keeps tunnel coordinates in the path, never the query', () => {
   const builder = section(app, 'function buildWebUIProxyUrl(', 'function extractWebUISecret');
-  assert.match(builder, /\/api\/agents\/webui-proxy\/m\/\$\{encodeURIComponent\(connectionId\)\}/);
+  assert.match(builder, /\/api\/agents\/webui-proxy\/m2\/\$\{encodeURIComponent\(connectionId\)\}/);
   // The query form evaporates on the first lazy chunk (RFC 3986 relative
   // resolution drops the base URL's query).
   assert.doesNotMatch(builder, /webui-proxy\?connectionId=/);

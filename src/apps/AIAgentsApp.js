@@ -161,7 +161,7 @@ function buildWebUIProxyUrl(connectionId, port, p, agentId = 'nanobot', routeOpt
     relayParts.push(`preferredRelay=${encodeURIComponent(routeOptions.preferredRelay)}`);
   }
   const relayQuery = relayParts.length ? `&${relayParts.join('&')}` : '';
-  return `/api/agents/webui-proxy/m/${encodeURIComponent(connectionId)}/${encodeURIComponent(String(port))}`
+  return `/api/agents/webui-proxy/m2/${encodeURIComponent(connectionId)}/${encodeURIComponent(String(port))}`
     + `${suffix ? '/' + suffix : ''}?agent=${encodeURIComponent(agentId)}${relayQuery}${hashPart}`;
 }
 

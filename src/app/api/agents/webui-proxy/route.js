@@ -24,7 +24,29 @@ import http from 'http';
 // ─── helpers ────────────────────────────────────────────────────────────────
 
 // Marker segment for "path-keyed" asset URLs — see assetPathPrefix().
-const ASSET_KEY = 'm';
+//
+// BUMP THIS when a release has to evict proxy URLs that are already sitting in a
+// cache. `m` → `m2` (2026-09-13) exists because a 200-HTML error card was once
+// served for `/assets/index-DY9avcdQ.js` and cached as
+// `public, max-age=31536000, immutable`; every later load then refused the entry
+// module ("Expected a JavaScript module script but the server responded with a
+// MIME type of text/html") and Hermes sat on its green boot splash forever.
+// `immutable` means the browser never revalidates, so a NEW URL is the only way
+// to evict it — and that is exactly what this key bump is for.
+//
+// It MUST stay a static path segment — never a query suffix, never per-process.
+// Hermes' Rolldown runtime resolves its lazy chunks against the MODULE URL and
+// RFC 3986 relative resolution DROPS the base query, while the
+// `<link rel="modulepreload">` href is built as `"/" + dep`
+// (origin-root-absolute) and therefore KEEPS it. The two copies diverge into
+// separate module instances, the SystemActionsProvider context splits, and the
+// app crashes back to the green splash — which is why a query-string epoch was
+// added in 4680c2d7 and removed again in 8e4f604d. A path segment survives BOTH
+// resolution rules, so the preload and the dynamic import stay byte-identical.
+//
+// Keep in sync with the client literals; tests/webui-proxy-key.test.mjs asserts
+// the server const and every client copy agree.
+const ASSET_KEY = 'm2';
 
 /**
  * Base path for proxied sub-resources (JS chunks, CSS, images).
@@ -475,7 +497,7 @@ if (isCloudflareInfra('/' + path)) return m;
   }
 
   // Rewrite absolute src, href, action attributes to path-keyed proxy URLs
-  // (/api/agents/webui-proxy/m/<cid>/<port>/assets/x.js) — handled by the
+  // (/api/agents/webui-proxy/m2/<cid>/<port>/assets/x.js) — handled by the
   // [...path] catch-all route. See assetPathPrefix() for why the coordinates
   // are carried in the path rather than the query.
   // NOTE: /cdn-cgi/* is Cloudflare-edge infrastructure (RUM analytics etc.).

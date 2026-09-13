@@ -209,7 +209,7 @@ function frameFor(port, target) {
  */
 function buildTunnelUrl(connectionId, port, path = '/') {
   const suffix = path === '/' ? '' : path.replace(/^\/+/, '');
-  return `/api/agents/webui-proxy/m/${encodeURIComponent(connectionId)}/${encodeURIComponent(String(port))}${suffix ? '/' + suffix : ''}`;
+  return `/api/agents/webui-proxy/m2/${encodeURIComponent(connectionId)}/${encodeURIComponent(String(port))}${suffix ? '/' + suffix : ''}`;
 }
 
 /** Hostname of a URL, falling back to whatever title we already had. */
@@ -625,7 +625,7 @@ export default function AgentWebUIBrowserApp({
   useEffect(() => {
     if (activeTab?.type !== 'webui' || activeTab?.phase !== 'ready') return undefined;
     const frame = frameRef.current;
-    const base = /^\/api\/agents\/webui-proxy\/m\/[^/]+\/[^/?#]+/.exec(activeTab.url || '');
+    const base = /^\/api\/agents\/webui-proxy\/m2\/[^/]+\/[^/?#]+/.exec(activeTab.url || '');
     if (!frame || !base) return undefined;
 
     const intervalId = setInterval(() => {
@@ -883,7 +883,7 @@ export default function AgentWebUIBrowserApp({
         return;
       }
       const targetConn = connectionId || 'local';
-      const proxyUrl = `/api/agents/webui-proxy/m/${encodeURIComponent(targetConn)}/${agPort}`;
+      const proxyUrl = `/api/agents/webui-proxy/m2/${encodeURIComponent(targetConn)}/${agPort}`;
       setTabs((prev) =>
         prev.map((t) =>
           t.id === activeTabId

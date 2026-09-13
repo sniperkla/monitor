@@ -138,7 +138,7 @@ test('Hermes API requests are rewritten into the HTTP tunnel', () => {
 test('Hermes hash-router base marker is not overwritten with a path prefix', () => {
   // Hermes uses createWebHashHistory() with routes like /hermes/chat. Its
   // routes live after the hash and must not receive the asset tunnel prefix.
-  // Overwriting a dashboard marker with /api/agents/webui-proxy/m/... leaves
+  // Overwriting a dashboard marker with /api/agents/webui-proxy/m2/... leaves
   // the shell visible but makes the chat view fail to resolve.
   assert.match(proxy, /uses a hash router/);
   assert.match(proxy, /window\\.__HERMES_BASE_PATH__/);

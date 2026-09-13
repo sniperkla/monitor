@@ -1,7 +1,7 @@
 import { handleProxy, ASSET_KEY } from '../route.js';
 
 // Path-keyed variant of the WebUI proxy:
-//   /api/agents/webui-proxy/m/<connectionId>/<port>/<remote-path>
+//   /api/agents/webui-proxy/m2/<connectionId>/<port>/<remote-path>
 //
 // This is the form every sub-resource URL is rewritten to (see
 // assetPathPrefix() in ../route.js). The tunnel coordinates have to travel in

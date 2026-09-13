@@ -203,7 +203,7 @@ export default function AgentWebUIView({
   useEffect(() => {
     if (!open || phase !== 'ready' || minimized) return undefined;
     const frame = frameRef.current;
-    const base = /^\/api\/agents\/webui-proxy\/m\/[^/]+\/[^/?#]+/.exec(url || '');
+    const base = /^\/api\/agents\/webui-proxy\/m2\/[^/]+\/[^/?#]+/.exec(url || '');
     if (!frame || !base) return undefined;
     const id = setInterval(() => {
       // Give the repaired load time to settle before judging it again.
