@@ -31,7 +31,7 @@ A modern, web-based SSH terminal and server monitoring dashboard built with Next
 
     ```ini
     MONGODB_URI=mongodb://localhost:27017/ssh-monitor
-    PORT=3000
+    PORT=3030
     ```
 
 3.  **Run Development Server**
@@ -44,7 +44,7 @@ A modern, web-based SSH terminal and server monitoring dashboard built with Next
 
 4.  **Open in Browser**
 
-    Navigate to [http://localhost:3000](http://localhost:3000).
+    Navigate to [http://localhost:3030](http://localhost:3030).
 
 ## Docker Deployment
 
@@ -67,12 +67,11 @@ This project includes a production-ready Docker setup for the custom `server.js`
 docker compose up -d --build
 ```
 
-This setup starts:
+This starts two services — nginx is a **separate** container and is not defined
+in this compose file:
 
-- `nginx` on `80`
-- `monitor` on `127.0.0.1:3010`
-- `mongo` on `127.0.0.1:27018` for host access
-- `mongo` with database `monitor`
+- `monitor` — no host port. Reachable on the `proxy-net` network as `monitor:3030`.
+- `monitor-mongo` — `127.0.0.1:27021` on the host, `monitor-mongo:27017` on `proxy-net`
 
 MongoDB credentials used by the app:
 
@@ -90,13 +89,13 @@ docker compose up -d --build
 
 ### Notes
 
-- The app listens on port `3000` inside the container.
-- `nginx` listens on port `80` in Docker and proxies requests to `monitor:3000` over the Docker network.
-- `docker-compose.yml` maps `127.0.0.1:3010:3000` so nginx can proxy it safely without using host port `3000`.
+- The app listens on port `3030` inside the container. `Dockerfile` sets `ENV PORT=3030` and `docker-compose.yml` sets `PORT: 3030`, which overrides `env_file` — this is deliberately **not** Next.js's `3000` default.
+- `nginx` runs as its own container on the external `proxy-net` network and proxies to `monitor:3030`; use `deploy/nginx/docker/default.conf` for that.
+- `docker-compose.yml` publishes **no** host port for `monitor`, so nginx must share the `proxy-net` network with it. A host nginx cannot reach it as-is — see the header of `deploy/nginx/monitor.eaqdragon.com.conf` for what that topology would require.
 - `.env` is injected at runtime via `env_file`, so secrets are not baked into the image.
 - `db-config.json` is bind-mounted to `/app/db-config.json` so Settings changes survive container restarts.
 - MongoDB data is stored in the Docker volume `mongo_data`.
-- MongoDB still listens on `27017` inside Docker, but is exposed as `127.0.0.1:27018` on the host to avoid host port conflicts.
+- MongoDB still listens on `27017` inside Docker, but is exposed as `127.0.0.1:27021` on the host to avoid host port conflicts. It is bound to loopback, never `0.0.0.0`.
 
 ### Nginx
 
