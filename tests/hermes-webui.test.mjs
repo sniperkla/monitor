@@ -120,7 +120,11 @@ test('the Web UI card offers a Stop control only while the UI is serving', () =>
   assert.match(app, /data-stop-webui-btn/);
   assert.match(app, /onClick=\{handleStopWebUI\}/);
   // Gated on both: an agent we actually launched, and a live webUIActive probe.
-  assert.match(app, /WEBUI_START_AGENTS\.includes\(agent\.id\) && details\?\.webUIActive/);
+  // The card hoists that first half into `canStartStop` (it gates the Start
+  // button too), so assert the definition AND the use — otherwise this would
+  // pass on any truthy name.
+  assert.match(app, /const canStartStop = WEBUI_START_AGENTS\.includes\(agent\.id\)/);
+  assert.match(app, /canStartStop && details\?\.webUIActive/);
   // Refresh comes from callAction's own loadDetails(), so webUIActive re-probes.
   assert.match(app, /config: \{ op: 'stop', port: webUIPort\(\) \}/);
 });

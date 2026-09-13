@@ -174,6 +174,15 @@ function extractWebUISecret(webUIBootstrapPath) {
   return m ? m[1] : '';
 }
 
+// Label + icon for the primary "open" button, derived from the mode this device
+// remembered. Pure, so it stays out of the component and out of the render
+// path's closures — the card used to inline the same ternary twice.
+function webUIOpenButton(mode) {
+  if (mode === WEBUI_OPEN_MODE_IN_APP) return { label: 'Open in App', Icon: MonitorSmartphone };
+  if (mode === WEBUI_OPEN_MODE_EXTERNAL) return { label: 'Open in New Tab', Icon: ExternalLink };
+  return { label: 'Open Web UI', Icon: ExternalLink };
+}
+
 export default function AIAgentsApp({ apiFetch }) {
   // `apiFetch` is accepted as a prop for direct mounts, but the window manager
   // renders every app as `<Component windowId={...} />` with no props, so the
@@ -2819,138 +2828,167 @@ export default function AIAgentsApp({ apiFetch }) {
                     <Trash2 size={11} />{activeInstance ? ` Remove "${activeInstance}"` : ' Uninstall'}
                   </button>
                 </div>
-                {/* ── Web UI quick-launch card (for agents with a built-in web interface) ── */}
-                {details?.hasWebUI && (
-                  <div className="rounded-xl border border-sky-500/25 bg-sky-500/5 p-3 flex items-center justify-between gap-3 flex-wrap">
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-8 h-8 rounded-lg bg-sky-500/20 text-sky-400 flex items-center justify-center shrink-0">
-                        <MonitorSmartphone size={16} />
-                      </div>
-                      <div>
-                        {/* No separate status pill — the Start button to the
-                            right carries the running/stopped state instead. */}
-                        <div className="font-bold text-white text-xs flex items-center gap-2 flex-wrap">
-                          <span>Web UI</span>
-                          <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-sky-500/20 text-sky-300 border border-sky-500/30">:{details.webUIPort}</span>
-                          {relayInfo?.connected ? (
-                            <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold bg-pink-500/15 text-pink-300 border border-pink-500/30 shadow-[0_0_8px_rgba(236,72,153,0.2)]" title="Direct local tunnel active: chat and UI stream directly with 0ms server latency">
-                              <Cable size={10} className="text-pink-400" /> Local Relay Active (0ms)
-                            </span>
-                          ) : (
-                            <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30" title="Central WebSocket proxy is disabled due to known protocol & chat bugs. Local Relay is required.">
-                              <ShieldOff size={10} className="text-amber-400" /> Local Relay Required
-                            </span>
-                          )}
+                {/* ── Web UI quick-launch card (for agents with a built-in web interface) ──
+                    One status, one primary action. The relay state used to be
+                    printed TWICE — a pill and then a sentence saying the same
+                    thing — and that sentence named a hardcoded
+                    127.0.0.1:18791 while the relay's own web proxy re-binds to
+                    18780+n when that port is taken (see AgentWebUIBrowserApp),
+                    so the copy could point at a dead port. Both now read the
+                    live relay status. The actions also moved out of a
+                    justify-between row, where four buttons crowded the text,
+                    into their own row with a real hierarchy: Start/Stop on the
+                    left, the quieter "Via server" beside the primary Open. */}
+                {details?.hasWebUI && (() => {
+                  const uiPort = details.webUIPort || webUIPort();
+                  const relayOn = !!relayInfo?.connected;
+                  // The relay's web-proxy port is NOT on relayInfo itself —
+                  // AppContext's SET_RELAY_INFO payload is { connected, relays,
+                  // checkDone }. Derive it from the relays the same way
+                  // src/utils/relayStatus.js does, so the copy names the port
+                  // the relay actually bound rather than a hardcoded one.
+                  const relayPort = Number(
+                    (relayInfo?.relays || []).find((r) => Number(r?.webProxyPort) > 0)?.webProxyPort,
+                  ) || 0;
+                  const canStartStop = WEBUI_START_AGENTS.includes(agent.id);
+                  const { label: openLabel, Icon: OpenIcon } = webUIOpenButton(webUIOpenMode);
+                  return (
+                    <div className="rounded-xl border border-sky-500/25 bg-sky-500/5 p-3 space-y-2.5">
+                      {/* Identity, port, and the ONE status pill. */}
+                      <div className="flex items-start gap-2.5">
+                        <div className="w-8 h-8 rounded-lg bg-sky-500/20 text-sky-400 flex items-center justify-center shrink-0">
+                          <MonitorSmartphone size={16} />
                         </div>
-                        <div className="text-[10px] text-[var(--text-muted)]">
-                          {agent.name} built-in web interface — chat, sessions, skills, cron and logs in your browser.
-                          {relayInfo?.connected
-                            ? ' ⚡ Direct mode: Served straight from your Local Relay (http://127.0.0.1:18791) with zero server hops.'
-                            : ' ⚠️ Local Relay required: Central WebSocket proxy is disabled to eliminate chat bugs. Run Local Relay on your computer to open Web UI directly.'}
+                        <div className="min-w-0 flex-1">
+                          <div className="font-bold text-white text-xs flex items-center gap-2 flex-wrap">
+                            <span>Web UI</span>
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-sky-500/20 text-sky-300 border border-sky-500/30">:{uiPort}</span>
+                            {relayOn ? (
+                              <span
+                                className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold bg-pink-500/15 text-pink-300 border border-pink-500/30"
+                                title={relayPort
+                                  ? `Direct local tunnel active — served from your Local Relay on 127.0.0.1:${relayPort}, no server hop`
+                                  : 'Direct local tunnel active — served from your Local Relay, no server hop'}
+                              >
+                                <Cable size={10} className="text-pink-400" /> Local Relay
+                              </span>
+                            ) : (
+                              <span
+                                className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30"
+                                title="Starting the Web UI process requires Local Relay. An already-running Web UI can still be opened through the monitor server."
+                              >
+                                <ShieldOff size={10} className="text-amber-400" /> Local Relay required
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-[10px] text-[var(--text-muted)] leading-relaxed mt-0.5">
+                            {relayOn
+                              ? `Chat, sessions, skills, cron and logs — streamed straight from your Local Relay${relayPort ? ` on 127.0.0.1:${relayPort}` : ''}.`
+                              : 'Chat, sessions, skills, cron and logs. Starting it needs Local Relay on your computer; an already-running Web UI still opens through the monitor server.'}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Actions: secondary left, primary right. */}
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {canStartStop && (
+                          <button
+                            data-start-webui-btn
+                            onClick={handleStartWebUI}
+                            // Blocked while already running (nothing to start) and
+                            // while a start is in flight (avoid double-launch).
+                            // webUIActive reflects the Web UI port itself, NOT the
+                            // gateway process — they are separate processes.
+                            disabled={startingWebUI || !!details?.webUIActive}
+                            className={
+                              details?.webUIActive
+                                ? 'px-3 py-1.5 rounded-xl bg-emerald-500/15 text-emerald-300 font-bold text-xs flex items-center gap-1.5 border border-emerald-500/30 cursor-default'
+                                : 'px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 hover:text-amber-200 font-bold text-xs flex items-center gap-1.5 border border-amber-500/30 transition cursor-pointer disabled:opacity-50'
+                            }
+                            title={
+                              details?.webUIActive
+                                ? `Web UI is already running on port ${uiPort}`
+                                : `Start the ${agent.name} Web UI process on port ${uiPort}`
+                            }
+                          >
+                            {details?.webUIActive ? (
+                              <><CheckCircle2 size={12} /> Running</>
+                            ) : startingWebUI ? (
+                              <><Loader2 size={11} className="animate-spin" /> Starting…</>
+                            ) : (
+                              <><Zap size={12} /> Start Web UI</>
+                            )}
+                          </button>
+                        )}
+                        {canStartStop && details?.webUIActive && (
+                          <button
+                            data-stop-webui-btn
+                            onClick={handleStopWebUI}
+                            disabled={stoppingWebUI || !!busyMsg}
+                            className="px-3 py-1.5 rounded-xl bg-red-500/15 hover:bg-red-500/25 text-red-300 hover:text-red-200 font-bold text-xs flex items-center gap-1.5 border border-red-500/30 transition cursor-pointer disabled:opacity-50"
+                            title={`Stop the ${agent.name} Web UI process listening on port ${uiPort}`}
+                          >
+                            {stoppingWebUI ? (
+                              <><Loader2 size={11} className="animate-spin" /> Stopping…</>
+                            ) : (
+                              <><Square size={10} /> Stop</>
+                            )}
+                          </button>
+                        )}
+
+                        <div className="flex items-center gap-2 ml-auto">
+                          {/* "Via server" only makes sense for a Web UI bound to
+                              LOOPBACK (127.0.0.1) on the target server — that is
+                              exactly what the proxy dials over SSH. When the UI is
+                              exposed on a public interface the browser reaches it
+                              directly and the button is hidden. details.webUILoopback
+                              comes from the ss/netstat probe in the agent's details
+                              action (nanobot + hermes routes). */}
+                          {details?.webUILoopback && (
+                            <button
+                              onClick={openWebUIViaServer}
+                              disabled={!target}
+                              className="px-3 py-1.5 rounded-xl bg-slate-500/10 hover:bg-slate-500/20 text-[var(--text-muted)] hover:text-white font-bold text-xs flex items-center gap-1.5 border border-[var(--border-color)] transition cursor-pointer disabled:opacity-50"
+                              title="Open through the monitor server (same-origin proxy) — works from any device"
+                            >
+                              <ServerIcon size={12} /> Via server
+                            </button>
+                          )}
+                          {/* Opening forks: in-app (framed over the same-origin
+                              proxy — the route that works on a phone in standard
+                              mobile mode) or a real browser tab. A remembered
+                              choice goes straight there; the caret re-opens the
+                              chooser so the other route is one click away. */}
+                          <div className="flex items-stretch rounded-xl border border-sky-500/40 overflow-hidden">
+                            <button
+                              data-open-webui-btn
+                              onClick={requestOpenWebUI}
+                              className="px-3 py-1.5 bg-sky-500/25 hover:bg-sky-500/40 text-sky-200 hover:text-white font-bold text-xs flex items-center gap-1.5 transition cursor-pointer"
+                              title={
+                                webUIOpenMode === WEBUI_OPEN_MODE_IN_APP
+                                  ? 'Open the Web UI inside monitor (works on any device)'
+                                  : webUIOpenMode === WEBUI_OPEN_MODE_EXTERNAL
+                                  ? 'Open the Web UI in a browser tab' + (relayOn ? ' — direct via Local Relay' : ' — through the monitor server')
+                                  : 'Open the Web UI — choose in app or browser tab'
+                              }
+                            >
+                              <OpenIcon size={12} /> {openLabel}
+                            </button>
+                            <button
+                              data-open-webui-mode-btn
+                              onClick={() => setWebUIChoiceOpen(true)}
+                              className="px-1.5 flex items-center justify-center bg-sky-500/25 hover:bg-sky-500/45 text-sky-300 hover:text-sky-200 border-l border-sky-500/40 transition cursor-pointer"
+                              title="Choose how the Web UI opens (in app or browser tab)"
+                              aria-label="Choose how the Web UI opens"
+                            >
+                              <ChevronDown size={12} />
+                            </button>
+                          </div>
                         </div>
                       </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      {WEBUI_START_AGENTS.includes(agent.id) && (
-                        <button
-                          data-start-webui-btn
-                          onClick={handleStartWebUI}
-                          // Blocked while already running (nothing to start) and
-                          // while a start is in flight (avoid double-launch).
-                          // webUIActive reflects the Web UI port itself, NOT the
-                          // gateway process — they are separate processes.
-                          disabled={startingWebUI || !!details?.webUIActive}
-                          className={
-                            details?.webUIActive
-                              ? 'px-3 py-1.5 rounded-xl bg-emerald-500/15 text-emerald-300 font-bold text-xs flex items-center gap-1.5 border border-emerald-500/30 cursor-default'
-                              : 'px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 hover:text-amber-200 font-bold text-xs flex items-center gap-1.5 border border-amber-500/30 transition cursor-pointer disabled:opacity-50'
-                          }
-                          title={
-                            details?.webUIActive
-                              ? `Web UI is already running on port ${details.webUIPort}`
-                              : `Start the ${agent.name} Web UI process on port ${webUIPort()}`
-                          }
-                        >
-                          {details?.webUIActive ? (
-                            <><CheckCircle2 size={12} /> Running</>
-                          ) : startingWebUI ? (
-                            <><Loader2 size={11} className="animate-spin" /> Starting…</>
-                          ) : (
-                            <><span>⚡</span> Start Web UI</>
-                          )}
-                        </button>
-                      )}
-                      {WEBUI_START_AGENTS.includes(agent.id) && details?.webUIActive && (
-                        <button
-                          data-stop-webui-btn
-                          onClick={handleStopWebUI}
-                          disabled={stoppingWebUI || !!busyMsg}
-                          className="px-3 py-1.5 rounded-xl bg-red-500/15 hover:bg-red-500/25 text-red-300 hover:text-red-200 font-bold text-xs flex items-center gap-1.5 border border-red-500/30 transition cursor-pointer disabled:opacity-50"
-                          title={`Stop the ${agent.name} Web UI process listening on port ${webUIPort()}`}
-                        >
-                          {stoppingWebUI ? (
-                            <><Loader2 size={11} className="animate-spin" /> Stopping…</>
-                          ) : (
-                            <><Square size={10} /> Stop</>
-                          )}
-                        </button>
-                      )}
-                      {/* Opening now forks: in-app (framed over the same-origin
-                          proxy — the route that works on a phone in standard
-                          mobile mode) or a real browser tab. A remembered
-                          choice goes straight there; the caret re-opens the
-                          chooser so the other route is one click away. */}
-                      <div className="flex items-stretch rounded-xl border border-sky-500/30 overflow-hidden">
-                        <button
-                          data-open-webui-btn
-                          onClick={requestOpenWebUI}
-                          className="px-3 py-1.5 bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 hover:text-sky-200 font-bold text-xs flex items-center gap-1.5 transition cursor-pointer"
-                          title={
-                            webUIOpenMode === WEBUI_OPEN_MODE_IN_APP
-                              ? 'Open the Web UI inside monitor (works on any device)'
-                              : webUIOpenMode === WEBUI_OPEN_MODE_EXTERNAL
-                              ? 'Open the Web UI in a browser tab' + (relayInfo?.connected ? ' — direct via Local Relay' : ' — through the monitor server')
-                              : 'Open the Web UI — choose in app or browser tab'
-                          }
-                        >
-                          {webUIOpenMode === WEBUI_OPEN_MODE_IN_APP ? (
-                            <><MonitorSmartphone size={12} /> Open in App</>
-                          ) : webUIOpenMode === WEBUI_OPEN_MODE_EXTERNAL ? (
-                            <><ExternalLink size={12} /> Open in New Tab</>
-                          ) : (
-                            <><ExternalLink size={12} /> Open Web UI</>
-                          )}
-                        </button>
-                        <button
-                          data-open-webui-mode-btn
-                          onClick={() => setWebUIChoiceOpen(true)}
-                          className="px-1.5 flex items-center justify-center bg-sky-500/20 hover:bg-sky-500/40 text-sky-300 hover:text-sky-200 border-l border-sky-500/30 transition cursor-pointer"
-                          title="Choose how the Web UI opens (in app or browser tab)"
-                          aria-label="Choose how the Web UI opens"
-                        >
-                          <ChevronDown size={12} />
-                        </button>
-                      </div>
-                      {/* "Via server" only makes sense for a Web UI bound to
-                          LOOPBACK (127.0.0.1) on the target server — that is
-                          exactly what the proxy dials over SSH. When the UI is
-                          exposed on a public interface the browser reaches it
-                          directly and the button is hidden. details.webUILoopback
-                          comes from the ss/netstat probe in the agent's details
-                          action (nanobot + hermes routes). */}
-                      {details?.webUILoopback && (
-                        <button
-                          onClick={openWebUIViaServer}
-                          disabled={!target}
-                          className="px-3 py-1.5 rounded-xl bg-slate-500/15 hover:bg-slate-500/25 text-slate-200 hover:text-white font-bold text-xs flex items-center gap-1.5 border border-slate-400/30 transition cursor-pointer disabled:opacity-50"
-                          title="Open through the monitor server (same-origin proxy) — works from any device"
-                        >
-                          <ServerIcon size={12} /> Via server
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                )}
+                  );
+                })()}
                 {/* ── Pairing & Access Approval Card ── */}{agent.id === 'zeroclaw' ? (
 
                   <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/5 p-4 space-y-3">
