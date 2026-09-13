@@ -67,11 +67,14 @@ test('Vite lazy assets stay under the keyed tunnel', () => {
   // The relative-branch rewrite must therefore emit the keyed prefix WITHOUT
   // the leading slash.
   assert.ok(proxy.includes("const relPrefix = prefix.replace(/^\\//, '')"));
-  assert.ok(proxy.includes('`${quote}${relPrefix}/assets/${file}${bust}${q2}`'));
+  assert.ok(proxy.includes('`${quote}${relPrefix}/assets/`'));
   // Root-absolute refs consumed directly keep the leading-slash keyed form.
-  assert.ok(proxy.includes('`${quote}${prefix}/assets/${file}${bust}${q2}`'));
-  // EVERY assets/ ref is re-prefixed (hashed or not); the cache epoch is only for hashed js/mjs/css.
-  assert.ok(proxy.includes("HASHED_ASSET_RE.test('/assets/' + file)"));
+  assert.ok(proxy.includes('`${quote}${prefix}/assets/`'));
+  // NO cache-epoch query anywhere: Hermes' Rolldown runtime builds lazy-chunk
+  // URLs from numeric ids without `?v=`, so any suffix on the preload links
+  // would split the module into two instances and crash the app.
+  assert.ok(!proxy.includes('ASSET_EPOCH'));
+  assert.ok(!proxy.includes('assetCacheBustSuffix'));
   // Defensive heal inside the injected helper for any producer of the
   // double-slash form (e.g. a stale cached bundle served by the remote).
   assert.ok(proxy.includes("u.indexOf('//' + TUNNEL_PREFIX) === 0) u = u.slice(1)"));
@@ -245,22 +248,16 @@ test('immutable cache only when the tunnel REALLY returned a JS/CSS binary', () 
   assert.match(cacheSection, /isBinary = /);
 });
 
-test('hashed asset URLs carry a per-deploy cache epoch (?v=) so a poisoned cache entry is bypassed on redeploy', () => {
-  // An earlier build stamped `immutable` on asset responses from the PATH
-  // alone; during a relay restart the FIRST request for a chunk could come
-  // back as the 200-HTML error card, and browser/shared caches stored that
-  // HTML under the bare .js URL — "module script served as MIME text/html"
-  // on every later load until purged by hand. Re-keying the URLs per server
-  // boot escapes the poisoned entry with no manual purge.
-  // ASSET_EPOCH is baked once per process; all three rewrite sites emit it:
-  assert.ok(proxy.includes('const ASSET_EPOCH = Date.now().toString(36);'));
-  assert.match(proxy, /assetCacheBustSuffix/);
-  // HTML attribute rewrite appends it (modulepreload links)
-  assert.match(proxy, /assetCacheBustSuffix\(full\)/);
-  // Bundle map-dep rewrite appends it (dynamic import URLs)
-  assert.match(proxy, /const suffix = `\?v=\$\{ASSET_EPOCH\}`;/);
-  // Injected bridge appends it (sub-resources added after load) with the
-  // SAME value, so preload/import URLs stay byte-identical.
-  assert.match(proxy, /var ASSET_EPOCH = \$\{JSON\.stringify\(ASSET_EPOCH\)\};/);
-  assert.match(proxy, /'v=' \+ ASSET_EPOCH;/);
+test('asset URLs carry NO cache-epoch suffix so modulepreload and dynamic import stay the same module', () => {
+  // REGRESSION (2026-09-13): adding `?v=<epoch>` to modulepreload links made
+  // the browser treat the preloaded copy and the lazily-imported copy (which
+  // Hermes' Rolldown runtime builds WITHOUT any query) as two different
+  // modules. `SystemActionsProvider` was registered on one instance while the
+  // consumer read the other — "useSystemActions must be used within a
+  // SystemActionsProvider" and the whole dashboard crashed back to the green
+  // splash ~6-12s after mount. Any cache-poisoning mitigation must keep the
+  // preload URL and the import URL byte-identical.
+  assert.ok(!proxy.includes('ASSET_EPOCH'));
+  assert.ok(!proxy.includes('assetCacheBustSuffix'));
+  assert.ok(!proxy.includes('?v='));
 });

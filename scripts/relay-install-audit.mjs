@@ -123,7 +123,7 @@ const PINNED = {
   //      through the relay; relative links remain untouched.
   // The shipped artifact: public/local-relay.min.js
   bytes: 219055,
-  sha256: '483bfe1b8c194d4368e063c968758685f296b6c8abfe86241e186ff1d4fc1571',
+  sha256: 'a0508f90924117024ec28d1d091f0f18d85d8128a8165747085ccc73a473bce9',
   // The readable source it must be built from: public/local-relay.js
   sourceSha256: '8945e43194bea80991477e8d795d7c5177efbb7b80ce6a3188b2d773cae11a67',
 

@@ -311,25 +311,21 @@ test('upstream cookies are stripped in both directions', async () => {
   assert.match(await res.text(), /cookie page/);
 });
 
-test('an un-prefixed path is sent back through the proxy, not to the info page', async () => {
-  // `location.href = '/watch'` resolves against the DOCUMENT url, not against
-  // <base href>, so a page at /p/<enc>/ lands its root-absolute navigations on
-  // this listener's root. Google does exactly this for /xjs/, /gen_204 and
-  // /complete/s, and without the re-prefix every one of them would hit the
-  // informational page instead of the site.
-  //
-  // An earlier version of this comment blamed this re-prefix for youtube.com
-  // failing in a frame. Both halves of that were wrong: the re-prefix works
-  // (measured, 12 redirects on a single Google load) and YouTube renders
-  // (measured — scratch/yt-actual-content.mjs).
+test('an un-prefixed path is served back through the proxy directly (no 302)', async () => {
   const first = await fetch(proxyUrl('/'));
   const cookie = (first.headers.get('set-cookie') || '').split(';')[0];
   assert.match(cookie, /^mp_proxy_target=/, 'loading a page must remember its target');
 
+  // The repair serves the target DIRECTLY (internal re-dispatch, 200)
+  // instead of 302-ing: a 302 is fatal for script subresources under the
+  // app shell's COEP ("The script resource is behind a redirect, which is
+  // disallowed" — measured 2026-09-12: a video site's
+  // /generated-service_worker.js took the 302 and the player never
+  // booted). The response must be the SITE's content served through the
+  // relay, not a redirect and not the info page.
   const res = await fetch(`${origin}/watch?v=1`, { headers: { cookie }, redirect: 'manual' });
-  assert.equal(res.status, 302);
-  const location = res.headers.get('location') || '';
-  assert.equal(location, `/p/${enc}/watch?v=1`, 'the path must be re-prefixed with the remembered target');
+  assert.notEqual(res.status, 302, 'no redirect — served directly');
+  assert.doesNotMatch(await res.text(), /Relay web proxy is running/, 'not the info page');
 
   // And a connection with NOTHING remembered still gets the informational
   // page. undici pools connections, so a plain fetch would hit the SAME
@@ -353,10 +349,11 @@ test('an un-prefixed path is sent back through the proxy, not to the info page',
 
   // Conversely, the SAME pooled connection (stamped by the first /p/ load)
   // now repairs an un-prefixed path even with NO cookie and NO referer —
-  // the third source that fixed the Google-search info page.
+  // the third source that fixed the Google-search info page. The repaired
+  // response serves the site's content directly (no redirect in the chain).
   const viaSocket = await fetch(`${origin}/watch`, { redirect: 'manual' });
-  assert.equal(viaSocket.status, 302);
-  assert.equal(viaSocket.headers.get('location'), `/p/${enc}/watch`);
+  assert.notEqual(viaSocket.status, 302, 'socket-stamped repair serves directly');
+  assert.equal(viaSocket.headers.get('location'), null, 'no redirect issued');
 });
 
 test('a decompressed body is not mislabelled by a stale content-length', async () => {
@@ -454,7 +451,7 @@ test('a request with no target gets an explanation, not a crash', async () => {
   const res = await new Promise((resolve) => {
     import('node:net').then(({ default: net }) => {
       const sock = net.connect(port, '127.0.0.1', () => {
-        sock.write(`GET / HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nConnection: close\r\n\r\n`);
+        sock.write(`GET /watch HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nConnection: close\r\n\r\n`);
       });
       let buf = '';
       sock.on('data', (d) => { buf += d.toString(); });
@@ -673,11 +670,13 @@ test("every frame-document response carries COEP+CORP, not just /p/ HTML", () =>
   assert.match(relay.slice(kh, kh + 300), /credentialless/, 'COEP must be declared');
   assert.match(relay.slice(kh, kh + 300), /cross-origin/, 'CORP must be declared');
 
-  // The un-prefixed 302 repair (the measured case) must spread it.
-  const un = relay.indexOf('302, { location: back');
-  assert.ok(un >= 0, 'the repair 302 must exist');
-  assert.match(relay.slice(un, un + 160), /WEB_PROXY_FRAME_HEADERS/,
-    'the repair 302 must carry the frame headers');
+  // The un-prefixed repair now RE-DISPATCHES in place (no 302): a script
+  // behind the repair 302 was refused wholesale under COEP. Pin the new
+  // internal re-dispatch instead — it must keep the frame headers available
+  // for the re-served response (the handler spreads them itself).
+  const rd = relay.indexOf('return handleWebProxyHttp(req, res);');
+  assert.ok(rd >= 0, 'the internal re-dispatch must exist');
+  assert.match(relay.slice(rd - 200, rd), /req\.url = back/);
 
   // The informational un-prefixed page too (it can be navigated to directly).
   // Its writeHead carries the constant; the body then ends the index HTML.

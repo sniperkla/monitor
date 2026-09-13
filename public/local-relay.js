@@ -776,9 +776,18 @@ async function handleWebProxyHttp(req, res) {
       // rendered sat behind an un-prefixed 302 without these headers, and the
       // frame ended on a chrome-error even though the redirect target itself
       // was served correctly. See WEB_PROXY_FRAME_HEADERS.
-      res.writeHead(302, { location: back, 'cache-control': 'no-store', ...WEB_PROXY_FRAME_HEADERS });
-      res.end();
-      return;
+      // Serve the target DIRECTLY instead of 302-ing. The redirect still
+      // works for frame NAVIGATIONS, but it is fatal for SUBRESOURCES under
+      // the app shell's COEP: a <script>, a service worker, any script that
+      // passes through a redirect is refused wholesale by Chromium ("The
+      // script resource is behind a redirect, which is disallowed" —
+      // measured 2026-09-12 on a video site: the page's
+      // /generated-service_worker.js took the 302 and the player never
+      // booted). Re-dispatch THIS request with the prefixed URL in place:
+      // same listener, same handler, and the response the browser sees is a
+      // normal 200 with no redirect in its chain.
+      req.url = back + (parsed.hash || '');
+      return handleWebProxyHttp(req, res);
     }
     console.log(`✗ [Relay WebProxy] un-prefixed ${parsed.pathname} — no target known (cookie, referer and socket all empty); serving the info page`);
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', ...WEB_PROXY_FRAME_HEADERS });
@@ -964,7 +973,15 @@ async function handleWebProxyHttp(req, res) {
       } catch (_) { return u; }
     };
     html = html.replace(
-      /(<(?:video|audio|source|track|img)\b[^>]*?\b(?:src|poster)=)(["'])(https?:\/\/[^"']+)\2/gi,
+      // script and link MUST be here: their absolute site-origin URLs redirect
+      // upstream to the CDN (e.g. a player chunk on www.youporn.com 302s to
+      // ea.ypncdn.com), and under the shell's COEP Chromium kills any script
+      // served behind a cross-origin redirect ("The script resource is behind
+      // a redirect, which is disallowed") — the player never boots and the
+      // video sticks on loading. Media/img tolerate redirects, but routing
+      // them through the proxy also fixes their hotlink referer. Measured
+      // 2026-09-12 on a video site.
+      /(<(?:video|audio|source|track|img|script|link|iframe|embed|object)\b[^>]*?\b(?:src|href|poster|data)=)(["'])(https?:\/\/[^"']+)\2/gi,
       (m, pre, q, u) => `${pre}${q}${proxifyAbsolute(u)}${q}`
     );
     // The only script injected. It exists because the parent frames a loopback
@@ -1065,7 +1082,21 @@ async function handleWebProxyHttp(req, res) {
       // a template literal: [literal slash] and [+] in a CHARACTER CLASS need no
       // backslashes at all, so this survives the minifier and re-stringify.
       `if(abs.protocol!=='http:'&&abs.protocol!=='https:')return u;` +
-      `if(abs.origin===location.origin)return u;` +
+      `if(abs.origin===location.origin){` +
+      // Same-origin is NOT automatically "already proxied". A ROOT-RELATIVE
+      // path (/html5player/...) IGNORES <base href> and requests the relay's
+      // own root, where the un-prefixed repair answers with a 302. For a
+      // <script> that chain is refused wholesale under the shell's COEP
+      // ("The script resource is behind a redirect, which is disallowed",
+      // measured 2026-09-12: the MGP player's root-relative chunk never
+      // booted). Wrap such paths in the CURRENT tunnel prefix (the one our
+      // own address already encodes) so the relay serves them directly.
+      // Already-prefixed paths (under /p/<something>) pass through untouched.
+      `var mm=abs.pathname.match(/\\/p\\/[^/]+/);` +
+      `if(mm&&mm[0]===abs.pathname.slice(0,mm[0].length))return u;` +
+      `var mine=(location.pathname.match(/\\/p\\/([^/]+)/)||['',''])[1];` +
+      `return location.origin+'/p/'+mine+abs.pathname+abs.search+abs.hash;` +
+      `}` +
       `var b=btoa(abs.origin).replace(/[+]/g,'-').replace(/[/]/g,'_').replace(/=+$/,'');` +
       `return location.origin+'/p/'+b+abs.pathname+abs.search+abs.hash;` +
 
@@ -1094,6 +1125,61 @@ async function handleWebProxyHttp(req, res) {
       `try{var __ms=Object.getOwnPropertyDescriptor(HTMLSourceElement.prototype,'src');` +
       `if(__ms&&__ms.set){var __mso=__ms.set;Object.defineProperty(HTMLSourceElement.prototype,'src',{configurable:true,` +
       `enumerable:__ms.enumerable,get:__ms.get,set:function(v){try{v=mpRewrite(v)}catch(e){}__mso.call(this,v)}})}` +
+      `}catch(e){}` +
+      // ── the frontier after that: OTHER dynamic subresources ────────────────
+      // The MGP player boots by injecting a <script> whose src is an ABSOLUTE
+      // url on the site's own origin (measured 2026-09-12: the watch page's
+      // player chunk). That browser-direct fetch is redirected upstream to the
+      // site's CDN, and under the shell's COEP Chromium kills ANY script
+      // served behind a cross-origin redirect ("The script resource is behind
+      // a redirect, which is disallowed") — the player never boots and the
+      // video sticks on loading. The media shadows above do not see script
+      // tags, so shadow the remaining subresource setters the same way.
+      `['HTMLScriptElement.src','HTMLLinkElement.href','HTMLImageElement.src','HTMLIFrameElement.src','HTMLEmbedElement.src','HTMLObjectElement.data'].forEach(function(pair){try{` +
+      `var parts=pair.split('.');var C=window[parts[0]];var prop=parts[1];` +
+      `if(!C||!C.prototype)return;` +
+      `var d=Object.getOwnPropertyDescriptor(C.prototype,prop);` +
+      `if(!d||!d.set)return;` +
+      `Object.defineProperty(C.prototype,prop,{configurable:true,enumerable:d.enumerable,get:d.get,` +
+      `set:function(v){try{v=mpRewrite(v)}catch(e){}d.set.call(this,v)}})` +
+      `}catch(e){}});` +
+      // Elements built via setAttribute never touch the property setters above.
+      `try{var __msa=Element.prototype.setAttribute;Element.prototype.setAttribute=function(n,v){try{` +
+      `var k=String(n).toLowerCase();if(k==='src'||k==='href'||k==='data')v=mpRewrite(v)` +
+      `}catch(e){}return __msa.call(this,n,v)}}catch(e){}` +
+      // Markup-injected elements (insertAdjacentHTML/innerHTML) bypass BOTH the
+      // property setters and setAttribute — the HTML parser creates them
+      // directly. Fix the (src|href)= values in the markup string itself.
+      `function __mpMarkup(m){try{` +
+      `return String(m).replace(/(src|href|data)=(["'])([^"']+)(["'])/g,function(m,a,q,v,q2){try{` +
+      `var r=mpRewrite(v);return r===v?m:a+'='+q+r+q2}catch(e){return m}})` +
+      `}catch(e){return m}}` +
+      `try{var __mia=Element.prototype.insertAdjacentHTML;Element.prototype.insertAdjacentHTML=function(p,m){` +
+      `return __mia.call(this,p,__mpMarkup(m))}}catch(e){}` +
+      `try{var __iih=Object.getOwnPropertyDescriptor(Element.prototype,'innerHTML');` +
+      `if(__iih&&__iih.set){Object.defineProperty(Element.prototype,'innerHTML',{configurable:true,enumerable:__iih.enumerable,get:__iih.get,` +
+      `set:function(v){try{v=(typeof v==='string')?__mpMarkup(v):v}catch(e){}__iih.set.call(this,v)}})}` +
+      `}catch(e){}` +
+      // document.write writes markup through the PARSER: the created <script>
+      // starts loading the instant the parser inserts it — faster than any
+      // MutationObserver microtask — so the write must be rewritten BEFORE.
+      `try{var __mdw=document.write.bind(document);document.write=function(m){` +
+      `try{m=(typeof m==='string')?__mpMarkup(m):m}catch(e){}return __mdw(m)}}catch(e){}` +
+      `try{var __mdwl=document.writeln.bind(document);document.writeln=function(m){` +
+      `try{m=(typeof m==='string')?__mpMarkup(m)+'\\\\n':m}catch(e){}return __mdwl(m)}}catch(e){}` +
+      // Safety net: a node added through any path still unhooked gets its
+      // (src|href|data) rewritten the moment it lands in the document.
+      `try{` +
+      `function __mpFixNode(n){try{if(!n||n.nodeType!==1||!n.getAttribute)return;` +
+      `['src','href','data'].forEach(function(a){try{` +
+      `var v=n.getAttribute(a);if(!v)return;var r=mpRewrite(v);if(r!==v)n.setAttribute(a,r)` +
+      `}catch(e){}})` +
+      `}catch(e){}}` +
+      `new MutationObserver(function(rs){for(var i=0;i<rs.length;i++){try{` +
+      `var rec=rs[i];var ad=rec.addedNodes||[];` +
+      `for(var j=0;j<ad.length;j++)__mpFixNode(ad[j]);` +
+      `if(rec.type==='attributes')__mpFixNode(rec.target)` +
+      `}catch(e){}}}).observe(document.documentElement||document,{childList:true,subtree:true,attributes:true,attributeFilter:['src','href','data']})` +
       `}catch(e){}` +
       // Some sites navigate with location.href = <absolute url> (JS, not a
       // link click and not .assign/.replace, so NONE of the hooks above see

@@ -693,14 +693,45 @@ export default function TmuxLayout({ windowId = 'default', isTmuxMode = false })
 
   // Sync to localStorage
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const allTerms = [];
-      const traverse = (node) => {
-        if (node.type === 'pane' && node.termData?.terminalId) allTerms.push(node.termData.terminalId);
-        if (node.children) node.children.forEach(traverse);
-      };
-      windows.forEach(w => traverse(w.layout));
-      localStorage.setItem(`tmux-layout-${windowId}`, JSON.stringify({ windows, _allTerms: allTerms }));
+    if (typeof window === 'undefined') return;
+    const allTerms = [];
+    const traverse = (node) => {
+      if (node.type === 'pane' && node.termData?.terminalId) allTerms.push(node.termData.terminalId);
+      if (node.children) node.children.forEach(traverse);
+    };
+    windows.forEach(w => traverse(w.layout));
+    let payload;
+    try {
+      payload = JSON.stringify({ windows, _allTerms: allTerms });
+    } catch (_) {
+      return; // circular/unserializable state — persistence is best-effort
+    }
+    // Persistence is best-effort: a layout that no longer fits the ~5MB
+    // localStorage quota must never crash the component (it used to throw
+    // "Failed to execute 'setItem' … exceeded the quota" straight through the
+    // render). On QuotaExceededError, drop OTHER tmux-layout-* keys — they
+    // belong to sessions the user can't get back to anyway — and retry once.
+    try {
+      localStorage.setItem(`tmux-layout-${windowId}`, payload);
+    } catch (err) {
+      const quota = err && (err.name === 'QuotaExceededError' || err.code === 22 || err.code === 1014);
+      if (!quota) {
+        console.warn('Failed to save tmux layout:', err);
+        return;
+      }
+      try {
+        const stale = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k && k.startsWith('tmux-layout-') && k !== `tmux-layout-${windowId}`) stale.push(k);
+        }
+        // Collect BEFORE removing: removeItem shifts indices, so unlinking
+        // inside the scan loop would skip every other key.
+        stale.forEach((k) => localStorage.removeItem(k));
+        localStorage.setItem(`tmux-layout-${windowId}`, payload);
+      } catch (retryErr) {
+        console.warn('Failed to save tmux layout after pruning:', retryErr);
+      }
     }
   }, [windows, windowId]);
 
