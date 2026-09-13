@@ -7,23 +7,22 @@ Next.js 16 + custom `server.js` + socket.io. Dev port **3030** (`npm run dev` = 
 - **Build into `./tmp/<name>`, never a top-level dir** — Tailwind v4 scans non-gitignored paths, and a stray top-level build dir's Turbopack cache 500s the dev server. Gitignored: `/tmp/`, `/.next*/`, `scratch/`.
 - **Never put a literal mangled Tailwind class in any scanned file** (incl. these notes) — Tailwind re-extracts it and re-breaks the server. Most dev breakage is a stale `.next/cache/turbopack`.
 - **A second `next dev` is NOT isolated by `NEXT_DIST_DIR`/`PORT`** — it shares `.next` and **takes the user's 3030 server down**. Restart: `nohup npm run dev > /tmp/monitor-dev-3030.log 2>&1 &`.
-- Browser checks: `http://localhost:3030` + a normal Chrome UA (headless is blocked by `src/proxy.js`); `npm test` (**544**) + per-file eslint 0 errors.
-- Auth-gated routes test without credentials — recipe in `embedded-frame-diagnose`. A minted session drives the desktop only with an **ObjectId-shaped** `sub`; a bare `'probe'` 500s `/api/connections`. **Gates stack**: also stub `/api/user/vault` (+ sessionStorage `_vault_uri`) and `/api/user/supporter`.
-- **A green suite does not mean the app runs** — source-inspecting tests cannot see a runtime `ReferenceError`. After changing a component, grep the dev log; a render harness beats a regex (`scratch/*-e2e.mjs`).
-- **`innerText` applies CSS `text-transform`** — an `uppercase` label never matches a lowercase substring check.
+- Browser checks: `http://localhost:3030` + a normal Chrome UA (headless is blocked by `src/proxy.js`); `npm test` (**547**) + per-file eslint 0 errors.
+- Auth-gated routes test without credentials — recipe in `embedded-frame-diagnose`. A minted session needs an **ObjectId-shaped** `sub`; a bare `'probe'` 500s `/api/connections`. **Gates stack**: also stub `/api/user/vault` (+ sessionStorage `_vault_uri`) and `/api/user/supporter`.
+- **A green suite does not mean the app runs** — source-inspecting tests cannot see a runtime `ReferenceError`. grep the dev log after a component change; a harness beats a regex (`scratch/*-e2e.mjs`).
 
 ## In-app frames: COEP + sandbox
 
-- **COEP nesting rule.** Under a `COEP: credentialless` embedder a nested document must send `credentialless`/`require-corp`; absent/`unsafe-none` is refused with `coep-frame-resource-needs-coep-header`, **even same-origin**. Set it in `coepValue()` (`server.js`), `COEP` (`next.config.mjs`) AND both route handlers.
+- **COEP nesting rule.** Under a `COEP: credentialless` embedder a nested document must send `credentialless`/`require-corp`; absent/`unsafe-none` is refused with `coep-frame-resource-needs-coep-header`, **even same-origin**. Set in `coepValue()` (`server.js`), `COEP` (`next.config.mjs`) AND both route handlers.
 - **Sandbox.** `/api/browser/proxy` serves third-party HTML from OUR origin, so external-web frames are sandboxed **without `allow-same-origin`** (`WEB_FRAME_SANDBOX`); `webui` tabs and the relay frame are NOT.
 - **The PARENT drives navigation; only it builds proxy URLs.** The injected script posts `{__mpBrowser:'goto'|'newtab'|'push'|'nav'}`; the parent assigns `frameSrc`, echoes `'nav'` for redirects, owns per-tab history. `handleNewTab` must stay a `useCallback`; relay absolute links are intercepted, relative ones stay via `<base href>`.
 - **The injected script is one JS template literal** — a backtick inside it terminates it early and 500s the route. `tests/browser-proxy.test.mjs` guards this.
 
 ## In-app browser: relay-hosted proxy
 
-- Ordinary sites render **in-app**, relay-first, with **NO server-proxy fallback** (`frameFor` → `relay` | `relay-required`). `relayProxyPort` ← `fetchRelayStatus()` ← `/api/relay/token`.
+- Ordinary sites render **in-app**, relay-first, **NO server-proxy fallback** (`frameFor` → `relay` | `relay-required`). `relayProxyPort` ← `fetchRelayStatus()` ← `/api/relay/token`.
 - LNA / `upgrade-insecure-requests` / `block-all-mixed-content` do **NOT** gate loopback frames — don't chase them. YouTube renders through the relay; an opaque origin breaks `localStorage`.
-- **The relay port must be re-read from TWO places.** `refreshRelayPort()` re-points relay tabs only when the port actually CHANGED (else every poll reloads every tab), on `relay-status-changed` AND from `armRelayProbe`'s timeout — a **silent relay restart fires no event**.
+- **The relay port must be re-read from TWO places.** `refreshRelayPort()` re-points relay tabs only when the port actually CHANGED, on `relay-status-changed` AND from `armRelayProbe`'s timeout — a **silent relay restart fires no event**.
 - **Every tab's frame stays MOUNTED** (inactive: `hidden` + `visibility:hidden`) so a tab switch never reloads: attribute `postMessage` by `event.source` via `frameRefsRef`; re-point `frameRef` in an effect; `relayReadyRef` keys readiness by **the `frameSrc` that proved it**.
 - **The relay's `<base href>` must carry the document's DIRECTORY, not just its origin** — it OVERRIDES the document URL, so an origin-only base 404s relative URLs below the root; root-absolute sites are unaffected, which hid it. Non-HTML responses **STREAM**.
 
@@ -31,6 +30,7 @@ Next.js 16 + custom `server.js` + socket.io. Dev port **3030** (`npm run dev` = 
 
 - `FileManager.js` owns the only socket pool; new handlers go in `FM_SOCKET_EVENTS` + `disposedRef` guard. Relay registrations keyed by JWT `sub`.
 - `server.js` sets security headers, but next.config `headers()` apply on top and win — change a value in **both**. It serves `/relay-ws` (Local Relay) + `/agent-ws` (Monitor Agent).
+- **Container app port is 3030**, not Next's 3000; Dockerfile + compose override `env_file`. Nginx on `proxy-net` → `monitor:3030`. Guard: `tests/deployPortConsistency.test.mjs`.
 - `src/proxy.js` **excludes `/api/agents/webui-proxy` + `/api/browser/proxy`**, so those routes' framing headers apply.
 - **`/api/health` 503 ≠ DB down**: `status = memory.safe && mongoUp ? 'ok':'degraded'`; the relay flag is informational. Read `body.mongo.up`, never the status code (`classifyHealth()`, `src/utils/healthProbe.js`). `checkMemory` reads `MemAvailable`, not `os.freemem()` (MemFree on Linux).
 
