@@ -275,10 +275,10 @@ export default function AgentWebUIBrowserApp({
   connectionId = '',
   connectionName = 'remote server',
   port = '',
-  initialMode = 'webui', // 'webui' | 'explore'
+  initialMode = 'webui', // 'webui' | 'explore' | 'web'
   onOpenExternal,
 }) {
-  const { state: osState } = useOS();
+  const { state: osState, openWindow } = useOS();
   const windowLayout = osState?.windowLayout || 'mac';
   const isMacTheme = windowLayout === 'mac';
 
@@ -304,23 +304,58 @@ export default function AgentWebUIBrowserApp({
 
   // Initial tab setup
   const initialUrl = url || '';
-  const [tabs, setTabs] = useState(() => [
-    {
-      id: 'tab-1',
-      title: initialMode === 'explore' || !initialUrl ? 'Explore & Browse' : `${agentName} Web UI`,
-      type: initialMode === 'explore' || !initialUrl ? 'explore' : 'webui',
-      url: initialUrl,
-      frameSrc: '',
-      agentId,
-      agentName,
-      connectionId,
-      connectionName,
-      port,
-      phase: initialMode === 'explore' || !initialUrl ? 'ready' : 'loading',
-      status: 0,
-      error: '',
-    },
-  ]);
+  const [tabs, setTabs] = useState(() => {
+    /**
+     * A torn-off tab opens with initialMode 'web' (an ordinary site) and must
+     * come back on THAT page rather than on the Explore placeholder.
+     *
+     * It needs frameFor() like any other web tab: starting as
+     * `relay-required` is correct, because refreshRelayPort re-points every
+     * relay-dependent web tab the moment the port is known — the same path a
+     * tab built by openWebTab takes. Guessing a port here would be worse: the
+     * relay may not even be up yet.
+     */
+    if (initialMode === 'web' && initialUrl) {
+      return [
+        {
+          id: 'tab-1',
+          title: hostnameOf(initialUrl, 'New Tab'),
+          type: 'web',
+          url: initialUrl,
+          ...frameFor(0, initialUrl),
+          agentId,
+          agentName,
+          connectionId,
+          connectionName,
+          port,
+          phase: 'ready',
+          status: 0,
+          error: '',
+          // A web tab needs a history stack from birth, or Back has nothing to pop.
+          history: [initialUrl],
+          historyIndex: 0,
+        },
+      ];
+    }
+    const isExplore = initialMode === 'explore' || !initialUrl;
+    return [
+      {
+        id: 'tab-1',
+        title: isExplore ? 'Explore & Browse' : `${agentName} Web UI`,
+        type: isExplore ? 'explore' : 'webui',
+        url: initialUrl,
+        frameSrc: '',
+        agentId,
+        agentName,
+        connectionId,
+        connectionName,
+        port,
+        phase: isExplore ? 'ready' : 'loading',
+        status: 0,
+        error: '',
+      },
+    ];
+  });
   const [activeTabId, setActiveTabId] = useState('tab-1');
 
   // Omnibox input state
@@ -682,15 +717,24 @@ export default function AgentWebUIBrowserApp({
     setActiveTabId(newId);
   }, []);
 
-  const handleCloseTab = (e, tabId) => {
-    e.stopPropagation();
-    // A closed tab's frame unmounts and its entry is dropped by the ref
-    // callback, but the side tables keyed by tab id are not — clean them here
-    // so a long session does not accumulate entries for tabs that are gone.
+  /**
+   * Remove a tab from THIS instance.
+   *
+   * Shared by the close button and by tearing a tab off into a new window,
+   * because both owe the same bookkeeping: a frame that unmounts drops its own
+   * entry from `frameRefsRef` via the ref callback, but the side tables keyed
+   * by tab id do not — so a long session would accumulate entries for tabs that
+   * are gone.
+   *
+   * Closing the ONLY tab converts it to Explore rather than leaving an empty
+   * strip. Tearing the last tab off must behave identically, or the source
+   * window becomes a browser with nothing in it and no way back.
+   */
+  const removeTab = useCallback((tabId) => {
     relayReadyRef.current.delete(tabId);
     markRelayDead(tabId, false);
-    if (tabs.length === 1) {
-      // If closing the only tab, convert it to Explore mode
+    const current = tabsRef.current;
+    if (current.length <= 1) {
       setTabs([{
         id: 'tab-1',
         title: 'Explore & Browse',
@@ -702,14 +746,147 @@ export default function AgentWebUIBrowserApp({
       setActiveTabId('tab-1');
       return;
     }
-    const idx = tabs.findIndex((t) => t.id === tabId);
-    const newTabs = tabs.filter((t) => t.id !== tabId);
-    setTabs(newTabs);
+    const idx = current.findIndex((t) => t.id === tabId);
+    const remaining = current.filter((t) => t.id !== tabId);
+    setTabs(remaining);
     if (activeTabId === tabId) {
-      const nextActive = newTabs[Math.max(0, idx - 1)];
-      setActiveTabId(nextActive.id);
+      setActiveTabId(remaining[Math.max(0, idx - 1)].id);
     }
+  }, [activeTabId, markRelayDead]);
+
+  const handleCloseTab = (e, tabId) => {
+    e.stopPropagation();
+    removeTab(tabId);
   };
+
+  /**
+   * Tab tear-off — drag a tab out of the strip to open it in a NEW instance.
+   *
+   * This is the Chrome gesture, and the only way to get two pages side by side
+   * without one of them being a hidden background tab.
+   *
+   * POINTER events, never the mouse trio: this app opens as a real OS window
+   * and is used on touchscreens, where `mousemove` never fires at all. The
+   * move/up listeners go on `window` instead of using setPointerCapture on the
+   * tab, because the entire point is to keep tracking the pointer after it
+   * leaves the tab — and the tab element may be replaced mid-gesture.
+   */
+  const TEAR_OFF_DISTANCE_PX = 26;
+
+  // { id, x, y, tearing } — drives the ghost. Only `id` is a dependency of the
+  // listener effect below, so re-rendering the ghost on every move does not
+  // tear down and re-add the listeners dozens of times a second.
+  const [tabDrag, setTabDrag] = useState(null);
+  const tabDragRef = useRef(null);
+  // Set once a drag has actually moved. A press that moved is not a click:
+  // without this, releasing a torn-off tab also fires the tab's onClick and
+  // selects an id that was just removed from the strip.
+  const tabDragMovedRef = useRef(false);
+  // Holds the LATEST tearOffTab. beginTabDrag builds its listeners at
+  // pointerdown time, so a directly captured closure could be a render or two
+  // stale by the time the user lets go of the tab.
+  const tearOffRef = useRef(null);
+
+  const beginTabDrag = useCallback((e, tabId) => {
+    // Left button only, and only for a real mouse. Touch/pen report button 0
+    // on contact, so this must not reject them.
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    // A press on the close button belongs to the close button.
+    if (e.target?.closest?.('button')) return;
+
+    tabDragRef.current = { id: tabId, startX: e.clientX, startY: e.clientY, tearing: false };
+    tabDragMovedRef.current = false;
+    setTabDrag({ id: tabId, x: e.clientX, y: e.clientY, tearing: false });
+
+    /**
+     * The move/up listeners are attached HERE, synchronously, and NOT in an
+     * effect.
+     *
+     * An effect runs after the commit, so the opening `pointermove` events of a
+     * fast drag are delivered before the listener exists. Measured in Chrome:
+     * with the listeners in an effect, a drag whose moves are dispatched
+     * immediately after pointerdown tears nothing off AND reports no error — a
+     * quick flick just silently does nothing. Attaching synchronously closes
+     * that window; the handlers read drag state from `tabDragRef`, so being
+     * created once per gesture costs nothing.
+     */
+    function onMove(ev) {
+      const d = tabDragRef.current;
+      if (!d) return;
+      const dx = ev.clientX - d.startX;
+      const dy = ev.clientY - d.startY;
+      if (Math.abs(dx) > 4 || Math.abs(dy) > 4) tabDragMovedRef.current = true;
+      // Vertical only. A horizontal drag along the strip reads as scrolling the
+      // tab list, so tearing off on `dx` would fire on an ordinary sideways
+      // nudge. Leaving the strip either way — up onto the desktop, or down into
+      // the page — is the tear-off gesture.
+      d.tearing = Math.abs(dy) > TEAR_OFF_DISTANCE_PX;
+      setTabDrag({ id: d.id, x: ev.clientX, y: ev.clientY, tearing: d.tearing });
+    }
+    function cleanup() {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onCancel);
+    }
+    function finish(ev, cancelled) {
+      const d = tabDragRef.current;
+      tabDragRef.current = null;
+      setTabDrag(null);
+      cleanup();
+      if (!cancelled && d?.tearing) tearOffRef.current?.(d.id, ev.clientX, ev.clientY);
+    }
+    function onUp(ev) { finish(ev, false); }
+    function onCancel(ev) { finish(ev, true); }
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onCancel);
+  }, []);
+
+  const tearOffTab = useCallback((tabId, clientX, clientY) => {
+    const tab = tabsRef.current.find((t) => t.id === tabId);
+    if (!tab || !openWindow) return;
+    const isWebUI = tab.type === 'webui';
+    // Only a page-bearing tab can be torn off. An Explore tab has nothing to
+    // carry, and a web tab with no URL has no destination.
+    if (!isWebUI && !(tab.type === 'web' && tab.url)) return;
+
+    const winId = `browser-${tabId}-${Date.now().toString(36)}`;
+    const props = {
+      initialMode: isWebUI ? 'webui' : 'web',
+      url: tab.url,
+      agentId: tab.agentId,
+      agentName: tab.agentName,
+      connectionId: tab.connectionId,
+      connectionName: tab.connectionName,
+      port: tab.port,
+    };
+    openWindow(
+      winId,
+      tab.title || 'Web Browser',
+      <AgentWebUIBrowserApp windowId={winId} {...props} />,
+      Globe,
+      {
+        // Both are required: the element renders the window NOW, while
+        // appType + props let it be rebuilt from AppRegistry on hydration.
+        // Same contract as AIAgentsApp's openEmbeddedWebUI.
+        appType: isWebUI ? 'agent-webui' : 'browser',
+        props,
+        // Land the new window under the cursor, so the tab appears to go
+        // wherever the user let go of it.
+        x: Math.max(0, Math.round(clientX - 120)),
+        y: Math.max(0, Math.round(clientY - 16)),
+        initialWidth: 1100,
+        initialHeight: 760,
+        minWidth: 480,
+        minHeight: 360,
+      }
+    );
+    removeTab(tabId);
+  }, [openWindow, removeTab]);
+
+  // Published for beginTabDrag's listeners. This effect has run long before any
+  // gesture can start, so the ref is never null when a drag finishes.
+  useEffect(() => { tearOffRef.current = tearOffTab; }, [tearOffTab]);
 
   /**
    * Frame coordinates for an ordinary website.
@@ -1379,7 +1556,17 @@ export default function AgentWebUIBrowserApp({
           return (
             <div
               key={tab.id}
-              onClick={() => setActiveTabId(tab.id)}
+              onPointerDown={(e) => beginTabDrag(e, tab.id)}
+              onClick={() => {
+                // A press that moved is not a click: releasing a torn-off tab
+                // would otherwise also select an id that no longer exists.
+                if (tabDragMovedRef.current) return;
+                setActiveTabId(tab.id);
+              }}
+              // `pan-x` keeps horizontal swipes scrolling the tab strip, while
+              // handing us the vertical gesture that tears a tab off. Without
+              // it the browser claims the touch and pointermove never arrives.
+              style={{ touchAction: 'pan-x' }}
               className={`group flex items-center gap-2 px-3 py-1.5 min-w-[130px] max-w-[220px] text-xs transition-all cursor-pointer select-none border-b-2 ${
                 isMacTheme
                   ? `rounded-t-lg ${
@@ -1392,8 +1579,8 @@ export default function AgentWebUIBrowserApp({
                         ? 'bg-[var(--bg-primary)] text-white border-t-sky-500 border-b-transparent font-medium'
                         : 'bg-[var(--bg-tertiary)] hover:bg-[var(--bg-card-hover)] text-zinc-400 border-t-transparent border-b-transparent'
                     }`
-              }`}
-              title={tab.title}
+              } ${tabDrag?.id === tab.id && tabDrag.tearing ? 'opacity-40' : ''}`}
+              title={`${tab.title} — drag out of the tab bar to open in a new window`}
             >
               {tab.type === 'webui' ? (
                 <Cpu size={13} className="text-sky-400 shrink-0" />
@@ -1942,6 +2129,26 @@ export default function AgentWebUIBrowserApp({
           );
         })}
       </div>
+
+      {/* Tear-off ghost. Follows the cursor once the tab has left the strip, so
+          the gesture is discoverable: without it a drag-out looks like nothing
+          is happening until the pointer is released. */}
+      {tabDrag?.tearing && (
+        <div
+          className="fixed z-[9999] pointer-events-none flex flex-col items-start gap-1"
+          style={{ left: tabDrag.x + 14, top: tabDrag.y + 14 }}
+        >
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[var(--bg-secondary)] border border-sky-400/60 shadow-2xl max-w-[220px]">
+            <Globe size={13} className="text-emerald-400 shrink-0" />
+            <span className="truncate text-[11px] text-white">
+              {tabs.find((t) => t.id === tabDrag.id)?.title || 'Tab'}
+            </span>
+          </div>
+          <span className="px-2 py-0.5 rounded-md bg-sky-500 text-white text-[10px] font-semibold shadow-lg">
+            Release to open in a new window
+          </span>
+        </div>
+      )}
 
       {/* First-time onboarding overlay */}
       {showOnboarding && (
