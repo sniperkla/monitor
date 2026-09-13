@@ -29,7 +29,7 @@ Next.js 16 + custom `server.js` + socket.io. Dev port **3030** (`npm run dev` = 
 ## Architecture
 
 - `FileManager.js` owns the only socket pool; new handlers go in `FM_SOCKET_EVENTS` + `disposedRef` guard. Relay registrations keyed by JWT `sub`.
-- `server.js` sets security headers, but next.config `headers()` apply on top and win — change a value in **both**. It serves `/relay-ws` (Local Relay) + `/agent-ws` (Monitor Agent).
+- `server.js` sets security headers, but next.config `headers()` win. It serves `/relay-ws` + `/agent-ws`.
 - **Container app port is 3030**, not Next's 3000; Dockerfile + compose override `env_file`. Nginx on `proxy-net` → `monitor:3030`. Guard: `tests/deployPortConsistency.test.mjs`.
 - `src/proxy.js` **excludes `/api/agents/webui-proxy` + `/api/browser/proxy`**, so those routes' framing headers apply.
 - **`/api/health` 503 ≠ DB down**: `status = memory.safe && mongoUp ? 'ok':'degraded'`; the relay flag is informational. Read `body.mongo.up`, never the status code (`classifyHealth()`, `src/utils/healthProbe.js`). `checkMemory` reads `MemAvailable`, not `os.freemem()` (MemFree on Linux).
@@ -38,7 +38,7 @@ Next.js 16 + custom `server.js` + socket.io. Dev port **3030** (`npm run dev` = 
 
 - `public/local-relay.js` → `.min.js` → `~/.ssh-monitor-relay/`; service `com.ssh-monitor.relay`. `scripts/build-relay.mjs` is deterministic (`--check` detects drift); the server serves only the artifact. Token via `Authorization: Bearer` on `/relay-ws` — WHATWG `WebSocket` ignores headers.
 - **No self-update, but no re-pairing either**: replace `~/.ssh-monitor-relay/local-relay.js` and `launchctl kickstart -k gui/$(id -u)/com.ssh-monitor.relay`; the token in `~/.ssh-monitor-relay.json` reconnects it as the same relay. Re-pin `relay-install-audit.mjs` `PINNED` on every relay change.
-- **Liveness is `GET /api/relay/token`, never `/api/health`** (health ≠ your relay). `src/utils/relayStatus.js`; relay-state changes must call `requestRelayStatusRefresh(...)`; `AppContext` owns the only poller (20s/5s) and does **not** emit the event after each poll.
+- **Liveness is `GET /api/relay/token`, never `/api/health`** (health ≠ your relay). `src/utils/relayStatus.js`; `AppContext` owns the only poller (20s/5s).
 - **`relayInfo` is `{ connected, relays, checkDone }` — NO `webProxyPort`.** The reducer drops the port `relayStatus.js` derives from `relays[]`, so reading it gives `undefined` silently and the feature does nothing. Derive it from `relays[]`.
 - **`ssh_monitor_ssh_mode` is per-device but converges per-ACCOUNT** — AppContext auto-pins `local` for any browser seeing the user's relay; `ssh_monitor_relay_optout=1` blocks that, pairing clears it. `resolveSshConfig` treats a missing relay as *fall back to direct* for non-localhost hosts (localhost MUST throw). `tests/ai-agents-relay-routing.test.mjs`.
 - **`relay-start` tunnels to 127.0.0.1 on the RELAY HOST, not the caller.** Ack contract: `webui:ready`(port) vs `webui:fail`(reason) — a relay-reported failure is a 502 quoting it, a timeout is the 504 blaming a missing relay. Log `~/Library/Logs/ssh-monitor-relay.log`; `tests/webui-forward-ack.test.mjs`.
@@ -53,4 +53,5 @@ Next.js 16 + custom `server.js` + socket.io. Dev port **3030** (`npm run dev` = 
 ## Security / open work
 
 - **OPEN (09-13): prod Mongo `43.210.134.78:27021` is internet-reachable, the `54ab5dac^` password still authenticates (root), and this repo is PUBLIC.** Fix = loopback bind + rotate.
+- **Deploy state (09-13):** `nextgen16` pushed, but prod did not auto-deploy; no deploy workflow and SSH denied. Host rebuild still needs server access.
 - See `SECURITY_ROADMAP_A_TO_A_PLUS.md` / `THREAT_MODEL.md`; don't re-fix completed rate limiting, CSP, RBAC, vault crypto, WebAuthn clone detection, audit logs.
