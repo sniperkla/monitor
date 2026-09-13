@@ -18,10 +18,8 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
-import { getSshConfig } from '@/app/api/server-backup/_ssh';
-import { Client } from 'ssh2';
+import { getSshConfig, getOrCreatePooledClient } from '@/app/api/server-backup/_ssh';
 import http from 'http';
-import net from 'net';
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -54,43 +52,29 @@ function encodeProxyPath(p) {
 }
 
 /**
- * Open an SSH-forwarded TCP socket to `remoteHost:remotePort` on the server
- * described by `sshConfig`.
+ * Open an SSH-forwarded TCP channel to `remoteHost:remotePort`, reusing a
+ * POOLED ssh2 connection when one is already open for this server.
+ *
+ * WHY A POOL: the dashboard fires ~15 parallel asset/API requests on boot, and
+ * every one of them used to pay a full SSH handshake (TCP + auth) and tear the
+ * connection down afterwards — measured ~600–830 ms per chunk locally and
+ * thousands of tunnel-opens in the relay log per session. ssh2 multiplexes any
+ * number of channels over ONE connection, so the pool pays the handshake once
+ * and every later request is a channel open (~ms).
+ *
+ * The pool itself lives in server-backup/_ssh.js (getOrCreatePooledClient —
+ * shared with the apps that exec commands over SSH), keyed by
+ * user@host:port with a 30s idle timeout and keepalives from the base config.
  */
-function sshForwardSocket(sshConfig, remoteHost, remotePort) {
+async function sshForwardChannel(sshConfig, remoteHost, remotePort) {
+  const client = await getOrCreatePooledClient(sshConfig);
   return new Promise((resolve, reject) => {
-    const conn = new Client();
-    const timeout = setTimeout(() => {
-      try { conn.end(); } catch {}
-      reject(new Error('SSH connect timeout'));
-    }, 20000);
-
-    conn.on('ready', () => {
-      conn.forwardOut('127.0.0.1', 0, remoteHost, remotePort, (err, stream) => {
-        clearTimeout(timeout);
-        if (err) { conn.end(); return reject(err); }
-        // Attach a cleanup hook so the SSH session closes when the stream ends
-        stream.on('close', () => { try { conn.end(); } catch {} });
-        stream.on('error', () => { try { conn.end(); } catch {} });
-        resolve({ stream, conn });
-      });
+    const to = setTimeout(() => reject(new Error('SSH forward timeout')), 20000);
+    client.forwardOut('127.0.0.1', 0, remoteHost, remotePort, (err, stream) => {
+      clearTimeout(to);
+      if (err) return reject(err);
+      resolve(stream);
     });
-
-    conn.on('error', (err) => { clearTimeout(timeout); reject(err); });
-
-    // Build the connect config — handle privateKey (Buffer / string)
-    const cfg = {
-      host:     sshConfig.host,
-      port:     parseInt(sshConfig.port, 10) || 22,
-      username: sshConfig.username,
-      readyTimeout: 18000,
-      keepaliveInterval: 0,
-    };
-    if (sshConfig.privateKey) cfg.privateKey = sshConfig.privateKey;
-    if (sshConfig.password)   cfg.password   = sshConfig.password;
-    if (sshConfig.passphrase) cfg.passphrase = sshConfig.passphrase;
-
-    conn.connect(cfg);
   });
 }
 
@@ -628,9 +612,11 @@ async function handleProxy(request) {
     });
 
     // Open SSH tunnel
-    let tunnel;
+    // Open (or reuse a pooled) SSH tunnel. The pooled connection pays the
+    // handshake once; every request here is just a channel open.
+    let stream;
     try {
-      tunnel = await sshForwardSocket(sshConfig, '127.0.0.1', port);
+      stream = await sshForwardChannel(sshConfig, '127.0.0.1', port);
     } catch (e) {
       return new NextResponse(
         `<!DOCTYPE html><html><head><meta charset="utf-8">
@@ -683,9 +669,9 @@ async function handleProxy(request) {
       // Request uncompressed so we can reliably inspect & rewrite HTML / CSS
       fwdHeaders['accept-encoding'] = 'identity';
 
-      resp = await httpOverSocket(tunnel.stream, port, remotePath, method, fwdHeaders, body);
+      resp = await httpOverSocket(stream, port, remotePath, method, fwdHeaders, body);
     } catch (e) {
-      try { tunnel.conn.end(); } catch {}
+      try { stream.close(); } catch {}
       return new NextResponse(
         `<!DOCTYPE html><html><head><meta charset="utf-8">
         <style>
@@ -787,9 +773,22 @@ async function handleProxy(request) {
     outHeaders['cross-origin-resource-policy'] = 'cross-origin';
     // Same reasoning as frameHeaders above: must match the shell's COEP.
     outHeaders['cross-origin-embedder-policy'] = 'credentialless';
-    // Never let the browser reuse a stale copy of the tunneled page — an old
-    // copy can carry pre-fix helper scripts or stale absolute URLs.
-    outHeaders['cache-control'] = 'no-store, max-age=0';
+    // HTML and API responses must never be cached: a stale copy can carry
+    // pre-fix helper scripts or stale absolute URLs, and agent API answers are
+    // session-specific. Hash-named assets are the OPPOSITE: the bundler puts
+    // the content hash in the filename (/assets/index-DY9avcdQ.js), so the
+    // bytes behind that name never change for a given deploy — cache them
+    // forever. On the visitor's machine this turns every reload after the
+    // first into ZERO tunnel traffic for assets (each used to cost an SSH
+    // round-trip). Un-hashed binaries get a short cache as a middle ground.
+    const assetPath = (remotePath.split('?')[0] || '');
+    if (/\/assets\/[^?]*-[A-Za-z0-9_-]{8,}\.(?:js|mjs|css)$/i.test(assetPath)) {
+      outHeaders['cache-control'] = 'public, max-age=31536000, immutable';
+    } else if (/\.(?:woff2?|ttf|otf|png|jpe?g|gif|svg|webp|avif|ico)$/i.test(assetPath)) {
+      outHeaders['cache-control'] = 'public, max-age=300';
+    } else {
+      outHeaders['cache-control'] = 'no-store, max-age=0';
+    }
 
     const contentType = (resp.headers['content-type'] || '').toLowerCase();
     let body = resp.body;
@@ -844,7 +843,10 @@ async function handleProxy(request) {
       }
     }
 
-    try { tunnel.conn.end(); } catch {}
+    // The channel is request-scoped: the full body has been read into memory,
+    // so close it now. The POOLED ssh2 connection itself stays open — that is
+    // the whole point (the next request reuses it instead of re-handshaking).
+    try { stream.close(); } catch {}
 
     const response = new NextResponse(body, {
       status: resp.status,

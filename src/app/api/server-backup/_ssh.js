@@ -183,7 +183,7 @@ function getPoolKey(config) {
   return `${config.username || 'root'}@${config.host || '127.0.0.1'}:${config.port || 22}`;
 }
 
-function getOrCreatePooledClient(sshConfig) {
+export function getOrCreatePooledClient(sshConfig) {
   const pool = global.__sshConnectionPool;
   const key = getPoolKey(sshConfig);
   

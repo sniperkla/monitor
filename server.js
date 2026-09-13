@@ -4898,6 +4898,9 @@ fi'`;
 
       async function loadPersistedRelayTokens() {
         const now = Date.now();
+        // Throttle marker: set at the START so a flood of concurrent misses
+        // can't trigger parallel re-reads (each call re-loads everything).
+        global.__relayTokensLoadedAt = now;
         let loaded = 0;
 
         // 1. Load from MongoDB (primary store)
@@ -5312,7 +5315,7 @@ fi'`;
       });
       // ── End Monitor Agent WebSocket Handler ────────────────────────────────────
 
-      relayWss.on('connection', (ws, req) => {
+      relayWss.on('connection', async (ws, req) => {
         // Token from the Authorization header, falling back to ?token=.
         // A query string is written to access logs, which is exactly where a
         // credential should not end up. The fallback is only for relays installed
@@ -5322,7 +5325,22 @@ fi'`;
         const token      = /^Bearer\s+/i.test(authHeader)
           ? authHeader.replace(/^Bearer\s+/i, '').trim()
           : url.searchParams.get('token');
-        const entry  = global.__relayTokens.get(token);
+        let  entry  = global.__relayTokens.get(token);
+
+        // The token map is loaded ONCE at boot. A token minted AFTER boot (a
+        // second device pairing, a fresh install) isn't in memory yet and would
+        // be rejected with "Invalid or expired token" until the next restart —
+        // measured live when a second relay was added for another monitor
+        // server. If a lookup misses, re-read the persisted store once
+        // (throttled) before rejecting.
+        if (!entry) {
+          const now = Date.now();
+          if (!global.__relayTokensLoadedAt || now - global.__relayTokensLoadedAt > 15000) {
+            global.__relayTokensLoadedAt = now;
+            try { await loadPersistedRelayTokens(); } catch (_) {}
+            entry = global.__relayTokens.get(token);
+          }
+        }
 
         if (!entry || entry.expiresAt < Date.now()) {
           ws.send(JSON.stringify({ type: 'error', message: 'Invalid or expired token' }));
