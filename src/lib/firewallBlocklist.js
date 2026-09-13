@@ -216,7 +216,7 @@ export function buildRestoreServiceExec(allowlistRestore = '') {
     `if iptables -L DOCKER-USER >/dev/null 2>&1; then iptables -C DOCKER-USER -m set --match-set ${COMPOSITE_SET} src -j DROP 2>/dev/null || iptables -I DOCKER-USER 1 -m set --match-set ${COMPOSITE_SET} src -j DROP; fi`,
     `while iptables -C INPUT -m set --match-set monitor_blocklist src -j DROP 2>/dev/null; do iptables -D INPUT -m set --match-set monitor_blocklist src -j DROP; done`,
     `while iptables -C FORWARD -m set --match-set monitor_blocklist src -j DROP 2>/dev/null; do iptables -D FORWARD -m set --match-set monitor_blocklist src -j DROP; done`,
-    `if iptables -L DOCKER-USER >/dev/null 2>&1; then while iptables -C DOCKER-USER -m set --match-set monitor_blocklist src -j DROP 2>/dev/null; do iptables -D DOCKER-USER -m set --match-set monitor_blocklist src -j DROP; done; fi${allowlistRestore ? allowlistRestore : ''}`,
+    `if iptables -L DOCKER-USER >/dev/null 2>&1; then while iptables -C DOCKER-USER -m set --match-set monitor_blocklist src -j DROP 2>/dev/null; do iptables -D DOCKER-USER -m set --match-set monitor_blocklist src -j DROP; done; fi${allowlistRestore ? '; ' + allowlistRestore : ''}`,
   ].join('; ');
 }
 
