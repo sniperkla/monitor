@@ -92,7 +92,38 @@ export function getConcurrencyLimiter(operation, maxConcurrent = 5) {
 
 
 import os from 'os';
+import fs from 'fs';
 import { logger } from './logger.js';
+
+/**
+ * Free memory in MB, as the kernel would report it to a new allocation.
+ *
+ * `os.freemem()` on its own is not a usable "is there room?" signal on either
+ * platform this runs on:
+ *
+ *   • Linux — libuv returns sysinfo(2).freeram, i.e. MemFree. That counter
+ *     excludes page cache and reclaimable slab, so a box that has served any
+ *     real I/O sits at a few hundred MB "free" while MemAvailable is still
+ *     gigabytes. Comparing MemFree against a 512MB floor therefore trips on
+ *     machines that are not remotely out of memory.
+ *   • macOS — excludes purgeable/compressed pages and reports near-zero on
+ *     healthy machines (hence the 64MB darwin threshold below).
+ *
+ * On Linux, prefer MemAvailable from /proc/meminfo: it is the kernel's own
+ * estimate of what can be allocated without swapping, which is precisely the
+ * question this guard means to ask. Everything else falls back to os.freemem().
+ */
+function getFreeMemMB() {
+  if (process.platform === 'linux') {
+    try {
+      const match = fs.readFileSync('/proc/meminfo', 'utf8').match(/^MemAvailable:\s+(\d+)\s*kB/m);
+      if (match) return Math.round(Number(match[1]) / 1024);
+    } catch (_) {
+      // No /proc (unusual container) — fall through to os.freemem().
+    }
+  }
+  return Math.round(os.freemem() / 1024 / 1024);
+}
 
 /**
  * Check if the server has enough free memory to handle a heavy request.
@@ -109,8 +140,10 @@ export function checkMemory(minFreeMB = 512) {
   const used = process.memoryUsage();
   const rssMB = Math.round(used.rss / 1024 / 1024);
   
-  // Use os.freemem() to check system-level RAM instead of V8 internal heap
-  const sysFreeMB = Math.round(os.freemem() / 1024 / 1024);
+  // Reclaim-aware on Linux — see getFreeMemMB. os.freemem() is MemFree there,
+  // which reads as "almost full" on a healthy host that is merely using its
+  // RAM for page cache.
+  const sysFreeMB = getFreeMemMB();
   const sysTotalMB = Math.round(os.totalmem() / 1024 / 1024);
   
   // RSS limit: 1.5GB in production, 2.5GB in Dev (Next.js dev is heavy)
@@ -124,7 +157,7 @@ export function checkMemory(minFreeMB = 512) {
   const safe = sysFreeMB > threshold && rssMB < rssLimitMB;
 
   if (!safe) {
-    logger.warn(`🛡️ Memory Guard Warning: RSS=${rssMB}MB, SysFree=${sysFreeMB}MB, Threshold=${threshold}MB`);
+    logger.warn(`🛡️ Memory Guard Warning: RSS=${rssMB}MB, SysFree=${sysFreeMB}MB (${process.platform === 'linux' ? 'MemAvailable' : 'os.freemem'}), Threshold=${threshold}MB`);
     // In development mode, we only WARN. We don't block the request.
     // This prevents the 503 error from stopping your workflow.
     if (isDev) return { safe: true, warning: true, rssMB, sysFreeMB };

@@ -7,8 +7,9 @@ import { useVault } from '@/context/VaultContext';
 import { useSession } from 'next-auth/react';
 import { LegacyBanner } from './LegacyBanner';
 import { useViewportSize } from '@/hooks/useViewportSize';
-import { RefreshCw, ShieldAlert, Zap } from 'lucide-react';
+import { RefreshCw, ShieldAlert, TriangleAlert, Zap } from 'lucide-react';
 import { detectMobileDevice } from '@/hooks/useIsMobileDevice';
+import { classifyHealth } from '@/utils/healthProbe';
 
 //
 // Design note — this screen used to be a cockpit HUD: four stage cards with
@@ -756,6 +757,11 @@ export function BootSequence({ onComplete, onSkip }) {
   // Server / Database health check
   const [serverStatus, setServerStatus] = useState('pending'); // pending | ok | error
   const [serverError, setServerError] = useState(null);
+  // Set when the server answered but reported itself degraded (memory guard
+  // tripped, no relay attached). That is NOT a database failure: the flag in
+  // the body says the database is up, so the boot continues and this surfaces
+  // as a warning line rather than a halt the user has to skip past.
+  const [serverDegraded, setServerDegraded] = useState(null);
   const [checkKey, setCheckKey] = useState(0);
 
   // Static lines tracking
@@ -838,24 +844,37 @@ export function BootSequence({ onComplete, onSkip }) {
       try {
         const res = await fetch('/api/health', { cache: 'no-store' });
         if (cancelled) return;
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({}));
-          const dbDown = body.status === 'degraded' || res.status === 503;
-          if (attempt < MAX_ATTEMPTS) {
-            await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
-            if (cancelled) return;
-            return doCheck(attempt + 1);
-          }
-          setServerError(
-            dbDown
-              ? '[ FATAL ] Central database is unreachable. The server has suspended operations to prevent data corruption. Please verify database connectivity.'
-              : `[ FATAL ] Server returned HTTP ${res.status}. Diagnostic logs required.`
-          );
-          setServerStatus('error');
-        } else {
+
+        const body = await res.json().catch(() => ({}));
+        const verdict = classifyHealth(res, body);
+
+        // Reachable, database up. A degraded 503 lands here too — the server is
+        // merely busy (memory guard tripped, no relay attached), which is not a
+        // reason to halt. Halting on it is what forced a manual skip on
+        // production, at 80%, with a message blaming a database that was fine.
+        if (verdict.ok) {
           setServerError(null);
+          setServerDegraded(
+            verdict.degraded
+              ? `server reported a degraded state (HTTP ${res.status}) but the database is reachable — continuing.`
+              : null
+          );
           setServerStatus('ok');
+          return;
         }
+
+        if (attempt < MAX_ATTEMPTS) {
+          await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+          if (cancelled) return;
+          return doCheck(attempt + 1);
+        }
+        setServerDegraded(null);
+        setServerError(
+          verdict.dbDown
+            ? '[ FATAL ] Central database is unreachable. The server has suspended operations to prevent data corruption. Please verify database connectivity.'
+            : `[ FATAL ] Server returned HTTP ${res.status}. Diagnostic logs required.`
+        );
+        setServerStatus('error');
       } catch {
         if (cancelled) return;
         if (attempt < MAX_ATTEMPTS) {
@@ -915,7 +934,9 @@ export function BootSequence({ onComplete, onSkip }) {
         if (serverStatus === 'pending') {
           try {
             const probe = await fetch('/api/health', { cache: 'no-store' });
-            if (probe.ok) {
+            const probeBody = await probe.json().catch(() => ({}));
+            // Same rule as the main probe — see classifyHealth.
+            if (classifyHealth(probe, probeBody).ok) {
               setServerStatus('ok');
               completedRef.current = true;
               setLaunching(true);
@@ -1000,7 +1021,11 @@ export function BootSequence({ onComplete, onSkip }) {
     ? 'boot suspended — awaiting database connection'
     : launching
     ? 'light pass-through engaged — transitioning into desktop'
-    : `${STAGE_LABEL[activeStage]} · ${serverStatus === 'ok' ? 'link nominal' : 'probing link'}`;
+    : `${STAGE_LABEL[activeStage]} · ${
+        serverStatus === 'ok'
+          ? (serverDegraded ? 'link degraded' : 'link nominal')
+          : 'probing link'
+      }`;
 
   return (
     <motion.div
@@ -1119,6 +1144,22 @@ export function BootSequence({ onComplete, onSkip }) {
               />
             ))}
           </div>
+
+          {/* Degraded-but-usable server: warn, do not halt. */}
+          <AnimatePresence>
+            {serverDegraded && serverStatus !== 'error' && (
+              <motion.div
+                key="degraded-warning"
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.3 }}
+                className="mt-4 flex items-start gap-2 font-mono text-[11px] text-amber-400/85"
+              >
+                <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <span className="whitespace-pre-wrap leading-relaxed">[ WARN ] {serverDegraded}</span>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
           {/* ── FATAL ERROR ── */}
           <AnimatePresence>
