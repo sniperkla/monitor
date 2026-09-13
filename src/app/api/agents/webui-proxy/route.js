@@ -51,6 +51,28 @@ function encodeProxyPath(p) {
   return String(p).split('/').map(encodeURIComponent).join('/');
 }
 
+// ─── per-deploy asset cache epoch ────────────────────────────────────────────
+// Every server boot mints a fresh epoch that is appended as `?v=` to hashed
+// asset URLs. WHY: during a relay restart an asset request could come back as
+// the 200-HTML error card; an earlier build then stamped
+// `public, max-age=31536000, immutable` on it from the PATH alone, and both
+// shared caches (Cloudflare sits in front of production) and BROWSER caches
+// stored that HTML under the bare .js URL — every later load answered
+// "Failed to load module script: … MIME text/html" until someone purged by
+// hand. Re-keying the URLs per deploy bypasses any poisoned entry on the
+// first load after an update, with no manual purge. The suffix is NOT
+// forwarded upstream (the catch-all route only reads connectionId/port/path),
+// and Hermes' static server ignores it — it is purely a cache-key change.
+// ASSET_EPOCH is baked once per process: HTML, the injected bridge and the
+// rewritten bundle map-deps all emit the same value, so the modulepreload URL
+// and the dynamic-import URL stay byte-identical and the browser dedupes them.
+const ASSET_EPOCH = Date.now().toString(36);
+const HASHED_ASSET_RE = /\/assets\/[^?]*-[A-Za-z0-9_-]{8,}\.(?:js|mjs|css)$/i;
+function assetCacheBustSuffix(p) {
+  const bare = String(p || '').split('?')[0];
+  return HASHED_ASSET_RE.test(bare) ? `?v=${ASSET_EPOCH}` : '';
+}
+
 /**
  * Open an SSH-forwarded TCP channel to `remoteHost:remotePort`, reusing a
  * POOLED ssh2 connection when one is already open for this server.
@@ -142,6 +164,7 @@ function rewriteHtml(html, proxyBase, currentPath, port, connectionId, agentId =
 (function() {
   var PROXY_BASE = ${JSON.stringify(proxyBase)};
   var ASSET_PREFIX = ${JSON.stringify(assetPathPrefix(connectionId, port))};
+  var ASSET_EPOCH = ${JSON.stringify(ASSET_EPOCH)};
   var CURRENT_FOLDER = ${JSON.stringify(folder)};
   var TUNNELED_PORT = ${JSON.stringify(String(port))};
   var TUNNEL_ID = ${JSON.stringify(String(connectionId || ''))};
@@ -353,7 +376,15 @@ function rewriteHtml(html, proxyBase, currentPath, port, connectionId, agentId =
     // A document that has escaped the proxy base makes even a relative URL
     // resolve against the wrong root, so anchor those at "/" too.
     var p = u.charAt(0) === '/' ? u : ('/' + u.replace(/^\\.\\//, ''));
-    return ASSET_PREFIX + p;
+    var proxied = ASSET_PREFIX + p;
+    // Per-deploy cache epoch on hashed assets — MUST match the suffix the
+    // server-side HTML rewrite emits for the same file, or the browser would
+    // treat the modulepreload copy and the dynamic-import copy as two
+    // different resources (double fetch, wasted tunnel traffic).
+    var bare = p.split('?')[0];
+    var hashedRe = new RegExp('^/assets/[^?]*-[A-Za-z0-9_-]{8,}\\\\.(?:js|mjs|css)$', 'i');
+    if (hashedRe.test(bare)) proxied += (p.indexOf('?') >= 0 ? '&' : '?') + 'v=' + ASSET_EPOCH;
+    return proxied;
   }
   // Same rewrite for markup injected as a STRING — insertAdjacentHTML /
   // innerHTML build elements through the HTML parser, which never touches the
@@ -483,17 +514,19 @@ if (isCloudflareInfra('/' + path)) return m;
   // machine, so it must stay un-tunneled even if a reference appears in the
   // HTML (Cloudflare injects its beacon into responses it passes through).
   const pathProxyBase = assetPathPrefix(connectionId, port);
-  res = res.replace(/(src|href|action)=(["'])\/((?!\/)[^"']*)(["'])/gi,
+  res = res.replace(/(src|href|action)=([\"'])\/((?!\/)[^\"']*)([\"'])/gi,
     (m, attr, q, path, q2) => {
       if (path === 'cdn-cgi' || path.startsWith('cdn-cgi/')) return m;
-      return `${attr}=${q}${pathProxyBase}${encodeProxyPath('/' + path)}${q2}`;
+      const full = '/' + path;
+      return `${attr}=${q}${pathProxyBase}${encodeProxyPath(full)}${assetCacheBustSuffix(full)}${q2}`;
     });
 
   // Rewrite url('/...') in style blocks
   res = res.replace(/url\((["']?)\/((?!\/)[^)]*?)(["']?)\)/gi,
     (m, q, path, q2) => {
       if (path === 'cdn-cgi' || path.startsWith('cdn-cgi/')) return m;
-      return `url(${q}${pathProxyBase}${encodeProxyPath('/' + path)}${q2})`;
+      const full = '/' + path;
+      return `url(${q}${pathProxyBase}${encodeProxyPath(full)}${assetCacheBustSuffix(full)}${q2})`;
     });
 
   return res;
@@ -523,10 +556,26 @@ function rewriteRootAssetRefs(text, connectionId, port) {
   //    leading slash so the helper's own '/' completes the keyed path.
   // 2. Root-absolute refs ("/assets/foo.css") consumed directly. Those keep
   //    the keyed prefix with its leading slash.
+  // Both forms gain the per-deploy `?v=` cache epoch on hashed files so the
+  // dynamic-import URL stays byte-identical to the modulepreload URL the
+  // HTML was rewritten to (same dedupe guarantee as before the bust).
   const relPrefix = prefix.replace(/^\//, '');
+  const suffix = `?v=${ASSET_EPOCH}`;
+  // Preserve the ORIGINAL behavior — every `assets/` reference is re-prefixed,
+  // hashed or not (images/fonts too). The per-deploy cache epoch is appended
+  // ONLY to hashed js/mjs/css: those are the URLs a cache could have poisoned,
+  // and busting everything would needlessly evict healthy entries on every
+  // deploy. Keeping the suffix on the same string keeps the dynamic-import URL
+  // byte-identical to the modulepreload URL (browser dedupes them).
   return String(text)
-    .replace(/(["'`])assets\//g, (_m, quote) => `${quote}${relPrefix}/assets/`)
-    .replace(/(["'`])\/assets\//g, (_m, quote) => `${quote}${prefix}/assets/`);
+    .replace(/(["'`])assets\/([^"'`\s]*)(["'`])/g, (_m, quote, file, q2) => {
+      const bust = HASHED_ASSET_RE.test('/assets/' + file) ? suffix : '';
+      return `${quote}${relPrefix}/assets/${file}${bust}${q2}`;
+    })
+    .replace(/(["'`])\/assets\/([^"'`\s]*)(["'`])/g, (_m, quote, file, q2) => {
+      const bust = HASHED_ASSET_RE.test('/assets/' + file) ? suffix : '';
+      return `${quote}${prefix}/assets/${file}${bust}${q2}`;
+    });
 }
 
 function rewriteAbsoluteSelfUrls(text, proxyBase, port) {
@@ -640,6 +689,12 @@ async function handleProxy(request) {
       // server.js. `unsafe-none` here gets the iframe refused by Chromium with
       // coep-frame-resource-needs-coep-header, even though it is same-origin.
       'Cross-Origin-Embedder-Policy': 'credentialless',
+      // NEVER cache an error card. During a relay restart these pages were
+      // served FOR ASSET PATHS (/assets/<hash>.js); any shared or browser
+      // cache that stored one then answered "Failed to load module script:
+      // … served MIME text/html" for every later load of the whole dashboard —
+      // measured live on production while the relay was flapping.
+      'Cache-Control': 'no-store, max-age=0',
     };
 
     const requestedSshMode = searchParams.get('sshMode') || request.headers.get('x-ssh-mode') || remembered?.sshMode || undefined;
@@ -683,7 +738,7 @@ async function handleProxy(request) {
             </div>
           </div>
         </body></html>`,
-        { status: 200, headers: frameHeaders }
+        { status: 502, headers: frameHeaders }
       );
     }
 
@@ -778,7 +833,7 @@ async function handleProxy(request) {
             }
           </script>
         </body></html>`,
-        { status: 200, headers: frameHeaders }
+        { status: 502, headers: frameHeaders }
       );
     }
 

@@ -67,9 +67,11 @@ test('Vite lazy assets stay under the keyed tunnel', () => {
   // The relative-branch rewrite must therefore emit the keyed prefix WITHOUT
   // the leading slash.
   assert.ok(proxy.includes("const relPrefix = prefix.replace(/^\\//, '')"));
-  assert.ok(proxy.includes('`${quote}${relPrefix}/assets/`'));
+  assert.ok(proxy.includes('`${quote}${relPrefix}/assets/${file}${bust}${q2}`'));
   // Root-absolute refs consumed directly keep the leading-slash keyed form.
-  assert.ok(proxy.includes('`${quote}${prefix}/assets/`'));
+  assert.ok(proxy.includes('`${quote}${prefix}/assets/${file}${bust}${q2}`'));
+  // EVERY assets/ ref is re-prefixed (hashed or not); the cache epoch is only for hashed js/mjs/css.
+  assert.ok(proxy.includes("HASHED_ASSET_RE.test('/assets/' + file)"));
   // Defensive heal inside the injected helper for any producer of the
   // double-slash form (e.g. a stale cached bundle served by the remote).
   assert.ok(proxy.includes("u.indexOf('//' + TUNNEL_PREFIX) === 0) u = u.slice(1)"));
@@ -241,4 +243,24 @@ test('immutable cache only when the tunnel REALLY returned a JS/CSS binary', () 
   assert.match(cacheSection, /isJsCss = \/\(\?:javascript\|wasm\|css\)\/\.test\(contentType\)/);
   assert.match(cacheSection, /statusOk && \/\\\/assets\\\/\[\^\?\]\*-\[A-Za-z0-9_-\]\{8,\}\D\.\(\?:js\|mjs\|css\)\$\/i\.test\(assetPath\) && isJsCss/);
   assert.match(cacheSection, /isBinary = /);
+});
+
+test('hashed asset URLs carry a per-deploy cache epoch (?v=) so a poisoned cache entry is bypassed on redeploy', () => {
+  // An earlier build stamped `immutable` on asset responses from the PATH
+  // alone; during a relay restart the FIRST request for a chunk could come
+  // back as the 200-HTML error card, and browser/shared caches stored that
+  // HTML under the bare .js URL — "module script served as MIME text/html"
+  // on every later load until purged by hand. Re-keying the URLs per server
+  // boot escapes the poisoned entry with no manual purge.
+  // ASSET_EPOCH is baked once per process; all three rewrite sites emit it:
+  assert.ok(proxy.includes('const ASSET_EPOCH = Date.now().toString(36);'));
+  assert.match(proxy, /assetCacheBustSuffix/);
+  // HTML attribute rewrite appends it (modulepreload links)
+  assert.match(proxy, /assetCacheBustSuffix\(full\)/);
+  // Bundle map-dep rewrite appends it (dynamic import URLs)
+  assert.match(proxy, /const suffix = `\?v=\$\{ASSET_EPOCH\}`;/);
+  // Injected bridge appends it (sub-resources added after load) with the
+  // SAME value, so preload/import URLs stay byte-identical.
+  assert.match(proxy, /var ASSET_EPOCH = \$\{JSON\.stringify\(ASSET_EPOCH\)\};/);
+  assert.match(proxy, /'v=' \+ ASSET_EPOCH;/);
 });
