@@ -238,6 +238,74 @@ error body — a misleading message for "you haven't picked a server". Resolve f
 state (`src/utils/tunnelConnection.js`) and, when there is none, say so; never invent an  
 id. The proxy route agrees on the shape: `/^[A-Za-z0-9_-]{6,64}$/` rejects `local`.
 
+### The path marker is VERSIONED — never hardcode it
+
+A path-keyed proxy URL is `/api/agents/webui-proxy/<marker>/<cid>/<port>/…`, where  
+`<marker>` is `ASSET_KEY` in `webui-proxy/route.js` — currently **`m2`**, bumped from  
+`m` on 2026-09-13 to evict a poisoned asset cache. **The HTTP catch-all imports that  
+constant; `server.js` is CommonJS and cannot**, so its WS upgrade parser hardcoded the  
+marker — and was not bumped with it:
+
+```js
+// server.js, handleWebUIProxyUpgrade — WRONG
+u.pathname.match(/^\/api\/agents\/webui-(?:ws-)?proxy\/m\/([^/]+)\/(\d+)…/)
+```
+
+Every WS upgrade on a URL the app actually mints then parsed to no coordinates and hit  
+`destroy()` — **silently**, with no HTTP status, which a hosted dashboard renders as an  
+auth failure. Measured with only the marker varying:
+
+| URL | result |
+|---|---|
+| `/api/agents/webui-ws-proxy?connectionId=…&path=%2F` (query form) | 101, alive, 1 frame |
+| `/api/agents/webui-proxy/m2/<cid>/18789/` (what the app mints) | **socket hang up** |
+| `/api/agents/webui-proxy/m/…` (the stale marker) | 101, alive, 1 frame |
+
+Now `/m\d*/`. `tests/webui-ws-path-key.test.mjs` pins the pattern against the **live  
+`ASSET_KEY` value** — because the older assertion in `webui-proxy-assets.test.mjs` pinned  
+the literal, so it kept passing while the pattern stopped matching anything.
+
+**Measure liveness, not the handshake.** "Did it open" is too weak: the monitor's upgrade  
+listener is a `prependListener`, so Next's dev-server upgradeHandler still sees the same  
+request. Hold the socket and check it survives — the OpenClaw gateway pushes a  
+`connect.challenge` frame immediately, so a healthy tunnel is unmistakable.
+
+### OpenClaw's Control UI needs a *gateway token*, and the bootstrap fragment is not one
+
+Symptom: the Control UI loads fine but shows *"This Gateway expects its token"* /  
+*"…rejected the supplied Gateway secret"*. **This is not a monitor bug** — the socket  
+reaches the gateway (101 + `connect.challenge`), and the gateway itself refuses the  
+handshake. Two things must both be true to diagnose it, and both are checkable:
+
+- **Does the target have a gateway token at all?** `~/.openclaw/openclaw.json` should  
+  carry one. A config of just `{"gateway":{"mode":"local","bind":"loopback"}}` has none,  
+  `secret_store_entries` in `~/.openclaw/state/openclaw.sqlite` is empty, and  
+  `openclaw dashboard --json` self-reports **`"tokenIncluded": false`**. With no token  
+  configured, *nothing* can match, so every attempt fails.
+- **What does the gateway log say?** `~/.openclaw/logs/gateway.log` distinguishes the two  
+  failure modes, and they are not interchangeable:
+
+  | log field | meaning |
+  |---|---|
+  | `auth=none reason=token_missing` | the UI presented nothing |
+  | `auth=password reason=token_mismatch` | the UI presented a secret and it was rejected |
+
+  `token_mismatch` is what the user sees as "rejected the supplied Gateway secret". The  
+  gateway's own `guidance=` field names the repair:  
+  `openclaw doctor --generate-gateway-token; restart`.
+
+**Do not try to fix this by injecting the bootstrap fragment.** It looks promising —  
+`openclaw dashboard --json` mints `#bootstrapToken=…&bootstrapProfile=owner`, and  
+`control-ui-core` really does prefer it (`preferBootstrapToken: true` is hardcoded).  
+Measured through the proxy, it is inert: the fragment survives to the page, the UI  
+consumes it (strips the hash), and then sends a `connect` frame with **no `auth` object  
+at all** → `AUTH_TOKEN_MISSING` again. Rewriting the fragment's `gatewayUrl` to our own  
+same-origin `webui-ws-proxy` endpoint does not rescue it either, because the settings  
+merge blanks `bootstrapToken` whenever the incoming gatewayUrl differs from the stored  
+one, and `dashboard --json` always hands out the target's loopback  
+(`ws://127.0.0.1:18789`) — unreachable from a browser. Both variants tested;  
+`scratch/probe-openclaw-bootstrap-rewrite.mjs` prints `Not a fix; do not ship it.`
+
 ### Shell fragments interpolated before `echo`
 
 zeroclaw's `broadKill` was missing its trailing `;`, so the shell parsed  
@@ -255,7 +323,7 @@ decide by port probe rather than marker for exactly this reason.
 npm test          # node --test, spec reporter
 ```
 
-- Current baseline: **577 tests / 7 suites / 0 fail** (~16 s).
+- Current baseline: **582 tests / 7 suites / 0 fail** (~16 s).
 - The spec reporter prints `ℹ tests N` / `ℹ pass N` / `ℹ fail N`. It does **not** print  
   TAP `#` lines — count `✔`/`✖` or read the `ℹ` summary.
 - `tests/_register-hooks.mjs` registers the `@/` alias for `node --test`, so tests *can*  
@@ -346,6 +414,29 @@ These are not optional extras — for anything needing a live server they are th
 - `probe-explore-bookmark-local.mjs` — drives the desktop Web Browser app's Explore  
   bookmarks. **4/0** with no connection, **3/0** with `STUB_CONN=1`. Pins the §4 rule that  
   no request may use the literal connection id `local`.
+- `probe-ws-path-key.mjs` — the controlled experiment for the marker bug above: same
+  handler, same target, only the URL form varies, and it holds the socket to check the
+  tunnel is *alive* rather than merely negotiated. `REVERSE=1` swaps case order, which is
+  how "follows the form" was separated from "follows the position".
+- `diag-openclaw-ws.mjs` — loads the OpenClaw Control UI through the proxy with CDP
+  WebSocket instrumentation (handshake, frames, close) and reports whether the injected
+  `window.WebSocket` patch was in effect. The tool that showed the socket reaching the
+  gateway with `auth=none`.
+- `probe-openclaw-bootstrap.mjs` — drives `openclaw dashboard --json` and tries the
+  returned one-time `browserUrl` through the proxy. Proved the fragment is delivered to the
+  page (`#bootstrapToken=` present at load) but that the Control UI still connects without
+  a token — i.e. the bootstrap fragment is not the missing piece.
+- `probe-openclaw-bootstrap-rewrite.mjs` — the follow-up that rules out the obvious rescue:
+  same as above, but also rewrites the fragment's `gatewayUrl` to our own same-origin
+  `webui-ws-proxy` endpoint. Prints the `connect` frame's `auth` field for each variant;
+  all three show `(NO auth object)`. This is the probe that says *stop* — see §4.
+- `probe-openclaw-handshake.mjs` — talks the gateway's raw WS protocol from inside the
+  target box, with no proxy and no Control UI in the loop. **Runs on the box, not locally**
+  (it shells out to `openclaw`); the header shows the base64-over-ssh incantation. Useful as
+  a technique: the envelope is `{type:"req", id, method, params}` (not JSON-RPC — that yields
+  `invalid request frame`), and the gateway validates `connect` params against a JSON
+  schema and **names every violation at once**. Sending deliberately incomplete params is
+  a far faster way to learn the required shape than reading the minified bundle.
 - `grant-supporter.mjs`, `mint-relay-token.mjs`.
 
 **Harness gotchas:** the session JWT must carry **ObjectId-shaped** `sub`/`dbId` (a bare  
@@ -402,6 +493,8 @@ Use a bracket trick (`'[s]se_test'`) or check by port instead.
 
 - `7192fca1 fix(agents): make the tunneled agent Web UIs actually work`
 - `24fab5f5 docs: add AGENTS.md handoff for the next agent`
+- `6ff9d304 fix(browser): stop addressing the WebUI proxy with the invented id 'local'`
+- `5f31d027 fix(webui-proxy): accept the versioned path marker in the WS upgrade parser`
 
 Shipped in this round:
 
@@ -411,15 +504,19 @@ Shipped in this round:
 - `_ssh.js` pre-ready connection leak fixed at three sites.
 - Agent bookmarks no longer address the proxy with the invented connection id `local`
   (§4) — the desktop Web Browser's Explore page 500ed on every agent bookmark.
-- Five new test files; `npm test` 547 → **577**.
+- `server.js`'s WS upgrade parser now accepts the **versioned** path marker (`/m\d*/`), so a
+  URL the app actually mints can no longer be silently dropped (§4).
+- Seven new test files; `npm test` 547 → **582**.
 
 Verified live against `fc-fedora40`:
 
-- `npm test` 577/577, eslint clean on changed files.
+- `npm test` **582/582**, 7 suites, eslint clean on changed files.
 - Proxy e2e across all four agents: **24/24**.
 - UI-card harness `e2e-webui-card-all4.mjs`: **46/0** (was 36/2, both failures being the
   harness's own mis-click).
 - Explore-bookmark probe: **4/0** with no server selected, **3/0** with one.
+- WS upgrade through the proxy for the path-keyed form the app mints: **101, socket held,
+  `connect.challenge` received** (was a silent socket hang up). `scratch/probe-ws-path-key.mjs`.
 - SSE through the proxy: first byte **0.18 s** (was 30.5 s, buffered).
 - OpenClaw through the proxy **with the full Cloudflare forwarded-header set present**:  
   200, real dashboard, no `proxy_attribution_required`.
@@ -430,24 +527,39 @@ Verified live against `fc-fedora40`:
 
 ### Open items
 
-1. **Nothing above is deployed.** Production is on an older bundle and does not auto-deploy.  
+1. **OpenClaw's Control UI token prompt is NOT a monitor bug — it needs a gateway token on
+   the box.** The user reported *"This Gateway expects its token"* / *"…rejected the supplied
+   Gateway secret"*. The socket reaches the gateway fine (101 + `connect.challenge`); the
+   gateway refuses the handshake because **no gateway token is configured there**:
+   `~/.openclaw/openclaw.json` is only `{"gateway":{"mode":"local","bind":"loopback"}}`,
+   `secret_store_entries` in `~/.openclaw/state/openclaw.sqlite` is **empty**, and
+   `openclaw dashboard --json` self-reports **`"tokenIncluded": false`**. The gateway log at
+   the screenshot's exact timestamp (`2026-09-14T09:52 UTC` = 16:52 Bangkok) shows
+   `auth=password reason=token_mismatch`, preceded by `auth=none reason=token_missing` —
+   a secret was offered and could not match, because there is nothing to match.
+   **Repair (target-side, mutates the user's setup — ask first):**
+   `openclaw doctor --generate-gateway-token`, then restart the gateway. The flag exists in
+   OpenClaw 2026.9.4. Injecting the `#bootstrapToken=` fragment is **not** a workaround —
+   measured inert, see §4. Not done here: generating a credential and restarting a service
+   on the user's box is their call, not ours.
+2. **Nothing above is deployed.** Production is on an older bundle and does not auto-deploy.  
    This is the single most likely reason a fix "didn't work". The OpenClaw 403 the user  
    re-reported was exactly this — the fix had never left the working tree.
-2. **ZeroClaw's content pane is fixed but not yet confirmed in a logged-in browser.** The  
+3. **ZeroClaw's content pane is fixed but not yet confirmed in a logged-in browser.** The  
    gateway stores device tokens encrypted (`enc2:…` in  
    `/root/.zeroclaw/config.toml` → `gateway.paired_tokens`), so a fresh headless session  
    stops at the pairing gate ("already paired"). Verification was therefore done at the  
    transport level (the three bullets above). **Worth a human eyeball** — and do not  
    re-pair the gateway to get one without asking; adding a device is a mutation of the  
    user's setup.
-3. **`probeTab()` shows raw HTML when the proxy 500s.** It sets the error card's copy to  
+4. **`probeTab()` shows raw HTML when the proxy 500s.** It sets the error card's copy to  
    `(await res.text()).slice(0, 300)`, and a 500 from this route is an HTML page — so the
    user reads `Web UI Unreachable <html><body style="background:#111…">💥 Proxy Error…`
    (captured in `scratch/explore-bookmark-local-withconn.png`). Not fixed here: it is an
    error-surface design question, not a functional break, and the real trigger for the
    agent bookmarks is gone. Extracting the text, or having the route answer with a plain
    message, are both reasonable.
-4. `webUIProbeShell`'s `/proc/net/tcp` fallback is IPv4-only. Low value: an IPv6-only bind  
+5. `webUIProbeShell`'s `/proc/net/tcp` fallback is IPv4-only. Low value: an IPv6-only bind  
    also fails the `curl 127.0.0.1` probe, so it surfaces as a visible "down" rather than a  
    silent wrong answer.
-5. hermes/nanobot still use inline copies of the probe/relay code (§2).
+6. hermes/nanobot still use inline copies of the probe/relay code (§2).

@@ -763,9 +763,23 @@ print('MODEL_TG_MERGED')
           // the relay reports the port it actually bound.
           localPortHint: 18793,
           monitorOrigin: String(config.monitorOrigin || ''),
-          // The Control UI authenticates with the gateway auth token, not a
-          // bootstrap query parameter, so there is nothing to inject here
-          // (unlike nanobot's bootstrapSecret).
+          // Nothing to inject here, unlike nanobot's bootstrapSecret — and this
+          // was measured, not assumed. `openclaw dashboard --json` does mint a
+          // one-time `#bootstrapToken=…&bootstrapProfile=owner`, and the Control
+          // UI does prefer it (`preferBootstrapToken: true` in control-ui-core),
+          // but through the proxy it is inert: the `connect` frame goes out with
+          // no `auth` object at all, so the gateway answers AUTH_TOKEN_MISSING
+          // and the UI shows its token prompt regardless.
+          //
+          // Rewriting the fragment's `gatewayUrl` to our own same-origin
+          // `webui-ws-proxy` endpoint does not help either — the settings merge
+          // blanks `bootstrapToken` whenever the incoming gatewayUrl differs from
+          // the stored one, and `dashboard --json` always hands out the target's
+          // loopback (`ws://127.0.0.1:18789`), which is unreachable from the
+          // browser. Both variants were tested; see AGENTS.md §4.
+          //
+          // The Control UI needs the gateway auth token, which only exists if the
+          // target has one configured (`openclaw doctor --generate-gateway-token`).
           bootstrapSecret: '',
           preferredRelay: options.preferredRelay,
           getSshConfig,
