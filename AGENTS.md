@@ -543,6 +543,12 @@ Verified live against `fc-fedora40`:
   `connect.challenge` received** (was a silent socket hang up). `scratch/probe-ws-path-key.mjs`.
 - Error card renders a real proxy 500 as `💥 Proxy Error Connection not found`: **7/0**.
   `scratch/probe-error-card-summary.mjs`.
+- ZeroClaw's dashboard boots through the proxy with **every asset 200** and **no console/page
+  errors** — the base-rewrite half of the content-pane fix, confirmed at runtime. The SPA's
+  own calls (`/health`, `/pair/code`) return 200. `scratch/diag-zeroclaw-content.mjs`.
+- The **doubled-slash collapse** holds: `…/42617//api/events` reaches the real gateway route
+  (`401` with the gateway's own body) instead of falling through to the SPA's `index.html`
+  under a `200`. That was the failure that made the pane sit empty with no error.
 - SSE through the proxy: first byte **0.18 s** (was 30.5 s, buffered).
 - OpenClaw through the proxy **with the full Cloudflare forwarded-header set present**:  
   200, real dashboard, no `proxy_attribution_required`.
@@ -571,13 +577,24 @@ Verified live against `fc-fedora40`:
 2. **Nothing above is deployed.** Production is on an older bundle and does not auto-deploy.  
    This is the single most likely reason a fix "didn't work". The OpenClaw 403 the user  
    re-reported was exactly this — the fix had never left the working tree.
-3. **ZeroClaw's content pane is fixed but not yet confirmed in a logged-in browser.** The  
-   gateway stores device tokens encrypted (`enc2:…` in  
-   `/root/.zeroclaw/config.toml` → `gateway.paired_tokens`), so a fresh headless session  
-   stops at the pairing gate ("already paired"). Verification was therefore done at the  
-   transport level (the three bullets above). **Worth a human eyeball** — and do not  
-   re-pair the gateway to get one without asking; adding a device is a mutation of the  
-   user's setup.
+3. **ZeroClaw's content pane: every layer up to the auth boundary is now verified; the
+   authenticated render is not, and cannot be from here.** The gateway's own gate replaces
+   the whole view before the pane mounts, so a fresh headless session never reaches it:
+
+   > This gateway is already paired — generate a code to add this device
+   > No pairing code was generated because a device is already paired.
+
+   `GET /api/events` and `/api/status` need `Authorization: Bearer <token>`
+   (`POST /pair` mints one); `/health` is open and reports `paired:true,
+   require_pairing:true`. The monitor app deliberately holds **no** dashboard token
+   (`webUIBootstrapPath: '/'`, `bootstrapSecret: ''` — it only drives the user through
+   `pairing-approve`), so there is nothing to inject. Verified WITHOUT auth, and passing:
+   the SPA boots with all assets 200, no console errors, and `//api/events` collapses onto
+   the real gateway route rather than the SPA fallback. What remains is narrow — *does the
+   pane render once the gateway accepts a token* — and reaching it means either pairing a
+   new device (a mutation: it appends to `gateway.paired_tokens` in
+   `/root/.zeroclaw/config.toml`, reversible by editing that list) or a human eyeball in an
+   already-paired browser. **Ask before pairing.**
 4. `webUIProbeShell`'s `/proc/net/tcp` fallback is IPv4-only. Low value: an IPv6-only bind  
    also fails the `curl 127.0.0.1` probe, so it surfaces as a visible "down" rather than a  
    silent wrong answer.
