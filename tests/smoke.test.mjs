@@ -52,6 +52,40 @@ test('SSH config resolves relay identity separately from database ownership iden
     'connection lookup must remain scoped to the database ownership identity');
 });
 
+test('every SSH client in _ssh.js releases itself when it fails before ready', () => {
+  const src = readFileSync('src/app/api/server-backup/_ssh.js', 'utf8');
+  // A bare `conn.on('error', reject)` leaks the client. Each of these functions
+  // closes its connection on every OTHER failure path — in `stream.on('close')`,
+  // in attachExecTimeout(), or in the individual stream error handlers — so a
+  // PRE-READY error (handshake timeout, auth refused, connection reset) was the
+  // only way to reject with the socket still open. Routes that probe with
+  // `{ pool: false }` on every request hit that path whenever the target is
+  // briefly unreachable; observed 2026-09-14 as accumulating dead clients while
+  // probing agent Web UIs against a loaded box.
+  // 1. The defect itself, in its many spellings — a handler that only rejects.
+  assert.doesNotMatch(src, /\.on\('error', reject\)/,
+    'no SSH client may reject without ending its connection');
+
+  // 2. Check every client site, not just the one we came here for: this leak was
+  // copy-pasted across several functions, and a new one would reintroduce it.
+  // Match the ASSIGNMENT form (`= new Client()`) so the prose in the comments
+  // above — which names `new Client()` — is not mistaken for a site.
+  const sites = [...src.matchAll(/=\s*new Client\(\)/g)].map((m) => m.index);
+  assert.ok(sites.length >= 4, `expected several SSH clients, found ${sites.length}`);
+  for (let i = 0; i < sites.length; i++) {
+    // Slice to the END OF THE ENCLOSING FUNCTION, not to the next client:
+    // sftpTransfer declares two clients on consecutive lines, so a
+    // between-clients slice is empty for the first of them.
+    const fnEnd = src.indexOf('\nexport function', sites[i] + 1);
+    const block = src.slice(sites[i], fnEnd === -1 ? src.length : fnEnd);
+    // Each function releases its connection somewhere in scope: directly via
+    // `conn.end()`, or through a `cleanup()` helper (the pooled client and
+    // sftpTransfer, which drives two connections from one `onErr`).
+    assert.match(block, /\.end\(\)|cleanup\(/,
+      `client #${i + 1} of ${sites.length} has no connection release in scope`);
+  }
+});
+
 test('relay status checks both provider and database identities', () => {
   const src = readFileSync('src/app/api/relay/token/route.js', 'utf8');
   assert.match(src, /User\.findOne\(\{ googleId: userId \}\)/,

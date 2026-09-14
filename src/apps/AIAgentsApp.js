@@ -100,11 +100,31 @@ const AGENTS = [
   },
 ];
 
-// Agents whose Web UI is a separate process we can start/stop on demand via
-// the `webui-ctl` action, and whose traffic can be direct-transferred through
-// the user's Local Relay (`op: 'relay-start'`). Anything else only has a
-// gateway port, reachable through the central proxy alone.
-const WEBUI_START_AGENTS = ['nanobot', 'hermes'];
+// Agents whose Web UI can be started/stopped on demand via the `webui-ctl`
+// action, and whose traffic can be direct-transferred through the user's Local
+// Relay (`op: 'relay-start'`).
+//
+// Two flavours live in here, and the difference matters for the Stop button:
+//   • nanobot / hermes  — the Web UI is a SEPARATE process from the messaging
+//     gateway, so stopping it is free of side effects.
+//   • zeroclaw / openclaw — there is no separate process. The agent's own
+//     daemon/gateway serves the dashboard on the same port it runs its channels
+//     on, so "stop the Web UI" and "stop the agent" are the same command.
+// See WEBUI_IS_AGENT_PROCESS below.
+const WEBUI_START_AGENTS = ['nanobot', 'hermes', 'zeroclaw', 'openclaw'];
+
+// Agents whose Web UI is served by the agent process itself (no separate
+// webui process). Starting one is meaningful and safe — it brings the
+// dashboard up. Stopping one takes the whole agent offline, so the Web UI card
+// offers no Stop button for these; the Overview tab's Gateway controls do the
+// same thing in a place where the consequence is named. Offering it here would
+// make "Stop" look like it only closed a dashboard.
+const WEBUI_IS_AGENT_PROCESS = ['zeroclaw', 'openclaw'];
+
+// Fallback Web UI port per agent, used ONLY until `details` reports a live one
+// (tagged instances get their own allocated port, and that value always wins).
+// Kept in one map so a new agent cannot silently inherit another's port.
+const WEBUI_DEFAULT_PORT = { hermes: 9119, nanobot: 8765, zeroclaw: 42617, openclaw: 18789 };
 
 // Hard client-side deadline for any Web UI open/start round trip. Every leg of
 // it server-side (SSH execs, the relay ack wait) has its own timeout, but their
@@ -888,8 +908,9 @@ export default function AIAgentsApp({ apiFetch }) {
 
   // Port the agent's Web UI listens on. Prefer the live value from `details`
   // (tagged instances get their own allocated port) and fall back to the
-  // agent's shipped default: Hermes' dashboard is 9119, nanobot's webui 8765.
-  const webUIPort = () => details?.webUIPort || (agent.id === 'hermes' ? 9119 : 8765);
+  // agent's shipped default — Hermes' dashboard is 9119, nanobot's webui 8765,
+  // ZeroClaw's dashboard 42617, OpenClaw's Control UI 18789.
+  const webUIPort = () => details?.webUIPort || WEBUI_DEFAULT_PORT[agent.id] || 8765;
 
   // Same-origin proxy fallback for this agent/target (see buildWebUIProxyUrl).
   // Handed to every failure card so the user is never left without a way in.
@@ -1013,9 +1034,10 @@ export default function AIAgentsApp({ apiFetch }) {
   handleStartWebUIRef.current = handleStartWebUI;
 
   // Stop the Web UI daemon. Only offered while it is actually serving
-  // (webUIActive), and only for agents that own a startable Web UI process —
-  // zeroclaw/openclaw expose a gateway port we never launched, so there is
-  // nothing for us to stop.
+  // (webUIActive), and only for agents whose Web UI is a SEPARATE process —
+  // for zeroclaw/openclaw the dashboard is served by the agent's own daemon,
+  // so this button is suppressed (WEBUI_IS_AGENT_PROCESS). Their lifecycle is
+  // the Overview tab's Gateway controls, where "stop" is named for what it is.
   //
   // `callAction` re-runs `loadDetails()` on completion, which is what flips the
   // button back to "Start Web UI" — webUIActive is a live probe, not local state.
@@ -2851,6 +2873,9 @@ export default function AIAgentsApp({ apiFetch }) {
                     (relayInfo?.relays || []).find((r) => Number(r?.webProxyPort) > 0)?.webProxyPort,
                   ) || 0;
                   const canStartStop = WEBUI_START_AGENTS.includes(agent.id);
+                  // Starting is always safe; stopping is only offered when the
+                  // Web UI is its own process (see WEBUI_IS_AGENT_PROCESS).
+                  const canStopWebUI = canStartStop && !WEBUI_IS_AGENT_PROCESS.includes(agent.id);
                   const { label: openLabel, Icon: OpenIcon } = webUIOpenButton(webUIOpenMode);
                   return (
                     <div className="rounded-xl border border-sky-500/25 bg-sky-500/5 p-3 space-y-2.5">
@@ -2897,8 +2922,9 @@ export default function AIAgentsApp({ apiFetch }) {
                             onClick={handleStartWebUI}
                             // Blocked while already running (nothing to start) and
                             // while a start is in flight (avoid double-launch).
-                            // webUIActive reflects the Web UI port itself, NOT the
-                            // gateway process — they are separate processes.
+                            // webUIActive reflects the Web UI PORT, not the agent
+                            // process — for nanobot/hermes they are separate; for
+                            // zeroclaw/openclaw the same process serves both.
                             disabled={startingWebUI || !!details?.webUIActive}
                             className={
                               details?.webUIActive
@@ -2908,7 +2934,12 @@ export default function AIAgentsApp({ apiFetch }) {
                             title={
                               details?.webUIActive
                                 ? `Web UI is already running on port ${uiPort}`
-                                : `Start the ${agent.name} Web UI process on port ${uiPort}`
+                                : WEBUI_IS_AGENT_PROCESS.includes(agent.id)
+                                  // Honest about the side effect: for these agents the
+                                  // dashboard is served by the agent's own daemon, so
+                                  // starting it starts the agent too.
+                                  ? `Start the ${agent.name} daemon on port ${uiPort} — it serves this dashboard (and the agent's channels)`
+                                  : `Start the ${agent.name} Web UI process on port ${uiPort}`
                             }
                           >
                             {details?.webUIActive ? (
@@ -2920,7 +2951,7 @@ export default function AIAgentsApp({ apiFetch }) {
                             )}
                           </button>
                         )}
-                        {canStartStop && details?.webUIActive && (
+                        {canStopWebUI && details?.webUIActive && (
                           <button
                             data-stop-webui-btn
                             onClick={handleStopWebUI}

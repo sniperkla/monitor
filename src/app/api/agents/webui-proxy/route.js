@@ -18,6 +18,9 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
+// Pure string transform, split out so tests can call it directly instead of
+// regex-matching this file's source (see the module's own doc comment).
+import { rewriteAbsoluteSelfUrls, collapseLeadingSlashes } from '../_webui-rewrite';
 import { getSshConfig, getOrCreatePooledClient } from '@/app/api/server-backup/_ssh';
 import http from 'http';
 
@@ -148,6 +151,118 @@ function httpOverSocket(socket, remotePort, reqPath, reqMethod, reqHeaders, reqB
     if (reqBody?.length) req.write(reqBody);
     req.end();
   });
+}
+
+/**
+ * Like `httpOverSocket`, but resolves as soon as the response HEADERS arrive and
+ * hands back the live upstream stream instead of buffering the whole body.
+ *
+ * WHY THIS EXISTS — Server-Sent Events. `httpOverSocket` waits for `end` before
+ * it resolves, and an event stream never ends, so through that path the browser
+ * received nothing until the 30 s timeout fired and then got a single stale
+ * burst (measured against a controlled SSE origin: 30.5 s to first byte). A
+ * dashboard that takes its live data from `GET /api/events` — ZeroClaw does —
+ * renders its chrome and leaves the content pane empty forever.
+ *
+ * There is deliberately NO body timeout: an event feed is supposed to stay open.
+ * The only reliable end-of-life signal is the client going away, handled by the
+ * ReadableStream's `cancel()` in `eventStreamResponse`.
+ */
+function httpOverSocketStreaming(socket, remotePort, reqPath, reqMethod, reqHeaders, reqBody) {
+  return new Promise((resolve, reject) => {
+    const options = {
+      createConnection: () => socket,
+      hostname: '127.0.0.1',
+      port: remotePort,
+      path: reqPath,
+      method: reqMethod,
+      headers: {
+        ...reqHeaders,
+        host: `127.0.0.1:${remotePort}`,
+        // Same reasoning as httpOverSocket: this app's session cookie is not
+        // the agent's credential. `authorization` must survive.
+        cookie: undefined,
+      },
+    };
+    for (const k of Object.keys(options.headers)) {
+      if (options.headers[k] === undefined) delete options.headers[k];
+    }
+
+    let settled = false;
+    const settle = (fn, val) => { if (!settled) { settled = true; fn(val); } };
+
+    // Guards only the wait for HEADERS. A target that accepts the channel and
+    // then never answers must not hold the request open forever.
+    const to = setTimeout(() => settle(reject, new Error('HTTP over SSH header timeout')), 30000);
+
+    const req = http.request(options, (res) => {
+      clearTimeout(to);
+      settle(resolve, { status: res.statusCode, headers: res.headers, upstream: res });
+    });
+    req.on('error', (e) => { clearTimeout(to); settle(reject, e); });
+
+    if (reqBody?.length) req.write(reqBody);
+    req.end();
+  });
+}
+
+/**
+ * Wrap a live upstream response as a streaming NextResponse.
+ *
+ * Nothing here may buffer, and `content-length` is dropped because the length is
+ * not known. `x-accel-buffering: no` is essential in production: nginx buffers
+ * proxied responses by default, which would silently re-introduce the exact
+ * delay this avoids — the app would look fine on localhost and hang behind the
+ * deployed reverse proxy.
+ */
+function eventStreamResponse(up, sshChannel, remotePath) {
+  const headers = new Headers();
+  // Hop-by-hop headers describe the monitor→agent leg and must not be relayed,
+  // and the frame-blocking ones are replaced below (see frameHeaders).
+  const drop = new Set([
+    'content-length', 'content-encoding', 'transfer-encoding',
+    'connection', 'keep-alive',
+    'x-frame-options', 'content-security-policy',
+    'content-security-policy-report-only',
+    'cross-origin-opener-policy', 'cross-origin-embedder-policy',
+    'cross-origin-resource-policy',
+  ]);
+  for (const [k, v] of Object.entries(up.headers || {})) {
+    if (drop.has(k.toLowerCase()) || v === undefined) continue;
+    if (Array.isArray(v)) for (const item of v) headers.append(k, item);
+    else headers.set(k, v);
+  }
+  // Never cache an event feed: a stored copy is stale by construction, and an
+  // intermediary (Cloudflare sits in front of production) replaying it would
+  // serve a frozen dashboard.
+  headers.set('cache-control', 'no-store, max-age=0');
+  headers.set('x-accel-buffering', 'no');
+  headers.set('x-frame-options', 'SAMEORIGIN');
+  headers.set('cross-origin-resource-policy', 'cross-origin');
+  headers.set('cross-origin-embedder-policy', 'credentialless');
+
+  const upstream = up.upstream;
+  const closeChannel = () => { try { sshChannel.close(); } catch { /* already gone */ } };
+
+  const body = new ReadableStream({
+    start(controller) {
+      upstream.on('data', (chunk) => {
+        // `enqueue` throws once the consumer has gone away; the `cancel()`
+        // handler below is what actually tears the tunnel down.
+        try { controller.enqueue(new Uint8Array(chunk)); } catch { /* consumer gone */ }
+      });
+      upstream.on('end', () => { closeChannel(); try { controller.close(); } catch { /* already closed */ } });
+      upstream.on('error', (e) => { closeChannel(); try { controller.error(e); } catch { /* already closed */ } });
+    },
+    cancel() {
+      // The browser navigated away or aborted. Tear the channel down now, or
+      // the SSH forward stays open until the pool's 30 s idle timeout.
+      try { upstream.destroy(); } catch { /* already gone */ }
+      closeChannel();
+    },
+  });
+
+  return new NextResponse(body, { status: up.status, headers });
 }
 
 /**
@@ -562,14 +677,6 @@ function rewriteRootAssetRefs(text, connectionId, port) {
     .replace(/(["'`])\/assets\//g, (_m, quote) => `${quote}${prefix}/assets/`);
 }
 
-function rewriteAbsoluteSelfUrls(text, proxyBase, port) {
-  const re = new RegExp(
-    '(https?:\\/\\/)(?:localhost|127\\.0\\.0\\.1|0\\.0\\.0\\.0|\\[::1\\])(?::' + port + ')?((?:\\/)[^\\s"\'`<>\\\\)\\]]*)?',
-    'gi'
-  );
-  return text.replace(re, (_m, _scheme, path) => proxyBase + encodeURIComponent(path || '/'));
-}
-
 // ─── coordinate memory ───────────────────────────────────────────────────────
 
 // The hosted SPA normalises the address bar and drops the proxy's query string,
@@ -628,6 +735,15 @@ async function handleProxy(request) {
     if (remotePath.includes('#')) {
       remotePath = remotePath.split('#')[0] || '/';
     }
+    // Collapse a doubled leading slash. A bundle that builds a URL by
+    // concatenating a base which already ends in `/` onto a path that starts
+    // with one produces `//api/events`; the agent's server has no such route and
+    // answers with its SPA index.html under a 200, so the caller gets a
+    // successful response full of HTML instead of the resource it asked for.
+    // Normalising here also rescues browsers still holding an already-cached
+    // bundle that composes the bad URL (assets are served `immutable`, so a
+    // client can keep the old bytes for a year).
+    remotePath = collapseLeadingSlashes(remotePath);
     // /cdn-cgi/* is Cloudflare-edge infrastructure (RUM analytics beacon,
     // challenge pages, email obfuscation, …). It exists ONLY on the CDN in
     // front of THIS origin, never on the tunneled agent box. A stale injected
@@ -734,17 +850,39 @@ async function handleProxy(request) {
         ? Buffer.from(await request.arrayBuffer())
         : null;
 
+      // Headers that describe the *upstream* hop (Cloudflare → monitor) rather
+      // than this one (monitor → agent). The monitor is the direct client of
+      // the agent over the SSH tunnel, so none of these are true at this hop,
+      // and some agents actively reject them:
+      //   - OpenClaw's Control UI classifies `forwarded`, `x-real-ip` or any
+      //     `x-forwarded-*` arriving from a non-trusted peer as an
+      //     unattributable proxy and answers 403 proxy_attribution_required.
+      //   - `host` and `cookie` are rebuilt by httpOverSocket() below.
+      const DROP_HEADERS = new Set([
+        'host', 'cookie', 'accept-encoding',
+        'x-forwarded-for', 'x-forwarded-host', 'x-forwarded-port',
+        'x-forwarded-proto', 'x-forwarded-server', 'x-real-ip',
+        'forwarded', 'cf-connecting-ip', 'cf-ray', 'true-client-ip',
+      ]);
       const fwdHeaders = {};
       for (const [k, v] of request.headers.entries()) {
         const kl = k.toLowerCase();
         // `authorization` is intentionally NOT stripped — see the note in
         // httpOverSocket(). Only this app's own session credentials (cookie)
-        // and upstream-supplied client IPs are withheld.
-        if (['host','cookie','x-forwarded-for','cf-connecting-ip','accept-encoding'].includes(kl)) continue;
+        // and upstream-hop identity headers are withheld.
+        if (DROP_HEADERS.has(kl) || kl.startsWith('x-forwarded-')) continue;
         fwdHeaders[k] = v;
       }
       // Request uncompressed so we can reliably inspect & rewrite HTML / CSS
       fwdHeaders['accept-encoding'] = 'identity';
+
+      // An event-stream request must be relayed live. Buffering it (the default
+      // path below) delivers nothing until the 30 s timeout and then one stale
+      // burst, which is indistinguishable from "the dashboard never loads".
+      if (/\btext\/event-stream\b/i.test(request.headers.get('accept') || '')) {
+        const up = await httpOverSocketStreaming(stream, port, remotePath, method, fwdHeaders, body);
+        return eventStreamResponse(up, stream, remotePath);
+      }
 
       resp = await httpOverSocket(stream, port, remotePath, method, fwdHeaders, body);
     } catch (e) {
@@ -887,7 +1025,7 @@ async function handleProxy(request) {
     // and mangle, truncating the script mid-line.
     if (contentType.includes('text/html')) {
       let html = body.toString('utf8');
-      html = rewriteAbsoluteSelfUrls(html, proxyBase, port);
+      html = rewriteAbsoluteSelfUrls(html, proxyBase, port, assetPathPrefix(connectionId, port));
       html = rewriteHtml(html, proxyBase, remotePath, port, connectionId, agentId, extraProxyQuery);
       // Hermes' dashboard uses a hash router (routes are /hermes/chat,
       // /hermes/history, etc.). Do not overwrite its base-path marker with the
@@ -920,7 +1058,7 @@ async function handleProxy(request) {
       // through the proxy so the app can never navigate out of the tunnel.
       let text = body.toString('utf8');
       const rewritten = rewriteRootAssetRefs(
-        rewriteAbsoluteSelfUrls(text, proxyBase, port),
+        rewriteAbsoluteSelfUrls(text, proxyBase, port, assetPathPrefix(connectionId, port)),
         connectionId,
         port
       );

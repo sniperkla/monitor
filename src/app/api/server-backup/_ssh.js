@@ -346,7 +346,21 @@ export function execCommand(sshConfig, command, options = {}) {
         });
       });
     });
-    conn.on('error', reject);
+    // Tear the client down on a PRE-READY failure too.
+    //
+    // The success path closes it in `stream.on('close')` and a post-ready
+    // timeout closes it in attachExecTimeout() — but an error before `ready`
+    // (handshake timeout, auth refused, connection reset) used to reject and
+    // leave the Client holding its socket and timers. Callers that probe with
+    // `{ pool: false }` on every request hit this path whenever the target is
+    // briefly unreachable, so dead clients accumulated in the monitor process.
+    // Observed 2026-09-14 while probing agent Web UIs against a loaded target:
+    // repeated "Timed out while waiting for handshake".
+    //
+    // sftpUpload and sftpReadStream carried the same bare `reject`; both are
+    // fixed too. Every `new Client()` in this file now releases itself on a
+    // pre-ready error — see tests/smoke.test.mjs, which fails if one regresses.
+    conn.on('error', (err) => { try { conn.end(); } catch {} reject(err); });
     conn.connect(sshConfig);
   });
 }
@@ -381,7 +395,10 @@ export function sftpUpload(sshConfig, localPath, remotePath, { onProgress } = {}
         readStream.on('error', (e) => { conn.end(); reject(e); });
       });
     });
-    conn.on('error', reject);
+    // Same pre-ready leak as execCommand's non-pooled path: every other failure
+    // path in this function ends the connection, so this one was the only way
+    // to reject while leaving the client holding its socket.
+    conn.on('error', (err) => { try { conn.end(); } catch {} reject(err); });
     conn.connect(sshConfig);
   });
 }
@@ -410,7 +427,12 @@ export function sftpReadStream(sshConfig, filePath) {
         resolve(stream);
       });
     });
-    conn.on('error', reject);
+    // Same pre-ready leak. Safe to end here: this handler only runs with no
+    // usable stream in hand — once a stream IS resolved the caller owns the
+    // connection and closes it in the stream's own `close` handler. A late
+    // error after resolution hits the already-settled promise, so the only
+    // effect is releasing a connection that has already failed.
+    conn.on('error', (err) => { try { conn.end(); } catch {} reject(err); });
     conn.connect(sshConfig);
   });
 }

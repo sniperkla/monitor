@@ -5145,14 +5145,27 @@ fi'`;
               dbg('forwardOut ok, rawUrl=', rawUrl);
               // Node consumed the client's request bytes — rebuild the
               // upgrade request for the remote service.
-              const skip = new Set(['host', 'connection', 'upgrade', 'cookie', 'origin']);
+              // Headers describing the upstream Cloudflare→monitor hop are
+              // dropped here: the monitor is the direct client of the agent
+              // over the SSH tunnel, so they are untrue at this hop and some
+              // agents reject them outright (OpenClaw answers 403
+              // proxy_attribution_required for any `x-forwarded-*`/`forwarded`/
+              // `x-real-ip` arriving from a non-trusted peer). Mirrors the
+              // HTTP proxy's DROP_HEADERS in webui-proxy/route.js.
+              const skip = new Set([
+                'host', 'connection', 'upgrade', 'cookie', 'origin',
+                'x-forwarded-for', 'x-forwarded-host', 'x-forwarded-port',
+                'x-forwarded-proto', 'x-forwarded-server', 'x-real-ip',
+                'forwarded', 'cf-connecting-ip', 'cf-ray', 'true-client-ip',
+              ]);
               let raw = `${req.method} ${rawUrl} HTTP/1.1\r\n`;
               raw += `Host: 127.0.0.1:${port}\r\n`;
               // Origin must match the tunneled origin — some WS servers reject
               // handshakes whose Origin is a foreign host.
               raw += `Origin: http://127.0.0.1:${port}\r\n`;
               for (const [k, v] of Object.entries(req.headers)) {
-                if (skip.has(k.toLowerCase())) continue;
+                const kl = k.toLowerCase();
+                if (skip.has(kl) || kl.startsWith('x-forwarded-')) continue;
                 raw += `${k}: ${Array.isArray(v) ? v.join(', ') : v}\r\n`;
               }
               // Forward non-monitor cookies (e.g. agent session cookies / tokens)

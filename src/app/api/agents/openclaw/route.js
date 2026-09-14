@@ -7,6 +7,7 @@ import { execDetached } from '@/app/api/agents/_remote-bg';
 import { getLatestAgentVersion, isNewerVersion } from '../_version-check';
 import { logger } from '@/lib/logger';
 import { parseInst, homeDir, instancePort, listInstances, cloneDefaultHome, pidAlive, gatewayUnit, ensureInstanceUnit, writeInstanceEnv, sdAvailable, sdInstanceCtl, copyInstanceBin } from '../_multi-instance';
+import { webUIProbeShell, parseWebUIProbe, startWebuiRelayTunnel } from '../_webui-relay';
 
 /**
  * OpenClaw (openclaw.ai) one-click installer — deploys the OpenClaw gateway
@@ -133,6 +134,16 @@ async function handleAgentAction(body, session, log = [], options = {}) {
       return r;
     };
     const b64 = (s) => Buffer.from(String(s), 'utf8').toString('base64');
+
+    // Function-level PATH/XDG preamble for ad-hoc execs.
+    //
+    // `gwCtl` and several handlers declare their own local ENVX (some of which
+    // additionally source the instance .env). This one is the plain default so
+    // that handlers outside those blocks — the Web UI probe and webui-ctl — have
+    // a PATH that can see an npm-installed `openclaw`. Referencing `ENVX` from a
+    // block that did not declare one used to be a ReferenceError swallowed by a
+    // try/catch, which made the Control UI probe silently report "not running".
+    const ENVX = `export XDG_RUNTIME_DIR="/run/user/$(id -u)" 2>/dev/null; export PATH="$HOME/.openclaw/local/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/usr/sbin:$PATH"`;
 
     // -- Multi-instance support (hermes blueprint) --
     const inst = parseInst(body);
@@ -398,6 +409,25 @@ echo "===ENVKEYS==="
           updateAvailable = isNewerVersion(currentVer, latestVersion);
         }
       } catch (_) {}
+
+      // Is the Control UI actually serving on its port?
+      //
+      // `running` above is the GATEWAY process, which serves the Control UI but
+      // can also be up while the HTTP listener is not (a bounce during startup,
+      // a port conflict, a bind configured elsewhere). The UI uses this flag to
+      // disable the Start button, so probe the port instead of inferring it.
+      const wuiPort = GW_PORT || 18789;
+      let webUIActive = false;
+      let webUIBind = null;
+      let webUILoopback = false;
+      try {
+        const wuResp = await execCommand(sshConfig, `${ENVX}; ${webUIProbeShell(wuiPort)}`, { pool: false, timeoutMs: 8000 });
+        const p = parseWebUIProbe(wuResp?.stdout);
+        webUIActive = p.active;
+        webUIBind = p.bind;
+        webUILoopback = p.loopback;
+      } catch { /* treat as not running */ }
+
       return NextResponse.json({
         success: true,
         installed: !!binR || !!configJson,
@@ -413,8 +443,17 @@ echo "===ENVKEYS==="
         envText: envText || '',
         envKeys,
         skills: [...skillsList],
-        webUIPort: GW_PORT || 18789,
+        webUIPort: wuiPort,
         hasWebUI: true,
+        // True only when the Control UI is actually answering on webUIPort —
+        // distinct from `running` (the gateway process), see the probe above.
+        webUIActive,
+        // Listen address of the Control UI port on the target ('127.0.0.1',
+        // '0.0.0.0', …) and whether it is loopback-only. AIAgentsApp offers the
+        // "Via server" proxy route only when this is true.
+        webUIBind,
+        webUILoopback,
+        webUIBootstrapPath: '/',
         systemPrompt,
         promptFiles: {
           'PROMPT.md': systemPrompt,
@@ -659,6 +698,131 @@ print('MODEL_TG_MERGED')
       }
       return ok;
     };
+    // ── WEB UI (Control UI) control ────────────────────────────────────────
+    //
+    // OpenClaw has no separate control-ui command: `openclaw gateway` serves the
+    // bundled Control UI itself on the gateway port (default 18789). Verified on
+    // the real install path — GET http://127.0.0.1:18789/ answers 200 with
+    // <title>OpenClaw Control</title> and data-openclaw-control-ui-base-path="".
+    // So "start the Web UI" means "make sure the gateway is up and that port
+    // answers", which is what gwCtl already does; this handler adds the
+    // WebUI-shaped contract the client expects (active / port /
+    // webUIBootstrapPath, plus relay-start).
+    //
+    // Consequence worth knowing: stopping this ALSO stops the agent's channels,
+    // because they share one process. The UI therefore offers no Stop button
+    // for openclaw (see WEBUI_IS_AGENT_PROCESS in AIAgentsApp) — the Overview
+    // tab's gateway controls are where that consequence is named.
+    if (action === 'webui-ctl') {
+      const op = ['start', 'stop', 'restart', 'status', 'relay-start'].includes(config.op) ? config.op : 'status';
+      const wuPort = parseInt(config.port, 10) > 0 ? parseInt(config.port, 10) : (GW_PORT || 18789);
+      const probe = async () => parseWebUIProbe(
+        (await execCommand(sshConfig, `${ENVX}; ${webUIProbeShell(wuPort)}`, { pool: false, timeoutMs: 15000 })).stdout,
+      );
+
+      if (op === 'status') {
+        const p = await probe();
+        return NextResponse.json({ success: true, active: p.active, op, port: wuPort, httpCode: p.code });
+      }
+
+      if (op === 'stop') {
+        log.push(`> Stopping OpenClaw gateway — the Control UI IS this process (port ${wuPort})...`);
+        const g = await gwCtl('stop');
+        // Verify by PROBE, not by the marker string `gwCtl` greps for — see the
+        // note in the zeroclaw route: a shell-level quoting slip can swallow the
+        // marker while the kill still works, and "did the port go away?" is the
+        // question the user actually cares about.
+        let stillUp = (await probe()).active;
+        for (let waited = 0; stillUp && waited < 12; waited += 3) {
+          await new Promise((r) => setTimeout(r, 3000));
+          stillUp = (await probe()).active;
+        }
+        if (stillUp) {
+          const errMsg = g.out || 'OpenClaw gateway is still running — it may be supervised by a service manager that restarts it.';
+          log.push(`✗ ${errMsg}`);
+          return NextResponse.json({ success: false, active: true, op, port: wuPort, error: errMsg, log });
+        }
+        log.push(`✓ OpenClaw gateway stopped — Control UI and channels are both down (port ${wuPort})`);
+        return NextResponse.json({
+          success: true,
+          active: false,
+          op,
+          port: wuPort,
+          output: `OpenClaw gateway stopped — the Control UI and its channels are both down (port ${wuPort}).`,
+          log,
+        });
+      }
+
+      if (op === 'relay-start') {
+        const r = await startWebuiRelayTunnel({
+          session,
+          connectionId,
+          remotePort: wuPort,
+          // 18793 keeps openclaw clear of nanobot (18790), hermes (18791) and
+          // zeroclaw (18792) when one machine hosts several tunnels. Hint only —
+          // the relay reports the port it actually bound.
+          localPortHint: 18793,
+          monitorOrigin: String(config.monitorOrigin || ''),
+          // The Control UI authenticates with the gateway auth token, not a
+          // bootstrap query parameter, so there is nothing to inject here
+          // (unlike nanobot's bootstrapSecret).
+          bootstrapSecret: '',
+          preferredRelay: options.preferredRelay,
+          getSshConfig,
+          log,
+        });
+        return NextResponse.json(r.body, { status: r.status });
+      }
+
+      // ── op === 'start' | 'restart' ──
+      // Already serving and nothing to restart? Report it and let the client
+      // open a tab rather than bouncing a working gateway.
+      if (op === 'start') {
+        const p = await probe();
+        if (p.active) {
+          log.push(`✓ OpenClaw Control UI is already serving on port ${wuPort} (HTTP ${p.code})`);
+          return NextResponse.json({
+            success: true, active: true, op, port: wuPort,
+            webUIBootstrapPath: '/',
+            output: `OpenClaw Web UI is already running on port ${wuPort}`,
+            log,
+          });
+        }
+      }
+
+      log.push(`> Starting OpenClaw gateway (it serves the Control UI on port ${wuPort})...`);
+      const g = await gwCtl(op === 'restart' ? 'restart' : 'start');
+      if (g.ok === false) {
+        log.push(`✗ ${g.out || 'gateway start failed'}`);
+        return NextResponse.json({
+          success: false, active: false, op, port: wuPort,
+          error: g.out || 'OpenClaw gateway did not start',
+          log,
+        });
+      }
+
+      // The gateway can bounce once right after start (port-release race) and
+      // only binds the HTTP listener after its plugins load, so poll the PORT
+      // rather than trusting the process table.
+      let p = await probe();
+      for (let waited = 0; !p.active && waited < 45; waited += 3) {
+        await new Promise((r) => setTimeout(r, 3000));
+        p = await probe();
+      }
+      if (p.active) {
+        log.push(`✓ OpenClaw Control UI started on port ${wuPort} (HTTP ${p.code})`);
+        return NextResponse.json({
+          success: true, active: true, op, port: wuPort,
+          webUIBootstrapPath: '/',
+          output: `OpenClaw Web UI is running on port ${wuPort}`,
+          log,
+        });
+      }
+      const errMsg = 'The OpenClaw gateway is running but its Control UI is not answering on the expected port — check ~/.openclaw/logs/gateway.log (the gateway bind/mode may be configured elsewhere).';
+      log.push(`✗ ${errMsg}`);
+      return NextResponse.json({ success: false, active: false, op, port: wuPort, error: errMsg, log });
+    }
+
     if (action === 'gateway') {
       const op = config.op || 'status';
       const g = await gwCtl(op);

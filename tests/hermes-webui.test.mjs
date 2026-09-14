@@ -75,13 +75,28 @@ test('hermes details reports the dashboard as a live-probed Web UI', () => {
 });
 
 test('hermes joins nanobot in the Web UI quick-launch card', () => {
-  assert.match(app, /const WEBUI_START_AGENTS = \['nanobot', 'hermes'\]/);
-  // Both the Start button and the Local Relay direct-transfer path are gated on
-  // that list, so hermes gets both.
+  // The list is the single gate for both the Start button and the Local Relay
+  // direct-transfer path, so every agent in it gets both. It grew from
+  // ['nanobot','hermes'] to cover zeroclaw and openclaw; assert membership
+  // rather than the literal array so adding an agent does not need a test edit.
+  const startList = /const WEBUI_START_AGENTS = \[([^\]]*)\]/.exec(app);
+  assert.ok(startList, 'WEBUI_START_AGENTS must be declared');
+  const ids = startList[1].split(',').map((s) => s.trim().replace(/^'|'$/g, '')).filter(Boolean);
+  for (const id of ['nanobot', 'hermes', 'zeroclaw', 'openclaw']) {
+    assert.ok(ids.includes(id), `${id} must be in WEBUI_START_AGENTS`);
+  }
   assert.match(app, /WEBUI_START_AGENTS\.includes\(agent\.id\)/);
   assert.match(app, /WEBUI_START_AGENTS\.includes\(agentRef\.current\?\.id\)/);
-  // Port fallback must be hermes-aware (9119), not nanobot's 8765.
-  assert.match(app, /agent\.id === 'hermes' \? 9119 : 8765/);
+
+  // Port fallback must be per-agent. A shared map replaced the old
+  // `agent.id === 'hermes' ? 9119 : 8765` ternary — that ternary silently gave
+  // every new agent nanobot's port, which is exactly the bug this pins against.
+  const portMap = /const WEBUI_DEFAULT_PORT = \{([^}]*)\}/.exec(app);
+  assert.ok(portMap, 'WEBUI_DEFAULT_PORT map must exist');
+  for (const [id, port] of [['hermes', 9119], ['nanobot', 8765], ['zeroclaw', 42617], ['openclaw', 18789]]) {
+    assert.match(portMap[1], new RegExp(`${id}:\\s*${port}`), `${id} fallback port must be ${port}`);
+  }
+  assert.doesNotMatch(app, /agent\.id === 'hermes' \? 9119 : 8765/);
 });
 
 test('webui-ctl stop returns a response instead of falling off the block', () => {
@@ -119,14 +134,35 @@ test('webui-ctl restart still reaches the launcher after the stop fix', () => {
 test('the Web UI card offers a Stop control only while the UI is serving', () => {
   assert.match(app, /data-stop-webui-btn/);
   assert.match(app, /onClick=\{handleStopWebUI\}/);
-  // Gated on both: an agent we actually launched, and a live webUIActive probe.
-  // The card hoists that first half into `canStartStop` (it gates the Start
-  // button too), so assert the definition AND the use — otherwise this would
-  // pass on any truthy name.
+  // Gated on both: an agent whose Web UI is a SEPARATE process, and a live
+  // webUIActive probe. The card hoists the first half into `canStartStop` (it
+  // gates the Start button too), so assert the definition AND the use —
+  // otherwise this would pass on any truthy name.
   assert.match(app, /const canStartStop = WEBUI_START_AGENTS\.includes\(agent\.id\)/);
-  assert.match(app, /canStartStop && details\?\.webUIActive/);
+  assert.match(app, /const canStopWebUI = canStartStop && !WEBUI_IS_AGENT_PROCESS\.includes\(agent\.id\)/);
+  assert.match(app, /canStopWebUI && details\?\.webUIActive/);
   // Refresh comes from callAction's own loadDetails(), so webUIActive re-probes.
   assert.match(app, /config: \{ op: 'stop', port: webUIPort\(\) \}/);
+});
+
+test('agents whose own daemon serves the dashboard get no Stop button', () => {
+  // zeroclaw's `daemon` and openclaw's `gateway` serve their dashboard on the
+  // SAME port they run their channels on — there is no separate webui process.
+  // "Stop the Web UI" would therefore take the whole agent offline, which is
+  // not what a Stop button next to a dashboard implies. The Overview tab's
+  // Gateway controls own that action, where the consequence can be named.
+  assert.match(app, /const WEBUI_IS_AGENT_PROCESS = \['zeroclaw', 'openclaw'\]/);
+  // Every agent that can start a Web UI must be in one of the two buckets, and
+  // the agent-process bucket must be a strict subset — a typo in either list
+  // would silently either strand an agent or expose a destructive Stop.
+  const startList = /const WEBUI_START_AGENTS = \[([^\]]*)\]/.exec(app)[1]
+    .split(',').map((s) => s.trim().replace(/^'|'$/g, '')).filter(Boolean);
+  const agentProc = /const WEBUI_IS_AGENT_PROCESS = \[([^\]]*)\]/.exec(app)[1]
+    .split(',').map((s) => s.trim().replace(/^'|'$/g, '')).filter(Boolean);
+  for (const id of agentProc) {
+    assert.ok(startList.includes(id), `${id} is in WEBUI_IS_AGENT_PROCESS but cannot start a Web UI`);
+  }
+  assert.ok(agentProc.length < startList.length, 'a strict subset is required for the Stop gate to mean anything');
 });
 
 test('webui proxy starts the right agent when the UI is down', () => {

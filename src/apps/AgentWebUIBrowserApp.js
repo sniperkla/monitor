@@ -217,6 +217,20 @@ function hostnameOf(target, fallback = '') {
   try { return new URL(target).hostname || fallback; } catch { return fallback; }
 }
 
+// agent:// shortcuts — one table so the address bar, the explore bookmarks and
+// the tab titles cannot disagree about an agent's port or display name.
+// Ports are the agents' shipped Web UI defaults:
+//   hermes   9119  `hermes dashboard` (Vite SPA)
+//   nanobot  8765  `nanobot webui`
+//   zeroclaw 42617 `zeroclaw daemon` — serves its own dashboard
+//   openclaw 18789 `openclaw gateway` — serves the Control UI
+const AGENT_WEBUI = {
+  hermes: { label: 'Hermes', port: 9119 },
+  nanobot: { label: 'Nanobot', port: 8765 },
+  zeroclaw: { label: 'ZeroClaw', port: 42617 },
+  openclaw: { label: 'OpenClaw', port: 18789 },
+};
+
 // Curated explore bookmarks for dev & AI productivity
 const EXPLORE_BOOKMARKS = [
   {
@@ -226,6 +240,8 @@ const EXPLORE_BOOKMARKS = [
     items: [
       { name: 'Hermes Agent WebUI', url: 'agent://hermes', desc: 'Nous Research agent dashboard', isAgent: true, port: 9119 },
       { name: 'Nanobot WebUI', url: 'agent://nanobot', desc: 'Ultra-lightweight personal AI agent', isAgent: true, port: 8765 },
+      { name: 'ZeroClaw WebUI', url: 'agent://zeroclaw', desc: 'Fast, small autonomous agent dashboard', isAgent: true, port: 42617 },
+      { name: 'OpenClaw Control UI', url: 'agent://openclaw', desc: 'Multi-channel agent gateway console', isAgent: true, port: 18789 },
       { name: 'Hugging Face', url: 'https://huggingface.co', desc: 'Models, datasets & spaces' },
       { name: 'DevDocs API', url: 'https://devdocs.io', desc: 'Fast, offline-friendly developer documentation' },
     ],
@@ -1052,9 +1068,20 @@ export default function AgentWebUIBrowserApp({
     // hand the selected agent to its existing real-tab + Local Relay flow.
     // Keep the old in-app fallback for standalone/browser-app contexts that do
     // not provide that callback.
-    if (raw.startsWith('agent://') || raw.includes(':9119') || raw.includes(':8765')) {
-      const agId = raw.includes('nano') ? 'nanobot' : 'hermes';
-      const agPort = agId === 'nanobot' ? 8765 : 9119;
+    //
+    // Matched by `agent://<id>` OR by a bare port that belongs to a known agent
+    // (the previous form hardcoded :9119/:8765, so typing :42617 fell through to
+    // the generic "isDomain" branch and tried to resolve "127.0.0.1:42617" as a
+    // website).
+    const agentPortMatch = Object.entries(AGENT_WEBUI).find(([, m]) => raw.includes(`:${m.port}`));
+    if (raw.startsWith('agent://') || agentPortMatch) {
+      const requested = raw.startsWith('agent://')
+        ? raw.slice('agent://'.length).split(/[/?#]/)[0].trim().toLowerCase()
+        : agentPortMatch[0];
+      // Unknown ids keep the historical Hermes default rather than erroring.
+      const agId = AGENT_WEBUI[requested] ? requested : 'hermes';
+      const agPort = AGENT_WEBUI[agId].port;
+      const agLabel = AGENT_WEBUI[agId].label;
       if (onOpenExternal && agId === agentId) {
         onOpenExternal();
         return;
@@ -1067,11 +1094,11 @@ export default function AgentWebUIBrowserApp({
             ? {
                 ...t,
                 type: 'webui',
-                title: `${agId === 'nanobot' ? 'Nanobot' : 'Hermes'} Web UI`,
+                title: `${agLabel} Web UI`,
                 url: proxyUrl,
                 frameSrc: '',
                 agentId: agId,
-                agentName: agId === 'nanobot' ? 'Nanobot' : 'Hermes',
+                agentName: agLabel,
                 port: agPort,
                 phase: 'loading',
               }

@@ -7,6 +7,7 @@ import { execDetached } from '@/app/api/agents/_remote-bg';
 import { getLatestAgentVersion, isNewerVersion } from '../_version-check';
 import { logger } from '@/lib/logger';
 import { parseInst, homeDir, instancePort, listInstances, cloneDefaultHome, pidAlive, gatewayUnit, ensureInstanceUnit, writeInstanceEnv, sdAvailable, sdInstanceCtl } from '../_multi-instance';
+import { webUIProbeShell, parseWebUIProbe, startWebuiRelayTunnel } from '../_webui-relay';
 import { shellQuote } from '@/utils/shellQuote';
 const sq = shellQuote;
 
@@ -206,7 +207,15 @@ async function handleAgentAction(body, session, log = [], options = {}) {
         // Broad `pkill -x zeroclaw` matches EVERY instance on the box — only
         // allowed for the default install (full reset). Instances are killed
         // strictly via their own pidfile.
-        const broadKill = inst ? '' : `for p in $(pgrep -f '[z]eroclaw dae[m]on' 2>/dev/null); do grep -qa -- '--config-dir' /proc/$p/cmdline 2>/dev/null || kill -9 $p 2>/dev/null; done; true`;
+        //
+        // The trailing `;` is load-bearing: this fragment is interpolated
+        // immediately before `echo GW_STOPPED` on a single line, so without it
+        // the shell parses `true echo GW_STOPPED` — `true` ignores its
+        // arguments, prints nothing, and the caller's /GW_STOPPED/ check fails
+        // even though the kill worked. (It did: the Overview tab's "Stop
+        // gateway" reported success:false for a stop that had actually
+        // succeeded. Found 2026-09-14 while adding the Web UI control.)
+        const broadKill = inst ? '' : `for p in $(pgrep -f '[z]eroclaw dae[m]on' 2>/dev/null); do grep -qa -- '--config-dir' /proc/$p/cmdline 2>/dev/null || kill -9 $p 2>/dev/null; done; true;`;
         return execCommand(sshConfig,
           `${ENVX}; ${BP} service stop 2>/dev/null; ${inst ? '' : 'systemctl --user stop zeroclaw 2>/dev/null;'} if [ -f "${PIDF}" ]; then kill $(cat "${PIDF}") 2>/dev/null; sleep 1; kill -9 $(cat "${PIDF}") 2>/dev/null; fi; rm -f "${PIDF}"; ${broadKill} echo GW_STOPPED`,
           { pool: false, timeoutMs: 60000 }).then(r => ({ ok: /GW_STOPPED/.test(r.stdout || ''), out: ((r.stdout || '') + (r.stderr || '')).slice(-400) }));
@@ -454,6 +463,25 @@ echo "===ENVKEYS==="
         }
       } catch (_) {}
 
+      // Is the dashboard actually serving on its port?
+      //
+      // `running` above is the DAEMON process. The dashboard is served by that
+      // same process, but "process alive" and "port answering" still diverge
+      // (a crash loop, a port conflict, a bind configured elsewhere), and the
+      // UI uses this flag to disable the Start button — so it must be a live
+      // probe, not an inference from the process table.
+      const wuiPort = GW_PORT || 42617;
+      let webUIActive = false;
+      let webUIBind = null;
+      let webUILoopback = false;
+      try {
+        const wuResp = await execCommand(sshConfig, `${ENVX}; ${webUIProbeShell(wuiPort)}`, { pool: false, timeoutMs: 8000 });
+        const p = parseWebUIProbe(wuResp?.stdout);
+        webUIActive = p.active;
+        webUIBind = p.bind;
+        webUILoopback = p.loopback;
+      } catch { /* treat as not running */ }
+
       return NextResponse.json({
         success: true,
         installed: !!binR,
@@ -469,8 +497,17 @@ echo "===ENVKEYS==="
         envText: envText || '',
         envKeys: section('ENVKEYS').split('\n').map(s => s.trim()).filter(Boolean),
         skills: [...new Set(skillsList)],
-        webUIPort: GW_PORT || 42617,
+        webUIPort: wuiPort,
         hasWebUI: true,
+        // True only when the dashboard is actually answering on webUIPort —
+        // distinct from `running` (the daemon process), see the probe above.
+        webUIActive,
+        // Listen address of the dashboard port on the target ('127.0.0.1',
+        // '0.0.0.0', …) and whether it is loopback-only. AIAgentsApp offers the
+        // "Via server" proxy route only when this is true.
+        webUIBind,
+        webUILoopback,
+        webUIBootstrapPath: '/',
         systemPrompt,
         promptFiles: {
           'PROMPT.md': systemPrompt,
@@ -782,6 +819,131 @@ if os.path.exists(p):
         warning: running ? null : 'Daemon is not running yet — add your API key and Telegram bot token in the Environment tab, then click Restart.',
         log,
       });
+    }
+
+    // ── WEB UI (dashboard) control ─────────────────────────────────────────
+    //
+    // ZeroClaw has no separate `webui` command: `zeroclaw daemon` serves the
+    // bundled dashboard itself on the gateway port (default 42617). Verified on
+    // the real install path — the installer reports "Web dashboard installed to
+    // .../share/zeroclaw/web/dist" and the daemon logs
+    // "🌐 Web Dashboard: http://127.0.0.1:42617/". So "start the Web UI" means
+    // "make sure the daemon is up and that port answers", which is what gwCtl
+    // already does; this handler adds the WebUI-shaped contract the client
+    // expects (active / port / webUIBootstrapPath, plus relay-start).
+    //
+    // Consequence worth knowing: stopping this ALSO stops the agent's channels,
+    // because they share one process. The UI therefore offers no Stop button
+    // for zeroclaw (see WEBUI_IS_AGENT_PROCESS in AIAgentsApp) — the Overview
+    // tab's gateway controls are where that consequence is named.
+    if (action === 'webui-ctl') {
+      const op = ['start', 'stop', 'restart', 'status', 'relay-start'].includes(config.op) ? config.op : 'status';
+      const wuPort = parseInt(config.port, 10) > 0 ? parseInt(config.port, 10) : (GW_PORT || 42617);
+      const probe = async () => parseWebUIProbe(
+        (await execCommand(sshConfig, `${ENVX}; ${webUIProbeShell(wuPort)}`, { pool: false, timeoutMs: 15000 })).stdout,
+      );
+
+      if (op === 'status') {
+        const p = await probe();
+        return NextResponse.json({ success: true, active: p.active, op, port: wuPort, httpCode: p.code });
+      }
+
+      if (op === 'stop') {
+        log.push(`> Stopping ZeroClaw daemon — its dashboard IS this process (port ${wuPort})...`);
+        const g = await gwCtl('stop');
+        // Verify by PROBE, not by the marker string `gwCtl` greps for.
+        // A shell-level quoting slip in that command once swallowed the marker
+        // while the kill still worked, so "did the port go away?" is the
+        // question that actually matters here.
+        let stillUp = (await probe()).active;
+        for (let waited = 0; stillUp && waited < 12; waited += 3) {
+          await new Promise((r) => setTimeout(r, 3000));
+          stillUp = (await probe()).active;
+        }
+        if (stillUp) {
+          const errMsg = g.out || 'ZeroClaw daemon is still running — it may be supervised by a service manager that restarts it.';
+          log.push(`✗ ${errMsg}`);
+          return NextResponse.json({ success: false, active: true, op, port: wuPort, error: errMsg, log });
+        }
+        log.push(`✓ ZeroClaw stopped — dashboard and channels are both down (port ${wuPort})`);
+        return NextResponse.json({
+          success: true,
+          active: false,
+          op,
+          port: wuPort,
+          output: `ZeroClaw stopped — the dashboard and its channels are both down (port ${wuPort}).`,
+          log,
+        });
+      }
+
+      if (op === 'relay-start') {
+        const r = await startWebuiRelayTunnel({
+          session,
+          connectionId,
+          remotePort: wuPort,
+          // 18792 keeps zeroclaw clear of nanobot (18790) and hermes (18791)
+          // when one machine hosts several tunnels. Hint only — the relay
+          // reports the port it actually bound.
+          localPortHint: 18792,
+          monitorOrigin: String(config.monitorOrigin || ''),
+          // The dashboard is unauthenticated at the HTTP layer and gates on the
+          // gateway pairing code instead, so there is no bootstrap secret to
+          // inject (unlike nanobot).
+          bootstrapSecret: '',
+          preferredRelay: options.preferredRelay,
+          getSshConfig,
+          log,
+        });
+        return NextResponse.json(r.body, { status: r.status });
+      }
+
+      // ── op === 'start' | 'restart' ──
+      // Already serving and nothing to restart? Report it and let the client
+      // open a tab rather than bouncing a working daemon.
+      if (op === 'start') {
+        const p = await probe();
+        if (p.active) {
+          log.push(`✓ ZeroClaw dashboard is already serving on port ${wuPort} (HTTP ${p.code})`);
+          return NextResponse.json({
+            success: true, active: true, op, port: wuPort,
+            webUIBootstrapPath: '/',
+            output: `ZeroClaw Web UI is already running on port ${wuPort}`,
+            log,
+          });
+        }
+      }
+
+      log.push(`> Starting ZeroClaw daemon (it serves the dashboard on port ${wuPort})...`);
+      const g = await gwCtl(op === 'restart' ? 'restart' : 'start');
+      if (g.ok === false) {
+        log.push(`✗ ${g.out || 'daemon start failed'}`);
+        return NextResponse.json({
+          success: false, active: false, op, port: wuPort,
+          error: g.out || 'ZeroClaw daemon did not start',
+          log,
+        });
+      }
+
+      // The dashboard only binds after the runtime components come up, so poll
+      // the PORT instead of trusting the process table — "daemon alive" and
+      // "dashboard serving" are not the same question.
+      let p = await probe();
+      for (let waited = 0; !p.active && waited < 30; waited += 3) {
+        await new Promise((r) => setTimeout(r, 3000));
+        p = await probe();
+      }
+      if (p.active) {
+        log.push(`✓ ZeroClaw Web UI started on port ${wuPort} (HTTP ${p.code})`);
+        return NextResponse.json({
+          success: true, active: true, op, port: wuPort,
+          webUIBootstrapPath: '/',
+          output: `ZeroClaw Web UI is running on port ${wuPort}`,
+          log,
+        });
+      }
+      const errMsg = 'The ZeroClaw daemon is running but its dashboard is not answering on the expected port — check ~/.zeroclaw/logs/daemon.log (the gateway bind address may be configured elsewhere).';
+      log.push(`✗ ${errMsg}`);
+      return NextResponse.json({ success: false, active: false, op, port: wuPort, error: errMsg, log });
     }
 
     // ── GATEWAY ops ──
