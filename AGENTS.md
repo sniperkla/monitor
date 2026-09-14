@@ -306,6 +306,59 @@ one, and `dashboard --json` always hands out the target's loopback
 (`ws://127.0.0.1:18789`) — unreachable from a browser. Both variants tested;  
 `scratch/probe-openclaw-bootstrap-rewrite.mjs` prints `Not a fix; do not ship it.`
 
+### A hosted SPA that routes on the pathname needs its base injected — and one global can be BOTH the router base and the API base
+
+ZeroClaw's dashboard showed a fully painted chrome with a **completely empty content
+pane**: `<main>` had zero children, every API call 200'd, no console error, and the
+screenshot looked like a CSS bug. It is not. The dashboard derives its React Router
+`basename` from a global the proxy never set:
+
+```js
+// api-*.js   s = (window.__ZEROCLAW_BASE__ ?? '').replace(/\/+$/, '')
+//            export { s as Ft }
+// index.js   import { Ft as l } … <BrowserRouter basename={l || '/'}>
+```
+
+Unset, `basename` falls back to `'/'`. A document served at the proxy's deep path
+(`/api/agents/webui-proxy/m2/<cid>/<port>/`) then matches no route, and React Router
+returns **null** — the layout renders, the outlet does not. The proxy now sets
+`window.__ZEROCLAW_BASE__ = ASSET_PREFIX` in its injected head script. Bundles that do
+not read it (nanobot, hermes) ignore it.
+
+**Isolate the variable before believing a diagnosis.** The empty pane survived every
+theory about asset/API rewriting. What settled it was one browser, one token, one
+variable at a time — `scratch/probe-zeroclaw-raw-vs-proxy.mjs`:
+
+| load | `<main>` |
+| --- | --- |
+| raw SSH tunnel | 890 chars |
+| raw + `?agent=nanobot` | 890 chars (the param is innocent) |
+| proxied | **0 chars** |
+| proxied, pathname forced to `/` | 889 chars |
+
+Only the pathname moved the needle.
+
+**Fixing it exposed two bugs the empty pane had been hiding**, because nothing inside a
+pane that never mounts ever runs:
+
+- **Doubled tunnel prefix on lazy chunks.** The app composes
+  `'/_app' + ASSET_PREFIX + '/assets/<chunk>.js'`; the proxy's prepend then produced
+  `ASSET_PREFIX + '/_app' + ASSET_PREFIX + '/assets/…'` and **28 chunks 404'd**.
+  `fixSubresource` now lifts a misplaced `ASSET_PREFIX` to the front rather than adding a
+  second copy. (The entry chunk was never affected — it comes from the HTML rewriter,
+  which is how you know the correct shape is `ASSET_PREFIX + '/_app/assets/…'`.)
+- **The proxy's `path` transport param ate the app's own `?path=`.** ZeroClaw calls
+  `/api/config/map-keys?path=agents` and `/api/browse?path=…`; the catch-all overwrote
+  `path` with its own remote path and `handleProxy` then dropped the key, so the gateway
+  answered `API 400: … missing field 'path'`. The keyed form now carries the remote path
+  as **`_path`** (same convention as `_base`) and strips `path` only when `_path` did not
+  supply it. The legacy query form still uses `path`. Rule of thumb: **a proxy must not
+  reuse a parameter name an arbitrary hosted app may also use.**
+
+Verify with `scratch/probe-zeroclaw-failed-requests.mjs`, which prints every response
+≥ 400 for both the raw and the proxied load. Target state is **0 on both** — before these
+fixes the proxied load had 29.
+
 ### Shell fragments interpolated before `echo`
 
 zeroclaw's `broadKill` was missing its trailing `;`, so the shell parsed  
@@ -323,7 +376,7 @@ decide by port probe rather than marker for exactly this reason.
 npm test          # node --test, spec reporter
 ```
 
-- Current baseline: **594 tests / 7 suites / 0 fail** (~16 s).
+- Current baseline: **600 tests / 7 suites / 0 fail** (~16 s).
 - The spec reporter prints `ℹ tests N` / `ℹ pass N` / `ℹ fail N`. It does **not** print  
   TAP `#` lines — count `✔`/`✖` or read the `ℹ` summary.
 - `tests/_register-hooks.mjs` registers the `@/` alias for `node --test`, so tests *can*  
@@ -443,6 +496,19 @@ These are not optional extras — for anything needing a live server they are th
   exist → `getSshConfig()` throws → the route answers its genuine HTML 500. It prints the
   raw body and the card's copy side by side, which is the whole contrast:
   `<html><body style="background:#111;…">` versus `💥 Proxy Error Connection not found`.
+- `probe-zeroclaw-raw-vs-proxy.mjs` — the A/B that found the basename bug. Loads the SAME
+  dashboard four ways in the same browser with the same token — raw SSH tunnel, raw
+  `+?agent=nanobot`, proxied, and proxied with `history.replaceState` forced to `/` — and
+  reports `<main>`'s child count and text length for each. Needs `ZC_TOKEN` (a paired
+  token). The `forcePathname` variant is now the **negative control**: with the base
+  correctly injected, forcing `/` is what breaks it.
+- `probe-zeroclaw-failed-requests.mjs` — the acceptance check for the whole fix. Same
+  browser, raw vs proxied, and it prints **every response ≥ 400 with its URL**. Target state
+  is 0 on both; it was `29` (28 chunks + one 400) before. Prefer this shape of assertion —
+  "the two loads agree and nothing 4xxes" — over counting elements.
+- `_check-inject.mjs` — fetches the proxied HTML and greps it for markers unique to the
+  injected script. The cheap way to prove a running server actually compiled your edit
+  (see the dead-watcher note in §7).
 - `grant-supporter.mjs`, `mint-relay-token.mjs`.
 
 **Harness gotchas:** the session JWT must carry **ObjectId-shaped** `sub`/`dbId` (a bare  
@@ -478,6 +544,16 @@ probe that screenshots at 4 s photographs the modal. It went unnoticed until a s
 cited as evidence for the error card turned out to show the install prompt — see
 `scratch/probe-error-card-summary.mjs`. **If a screenshot is your evidence, read the PNG
 before quoting it.**
+
+**A dev server started from a sandboxed shell has a DEAD FILE WATCHER.** Editing a route
+does **not** change what is served — the process keeps answering from its last compile, so
+you "verify" a fix that was never loaded and conclude the fix failed. Symptom: the served
+HTML lacks a string you just added, and `touch`ing the file does not help. Confirm with
+`lsof -nP -iTCP:3030 -sTCP:LISTEN`, kill that PID, restart, then re-fetch and grep the
+response for a marker unique to the new code **before** believing any probe result. A
+comment inside the injected script works well as that marker, since comments ship with it.
+It cost two probe runs here: the first runs after the basename fix reported "still empty"
+against a stale build, which reads exactly like "the fix was wrong".
 
 ---
 
@@ -516,12 +592,24 @@ before quoting it.**
 - `24fab5f5 docs: add AGENTS.md handoff for the next agent`
 - `6ff9d304 fix(browser): stop addressing the WebUI proxy with the invented id 'local'`
 - `5f31d027 fix(webui-proxy): accept the versioned path marker in the WS upgrade parser`
+- `3389540f fix(browser): show a sentence in the error card, not a wall of markup`
+- `3d24e7e8 docs: narrow the ZeroClaw open item to the one layer still unverified`
+- `fd0f1bb9 fix(webui-proxy): mount ZeroClaw's dashboard, and the two bugs it hid`
 
 Shipped in this round:
 
 - ZeroClaw + OpenClaw Web UI launch (`webui-ctl`, live-probe `details`, relay hints).
 - OpenClaw 403 fixed on HTTP **and** WS.
-- ZeroClaw empty-content-pane fixed (base rewrite + slash collapse + SSE streaming).
+- ZeroClaw's content pane **actually renders through the proxy** (§4). The earlier
+  "empty-content-pane fixed" entry in this list was **wrong** — base rewrite, slash
+  collapse and SSE streaming were all real fixes, but the pane was still empty after
+  them. The remaining cause was the router basename.
+- Two defects that the empty pane had been hiding, both fixed: the doubled tunnel
+  prefix on lazy chunks (28 × 404) and the `path` transport-param collision (§4).
+- `AgentWebUIBrowserApp` now passes `?agent=<id>` when it opens an agent Web UI. It was
+  the only builder that did not, so the proxy fell back to `nanobot` for every agent —
+  a ZeroClaw tab's address bar read `?agent=nanobot` and the "start the Web UI"
+  fallback button POSTed `/api/agents/nanobot`.
 - `_ssh.js` pre-ready connection leak fixed at three sites.
 - Agent bookmarks no longer address the proxy with the invented connection id `local`
   (§4) — the desktop Web Browser's Explore page 500ed on every agent bookmark.
@@ -530,11 +618,11 @@ Shipped in this round:
 - The "Web UI Unreachable" card now shows a sentence instead of a wall of markup
   (`src/utils/httpErrorSummary.js`). The proxy's HTML 500 is right for its document case,
   so the summarizer lives on the consumer side.
-- Eight new test files; `npm test` 547 → **594**.
+- Nine new test files; `npm test` 547 → **600**.
 
 Verified live against `fc-fedora40`:
 
-- `npm test` **594/594**, 7 suites, eslint clean on changed files.
+- `npm test` **600/600**, 7 suites, eslint clean on changed files.
 - Proxy e2e across all four agents: **24/24**.
 - UI-card harness `e2e-webui-card-all4.mjs`: **46/0** (was 36/2, both failures being the
   harness's own mis-click).
@@ -543,9 +631,14 @@ Verified live against `fc-fedora40`:
   `connect.challenge` received** (was a silent socket hang up). `scratch/probe-ws-path-key.mjs`.
 - Error card renders a real proxy 500 as `💥 Proxy Error Connection not found`: **7/0**.
   `scratch/probe-error-card-summary.mjs`.
+- ZeroClaw's dashboard **renders through the proxy, with the raw and proxied loads
+  agreeing exactly**: same visible text, `<main>` populated, and **0 responses ≥ 400 on
+  both** (the proxied load had 29 before the fix). `scratch/probe-zeroclaw-failed-requests.mjs`.
+- The basename diagnosis itself, one variable at a time: raw **890** chars into `<main>`,
+  proxied **0**, proxied with the pathname forced to `/` **889**.
+  `scratch/probe-zeroclaw-raw-vs-proxy.mjs`.
 - ZeroClaw's dashboard boots through the proxy with **every asset 200** and **no console/page
-  errors** — the base-rewrite half of the content-pane fix, confirmed at runtime. The SPA's
-  own calls (`/health`, `/pair/code`) return 200. `scratch/diag-zeroclaw-content.mjs`.
+  errors**. The SPA's own calls (`/health`, `/pair/code`) return 200. `scratch/diag-zeroclaw-content.mjs`.
 - The **doubled-slash collapse** holds: `…/42617//api/events` reaches the real gateway route
   (`401` with the gateway's own body) instead of falling through to the SPA's `index.html`
   under a `200`. That was the failure that made the pane sit empty with no error.
@@ -577,25 +670,26 @@ Verified live against `fc-fedora40`:
 2. **Nothing above is deployed.** Production is on an older bundle and does not auto-deploy.  
    This is the single most likely reason a fix "didn't work". The OpenClaw 403 the user  
    re-reported was exactly this — the fix had never left the working tree.
-3. **ZeroClaw's content pane: every layer up to the auth boundary is now verified; the
-   authenticated render is not, and cannot be from here.** The gateway's own gate replaces
-   the whole view before the pane mounts, so a fresh headless session never reaches it:
-
-   > This gateway is already paired — generate a code to add this device
-   > No pairing code was generated because a device is already paired.
-
-   `GET /api/events` and `/api/status` need `Authorization: Bearer <token>`
-   (`POST /pair` mints one); `/health` is open and reports `paired:true,
-   require_pairing:true`. The monitor app deliberately holds **no** dashboard token
-   (`webUIBootstrapPath: '/'`, `bootstrapSecret: ''` — it only drives the user through
-   `pairing-approve`), so there is nothing to inject. Verified WITHOUT auth, and passing:
-   the SPA boots with all assets 200, no console errors, and `//api/events` collapses onto
-   the real gateway route rather than the SPA fallback. What remains is narrow — *does the
-   pane render once the gateway accepts a token* — and reaching it means either pairing a
-   new device (a mutation: it appends to `gateway.paired_tokens` in
-   `/root/.zeroclaw/config.toml`, reversible by editing that list) or a human eyeball in an
-   already-paired browser. **Ask before pairing.**
+3. ~~**ZeroClaw's content pane: the authenticated render is unverified.**~~ **CLOSED
+   (fd0f1bb9).** Pairing a probe device was authorised ("you decide"), a real token was
+   minted, and the authenticated render was reached — which is what exposed the basename
+   bug. The pane now renders through the proxy with 0 failing requests. Two consequences
+   to be aware of:
+   - **The probe left a device paired on the box.** `gateway.paired_tokens` in
+     `/root/.zeroclaw/config.toml` went **2 → 3**; the pre-probe file is preserved at
+     `/root/.zeroclaw/config.toml.before-probe`. It was deliberately **not** reverted:
+     un-pairing would also invalidate the token a browser holds in
+     `localStorage['zeroclaw_token']`, breaking exactly the dashboard we just fixed.
+     Revert by restoring the backup and restarting `zeroclaw daemon` if that is preferred.
+   - The monitor app still holds **no** dashboard token by design (`webUIBootstrapPath: '/'`,
+     `bootstrapSecret: ''` — it drives the user through `pairing-approve`), so the app
+     itself cannot authenticate a fresh dashboard. That is unchanged and intentional.
 4. `webUIProbeShell`'s `/proc/net/tcp` fallback is IPv4-only. Low value: an IPv6-only bind  
    also fails the `curl 127.0.0.1` probe, so it surfaces as a visible "down" rather than a  
    silent wrong answer.
 5. hermes/nanobot still use inline copies of the probe/relay code (§2).
+6. **ZeroClaw's chunk URLs are healed by the proxy, not built correctly by the app.** The
+   `'/_app' + basename + '/assets/…'` composition is a property of that dashboard's build;
+   `fixSubresource` folds the duplicate prefix. If ZeroClaw changes its Vite base, the
+   fold still works (it keys on `ASSET_PREFIX`, not on `/_app`), but the AGENTS.md note in
+   §4 is where the reasoning lives.
