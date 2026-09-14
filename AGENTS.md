@@ -334,7 +334,7 @@ script — but **only** when `agentId === 'openclaw'`, since the read costs a re
 only this dashboard consumes a secret. Both key spellings are seeded (with and without a
 trailing slash) because the UI normalises the path.
 
-Two traps, both now pinned by `tests/openclaw-gateway-token.test.mjs`:
+Three traps, all now pinned by `tests/openclaw-gateway-token.test.mjs`:
 
 - **Do not add an awk/regex fallback for the read.** The obvious one ("the first `"token"`
   after `"gateway"`") matches `"mode": "token"` and returns the literal string `token`. A
@@ -343,6 +343,14 @@ Two traps, both now pinned by `tests/openclaw-gateway-token.test.mjs`:
   behaviour the user already understands.
 - **Guard the seed with `if (OPENCLAW_TOKEN)`.** Writing `''` would turn "no secret" into
   "the wrong secret" and change the failure mode from the honest prompt to a mismatch.
+- **Rewrite `style`, not only `src`/`href`.** OpenClaw's Lit runtime puts provider icons in
+  a CSS custom property: `setAttribute('style', '--provider-icon-url: url("/provider-icons/…")')`.
+  The initial proxy patch missed this because it only rewrote `src`, `href`, and `data`.
+  Result: raw tunnel 39/39 provider-icon requests succeeded, while the proxy had 39 404s.
+  A stack trace from the live page (`lit-runtime` → `setAttribute`) identified the sink;
+  `fixCssUrls()` now rewrites root-absolute `url()` values in style attributes, idempotently.
+  The corrected census is raw **1** failure / proxy **1** failure, with **0 proxy-only icon
+  failures**; the remaining `/__openclaw__/catalog-icon/…` failure is shared by raw and proxy.
 
 Verified end-to-end with a probe that injects **nothing** itself, so any success is
 attributable to the proxy alone (`scratch/probe-openclaw-token-prompt.mjs`): the connect
@@ -420,7 +428,7 @@ decide by port probe rather than marker for exactly this reason.
 npm test          # node --test, spec reporter
 ```
 
-- Current baseline: **612 tests / 7 suites / 0 fail** (~16 s).
+- Current baseline: **613 tests / 7 suites / 0 fail** (~16 s).
 - The spec reporter prints `ℹ tests N` / `ℹ pass N` / `ℹ fail N`. It does **not** print  
   TAP `#` lines — count `✔`/`✖` or read the `ℹ` summary.
 - `tests/_register-hooks.mjs` registers the `@/` alias for `node --test`, so tests *can*  
@@ -686,11 +694,15 @@ Shipped in this round:
 - The "Web UI Unreachable" card now shows a sentence instead of a wall of markup
   (`src/utils/httpErrorSummary.js`). The proxy's HTML 500 is right for its document case,
   so the summarizer lives on the consumer side.
-- Ten new test files; `npm test` 547 → **612**.
+- Ten new test files; `npm test` 547 → **613**.
+- OpenClaw's provider-icon style-attribute rewrite is now pinned by one additional
+  regression test; the live raw-vs-proxy census is recorded in §4.
 
 Verified live against `fc-fedora40`:
 
-- `npm test` **612/612**, 7 suites, eslint clean on changed files.
+- `npm test` **613/613**, 7 suites, eslint clean on changed files.
+- OpenClaw auto-paste probe: `hello-ok` / protocol 4 and all dashboard requests under
+  test were `ok:true`; raw-vs-proxy icon census: 1 shared failure, 0 proxy-only failures.
 - Proxy e2e across all four agents: **24/24**.
 - UI-card harness `e2e-webui-card-all4.mjs`: **46/0** (was 36/2, both failures being the
   harness's own mis-click).

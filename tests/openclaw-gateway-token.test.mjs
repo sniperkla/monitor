@@ -241,3 +241,22 @@ test('the seed runs inside the injected head script, before the bundle boots', (
   const wsPatchAt = injected.indexOf('window.WebSocket = function ProxiedWebSocket');
   assert.ok(wsPatchAt < 0 || seedAt < wsPatchAt, 'seed must precede the WebSocket patch');
 });
+
+test('the injected patch rewrites root-absolute url() values in style attributes', () => {
+  const injected = section(proxy, 'var CSS_URL_RE =', '  // Same rewrite for markup');
+  // OpenClaw/Lit puts provider icons in a CSS custom property on a style
+  // attribute, not in src/href markup. The old patch missed style entirely and
+  // caused 39 provider-icon 404s through the proxy while raw served 39/39.
+  assert.match(injected, /var CSS_URL_RE = new RegExp\(/);
+  assert.match(injected, /function fixCssUrls\(css\)/);
+  assert.match(proxy, /if \(name === 'style' && typeof value === 'string'\)/);
+  assert.match(proxy, /value = fixCssUrls\(value\);/);
+
+  // The regex must be constructor-built: a literal inside this template loses
+  // its backslash-slash escapes and can break parsing of the entire injection.
+  assert.doesNotMatch(injected, /\/url\\\\\(/);
+  const fullInjected = section(proxy, 'const scriptTag = `', '</script>');
+  const fixAt = fullInjected.indexOf('function fixCssUrls(css)');
+  const setterAt = fullInjected.indexOf("name === 'style'");
+  assert.ok(setterAt > fixAt, 'style setter must call a helper declared earlier');
+});

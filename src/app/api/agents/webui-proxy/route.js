@@ -553,6 +553,32 @@ function rewriteHtml(html, proxyBase, currentPath, port, connectionId, agentId =
     var p = u.charAt(0) === '/' ? u : ('/' + u.replace(/^\\.\\//, ''));
     return ASSET_PREFIX + p;
   }
+  // A style ATTRIBUTE carries url() too, and the CSS engine resolves a
+  // root-absolute one against the DOCUMENT origin — not against the proxy path
+  // the document happens to sit at. Measured on the OpenClaw Control UI, which is
+  // built with Lit: its runtime applies inline CSS with
+  //     setAttribute('style', '--provider-icon-url: url("/provider-icons/…")')
+  // (stack: lit-runtime B.j -> B._$AI). Every one of 39 provider icons was then
+  // fetched from the monitor's own origin and 404'd, while the raw tunnel served
+  // 39/39. Note the shape: a CSS CUSTOM PROPERTY holding a url(). It is invisible
+  // to the markup regexes (no src/href), absent from the served HTML, absent from
+  // the stylesheets, and not a CSSOM rule — which is why it took a stack trace to
+  // find rather than a grep.
+  //
+  // Built with the RegExp constructor for the reason given above: a regex literal
+  // written here loses its backslash escapes to the template literal itself, and
+  // the unescaped double-slash would end the literal and break the whole helper.
+  var CSS_URL_RE = new RegExp('url\\\\((["\\']?)/(?!/)([^)]*?)(["\\']?)\\\\)', 'gi');
+  function fixCssUrls(css) {
+    if (!css || typeof css !== 'string' || css.indexOf('url(') < 0) return css;
+    return css.replace(CSS_URL_RE, function(m, q, path, q2) {
+      if (isCloudflareInfra('/' + path)) return m;
+      // Already tunneled — keeps this idempotent, so running it twice (the
+      // MutationObserver safety net can) cannot stack a second prefix.
+      if (path.indexOf(TUNNEL_PREFIX.slice(1)) === 0) return m;
+      return 'url(' + q + ASSET_PREFIX + '/' + path + q2 + ')';
+    });
+  }
   // Same rewrite for markup injected as a STRING — insertAdjacentHTML /
   // innerHTML build elements through the HTML parser, which never touches the
   // attribute setters patched below.
@@ -594,6 +620,10 @@ if (isCloudflareInfra('/' + path)) return m;
   Element.prototype.setAttribute = function(name, value) {
     if ((name === 'src' || name === 'href' || name === 'data') && typeof value === 'string') {
       value = fixSubresource(value);
+    } else if (name === 'style' && typeof value === 'string') {
+      // The style attribute was missing from this list, which is what broke the
+      // 39 provider icons: the app writes its inline CSS through this exact call.
+      value = fixCssUrls(value);
     }
     return origSetAttribute.call(this, name, value);
   };
