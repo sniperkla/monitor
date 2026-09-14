@@ -28,6 +28,10 @@ import { authOptions } from '@/lib/auth';
 // Pure string transform, split out so tests can call it directly instead of
 // regex-matching this file's source (see the module's own doc comment).
 import { rewriteAbsoluteSelfUrls, collapseLeadingSlashes } from '../_webui-rewrite';
+// OpenClaw's Control UI will not complete its WebSocket handshake without the
+// gateway secret, and the secret only exists on the gateway host. See the
+// module for the measurements that pinned down where the UI reads it from.
+import { readOpenClawGatewayToken, OPENCLAW_TOKEN_KEY_PREFIX } from '../_openclaw-gateway-token';
 import { getSshConfig, getOrCreatePooledClient } from '@/app/api/server-backup/_ssh';
 import http from 'http';
 
@@ -276,7 +280,7 @@ function eventStreamResponse(up, sshChannel, remotePath) {
  * Rewrite URLs in HTML so that relative paths and AJAX/fetch calls continue
  * to go through this proxy endpoint rather than hitting the real domain.
  */
-function rewriteHtml(html, proxyBase, currentPath, port, connectionId, agentId = 'nanobot', extraProxyQuery = '') {
+function rewriteHtml(html, proxyBase, currentPath, port, connectionId, agentId = 'nanobot', extraProxyQuery = '', openclawToken = '') {
   // Folder for relative resolution (e.g. /app/ -> /app/, /index.html -> /)
   const folder = currentPath.substring(0, currentPath.lastIndexOf('/') + 1) || '/';
 
@@ -309,6 +313,24 @@ function rewriteHtml(html, proxyBase, currentPath, port, connectionId, agentId =
   // '/' renders again (889 chars). Bundles that do not read this global (nanobot,
   // hermes) ignore it.
   window.__ZEROCLAW_BASE__ = ASSET_PREFIX;
+  // OpenClaw's Control UI keeps its gateway secret in sessionStorage under a
+  // per-gateway key, and will not complete the WebSocket handshake without it.
+  // Left alone it renders "This Gateway expects its token" and asks the user to
+  // paste a secret that only exists on the gateway host. Seeding the key before
+  // the bundle boots is the whole of the "auto paste" — measured: the connect
+  // frame goes from no auth object at all to {token, password} and the
+  // gateway answers ok. sessionStorage (not localStorage) is deliberate on the
+  // UI's side, which is also why the prompt returns on every new tab.
+  var OPENCLAW_TOKEN = ${JSON.stringify(String(openclawToken || ''))};
+  if (OPENCLAW_TOKEN) {
+    try {
+      var OPENCLAW_GW = (location.protocol === 'https:' ? 'wss' : 'ws') + '://' + location.host + ASSET_PREFIX;
+      sessionStorage.setItem(${JSON.stringify(OPENCLAW_TOKEN_KEY_PREFIX)} + OPENCLAW_GW, OPENCLAW_TOKEN);
+      // The UI normalises the page path by dropping a trailing slash; seed that
+      // spelling too so the key matches whichever form it computes.
+      sessionStorage.setItem(${JSON.stringify(OPENCLAW_TOKEN_KEY_PREFIX)} + OPENCLAW_GW + '/', OPENCLAW_TOKEN);
+    } catch (e) {}
+  }
   function proxyWsUrl(p) {
     // Dedicated WS path (no Next.js route behind it): if the WS URL pointed at
     // /api/agents/webui-proxy, Next's upgradeHandler would treat the upgrade as
@@ -1076,7 +1098,15 @@ async function handleProxy(request) {
     if (contentType.includes('text/html')) {
       let html = body.toString('utf8');
       html = rewriteAbsoluteSelfUrls(html, proxyBase, port, assetPathPrefix(connectionId, port));
-      html = rewriteHtml(html, proxyBase, remotePath, port, connectionId, agentId, extraProxyQuery);
+      // Only OpenClaw's Control UI takes a seeded gateway secret, and reading it
+      // costs a remote exec — so ask for it only when we are serving that
+      // dashboard's document. Documents are rare (one per tab load); assets are
+      // not, and they never reach this branch.
+      let openclawToken = '';
+      if (agentId === 'openclaw') {
+        openclawToken = await readOpenClawGatewayToken(sshConfig, connectionId);
+      }
+      html = rewriteHtml(html, proxyBase, remotePath, port, connectionId, agentId, extraProxyQuery, openclawToken);
       // Hermes' dashboard uses a hash router (routes are /hermes/chat,
       // /hermes/history, etc.). Do not overwrite its base-path marker with the
       // keyed proxy path: that makes the dashboard render its dark/green shell
