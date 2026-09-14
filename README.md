@@ -2,6 +2,11 @@
 
 A modern, web-based SSH terminal and server monitoring dashboard built with Next.js, Tailwind CSS, and MongoDB.
 
+> **Working on this repo with an AI agent?** Read **[AGENTS.md](./AGENTS.md)** first — it is
+> the handoff document, and it documents the agent Web UI tunnel architecture plus the
+> non-obvious rules (forwarded-header handling, SSE streaming, the path-keyed proxy) that
+> will otherwise cost you a debugging session.
+
 ## Features
 
 - 🖥️ **Web-based SSH Terminal**: Full-featured xterm.js terminal with resizing and real-time WebSocket communication.
