@@ -8,7 +8,14 @@
  * Query params:
  *   connectionId  – DB id of the SSH connection
  *   port          – remote port to forward to (e.g. 8765, 7860, 42617)
- *   path          – URL path + query to request on the remote (default "/")
+ *   path          – URL path + query to request on the remote (default "/").
+ *                   Legacy query form ONLY — see `_path` below.
+ *   _path         – internal: the remote path, for the path-keyed form
+ *                   (/api/agents/webui-proxy/m2/<cid>/<port>/<remote>). A
+ *                   separate name is required because in the keyed form a
+ *                   `path` in the query belongs to the HOSTED APP — ZeroClaw
+ *                   calls /api/config/map-keys?path=agents — and reusing `path`
+ *                   for both roles silently ate the app's parameter.
  *   _base         – internal: base path already stripped (for rewriting)
  *
  * All HTML responses have relative URLs rewritten to go back through this
@@ -284,6 +291,24 @@ function rewriteHtml(html, proxyBase, currentPath, port, connectionId, agentId =
   var TUNNEL_ID = ${JSON.stringify(String(connectionId || ''))};
   var WEBUI_AGENT = ${JSON.stringify(String(agentId || 'nanobot'))};
   var EXTRA_WS_PARAMS = ${JSON.stringify(extraProxyQuery || '')};
+  // ZeroClaw's dashboard reads the base path it is served under from this
+  // global, and it feeds it to BOTH its API client and its router:
+  //
+  //   api-*.js:  s = (window.__ZEROCLAW_BASE__ ?? '').replace(/\\/+$/, '')
+  //              fetch(gateway + s + path)                     // API base
+  //              export { s as Ft }
+  //   index.js:  import { Ft as l } … <BrowserRouter basename={l || '/'}>
+  //
+  // Left unset it falls back to '/', so a document served at THIS proxy's deep
+  // path matches no route. React Router then logs
+  //   <Router basename="/"> is not able to match the URL "/api/agents/…"
+  // and returns null — the dashboard chrome renders, every API call 200s, and
+  // the content pane stays empty, which is exactly the symptom that was
+  // reported. Measured with one variable at a time: raw tunnel renders (890
+  // chars in <main>), proxied is empty, proxied with the pathname forced to
+  // '/' renders again (889 chars). Bundles that do not read this global (nanobot,
+  // hermes) ignore it.
+  window.__ZEROCLAW_BASE__ = ASSET_PREFIX;
   function proxyWsUrl(p) {
     // Dedicated WS path (no Next.js route behind it): if the WS URL pointed at
     // /api/agents/webui-proxy, Next's upgradeHandler would treat the upgrade as
@@ -486,6 +511,20 @@ function rewriteHtml(html, proxyBase, currentPath, port, connectionId, agentId =
     }
     if (u.indexOf('//') === 0 || u.indexOf('data:') === 0 || u.indexOf('blob:') === 0 ||
         u.indexOf('javascript:') === 0 || /^[a-z][a-z0-9+.-]*:/i.test(u)) return u;
+    // ZeroClaw builds its lazily-imported chunk URLs by gluing its Vite base
+    // onto the router basename we hand it via window.__ZEROCLAW_BASE__:
+    //     '/_app' + ASSET_PREFIX + '/assets/<chunk>.js'
+    // That is root-absolute on THIS origin with the tunnel coordinates buried
+    // in the middle, so the prepend below produced
+    //     ASSET_PREFIX + '/_app' + ASSET_PREFIX + '/assets/<chunk>.js'
+    // and every lazy chunk 404'd (measured: 28 of them). The coordinates name
+    // THIS tunnel whichever position they sit in, so lift them to the front
+    // instead of adding a second copy. Only the path-keyed form is touched:
+    // a real remote path can never contain our own keyed prefix.
+    var at = u.indexOf(ASSET_PREFIX);
+    if (at > 0) {
+      u = ASSET_PREFIX + u.slice(0, at) + u.slice(at + ASSET_PREFIX.length);
+    }
     if (u.indexOf(TUNNEL_PREFIX) === 0) return u;
     // A document that has escaped the proxy base makes even a relative URL
     // resolve against the wrong root, so anchor those at "/" too.
@@ -726,7 +765,7 @@ async function handleProxy(request) {
     const { searchParams } = new URL(request.url);
     let connectionId = searchParams.get('connectionId');
     let port         = searchParams.has('port') ? parseInt(searchParams.get('port'), 10) : 8765;
-    let remotePath     = searchParams.get('path') || '/';
+    let remotePath     = searchParams.get('_path') ?? (searchParams.get('path') || '/');
     // Which agent owns this Web UI. The "service not running" rescue screen
     // below has to call that agent's `webui-ctl` to start it, and different
     // agents ship different UIs (nanobot's webui vs Hermes' dashboard).
@@ -768,10 +807,21 @@ async function handleProxy(request) {
     if (!connectionId) return new NextResponse('connectionId required', { status: 400 });
     if (!port || port < 1 || port > 65535) return new NextResponse('invalid port', { status: 400 });
 
-    // Append any extra query parameters that aren't proxy parameters
+    // Append any extra query parameters that aren't proxy parameters.
+    //
+    // `path` is a proxy parameter ONLY in the legacy query form
+    // (/api/agents/webui-proxy/<remote>?connectionId=..&port=..&path=<remote>).
+    // The path-keyed form names the remote path `_path` precisely so that a
+    // hosted app's own `?path=` survives — ZeroClaw asks for
+    // /api/config/map-keys?path=agents, and dropping that key made its gateway
+    // answer "missing field `path`". So `path` is stripped only when `_path`
+    // did not supply the remote path.
+    const remotePathFromKeyedForm = searchParams.has('_path');
+    const transportParams = ['connectionId', 'port', '_path', '_base', 'agent', 'sshMode', 'preferredRelay'];
+    if (!remotePathFromKeyedForm) transportParams.push('path');
     const extraParams = new URLSearchParams();
     for (const [k, v] of searchParams.entries()) {
-      if (!['connectionId', 'port', 'path', '_base', 'agent', 'sshMode', 'preferredRelay'].includes(k)) {
+      if (!transportParams.includes(k)) {
         extraParams.append(k, v);
       }
     }

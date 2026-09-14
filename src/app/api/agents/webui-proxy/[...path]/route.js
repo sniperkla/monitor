@@ -37,7 +37,16 @@ async function handler(request, ctx) {
   }
 
   const suffix = segments.length ? '/' + segments.join('/') : '/';
-  url.searchParams.set('path', suffix);
+  // Carry the remote path under an INTERNAL name (`_path`, same convention as
+  // `_base`), not `path`.
+  //
+  // `path` belongs to the hosted app here: ZeroClaw's dashboard calls
+  // /api/config/map-keys?path=agents and /api/browse?path=… . Writing our own
+  // remote path into `path` overwrote theirs, and handleProxy then dropped the
+  // key entirely, so the gateway answered
+  //   API 400: Failed to deserialize query string: missing field `path`
+  // The legacy query form still passes `path`, so handleProxy accepts both.
+  url.searchParams.set('_path', suffix);
   return handleProxy(new Request(url.toString(), request));
 }
 

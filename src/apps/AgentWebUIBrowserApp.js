@@ -1119,7 +1119,14 @@ export default function AgentWebUIBrowserApp({
         setTimeout(() => setDirectOpenNotice(''), 8000);
         return;
       }
-      const proxyUrl = `/api/agents/webui-proxy/m2/${encodeURIComponent(targetConn)}/${agPort}`;
+      // Carry the agent id in the query, exactly like AIAgentsApp's
+      // buildWebUIProxyUrl already does. Omitting it made the proxy fall back
+      // to its 'nanobot' default, so a ZeroClaw or Hermes tab was served with
+      // the WRONG agentId: the injected script echoed `?agent=nanobot` into the
+      // address bar, and the "start the Web UI" fallback button POSTed
+      // /api/agents/nanobot — i.e. it tried to start a different agent than the
+      // one the tab was showing.
+      const proxyUrl = `/api/agents/webui-proxy/m2/${encodeURIComponent(targetConn)}/${agPort}?agent=${encodeURIComponent(agId)}`;
       setTabs((prev) =>
         prev.map((t) =>
           t.id === activeTabId
