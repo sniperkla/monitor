@@ -5008,8 +5008,22 @@ fi'`;
           let port = parseInt(u.searchParams.get('port'), 10);
           let remotePath = (u.searchParams.get('path') || '').split('#')[0];
 
-          // Support path-keyed variant: /api/agents/webui-[ws-]proxy/m/<connectionId>/<port>/<path>
-          const pathMatch = u.pathname.match(/^\/api\/agents\/webui-(?:ws-)?proxy\/m\/([^/]+)\/(\d+)(?:\/(.*))?$/);
+          // Support path-keyed variant: /api/agents/webui-[ws-]proxy/<marker>/<connectionId>/<port>/<path>
+          //
+          // The marker is ASSET_KEY from src/app/api/agents/webui-proxy/route.js,
+          // and it is VERSIONED — `m` → `m2` on 2026-09-13, to evict a poisoned
+          // asset cache. This regex was not bumped with it, so every path-keyed
+          // WS upgrade parsed to no coordinates and hit the `destroy()` below —
+          // silently, with no HTTP status, which a hosted dashboard reports as an
+          // auth failure rather than a transport one. Measured before the fix:
+          // the query form opened (101) while `/m2/…` gave "socket hang up" and
+          // the stale `/m/…` still opened (101) — the marker was the only
+          // variable.
+          //
+          // Accept any `m<n>` so the next bump cannot repeat this, and see
+          // tests/webui-ws-path-key.test.mjs, which pins this pattern against the
+          // live ASSET_KEY value.
+          const pathMatch = u.pathname.match(/^\/api\/agents\/webui-(?:ws-)?proxy\/m\d*\/([^/]+)\/(\d+)(?:\/(.*))?$/);
           if (pathMatch) {
             if (!connectionId) connectionId = decodeURIComponent(pathMatch[1]);
             if (!port) port = parseInt(pathMatch[2], 10);
@@ -5178,6 +5192,14 @@ fi'`;
               }
               raw += 'Connection: Upgrade\r\nUpgrade: websocket\r\n\r\n';
               dbg('sending raw len', raw.length + (head ? head.length : 0));
+              dbg('request line', raw.split('\r\n')[0]);
+              // Which headers arrived, and from whom. Middleware-injected headers
+              // (x-forwarded-*, x-nonce) appear only when the request matched a
+              // middleware rule, so this doubles as "did middleware run for this
+              // URL form" — the difference between the query and path-keyed
+              // forms, and worth seeing when a WS handshake misbehaves.
+              dbg('header names', Object.keys(req.headers).join(','));
+              dbg('raw head', raw.slice(0, 200).replace(/\r\n/g, ' | '));
               stream.write(raw);
               if (head && head.length) stream.write(head);
               // Explicit bidirectional forwarding with backpressure handling

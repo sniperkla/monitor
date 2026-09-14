@@ -190,8 +190,14 @@ test('sub-resources injected after load are pulled back into the tunnel', () => 
 test('WebSocket proxy upgrade in server.js handles path-keyed URLs and auth credentials', () => {
   const server = readFileSync('server.js', 'utf8');
   const wsHandler = section(server, 'async function handleWebUIProxyUpgrade', '// Intercept HTTP upgrades');
-  // Path-keyed URL support
-  assert.match(wsHandler, /pathname\.match\(\/\^\\\/api\\\/agents\\\/webui-\(\?:ws-\)\?proxy\\\/m\\\//);
+  // Path-keyed URL support. The marker is VERSIONED — it is ASSET_KEY in
+  // webui-proxy/route.js and went `m` → `m2` on 2026-09-13. This assertion used
+  // to pin `m\/`, so it kept passing while the pattern silently stopped matching
+  // the URLs the app generates: every path-keyed WS upgrade parsed to no
+  // coordinates and was destroyed. Assert the version suffix is tolerated, and
+  // see tests/webui-ws-path-key.test.mjs, which pins the pattern against the
+  // live ASSET_KEY value instead of against a literal.
+  assert.match(wsHandler, /pathname\.match\(\/\^\\\/api\\\/agents\\\/webui-\(\?:ws-\)\?proxy\\\/m\\d\*\\\//);
   // Robust NextAuth secret and secureCookie fallback
   assert.match(wsHandler, /process\.env\.NEXTAUTH_SECRET \|\| process\.env\.AUTH_SECRET \|\| process\.env\.ENCRYPTION_KEY/);
   assert.match(wsHandler, /secureCookie: true/);
