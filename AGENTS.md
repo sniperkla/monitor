@@ -664,6 +664,7 @@ against a stale build, which reads exactly like "the fix was wrong".
 - `fd0f1bb9 fix(webui-proxy): mount ZeroClaw's dashboard, and the two bugs it hid`
 - `90037ede docs: record the ZeroClaw basename bug, and correct the claim that the pane was fixed`
 - `64b51e9a feat(webui-proxy): paste OpenClaw's gateway secret instead of prompting`
+- `c2880a4c fix(webui-proxy): rewrite CSS urls in OpenClaw style attributes`
 
 Shipped in this round:
 
