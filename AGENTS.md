@@ -323,7 +323,7 @@ decide by port probe rather than marker for exactly this reason.
 npm test          # node --test, spec reporter
 ```
 
-- Current baseline: **582 tests / 7 suites / 0 fail** (~16 s).
+- Current baseline: **594 tests / 7 suites / 0 fail** (~16 s).
 - The spec reporter prints `ℹ tests N` / `ℹ pass N` / `ℹ fail N`. It does **not** print  
   TAP `#` lines — count `✔`/`✖` or read the `ℹ` summary.
 - `tests/_register-hooks.mjs` registers the `@/` alias for `node --test`, so tests *can*  
@@ -437,6 +437,12 @@ These are not optional extras — for anything needing a live server they are th
   `invalid request frame`), and the gateway validates `connect` params against a JSON
   schema and **names every violation at once**. Sending deliberately incomplete params is
   a far faster way to learn the required shape than reading the minified bundle.
+- `probe-error-card-summary.mjs` — asserts the "Web UI Unreachable" card shows a sentence,
+  not markup. **7/0.** Deliberately fully real: it stubs only `/api/connections` so a server
+  is selectable, then lets the proxy request reach the server, where the fake id does not
+  exist → `getSshConfig()` throws → the route answers its genuine HTML 500. It prints the
+  raw body and the card's copy side by side, which is the whole contrast:
+  `<html><body style="background:#111;…">` versus `💥 Proxy Error Connection not found`.
 - `grant-supporter.mjs`, `mint-relay-token.mjs`.
 
 **Harness gotchas:** the session JWT must carry **ObjectId-shaped** `sub`/`dbId` (a bare  
@@ -457,6 +463,21 @@ clicked, so a mis-click can never pass vacuously.
 
 Also: `pkill -f '<pattern>'` over SSH **matches its own shell** and kills your command.  
 Use a bracket trick (`'[s]se_test'`) or check by port instead.
+
+**A full-screen overlay can make your screenshot lie while every assertion passes.**
+Two of them stack on the desktop, and neither blocks a synthetic `.click()` — so the DOM
+assertions are green and the PNG shows the overlay instead of the thing under test:
+
+| overlay | appears | suppress before load |
+|---|---|---|
+| Initialize Secure Vault | immediately, if the vault is "not configured" | stub `/api/user/vault` **and** seed `_vault_uri`/`_vault_pwd` in `sessionStorage` |
+| **Install SSH Monitor** (PWA) | **3 s after load**, driven by `beforeinstallprompt` | `sessionStorage.setItem('pwa_modal_dismissed','true')` |
+
+The PWA one is the sneakier of the two: it arrives *after* the page looks settled, so a
+probe that screenshots at 4 s photographs the modal. It went unnoticed until a screenshot
+cited as evidence for the error card turned out to show the install prompt — see
+`scratch/probe-error-card-summary.mjs`. **If a screenshot is your evidence, read the PNG
+before quoting it.**
 
 ---
 
@@ -506,17 +527,22 @@ Shipped in this round:
   (§4) — the desktop Web Browser's Explore page 500ed on every agent bookmark.
 - `server.js`'s WS upgrade parser now accepts the **versioned** path marker (`/m\d*/`), so a
   URL the app actually mints can no longer be silently dropped (§4).
-- Seven new test files; `npm test` 547 → **582**.
+- The "Web UI Unreachable" card now shows a sentence instead of a wall of markup
+  (`src/utils/httpErrorSummary.js`). The proxy's HTML 500 is right for its document case,
+  so the summarizer lives on the consumer side.
+- Eight new test files; `npm test` 547 → **594**.
 
 Verified live against `fc-fedora40`:
 
-- `npm test` **582/582**, 7 suites, eslint clean on changed files.
+- `npm test` **594/594**, 7 suites, eslint clean on changed files.
 - Proxy e2e across all four agents: **24/24**.
 - UI-card harness `e2e-webui-card-all4.mjs`: **46/0** (was 36/2, both failures being the
   harness's own mis-click).
 - Explore-bookmark probe: **4/0** with no server selected, **3/0** with one.
 - WS upgrade through the proxy for the path-keyed form the app mints: **101, socket held,
   `connect.challenge` received** (was a silent socket hang up). `scratch/probe-ws-path-key.mjs`.
+- Error card renders a real proxy 500 as `💥 Proxy Error Connection not found`: **7/0**.
+  `scratch/probe-error-card-summary.mjs`.
 - SSE through the proxy: first byte **0.18 s** (was 30.5 s, buffered).
 - OpenClaw through the proxy **with the full Cloudflare forwarded-header set present**:  
   200, real dashboard, no `proxy_attribution_required`.
@@ -552,14 +578,7 @@ Verified live against `fc-fedora40`:
    transport level (the three bullets above). **Worth a human eyeball** — and do not  
    re-pair the gateway to get one without asking; adding a device is a mutation of the  
    user's setup.
-4. **`probeTab()` shows raw HTML when the proxy 500s.** It sets the error card's copy to  
-   `(await res.text()).slice(0, 300)`, and a 500 from this route is an HTML page — so the
-   user reads `Web UI Unreachable <html><body style="background:#111…">💥 Proxy Error…`
-   (captured in `scratch/explore-bookmark-local-withconn.png`). Not fixed here: it is an
-   error-surface design question, not a functional break, and the real trigger for the
-   agent bookmarks is gone. Extracting the text, or having the route answer with a plain
-   message, are both reasonable.
-5. `webUIProbeShell`'s `/proc/net/tcp` fallback is IPv4-only. Low value: an IPv6-only bind  
+4. `webUIProbeShell`'s `/proc/net/tcp` fallback is IPv4-only. Low value: an IPv6-only bind  
    also fails the `curl 127.0.0.1` probe, so it surfaces as a visible "down" rather than a  
    silent wrong answer.
-6. hermes/nanobot still use inline copies of the probe/relay code (§2).
+5. hermes/nanobot still use inline copies of the probe/relay code (§2).

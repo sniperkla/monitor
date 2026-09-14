@@ -35,6 +35,7 @@ import {
 import { openExternalUrl } from '@/utils/webuiOpenMode';
 import { fetchRelayStatus, onRelayStatusRefresh, requestRelayStatusRefresh } from '@/utils/relayStatus';
 import { resolveTunnelConnectionId } from '@/utils/tunnelConnection';
+import { summarizeHttpFailure } from '@/utils/httpErrorSummary';
 import BrowserOnboarding, { hasCompletedBrowserOnboarding, resetBrowserOnboarding } from '@/components/BrowserOnboarding';
 
 const PROBE_TIMEOUT_MS = 30_000;
@@ -631,9 +632,14 @@ export default function AgentWebUIBrowserApp({
       });
 
       if (!res.ok) {
-        let detail = '';
+        // Read the body as text, then let the shared helper decide what is
+        // actually a message. The proxy's catch-all 500 is an HTML page on
+        // purpose (the same URL can be an <iframe> src), so echoing the body
+        // verbatim used to fill this card with markup — see
+        // src/utils/httpErrorSummary.js.
+        let body = '';
         try {
-          detail = (await res.text()).slice(0, 300).replace(/\s+/g, ' ').trim();
+          body = await res.text();
         } catch { /* unreadable */ }
         setTabs((prev) =>
           prev.map((t) =>
@@ -642,7 +648,11 @@ export default function AgentWebUIBrowserApp({
                   ...t,
                   phase: 'error',
                   status: res.status,
-                  error: detail || `HTTP status ${res.status} from agent server.`,
+                  error: summarizeHttpFailure({
+                    status: res.status,
+                    contentType: res.headers.get('content-type') || '',
+                    body,
+                  }),
                 }
               : t
           )
