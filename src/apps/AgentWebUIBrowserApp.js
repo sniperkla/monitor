@@ -34,6 +34,7 @@ import {
 } from 'lucide-react';
 import { openExternalUrl } from '@/utils/webuiOpenMode';
 import { fetchRelayStatus, onRelayStatusRefresh, requestRelayStatusRefresh } from '@/utils/relayStatus';
+import { resolveTunnelConnectionId } from '@/utils/tunnelConnection';
 import BrowserOnboarding, { hasCompletedBrowserOnboarding, resetBrowserOnboarding } from '@/components/BrowserOnboarding';
 
 const PROBE_TIMEOUT_MS = 30_000;
@@ -1086,7 +1087,28 @@ export default function AgentWebUIBrowserApp({
         onOpenExternal();
         return;
       }
-      const targetConn = connectionId || 'local';
+      // Resolve the connection the SAME way the localhost-tunnel branch below
+      // does, and refuse to invent one.
+      //
+      // This used to be `connectionId || 'local'`. The standalone desktop Web
+      // Browser mounts this app with no connection at all
+      // (DesktopEnvironment: <AgentWebUIBrowserApp initialMode="explore" />), so
+      // every agent bookmark on the Explore page asked the proxy for connection
+      // id `local`. `local` is not a database id: getSshConfig() throws
+      // "Connection not found", the route answers 500, and probeTab() turns that
+      // into a misleading "Web UI Unreachable" card quoting the raw 500 body.
+      // Measured: clicking Explore → "Hermes Agent WebUI" produced
+      // `500 GET /api/agents/webui-proxy/m2/local/9119` and no frame.
+      const targetConn = resolveTunnelConnectionId({
+        tabConnectionId: activeTab?.connectionId,
+        propConnectionId: connectionId,
+        selectedConnectionId,
+      });
+      if (!targetConn) {
+        setDirectOpenNotice(`Select a server connection first — the ${agLabel} Web UI is tunneled through it.`);
+        setTimeout(() => setDirectOpenNotice(''), 8000);
+        return;
+      }
       const proxyUrl = `/api/agents/webui-proxy/m2/${encodeURIComponent(targetConn)}/${agPort}`;
       setTabs((prev) =>
         prev.map((t) =>
@@ -1099,6 +1121,11 @@ export default function AgentWebUIBrowserApp({
                 frameSrc: '',
                 agentId: agId,
                 agentName: agLabel,
+                // Record the resolved connection on the TAB, so the loading
+                // overlay names a real server and a later reload/navigation
+                // resolves the same one. Same as the localhost branch below.
+                connectionId: targetConn,
+                connectionName: activeConnection?.name || activeConnection?.host || activeTab?.connectionName || connectionName || 'remote server',
                 port: agPort,
                 phase: 'loading',
               }
@@ -1155,7 +1182,11 @@ export default function AgentWebUIBrowserApp({
       const path = localMatch[3] || '/';
       // Prefer the tab's current server. This matters after the user changes
       // the selector: the component prop may still point at the old server.
-      const targetConn = activeTab?.connectionId || activeConnectionId;
+      const targetConn = resolveTunnelConnectionId({
+        tabConnectionId: activeTab?.connectionId,
+        propConnectionId: connectionId,
+        selectedConnectionId,
+      });
       if (targetConn) {
         const proxyUrl = buildTunnelUrl(targetConn, port, path);
         setTabs((prev) =>
