@@ -306,6 +306,50 @@ one, and `dashboard --json` always hands out the target's loopback
 (`ws://127.0.0.1:18789`) — unreachable from a browser. Both variants tested;  
 `scratch/probe-openclaw-bootstrap-rewrite.mjs` prints `Not a fix; do not ship it.`
 
+#### The secret is in **sessionStorage**, and the monitor now seeds it
+
+Asking the user to paste a secret that only exists on the gateway host is a dead end, so
+the proxy reads it and hands it over. Two things had to be *measured* — the first guess
+was wrong and silently inert:
+
+- **Where the UI keeps it.** `sessionStorage['openclaw.control.token.v1:<gatewayUrl>']`.
+  `localStorage` holds only `openclaw.control.settings.v1:<gw>` (gatewayUrl / theme /
+  navWidth) plus a `bootRecord` whose `credential` is a truncated *fingerprint*. Seeding
+  either of those changes nothing: the connect frame still goes out with no `auth` object.
+  Found by driving the UI's own login form (`#login-gate-url`, `#login-gate-credential`)
+  and diffing storage before/after — **not** by reading its source.
+  Because it is sessionStorage, the secret is **per-tab** — which is exactly why the
+  prompt comes back on every new tab even after a successful login.
+- **Where it can be read from.** `openclaw gateway auth-token --show` refuses outside an
+  interactive terminal, so it is unusable over an SSH exec channel; `openclaw config get
+  gateway.auth.token` prints `__OPENCLAW_REDACTED__`. The value **is plaintext** in
+  `~/.openclaw/openclaw.json` under `gateway.auth.token` — the gateway's own
+  `openclaw doctor --json` warns about precisely that. Read the file (python3), same as
+  the nanobot route does for its bootstrap secret.
+
+`src/app/api/agents/_openclaw-gateway-token.js` does the read (30 s memo per connection;
+swallows errors to `''`, because a gateway we cannot read should degrade to the honest
+prompt, not fail the page), and `webui-proxy/route.js` seeds the key in the injected head
+script — but **only** when `agentId === 'openclaw'`, since the read costs a remote exec and
+only this dashboard consumes a secret. Both key spellings are seeded (with and without a
+trailing slash) because the UI normalises the path.
+
+Two traps, both now pinned by `tests/openclaw-gateway-token.test.mjs`:
+
+- **Do not add an awk/regex fallback for the read.** The obvious one ("the first `"token"`
+  after `"gateway"`") matches `"mode": "token"` and returns the literal string `token`. A
+  *wrong* secret is worse than none: it fails as `token_mismatch` and hides the real cause.
+  With no fallback, a missing python3 yields `''` → the prompt, which is the pre-existing
+  behaviour the user already understands.
+- **Guard the seed with `if (OPENCLAW_TOKEN)`.** Writing `''` would turn "no secret" into
+  "the wrong secret" and change the failure mode from the honest prompt to a mismatch.
+
+Verified end-to-end with a probe that injects **nothing** itself, so any success is
+attributable to the proxy alone (`scratch/probe-openclaw-token-prompt.mjs`): the connect
+frame goes from `AUTH_TOKEN_MISSING` to
+`{"type":"res","ok":true,"payload":{"type":"hello-ok","protocol":4,…}}`, followed by a live
+dashboard (`sessions.subscribe`, `config.get`, `agents.list`, `health` — all `ok:true`).
+
 ### A hosted SPA that routes on the pathname needs its base injected — and one global can be BOTH the router base and the API base
 
 ZeroClaw's dashboard showed a fully painted chrome with a **completely empty content
@@ -376,7 +420,7 @@ decide by port probe rather than marker for exactly this reason.
 npm test          # node --test, spec reporter
 ```
 
-- Current baseline: **600 tests / 7 suites / 0 fail** (~16 s).
+- Current baseline: **612 tests / 7 suites / 0 fail** (~16 s).
 - The spec reporter prints `ℹ tests N` / `ℹ pass N` / `ℹ fail N`. It does **not** print  
   TAP `#` lines — count `✔`/`✖` or read the `ℹ` summary.
 - `tests/_register-hooks.mjs` registers the `@/` alias for `node --test`, so tests *can*  
@@ -490,6 +534,21 @@ These are not optional extras — for anything needing a live server they are th
   `invalid request frame`), and the gateway validates `connect` params against a JSON
   schema and **names every violation at once**. Sending deliberately incomplete params is
   a far faster way to learn the required shape than reading the minified bundle.
+- `probe-openclaw-token-prompt.mjs` — **the decisive one for the auto-paste.** Dumps the
+  Control UI's DOM, storage and raw WS frames. It injects **nothing** itself, so a
+  successful handshake is attributable to the proxy's seed alone. Before the fix: prompt
+  visible, connect frame carries no `auth`, gateway answers `AUTH_TOKEN_MISSING`. After:
+  `{"type":"res","ok":true,"payload":{"type":"hello-ok","protocol":4,…}}` and a live
+  dashboard. This is the probe to re-run after touching the seed.
+- `probe-openclaw-token-inject.mjs` — **a dead end, kept as a warning.** Seeded
+  `localStorage['openclaw.control.settings.v1:<gw>'] = {gatewayUrl, token}` — the plausible
+  guess. Inert: the connect frame still had no `auth`. Superseded by
+  `probe-openclaw-token-submit.mjs`, which drives the UI's **real** login form and diffs
+  storage before/after — that is what found the sessionStorage key. Lesson: to learn where
+  an app persists a secret, submit its own form and watch, do not guess the store.
+- `openclaw-gw-ctl.mjs` — drives the gateway's lifecycle through the app's own `webui-ctl`
+  (start/stop/status), because `systemctl --user` does not exist on the box and
+  `openclaw doctor --fix` refuses to run while the gateway holds the state DB.
 - `probe-error-card-summary.mjs` — asserts the "Web UI Unreachable" card shows a sentence,
   not markup. **7/0.** Deliberately fully real: it stubs only `/api/connections` so a server
   is selectable, then lets the proxy request reach the server, where the fake id does not
@@ -595,6 +654,8 @@ against a stale build, which reads exactly like "the fix was wrong".
 - `3389540f fix(browser): show a sentence in the error card, not a wall of markup`
 - `3d24e7e8 docs: narrow the ZeroClaw open item to the one layer still unverified`
 - `fd0f1bb9 fix(webui-proxy): mount ZeroClaw's dashboard, and the two bugs it hid`
+- `90037ede docs: record the ZeroClaw basename bug, and correct the claim that the pane was fixed`
+- `64b51e9a feat(webui-proxy): paste OpenClaw's gateway secret instead of prompting`
 
 Shipped in this round:
 
@@ -610,6 +671,13 @@ Shipped in this round:
   the only builder that did not, so the proxy fell back to `nanobot` for every agent —
   a ZeroClaw tab's address bar read `?agent=nanobot` and the "start the Web UI"
   fallback button POSTed `/api/agents/nanobot`.
+- **OpenClaw's gateway secret is pasted for the user.** The Control UI no longer asks them
+  to supply a token that only exists on the gateway host: the proxy reads it over SSH and
+  seeds the UI's sessionStorage key before the bundle boots (§4). Verified end-to-end by a
+  probe that injects nothing itself — `hello-ok` and a live dashboard. On the target the
+  token was generated with `openclaw doctor --fix --generate-gateway-token` **with the
+  user's authorisation** (they chose "Generate it, then wire auto-paste"); the gateway was
+  stopped first, because doctor needs exclusive state-DB access (§10 open item 1).
 - `_ssh.js` pre-ready connection leak fixed at three sites.
 - Agent bookmarks no longer address the proxy with the invented connection id `local`
   (§4) — the desktop Web Browser's Explore page 500ed on every agent bookmark.
@@ -618,11 +686,11 @@ Shipped in this round:
 - The "Web UI Unreachable" card now shows a sentence instead of a wall of markup
   (`src/utils/httpErrorSummary.js`). The proxy's HTML 500 is right for its document case,
   so the summarizer lives on the consumer side.
-- Nine new test files; `npm test` 547 → **600**.
+- Ten new test files; `npm test` 547 → **612**.
 
 Verified live against `fc-fedora40`:
 
-- `npm test` **600/600**, 7 suites, eslint clean on changed files.
+- `npm test` **612/612**, 7 suites, eslint clean on changed files.
 - Proxy e2e across all four agents: **24/24**.
 - UI-card harness `e2e-webui-card-all4.mjs`: **46/0** (was 36/2, both failures being the
   harness's own mis-click).
@@ -652,21 +720,30 @@ Verified live against `fc-fedora40`:
 
 ### Open items
 
-1. **OpenClaw's Control UI token prompt is NOT a monitor bug — it needs a gateway token on
-   the box.** The user reported *"This Gateway expects its token"* / *"…rejected the supplied
-   Gateway secret"*. The socket reaches the gateway fine (101 + `connect.challenge`); the
-   gateway refuses the handshake because **no gateway token is configured there**:
-   `~/.openclaw/openclaw.json` is only `{"gateway":{"mode":"local","bind":"loopback"}}`,
-   `secret_store_entries` in `~/.openclaw/state/openclaw.sqlite` is **empty**, and
-   `openclaw dashboard --json` self-reports **`"tokenIncluded": false`**. The gateway log at
-   the screenshot's exact timestamp (`2026-09-14T09:52 UTC` = 16:52 Bangkok) shows
-   `auth=password reason=token_mismatch`, preceded by `auth=none reason=token_missing` —
-   a secret was offered and could not match, because there is nothing to match.
-   **Repair (target-side, mutates the user's setup — ask first):**
-   `openclaw doctor --generate-gateway-token`, then restart the gateway. The flag exists in
-   OpenClaw 2026.9.4. Injecting the `#bootstrapToken=` fragment is **not** a workaround —
-   measured inert, see §4. Not done here: generating a credential and restarting a service
-   on the user's box is their call, not ours.
+1. ~~**OpenClaw's Control UI token prompt is NOT a monitor bug — it needs a gateway token on
+   the box.**~~ **CLOSED — the target was repaired *with authorisation*, and the monitor now
+   pastes the secret for the user.** The original diagnosis was right and is preserved here
+   because the failure modes are still the first thing to check: the socket reaches the
+   gateway fine (101 + `connect.challenge`); the gateway refuses the handshake because **no
+   gateway token was configured** — `~/.openclaw/openclaw.json` was only
+   `{"gateway":{"mode":"local","bind":"loopback"}}`, `secret_store_entries` in
+   `~/.openclaw/state/openclaw.sqlite` was **empty**, and `openclaw dashboard --json`
+   self-reported **`"tokenIncluded": false`**. The gateway log at the screenshot's timestamp
+   (`2026-09-14T09:52 UTC` = 16:52 Bangkok) shows `auth=password reason=token_mismatch`,
+   preceded by `auth=none reason=token_missing` — a secret was offered and could not match,
+   because there was nothing to match.
+   **What was done (user chose "Generate it, then wire auto-paste"):**
+   - ran `openclaw doctor --fix --generate-gateway-token` on `fc-fedora40`, then restarted
+     the gateway. Note the ordering constraint: **doctor needs exclusive state-DB access**
+     and dies with `StateDatabaseCoordinatorContentionError: another OpenClaw process owns
+     gateway-lifecycle` unless the gateway is stopped first. `systemctl --user` is unavailable
+     on that box (`Failed to connect to bus: No medium found`); the gateway is a detached
+     `setsid nohup` process tracked in `~/.openclaw/daemon.pid`. Stopped/started it through
+     the app's own `webui-ctl` path (`scratch/openclaw-gw-ctl.mjs`).
+   - wired the auto-paste — the sessionStorage key, the read, and the two traps are in §4
+     above. The token is **not** in the repo or in the monitor's config; it is read from the
+     box on demand and memoised for 30 s.
+   The `#bootstrapToken=` fragment is still **not** a workaround — measured inert, see §4.
 2. **Nothing above is deployed.** Production is on an older bundle and does not auto-deploy.  
    This is the single most likely reason a fix "didn't work". The OpenClaw 403 the user  
    re-reported was exactly this — the fix had never left the working tree.
