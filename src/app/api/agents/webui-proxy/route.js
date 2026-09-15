@@ -31,7 +31,7 @@ import { rewriteAbsoluteSelfUrls, collapseLeadingSlashes } from '../_webui-rewri
 // OpenClaw's Control UI will not complete its WebSocket handshake without the
 // gateway secret, and the secret only exists on the gateway host. See the
 // module for the measurements that pinned down where the UI reads it from.
-import { readOpenClawGatewayToken, OPENCLAW_TOKEN_KEY_PREFIX } from '../_openclaw-gateway-token';
+import { readOpenClawGatewayToken, OPENCLAW_TOKEN_KEY_PREFIX, OPENCLAW_SEED_MARK_PREFIX } from '../_openclaw-gateway-token';
 import { getSshConfig, getOrCreatePooledClient } from '@/app/api/server-backup/_ssh';
 import http from 'http';
 
@@ -280,9 +280,18 @@ function eventStreamResponse(up, sshChannel, remotePath) {
  * Rewrite URLs in HTML so that relative paths and AJAX/fetch calls continue
  * to go through this proxy endpoint rather than hitting the real domain.
  */
-function rewriteHtml(html, proxyBase, currentPath, port, connectionId, agentId = 'nanobot', extraProxyQuery = '', openclawToken = '') {
+function rewriteHtml(html, proxyBase, currentPath, port, connectionId, agentId = 'nanobot', extraProxyQuery = '', openclawToken = '', openclawAuth = '') {
   // Folder for relative resolution (e.g. /app/ -> /app/, /index.html -> /)
   const folder = currentPath.substring(0, currentPath.lastIndexOf('/') + 1) || '/';
+
+  // Inline <script> bodies are invisible to attribute rewriting, and they carry
+  // module specifiers of their own. @vitejs/plugin-react's preamble is exactly
+  // that shape (`import RefreshRuntime from "/@react-refresh"` inside the HTML):
+  // left unprefixed it 404s, the preamble never runs and React aborts with
+  // "@vitejs/plugin-react can't detect preamble. Something is wrong." on a page
+  // whose every other asset loaded fine (measured 2026-09-15 on a Vite dev
+  // server at :3076).
+  html = rewriteInlineScriptRefs(html, assetPathPrefix(connectionId, port));
 
   // Inject helper script to monkey-patch fetch and XMLHttpRequest for SPAs
   const scriptTag = `
@@ -321,14 +330,51 @@ function rewriteHtml(html, proxyBase, currentPath, port, connectionId, agentId =
   // frame goes from no auth object at all to {token, password} and the
   // gateway answers ok. sessionStorage (not localStorage) is deliberate on the
   // UI's side, which is also why the prompt returns on every new tab.
+  //
+  // The seed is also RETRACTABLE. sessionStorage outlives a reload, so a secret
+  // we injected while the gateway still had a token keeps being auto-filled
+  // into the "Gateway secret" field after that token is gone — a fresh install
+  // has no gateway credential at all, so the user sees a secret appear by
+  // itself and Connect fails as a MISMATCH, an error that names the wrong cause
+  // (it points at the pasted token, not at the empty host).
+  //
+  // So when the read says the config carries no credential at all, the stored
+  // secret is retracted. The one case we leave alone is the one we can PROVE is
+  // the operator's: a marker exists and disagrees with the stored value, i.e.
+  // they pasted over our seed. No marker at all means the value came either
+  // from our own seed (the version before markers existed) or from a manual
+  // paste — and with nothing configured on the host, neither can authenticate,
+  // so keeping it only reproduces the phantom mismatch above.
+  //
+  // NOTE: no backticks anywhere in this block. The whole script is one JS
+  // template literal, so a single one terminates it early and 500s the route
+  // (tests/browser-proxy.test.mjs guards this).
   var OPENCLAW_TOKEN = ${JSON.stringify(String(openclawToken || ''))};
-  if (OPENCLAW_TOKEN) {
+  var OPENCLAW_AUTH = ${JSON.stringify(String(openclawAuth || ''))};
+  if (OPENCLAW_TOKEN || OPENCLAW_AUTH === 'unset') {
     try {
       var OPENCLAW_GW = (location.protocol === 'https:' ? 'wss' : 'ws') + '://' + location.host + ASSET_PREFIX;
-      sessionStorage.setItem(${JSON.stringify(OPENCLAW_TOKEN_KEY_PREFIX)} + OPENCLAW_GW, OPENCLAW_TOKEN);
-      // The UI normalises the page path by dropping a trailing slash; seed that
-      // spelling too so the key matches whichever form it computes.
-      sessionStorage.setItem(${JSON.stringify(OPENCLAW_TOKEN_KEY_PREFIX)} + OPENCLAW_GW + '/', OPENCLAW_TOKEN);
+      // The UI normalises the page path by dropping a trailing slash, so seed
+      // (and retract) both spellings: the key it computes can differ from ours
+      // by exactly that, and a miss is silent either way.
+      var OPENCLAW_KEYS = [
+        [${JSON.stringify(OPENCLAW_TOKEN_KEY_PREFIX)} + OPENCLAW_GW, ${JSON.stringify(OPENCLAW_SEED_MARK_PREFIX)} + OPENCLAW_GW],
+        [${JSON.stringify(OPENCLAW_TOKEN_KEY_PREFIX)} + OPENCLAW_GW + '/', ${JSON.stringify(OPENCLAW_SEED_MARK_PREFIX)} + OPENCLAW_GW + '/']
+      ];
+      for (var i = 0; i < OPENCLAW_KEYS.length; i++) {
+        var tokenKey = OPENCLAW_KEYS[i][0], markKey = OPENCLAW_KEYS[i][1];
+        if (OPENCLAW_TOKEN) {
+          sessionStorage.setItem(tokenKey, OPENCLAW_TOKEN);
+          sessionStorage.setItem(markKey, OPENCLAW_TOKEN);
+        } else {
+          var stored = sessionStorage.getItem(tokenKey);
+          var mark = sessionStorage.getItem(markKey);
+          if (stored && (!mark || stored === mark)) {
+            sessionStorage.removeItem(tokenKey);
+            sessionStorage.removeItem(markKey);
+          }
+        }
+      }
     } catch (e) {}
   }
   function proxyWsUrl(p) {
@@ -737,7 +783,7 @@ if (isCloudflareInfra('/' + path)) return m;
  * SSH tunnel and the BROWSER dials localhost:<port> on the visitor's machine
  * ("localhost refused to connect").
  */
-function rewriteRootAssetRefs(text, connectionId, port) {
+export function rewriteRootAssetRefs(text, connectionId, port) {
   const prefix = assetPathPrefix(connectionId, port);
   // Hermes' Vite preload map stores lazy chunks as `assets/foo.js`. Two
   // consumers read `/assets/...`-shaped strings out of the bundles, and they
@@ -765,7 +811,72 @@ function rewriteRootAssetRefs(text, connectionId, port) {
   // byte-identical preload/import URL is the whole point of path-keying.
   return String(text)
     .replace(/(["'`])assets\//g, (_m, quote) => `${quote}${relPrefix}/assets/`)
-    .replace(/(["'`])\/assets\//g, (_m, quote) => `${quote}${prefix}/assets/`);
+    .replace(/(["'`])\/assets\//g, (_m, quote) => `${quote}${prefix}/assets/`)
+    .replace(/(["'`])(\/[^"'`\s]*)(["'`])/g, (_m, q, path, q2) => (
+      needsProxyPrefix(path, prefix) ? `${q}${prefix}${path}${q2}` : _m
+    ));
+}
+
+/**
+ * Root-absolute module specifiers inside a bundle need the proxy prefix too.
+ *
+ * Markup rewriting cannot reach these: a Vite DEV server's chunks import each
+ * other by root-absolute path (`import "/node_modules/vite/dist/client/env.mjs"`,
+ * `import "/src/App.tsx"`, `import "/@vite/client"`, `import "/@react-refresh"`),
+ * and the browser resolves those against the document ORIGIN — the monitor's —
+ * so every one of them 404s and the app renders a blank page. A `<base>` tag
+ * does not help either: a root-absolute reference takes the base's origin but
+ * ignores its PATH (measured 2026-09-15 on a Vite playground at :3076).
+ *
+ * Deliberately conservative — only shapes that cannot be app ROUTES are
+ * rewritten, because a client-side route string ("/settings") must stay a route:
+ *   - a dev-server marker segment (`/@vite`, `/@react-refresh`, `/@fs`, `/@id`,
+ *     `/node_modules`, `/src`), or
+ *   - a path ending in a module/asset extension (`/static/js/main.chunk.js`).
+ * Protocol-relative ("//cdn/x.js"), absolute ("https://…") and ALREADY-prefixed
+ * refs are left alone; prefixing the last group again would produce
+ * `/api/agents/webui-proxy/…/api/agents/webui-proxy/…`.
+ */
+const DEV_ROOT_RE = /^\/(?:@vite|@react-refresh|@fs|@id|@hmr|node_modules|src)(?:\/|$)/;
+const ASSET_EXT_RE = /\.(?:m?[jt]sx?|mjs|cjs|css|json|map|svg|png|jpe?g|gif|webp|avif|ico|woff2?|ttf|otf|eot|mp4|webm|wav|wasm)(?=[?#]|$)/i;
+
+/**
+ * Re-prefix root-absolute refs inside INLINE <script> bodies of a document.
+ *
+ * Only inline scripts are touched: an `src="/x"` attribute is already handled by
+ * the attribute pass, and applying the BUNDLE rules (notably the relative
+ * `assets/` one, which deliberately emits a slash-less form for React Router)
+ * to markup would corrupt ordinary relative URLs.
+ */
+export function rewriteInlineScriptRefs(html, prefix) {
+  return String(html).replace(
+    /(<script\b(?![^>]*\bsrc=)[^>]*>)([\s\S]*?)(<\/script>)/gi,
+    (_m, open, body, close) => open
+      + body.replace(/(["'`])(\/[^"'`\s]*)(["'`])/g, (m, q, path, q2) => (
+        needsProxyPrefix(path, prefix) ? `${q}${prefix}${path}${q2}` : m
+      ))
+      + close
+  );
+}
+
+function needsProxyPrefix(path, prefix) {
+  // Not a root-absolute path, or protocol-relative ("//host/x").
+  if (!path.startsWith('/') || path.startsWith('//')) return false;
+  // Already inside the proxy: the first two passes produced these, and
+  // double-prefixing is unrecoverable.
+  if (prefix && (path === prefix || path.startsWith(`${prefix}/`))) return false;
+  const bare = path.split(/[?#]/, 1)[0];
+  if (DEV_ROOT_RE.test(bare)) return true;
+  if (!ASSET_EXT_RE.test(bare)) return false;
+  // Extension branch only: require at least one DIRECTORY segment. A bare
+  // "/name.ext" is far more often a SUFFIX concatenated onto some other origin
+  // than a same-origin asset — @monaco-editor/loader builds its script URL as
+  //   "".concat(state.config.paths.vs, "/loader.js")   // vs = a jsdelivr CDN base
+  // so prefixing it produced
+  //   https://cdn.jsdelivr.net/…/min/vs/api/agents/webui-proxy/…/loader.js
+  // and the editor never mounted (net::ERR_BLOCKED_BY_ORB, measured 2026-09-15).
+  // Real module/asset paths are always nested ("/src/App.tsx", "/static/js/main.js").
+  return bare.slice(1).split('/').filter(Boolean).length >= 2;
 }
 
 // ─── coordinate memory ───────────────────────────────────────────────────────
@@ -1133,10 +1244,11 @@ async function handleProxy(request) {
       // dashboard's document. Documents are rare (one per tab load); assets are
       // not, and they never reach this branch.
       let openclawToken = '';
+      let openclawAuth = '';
       if (agentId === 'openclaw') {
-        openclawToken = await readOpenClawGatewayToken(sshConfig, connectionId);
+        ({ token: openclawToken, auth: openclawAuth } = await readOpenClawGatewayToken(sshConfig, connectionId));
       }
-      html = rewriteHtml(html, proxyBase, remotePath, port, connectionId, agentId, extraProxyQuery, openclawToken);
+      html = rewriteHtml(html, proxyBase, remotePath, port, connectionId, agentId, extraProxyQuery, openclawToken, openclawAuth);
       // Hermes' dashboard uses a hash router (routes are /hermes/chat,
       // /hermes/history, etc.). Do not overwrite its base-path marker with the
       // keyed proxy path: that makes the dashboard render its dark/green shell

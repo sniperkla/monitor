@@ -358,6 +358,53 @@ frame goes from `AUTH_TOKEN_MISSING` to
 `{"type":"res","ok":true,"payload":{"type":"hello-ok","protocol":4,…}}`, followed by a live
 dashboard (`sessions.subscribe`, `config.get`, `agents.list`, `health` — all `ok:true`).
 
+#### A fresh install has NO gateway token, and the seed must be able to retract itself
+
+**Symptom reported (2026-09-15):** *"it auto add Gateway secret but it's not work when i
+click connect → unauthorized: gateway token mismatch"*, after a fresh `openclaw` install.
+
+Measured on `fc-fedora40` minutes after a clean reinstall:
+
+```
+~/.openclaw/openclaw.json   {"gateway":{"mode":"local","bind":"loopback"}}   ← no auth
+openclaw dashboard --json   "tokenIncluded": false
+openclaw gateway auth-token --show
+  → No configured Gateway token is available. Run `openclaw doctor --generate-gateway-token`
+```
+
+With nothing configured, **no secret can match** — the gateway answers `token_missing` for
+`auth=none` and `token_mismatch` for anything presented. So the read returns `''` and the
+seed wrote nothing… which is exactly what made it confusing: it left the tab's previously
+seeded key in place, and the Control UI **auto-fills its "Gateway secret" field from that
+key on every load**. The user saw a secret appear by itself and got a *mismatch*, an error
+that blames the pasted token instead of naming the empty host. Reproduced verbatim by
+pre-seeding the key and watching the connect frame
+(`scratch/probe-openclaw-stale-seed.mjs`).
+
+Two fixes, both pinned by `tests/openclaw-gateway-token.test.mjs`:
+
+- The remote read now prints `OCTOKEN_AUTH=<configured|unset|unknown>` alongside the
+  token. `unset` is claimed **only** when the config parsed and carries no truthy
+  `gateway.auth`; a file we could not read is `unknown`, never `unset` — the caller
+  destroys state on `unset`, so guessing there would discard a valid credential.
+- On `unset` the seed **retracts** itself: the token key and our own
+  `openclaw.control.monitorSeed.v1:<gw>` marker are removed. The marker is what protects
+  the one case we must not touch — the operator pasted over our seed, so marker and stored
+  value disagree. **No marker at all is retracted too**, because that is the shape a seed
+  written by the version before markers existed leaves behind, i.e. the very tab that
+  reported the bug; with no credential on the host it cannot authenticate either way.
+
+Consequence for the report itself: the honest prompt is the correct end state, but it is
+still a dead end for the user — nothing on this side can supply a credential that does not
+exist. `openclaw doctor --generate-gateway-token` on the box (gateway stopped first, §10
+open item 1) is the unblock, and then the auto-paste works again untouched. Verified after
+generating one: `configured` + the real token in the injected literal, the connect frame
+carrying `{token, password}`, and a live dashboard.
+
+Residue, pre-existing and cosmetic: `/__openclaw__/workspace-icon/agent:main:main` 404s on
+raw *and* proxy (the proxied URL double-encodes the colon), so the census shows 1
+"proxy-only" failure for a resource that fails both ways. The dashboard renders fully.
+
 ### A hosted SPA that routes on the pathname needs its base injected — and one global can be BOTH the router base and the API base
 
 ZeroClaw's dashboard showed a fully painted chrome with a **completely empty content
@@ -419,89 +466,30 @@ zeroclaw's `broadKill` was missing its trailing `;`, so the shell parsed
 immediately before a marker `echo`, **end it with `;`**. Both new `webui-ctl stop` paths  
 decide by port probe rather than marker for exactly this reason.
 
----
+### A remote command must be ONE template literal
 
+openclaw's reconfigure built its command as
 
-## 5. Tests
-
-```bash
-npm test          # node --test, spec reporter
+```js
+`export OC_HOME="${HH}"` + '; echo \'${envPyB64}\' | base64 -d | python3'
 ```
 
-- Current baseline: **659 tests / 7 suites / 0 fail** (~16 s).
-- `tests/relay-web-proxy.test.mjs` lifts the proxy section out of the shipped source and
-  **executes** it against real HTTP servers. It needs `http`, `https`, `fs`, `path`, `os`
-  injected into its `new Function` factory (the section is a slice, so module-scope
-  requires are not in scope), plus `SSH_MONITOR_RELAY_ORIGINS` and
-  `SSH_MONITOR_RELAY_SITE_PORT_BASE` set to a temp file and a spare range — otherwise the
-  suite writes the developer's real registry and fights the running relay for ports.
-- **Its teardown must call `closeAllConnections()`.** `server.close()` alone waits for open
-  connections to end and `fetch` (undici) pools keep-alive sockets, so the suite hung for
-  three minutes with every assertion green. A timeout floor in the teardown too.
-- The spec reporter prints `ℹ tests N` / `ℹ pass N` / `ℹ fail N`. It does **not** print  
-  TAP `#` lines — count `✔`/`✖` or read the `ℹ` summary.
-- `tests/_register-hooks.mjs` registers the `@/` alias for `node --test`, so tests *can*  
-  import `src` ESM modules directly (8 files do).
+The second half is a **single-quoted** JS string, so `${envPyB64}` was never
+interpolated — the remote ran `echo '${envPyB64}' | base64 -d` and died with
+`base64: invalid input`, python never ran, and reconfigure aborted before the gateway
+restart. It passes review because both halves look right in isolation and it only
+fails on the remote host.
 
-**Prefer calling real code over regex-matching source.** A source-pinning assertion that  
-is sloppy about *which* occurrence it matches fails for the wrong reason and costs more  
-than it saves. Four of my own tests were wrong this way in one session:
-
-1. A bare `/Error/i` on dashboard HTML matched OpenClaw's own inline  
-   `throw new Error("gateway unavailable")`. Match the proxy's error shells by their  
-   distinctive copy.
-2. `body.length > 200` failed on OpenClaw's legitimate **60-byte** ES-module stub. Assert  
-   content-type and walk the import graph instead.
-3. `indexOf('__waitForWebuiForward')` vs `indexOf('__sendToRelayForUserAny')` compared a  
-   *guard* against the waiter, inverting the result. Match the **calls** (with parens).
-4. Flagging `localPort: 18791` as "inventing a port" — it is the **request hint**. The  
-   response port comes from the ack.
-
-Two more traps: `new Client()` appears in comments, so match the assignment form  
-`= new Client()`; and "slice from this match to the next" is empty when two matches are  
-adjacent — slice to the next `export function`.
-
-That is why `rewriteAbsoluteSelfUrls` / `collapseLeadingSlashes` were split into  
-`_webui-rewrite.js`: dependency-free, so tests call them for real.
-
-Same reason `resolveTunnelConnectionId` lives in `src/utils/tunnelConnection.js` rather  
-than inline in `AgentWebUIBrowserApp`: the component is not importable from  
-`node --test` (it pulls in React and the whole desktop shell), so the rule would  
-otherwise only ever be checked by regex.
-
-**When a negative source assertion matches a comment.** `tests/tunnel-connection.test.mjs`  
-asserts the component contains no `|| 'local'` — but the file *explains* that bug in a  
-comment quoting the old expression, so raw source fails on a correct file. Strip  
-whole-line comments before matching, and only whole-line ones: the file has string  
-literals like `'https://…'`, and a naive `//` strip eats the code after them, turning a  
-real violation into a pass.
-
----
-
-
-## 6. Local Relay testing recipe
-
-Never repoint the user's production relay service. Run a **second, isolated** one.
-
-The relay's config path is hardcoded to `~/.ssh-monitor-relay.json`, so override `HOME`  
-rather than looking for a flag:
+Never splice a `'…'` / `"…"` string into a command that a template literal started. The
+whole command must be one backtick string. After touching any agent route, grep:
 
 ```bash
-HOME=/tmp/relaydev node ~/.ssh-monitor-relay/local-relay.js \
-  --server http://localhost:3030 --token <minted> --name relaydev
+grep -rnE "\+ *['\"][^'\"]*\\\$\{[a-zA-Z_]" src/app/api/agents/*/route.js
 ```
 
-`--server/--token` runs in the foreground and does **not** install a service. There is no  
-single-instance lock, so this coexists with `com.ssh-monitor.relay`.
-
-**Two gates bite here:**
-
-- The relay needs `supporter.status = 'active'` on its user (`scratch/grant-supporter.mjs`).  
-  Already granted to `ui-test@local.test` and left set.
-- The WS gate caches that verdict for **5 minutes** (`global.__relaySupporterCache` in  
-  `server.js`). Granting supporter and retrying immediately still gets  
-  `4003 SUPPORTER_REQUIRED` while `/api/relay/token` cheerfully reports  
-  `isSupporter:true` — they read through different paths. **Restart the dev server.**
+`tests/openclaw-reconfigure-env.test.mjs` pins this by lifting the real command
+expression out of the route, evaluating it with the placeholders bound, and running it
+under `sh -c` — an uninterpolated placeholder fails there, not on someone's server.
 
 ### The relay is not a browser, and neither is the page it serves
 
@@ -758,6 +746,90 @@ No re-pairing is needed — the saved token reconnects the new file as the same 
 ---
 
 
+## 5. Tests
+
+```bash
+npm test          # node --test, spec reporter
+```
+
+- Current baseline: **659 tests / 7 suites / 0 fail** (~16 s).
+- `tests/relay-web-proxy.test.mjs` lifts the proxy section out of the shipped source and
+  **executes** it against real HTTP servers. It needs `http`, `https`, `fs`, `path`, `os`
+  injected into its `new Function` factory (the section is a slice, so module-scope
+  requires are not in scope), plus `SSH_MONITOR_RELAY_ORIGINS` and
+  `SSH_MONITOR_RELAY_SITE_PORT_BASE` set to a temp file and a spare range — otherwise the
+  suite writes the developer's real registry and fights the running relay for ports.
+- **Its teardown must call `closeAllConnections()`.** `server.close()` alone waits for open
+  connections to end and `fetch` (undici) pools keep-alive sockets, so the suite hung for
+  three minutes with every assertion green. A timeout floor in the teardown too.
+- The spec reporter prints `ℹ tests N` / `ℹ pass N` / `ℹ fail N`. It does **not** print  
+  TAP `#` lines — count `✔`/`✖` or read the `ℹ` summary.
+- `tests/_register-hooks.mjs` registers the `@/` alias for `node --test`, so tests *can*  
+  import `src` ESM modules directly (8 files do).
+
+**Prefer calling real code over regex-matching source.** A source-pinning assertion that  
+is sloppy about *which* occurrence it matches fails for the wrong reason and costs more  
+than it saves. Four of my own tests were wrong this way in one session:
+
+1. A bare `/Error/i` on dashboard HTML matched OpenClaw's own inline  
+   `throw new Error("gateway unavailable")`. Match the proxy's error shells by their  
+   distinctive copy.
+2. `body.length > 200` failed on OpenClaw's legitimate **60-byte** ES-module stub. Assert  
+   content-type and walk the import graph instead.
+3. `indexOf('__waitForWebuiForward')` vs `indexOf('__sendToRelayForUserAny')` compared a  
+   *guard* against the waiter, inverting the result. Match the **calls** (with parens).
+4. Flagging `localPort: 18791` as "inventing a port" — it is the **request hint**. The  
+   response port comes from the ack.
+
+Two more traps: `new Client()` appears in comments, so match the assignment form  
+`= new Client()`; and "slice from this match to the next" is empty when two matches are  
+adjacent — slice to the next `export function`.
+
+That is why `rewriteAbsoluteSelfUrls` / `collapseLeadingSlashes` were split into  
+`_webui-rewrite.js`: dependency-free, so tests call them for real.
+
+Same reason `resolveTunnelConnectionId` lives in `src/utils/tunnelConnection.js` rather  
+than inline in `AgentWebUIBrowserApp`: the component is not importable from  
+`node --test` (it pulls in React and the whole desktop shell), so the rule would  
+otherwise only ever be checked by regex.
+
+**When a negative source assertion matches a comment.** `tests/tunnel-connection.test.mjs`  
+asserts the component contains no `|| 'local'` — but the file *explains* that bug in a  
+comment quoting the old expression, so raw source fails on a correct file. Strip  
+whole-line comments before matching, and only whole-line ones: the file has string  
+literals like `'https://…'`, and a naive `//` strip eats the code after them, turning a  
+real violation into a pass.
+
+---
+
+
+## 6. Local Relay testing recipe
+
+Never repoint the user's production relay service. Run a **second, isolated** one.
+
+The relay's config path is hardcoded to `~/.ssh-monitor-relay.json`, so override `HOME`  
+rather than looking for a flag:
+
+```bash
+HOME=/tmp/relaydev node ~/.ssh-monitor-relay/local-relay.js \
+  --server http://localhost:3030 --token <minted> --name relaydev
+```
+
+`--server/--token` runs in the foreground and does **not** install a service. There is no  
+single-instance lock, so this coexists with `com.ssh-monitor.relay`.
+
+**Two gates bite here:**
+
+- The relay needs `supporter.status = 'active'` on its user (`scratch/grant-supporter.mjs`).  
+  Already granted to `ui-test@local.test` and left set.
+- The WS gate caches that verdict for **5 minutes** (`global.__relaySupporterCache` in  
+  `server.js`). Granting supporter and retrying immediately still gets  
+  `4003 SUPPORTER_REQUIRED` while `/api/relay/token` cheerfully reports  
+  `isSupporter:true` — they read through different paths. **Restart the dev server.**
+
+---
+
+
 ## 7. Scratch harnesses (`scratch/`, gitignored)
 
 These are not optional extras — for anything needing a live server they are the test suite.
@@ -809,6 +881,14 @@ These are not optional extras — for anything needing a live server they are th
   visible, connect frame carries no `auth`, gateway answers `AUTH_TOKEN_MISSING`. After:
   `{"type":"res","ok":true,"payload":{"type":"hello-ok","protocol":4,…}}` and a live
   dashboard. This is the probe to re-run after touching the seed.
+- `probe-openclaw-stale-seed.mjs` — the controlled experiment for the *other* half: it
+  pre-seeds the UI's sessionStorage key with a dead secret before the bundle boots, i.e.
+  the state a tab is left in when the gateway is reinstalled, and reports the field's value
+  and the connect frame's `auth`. Before the retract fix: field auto-filled, frame carries
+  `{token, password}`, gateway answers the user's exact
+  `unauthorized: gateway token mismatch`. After: the seed is retracted, the field is empty,
+  and the frame has no `auth` at all → the honest `token_missing` prompt. Run it against
+  both gateway states — `configured` must overwrite the stale value with the real token.
 - `probe-openclaw-token-inject.mjs` — **a dead end, kept as a warning.** Seeded
   `localStorage['openclaw.control.settings.v1:<gw>'] = {gatewayUrl, token}` — the plausible
   guess. Inert: the connect frame still had no `auth`. Superseded by
@@ -999,6 +1079,12 @@ Shipped in this round:
 Verified live against `fc-fedora40`:
 
 - `npm test` **613/613**, 7 suites, eslint clean on changed files.
+- *(2026-09-15, after the retract fix:)* `npm test` **618/618**, 7 suites, eslint clean on
+  the three changed files. Retract verified live both ways — `unset` → field emptied, no
+  `auth` on the connect frame; `configured` → stale value overwritten with the real token
+  and a live dashboard. Raw-vs-proxy census 3 / 3 failing, the one "proxy-only" entry being
+  `/__openclaw__/workspace-icon/agent:main:main`, which 404s on both (the proxied URL
+  double-encodes the colon) — see the §4 subsection.
 - OpenClaw auto-paste probe: `hello-ok` / protocol 4 and all dashboard requests under
   test were `ok:true`; raw-vs-proxy icon census: 1 shared failure, 0 proxy-only failures.
 - Proxy e2e across all four agents: **24/24**.
@@ -1054,6 +1140,15 @@ Verified live against `fc-fedora40`:
      above. The token is **not** in the repo or in the monitor's config; it is read from the
      box on demand and memoised for 30 s.
    The `#bootstrapToken=` fragment is still **not** a workaround — measured inert, see §4.
+   **REOPENED AND RE-CLOSED (2026-09-15): a fresh `openclaw` install wipes the token, so the
+   whole failure comes back and the auto-paste goes silent.** Re-ran
+   `openclaw doctor --generate-gateway-token` on `fc-fedora40` after stopping the gateway
+   through `scratch/openclaw-gw-ctl.mjs`, started it again, and the embedded dashboard
+   connected with no further change. The monitor now *retracts* its own stale seed when the
+   config carries no credential, so the user gets the honest prompt instead of a phantom
+   mismatch — but it still cannot invent a credential, so a reinstall needs this step. See
+   the §4 subsection. **This is the item to check first whenever an OpenClaw Web UI
+   "suddenly" stops authenticating.**
 2. **Nothing above is deployed.** Production is on an older bundle and does not auto-deploy.  
    This is the single most likely reason a fix "didn't work". The OpenClaw 403 the user  
    re-reported was exactly this — the fix had never left the working tree.

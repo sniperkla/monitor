@@ -999,9 +999,13 @@ echo "TG=$TG"
           `print('ENV_UPDATED')`,
         ].join('\n');
         const envPyB64 = b64(envPy);
-        const w = await run('write ~/.openclaw/.env', `export OC_HOME="${HH}"` + '; echo \'${envPyB64}\' | base64 -d | python3', { timeoutMs: 30000 });
+        // NOTE: this must be ONE template literal. Splitting it and concatenating a
+        // single-quoted string silently ships the literal text `${envPyB64}` to the
+        // remote shell, which prints it and feeds it to `base64 -d` -> "invalid input".
+        const w = await run('write ~/.openclaw/.env', `export OC_HOME="${HH}"; echo '${envPyB64}' | base64 -d | python3 2>&1`, { timeoutMs: 30000 });
         if (!/ENV_UPDATED/.test(w.stdout || '')) {
-          return NextResponse.json({ success: false, error: 'Failed to write ~/.openclaw/.env', log });
+          const tail = String(w.stdout || w.stderr || '').split('\n').filter(Boolean).slice(-3).join(' | ');
+          return NextResponse.json({ success: false, error: `Failed to write ~/.openclaw/.env${tail ? ` — ${tail}` : ''}`, log });
         }
       }
 
