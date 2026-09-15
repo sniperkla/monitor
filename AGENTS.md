@@ -428,7 +428,16 @@ decide by port probe rather than marker for exactly this reason.
 npm test          # node --test, spec reporter
 ```
 
-- Current baseline: **613 tests / 7 suites / 0 fail** (~16 s).
+- Current baseline: **659 tests / 7 suites / 0 fail** (~16 s).
+- `tests/relay-web-proxy.test.mjs` lifts the proxy section out of the shipped source and
+  **executes** it against real HTTP servers. It needs `http`, `https`, `fs`, `path`, `os`
+  injected into its `new Function` factory (the section is a slice, so module-scope
+  requires are not in scope), plus `SSH_MONITOR_RELAY_ORIGINS` and
+  `SSH_MONITOR_RELAY_SITE_PORT_BASE` set to a temp file and a spare range — otherwise the
+  suite writes the developer's real registry and fights the running relay for ports.
+- **Its teardown must call `closeAllConnections()`.** `server.close()` alone waits for open
+  connections to end and `fetch` (undici) pools keep-alive sockets, so the suite hung for
+  three minutes with every assertion green. A timeout floor in the teardown too.
 - The spec reporter prints `ℹ tests N` / `ℹ pass N` / `ℹ fail N`. It does **not** print  
   TAP `#` lines — count `✔`/`✖` or read the `ℹ` summary.
 - `tests/_register-hooks.mjs` registers the `@/` alias for `node --test`, so tests *can*  
@@ -493,6 +502,258 @@ single-instance lock, so this coexists with `com.ssh-monitor.relay`.
   `server.js`). Granting supporter and retrying immediately still gets  
   `4003 SUPPORTER_REQUIRED` while `/api/relay/token` cheerfully reports  
   `isSupporter:true` — they read through different paths. **Restart the dev server.**
+
+### The relay is not a browser, and neither is the page it serves
+
+The in-app browser is an **iframe in the user's real browser** — there is no Chromium,
+no CDP, and `navigator.webdriver` is already `false`. So "stealth" here is not
+puppeteer-extra-plugin-stealth; it is two consistency fixes in `public/local-relay.js`:
+
+1. **The request** carried no client hints at all. `WEB_PROXY_DROP_REQ` plus the
+   blanket `k.startsWith('sec-')` drop removed every `sec-*` header, so upstream saw a
+   request with no `sec-ch-ua` — one of the cheapest bot signals there is. Now
+   `sec-ch-ua` / `-mobile` / `-platform` are synthesised to match `WEB_PROXY_UA`.
+2. **The page** contradicted the request. The frame's JS runs in the user's *real*
+   browser, so `navigator.userAgent` reported that browser while upstream had been told
+   Chrome 140. `STEALTH_SCRIPT` is injected **first in `<head>`** (ahead of the bridge,
+   so it runs before any page code) and aligns navigator to the same UA.
+
+Two traps, both measured rather than guessed:
+
+- **`sec-fetch-mode` cannot be set.** undici forces `cors` on every fetch, and the
+  Fetch spec makes *every* `sec-` header forbidden, so `navigate` is unreachable. Do
+  **not** send `sec-fetch-dest: document` next to it — that combination is impossible
+  in a real browser and is a *stronger* tell than omitting the set. The rest of the set
+  is made to agree with the forced mode (`dest: empty`, `site: same-origin`, which also
+  matches the origin-only referer), and `sec-fetch-user` /
+  `upgrade-insecure-requests` are not sent at all.
+- **Fake interfaces must be built on the real ones.** A plain object passes
+  `plugins.length > 0` but fails `instanceof PluginArray`; inheriting the native
+  `item()` throws `Illegal invocation` (no internal slot). Build entries with
+  `Object.create(Plugin.prototype)`, set `Symbol.toStringTag` explicitly, and shadow
+  the accessors with own native-masked functions. bot.sannysoft.com requires all three
+  of `instanceof`, non-zero length **and** `plugins[0].toString() === '[object Plugin]'`.
+  Live check: **58 rows, 0 failures** (`scratch/verify-relay-stealth.mjs`).
+
+`tests/relay-web-proxy.test.mjs` pins both halves. Note `bridgeIn(html)` — three tests
+used `html.indexOf('<script>')` to find the bridge and silently started matching the
+stealth script once it was injected ahead of it. Anchor on `function post(m)`.
+
+**Scope, stated honestly:** this makes the tab behave like a normal one. It does not
+solve a challenge — a CAPTCHA or a Turnstile wall still wins — and being framed stays
+visible (`window.top !== window.self`), because the in-app browser *is* an iframe.
+
+### A root-absolute URL is never rewritten, anywhere
+
+This is the rule that fixed "the in-app browser cannot open our own dashboard". It cost
+a full session of wrong conclusions, so the reasoning is worth keeping.
+
+A document served at `/p/<enc>/` has root-absolute refs (`/_next/…`) that `<base href>`
+cannot touch — they resolve against the **relay's own root**. Two mechanisms therefore
+have to agree about what to do with them, and the failure mode is disagreement:
+
+- `mpRewrite` in the injected bridge wrapped **same-origin** root-absolute URLs in the
+  current `/p/<enc>/` prefix. Its justification was that the un-prefixed repair used to
+  answer with a **302**, and Chromium refuses a script served behind a redirect under
+  the shell's COEP. That went stale when the repair was changed to **re-dispatch
+  internally** (`req.url = back; return handleWebProxyHttp(…)`) — the browser now sees
+  one plain 200, so a root-absolute path needs no prefix at all.
+- The HTML rewrite did the same thing to the tags, to "match" the bridge.
+
+Because the parser loads `<script src="/_next/…">` **bare**, and the bridge then
+re-points the *same element* at the prefixed spelling (via the src setters,
+`setAttribute`, and the `MutationObserver` safety net), every chunk loads **twice under
+two URLs**. The browser holds two module instances of each, `window.next` is never
+defined, the session hook never leaves `loading`, and the page sits on its
+server-rendered **"CONNECTING…"** forever with every asset returning 200. It also shows
+up as `net::ERR_ABORTED` — re-setting `src` cancels the in-flight bare load.
+
+Measured through the real relay on our own dashboard, 2026-09-15:
+
+| variant | requests | API calls | `window.next` |
+| --- | --- | --- | --- |
+| bridge rewrites same-origin (before) | 49 | 0 | `undefined` |
+| bridge leaves same-origin alone (after) | 37 | 4 | `object` |
+
+So: **the bridge returns same-origin URLs untouched, and the two HTML prefix passes are
+gone.** Cross-origin URLs are still wrapped — that branch is the CORS/hotlink-referer
+fix and earns its keep.
+
+Two traps this exposed, both worth remembering:
+
+- **A local mirror is not the product.** A harness that serves the target's HTML and
+  proxies every path — but has no bridge, no `<base>`, and no repair — reported that
+  un-prefixed HTML "boots" and prefixed HTML "never boots". Both were artefacts: the
+  harness was simulating the bridge's rewrite by hand. The decisive test was running
+  **two copies of `public/local-relay.js` itself**, differing only in the one branch
+  (`scratch/relay-prefix-real.mjs`), against the real target.
+- **Ask the browser who requested the URL.** `request.initiator()` named the culprit in
+  one run — `Element.setAttribute <- __mpFixNode` — after several rounds of reasoning
+  about the module graph had produced nothing but plausible-sounding stories.
+
+`tests/relay-web-proxy.test.mjs` pins it: the served HTML must keep the target's
+spelling, and `loadMpRewrite()` executes the bridge's real `mpRewrite` in a minimal fake
+DOM to assert same-origin passes through while cross-origin is tunnelled. That helper
+injects its probe **inside** the bridge's IIFE — `mpRewrite` is a local, so a hook
+appended after `})()` is out of scope.
+
+### Stripping the target's CSP is load-bearing — do not "fix" it
+
+`WEB_PROXY_ALLOW_RES` deliberately does **not** forward `content-security-policy`, and
+that looks like an oversight until you try to correct it. Forwarding it means the target's
+`script-src 'self' 'nonce-…'` applies to a document now served from the relay origin: the
+relay's own injected scripts carry no nonce, so measured on our own dashboard the page
+logged **5 CSP violations** and the injected scripts were refused. The policy is written
+for the target's origin and cannot be honoured from ours. Leaving it out is the only
+workable choice; the cost is that a proxied page runs without its CSP, which is one more
+reason the relay is loopback-only and holds no cookie jar.
+
+Regression check after the bridge change (`scratch/relay-regression-sites.mjs`), because
+it touches a branch every proxied page depends on — example.com, en.wikipedia.org,
+news.ycombinator.com, youtube.com and developer.mozilla.org all render, with **0**
+root-absolute requests stranded (85 repair hits, all resolved). YouTube's
+`/s/player/…` chunks showing `net::ERR_ABORTED` is normal — that is its on-demand player
+bundle, not a proxy failure.
+
+**Known cosmetic residual:** a React error **#418** (hydration mismatch) fires through
+the relay and not on a direct load — deterministically, 3/3 both ways. It is *not* caused
+by anything the relay rewrites: bisected and it still fires with the injected markup
+removed entirely, with absolute-URL rewriting disabled, and with the CSP forwarded. It is
+also not path-derived (`usePathname` / `useSearchParams` appear nowhere in `src/`). React
+recovers by client-rendering the subtree, and the page boots, renders and makes all four
+API calls, so it is cosmetic. It only became *visible* once hydration started working —
+before the fix the page never hydrated at all.
+
+### One origin per site — the port IS the identity
+
+Every proxied site used to be served from **one** loopback origin, so site A and site B
+shared a cookie jar, a `localStorage` and an IndexedDB. Measured 2026-09-15: two unrelated
+sites both reported `origin=http://127.0.0.1:18780` and each could read a key the other had
+written. No header work fixes that — storage partitioning follows the **origin** — so the
+origin itself had to change.
+
+Each target origin now gets its **own loopback listener**, hence its own origin, hence its
+own storage. Chromium derives an origin from scheme+host+**port**, so a distinct port is a
+distinct origin and the browser partitions storage with no code of ours involved.
+
+**A distinct HOST would read better and does not work on macOS.** `ifconfig lo0` carries
+only `127.0.0.1`, so binding any other `127.x.y.z` fails with `EADDRNOTAVAIL: Can't assign
+requested address` unless someone runs `sudo ifconfig lo0 alias 127.0.0.7` first — root,
+and gone after a reboot. Ports need no privileges.
+
+Consequences, and each one is load-bearing:
+
+* **A site is served at its own ROOT.** No `/p/<enc>/` prefix in the document URL, so a
+  root-absolute path resolves the way the site's HTML intends and **one chunk can never
+  have two spellings** — the module-graph split is now structurally impossible, not merely
+  fixed. Measured on our dashboard: 17 distinct chunks, **0 fetched twice**.
+* **The entry listener's `/go/<enc>/…` answers 307** to that site's origin. 307 rather than
+  302 so a POST entry keeps its method and body, and it carries the COEP/CORP pair because
+  it *is* the answer to a frame navigation.
+* **`/p/<enc>/…` on the entry listener is DEPRECATED but still serves the target
+  directly**, so a deployed app that predates `/go/` keeps working. It is the shared-origin
+  path; new code must not use it. A per-site listener also accepts `/p/<enc>/…`, meaning
+  "serve *another* origin from me" — that is what makes cross-origin **subresources** (scripts,
+  fonts, media) work from the page's point of view, and it is a different thing from the
+  deprecated shape.
+* **A cross-origin DOCUMENT always lands on its own origin — never on the one that linked to
+  it.** Two routes reach a site listener wearing a `/p/<enc>/` prefix: a redirect the target
+  itself sent, and an absolute link the injected bridge rewrote. Both are 307'd to
+  `ensureSiteListener(target.origin)`. Measured 2026-09-15 in the app UI: clicking
+  example.com's link to iana.org left the frame on `127.0.0.1:18800/p/<enc>/domains/…` and
+  iana.org's own `localStorage.getItem` returned the key example.com had written — the exact
+  leak this section exists to prevent, on the most common navigation there is. After the fix
+  the frame lands on iana.org's own port and reads `null`.
+* **The split is `sec-fetch-dest`, and a subresource must NEVER be redirected.** A subresource
+  behind a redirect is refused outright under COEP, so redirecting a CDN script breaks the
+  asset — the worse of the two failures. Only `document` / `iframe` / `frame` count as
+  documents. When the header is absent we cannot tell, so the request is served in place as
+  before rather than guessed at (Safari before 16.4 sends no `sec-fetch-*`, and keeps the old
+  behaviour).
+* **The bridge reports the document's REAL url** to the parent (`data.target`), because a
+  bare loopback origin is not invertible — the port is the relay's to choose. Without it the
+  omnibox and tab history stop tracking any SPA that navigates itself. `relayProxyTargetFor`
+  remains the fallback for a frame still on the entry port.
+* **The origin→port map persists** to `~/.ssh-monitor-relay-origins.json` (0600) and is
+  re-bound eagerly at start. The port IS the origin, so handing a site a different one on
+  restart silently logs the user out. Live listeners are capped at 24 and evicted
+  least-recently-used — but the **port is kept**, and the eviction loop must count live
+  listeners, not map entries (an evicted origin keeps its entry with `server: null`, so the
+  map size never falls and a size-guarded loop either never fires or closes everything).
+
+**A cookie we set is NOT isolated by this, because cookies are host-scoped and know nothing
+about ports.** Measured: `Cookie: mp_proxy_target=…` arrived on a *different* site's origin.
+So the hint cookie is set only on the deprecated `/p/` path, where the un-prefixed repair
+reads it; a per-site listener sets no cookie at all. A test pins that.
+
+### WebSocket upgrades are tunnelled — and the teardown is the hard part
+
+`socket.destroy()` was the whole implementation until 2026-09-15, which made every live
+channel a dead end: measured, an upgrade got a socket closed with **no response**, so the
+page's own reconnect loop spun forever.
+
+* An **absolute** `ws://`/`wss://` is rewritten to
+  `ws://<listener>/__ws/<b64url(scheme//host)>/<path>`. The scheme travels in the encoding,
+  because `wss://` needs TLS upstream and the listener itself has no TLS — rewriting to
+  `wss://` on the listener would fail the handshake before it began.
+* A **relative** `new WebSocket('/socket')` needs no rewriting at all: it already resolves
+  against the listener, and the relay attributes it to the site that listener serves.
+* Teardown **destroys both ends on `end` as well as `close`**. A socket handed out by Node's
+  HTTP server is half-open, so a peer that simply goes away (a closed tab, a killed browser)
+  delivers `end` and never `close` — the first version of this leaked a socket pair per
+  tunnel and the event loop never emptied.
+* Teardown holds the upstream socket in a **closure variable**, not an argument. The client
+  side usually goes first, so teardown runs before `upgrade` has handed us that socket; a
+  guard that returned early would mark the tunnel cleaned up and leave the socket open.
+* An upgraded `ClientRequest` must **NOT** be watched for `close`: it fires the moment the
+  *request* finishes, which is right after the 101, and every byte after the handshake then
+  vanishes. Its `error` is the signal that matters.
+* **A hand-rolled echo server is not a WebSocket server.** Client frames are MASKED, so
+  echoing raw bytes back makes the browser reject the reply with "A server must not mask any
+  frames that it sends to the client" — which looks exactly like a proxy failure. Use the
+  `ws` package in harnesses.
+
+### A relay change needs its install restarted, and the service can be dead for reasons that are not yours
+
+Before diagnosing anything as broken, check the service is actually **running**:
+
+```bash
+launchctl print gui/$(id -u)/com.ssh-monitor.relay | grep -E "state =|last exit|pid ="
+```
+
+`last exit code = 78: EX_CONFIG` with `state = spawn scheduled` means launchd cannot spawn
+the program at all — almost always a stale `ProgramArguments[0]`, because the plist records
+`process.execPath` at install time. Measured 2026-09-15: it pointed at
+`~/.hermes/node/bin/node`, which had been deleted, so the relay had been **down for hours
+with no symptom in its log** (a dead relay writes nothing). Repoint it at a stable node and
+re-bootstrap:
+
+```bash
+plutil -replace ProgramArguments -json '["/opt/homebrew/bin/node","'"$HOME"'/.ssh-monitor-relay/local-relay.js"]' \
+  ~/Library/LaunchAgents/com.ssh-monitor.relay.plist
+launchctl bootout gui/$(id -u)/com.ssh-monitor.relay 2>/dev/null
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.ssh-monitor.relay.plist
+```
+
+Use `plutil -replace ProgramArguments -json '[...]'` for the whole array: `-replace
+ProgramArguments.0` **inserts** rather than replaces and leaves a stray argument that makes
+node try to run the old path as a script.
+
+### Shipping a relay change
+
+`~/.ssh-monitor-relay/local-relay.js` is the **built artifact**, not the readable
+source — install `public/local-relay.min.js` (253 KB), not `public/local-relay.js`.
+Then re-pin `scripts/relay-install-audit.mjs` (`bytes` / `sha256` / `sourceSha256`) or
+the audit reports drift:
+
+```bash
+node scripts/build-relay.mjs --force && node scripts/build-relay.mjs --check
+cp public/local-relay.min.js ~/.ssh-monitor-relay/local-relay.js
+launchctl kickstart -k gui/$(id -u)/com.ssh-monitor.relay
+node scripts/relay-install-audit.mjs    # must not report drift
+```
+
+No re-pairing is needed — the saved token reconnects the new file as the same relay.
 
 ---
 
@@ -621,6 +882,42 @@ response for a marker unique to the new code **before** believing any probe resu
 comment inside the injected script works well as that marker, since comments ship with it.
 It cost two probe runs here: the first runs after the basename fix reported "still empty"
 against a stale build, which reads exactly like "the fix was wrong".
+
+**The per-site-origin harnesses (2026-09-15).** Both gaps were found by measurement, so
+they are closed by measurement — in real Chrome, against the *installed* relay, not a copy:
+
+| harness | question it answers |
+|---|---|
+| `relay-origin-isolation.mjs` | do two sites get different origins, and can B read A's `localStorage`? does a relative **and** an absolute `WebSocket` echo? |
+| `relay-regression-sweep.mjs` | do ordinary sites still render, and does **our dashboard still boot** (`window.next` an object, chunks fetched once)? |
+| `relay-ws-cdp.mjs` | what did the browser *actually* say about a failed handshake — `onerror` carries no detail, CDP does |
+| `relay-handle-probe.mjs` | does the event loop empty after a tunnel closes? (`process.on('beforeExit')` is the only honest signal; calling `process.exit` proves nothing) |
+| `webui-app-go-hop.mjs` | the **whole chain through the real UI**: desktop → Web Browser app → omnibox → `/go/` hop → site origin. Mints a session for the **paired relay's owner**, so nothing is stubbed — see below. |
+| `relay-iframe-origin.mjs` | does a cross-origin **iframe** still work after the document/subresource split, and does it get its own origin? Two local fixtures, no network — iframes are the case most likely to regress silently, because they are a *document* that is not a visible navigation. |
+
+Two traps in writing them. A hand-rolled WebSocket echo **is not a WebSocket server** —
+client frames are masked, so echoing raw bytes makes the browser reject the reply and the
+failure looks exactly like a proxy bug. Use `ws`. And the leak probe must not
+`process.exit(0)`: that hides the very hang it exists to find.
+
+**Driving the real UI needs no stubs, if you use the right `sub`.** `webui-app-go-hop.mjs`
+mints a session whose `sub` is the **`googleId` of the account that owns the paired relay**
+— find it in the local Mongo `systemsettings` doc keyed `relay_tokens`, then
+`db.users.findOne({ googleId })`. `/api/relay/token` then resolves the live relay itself
+(`connected: true`, the real `webProxyPort`), and that user's real vault + supporter rows
+pass their gates. The only client-side setup is the vault **unlock** cache
+(`sessionStorage._vault_uri`), which the app writes itself on a normal unlock.
+
+Two more traps, both cost a run each:
+
+* **The desktop icon's `[data-icon-id]` rect is not trustworthy** — it is
+  `position:absolute` with a pointer-drag handler and its rect was observed duplicated
+  across icons. Use the **label span**, `scrollIntoView` first (it sits below the fold at
+  1000px), and re-measure immediately before clicking. Fall back to dispatching the icon's
+  own `dblclick` on `[data-icon-id="browser"]`.
+* **A check can be self-defeating.** "the link moved the frame to a *different* frame" can
+  never pass: the `Frame` object you hold is the one that navigated, so its `url()` has
+  already changed. Compare **origins**, not frame identity.
 
 ---
 
