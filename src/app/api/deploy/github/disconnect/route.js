@@ -56,9 +56,12 @@ export async function POST(request) {
       }
     }
 
-    // Clear token and mark disconnected
+    // Clear token and mark disconnected.
+    // Scoped with resolveUserIdQuery so both the ObjectId and string storage
+    // forms match — a raw `{ userId }` filter silently no-ops on legacy rows,
+    // leaving the token live after the user believed they had revoked it.
     const updated = { ...cfg, githubConnected: false, githubUser: '', githubToken: '', githubRepo: cfg.githubRepo || '' };
-    await SystemSetting.findOneAndUpdate({ userId, key: dbKey }, { $set: { value: updated } });
+    await SystemSetting.findOneAndUpdate({ ...userIdQuery, key: dbKey }, { $set: { value: updated } });
 
     return NextResponse.json({ success: true, message: 'Disconnected GitHub for project' });
   } catch (error) {

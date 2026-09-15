@@ -33,7 +33,9 @@ export async function POST(request) {
       bitbucketUsername: '',
       bitbucketAppPassword: '',
     };
-    await SystemSetting.findOneAndUpdate({ userId, key: dbKey }, { $set: { value: updated } });
+    // Same reasoning as github/disconnect: resolveUserIdQuery matches both the
+    // ObjectId and string storage forms, so the revoke cannot silently no-op.
+    await SystemSetting.findOneAndUpdate({ ...userIdQuery, key: dbKey }, { $set: { value: updated } });
 
     return NextResponse.json({ success: true, message: 'Disconnected Bitbucket for project' });
   } catch (error) {

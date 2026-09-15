@@ -4,7 +4,7 @@ import { authOptions } from '@/lib/auth';
 import connectDB from '@/lib/mongodb';
 import SystemSetting from '@/models/SystemSetting';
 import { encrypt } from '@/utils/encryption';
-import { resolveUserIdQuery, normalizeUserId } from '@/lib/deployUserQuery';
+import { resolveUserIdQuery, normalizeUserId, validateProjectId } from '@/lib/deployUserQuery';
 import { logger } from '@/lib/logger';
 
 // POST /api/deploy/bitbucket/connect?project=projectId
@@ -17,7 +17,11 @@ export async function POST(request) {
     const userId = normalizeUserId(session.user?.id || session.user?.sub || session.user?.email);
 
     const { searchParams } = new URL(request.url);
-    const project = searchParams.get('project') || 'default';
+    // Validated: the id is interpolated into a SystemSetting key below.
+    const project = validateProjectId(searchParams.get('project'));
+    if (!project) {
+      return NextResponse.json({ success: false, error: 'Invalid project id' }, { status: 400 });
+    }
     const dbKey = project === 'default' ? 'auto_deploy_config' : `auto_deploy_config_${project}`;
 
     const { username, appPassword } = await request.json();
@@ -54,7 +58,7 @@ export async function POST(request) {
       bitbucketAppPassword: encrypt(appPassword),
     };
 
-    const targetUserId = normalizeUserId(setting?.userId || userId, true);
+    const targetUserId = normalizeUserId(setting?.userId || userId);
     await SystemSetting.findOneAndUpdate({ ...resolveUserIdQuery(targetUserId), key: dbKey }, { $set: { userId: targetUserId, value: updated } }, { upsert: true });
 
     return NextResponse.json({ success: true, bitbucketUser: bbUser });
