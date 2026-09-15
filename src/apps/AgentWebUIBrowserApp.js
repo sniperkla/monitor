@@ -93,29 +93,55 @@ function unb64url(value) {
 }
 
 /**
- * A destination as a relay-proxy frame URL: `http://127.0.0.1:<port>/p/<enc>/…`.
+ * A destination as a relay-proxy frame URL.
  *
- * Only the ORIGIN is encoded, which is what makes the relay's proxy stateless —
- * and it is why the page's own RELATIVE links, assets and fetches stay inside
- * the proxy with no click interception at all. An absolute href is the one case
- * the base cannot cover, so the relay intercepts just those and reports the real
+ * `/go/<enc>/…` on the relay's entry listener, which answers with a 307 to the
+ * site's OWN loopback origin (`127.0.0.1:<its own port>`). That extra hop is the
+ * whole point: Chromium derives an origin from scheme+host+PORT, so a distinct
+ * port is a distinct origin, and the browser then partitions cookies and
+ * storage per site with no code of ours involved. Before this, every proxied
+ * site shared one loopback origin and could read every other one's keys —
+ * measured, two unrelated sites both reporting `http://127.0.0.1:18780`.
+ *
+ * The redirect also makes the document live at the site's ROOT, so a
+ * root-absolute path (`/_next/…`, `/api/…`) resolves the way the site's own
+ * HTML intends. The old `/p/<enc>/…` shape needed a repair step for those, and
+ * a chunk fetched under two spellings split its module graph.
+ *
+ * Only the ORIGIN is encoded, which is what keeps the relay stateless — and it
+ * is why the page's own RELATIVE links, assets and fetches stay inside the
+ * proxy with no click interception at all. An absolute href is the one case the
+ * base cannot cover, so the relay intercepts just those and reports the real
  * destination here; see the injected script in `public/local-relay.js`.
+ *
+ * Consequence for this side: the frame's document ends up on a port we did not
+ * choose and cannot derive, so `relayProxyTargetFor` can no longer invert it.
+ * The relay therefore reports the real URL alongside every navigation it
+ * observes — see `data.target` below.
  */
 function relayProxyUrlFor(port, target) {
   try {
     const u = new URL(target);
-    return `http://127.0.0.1:${port}/p/${b64url(u.origin)}${u.pathname}${u.search}${u.hash}`;
+    return `http://127.0.0.1:${port}/go/${b64url(u.origin)}${u.pathname}${u.search}${u.hash}`;
   } catch {
     return '';
   }
 }
 
-/** Inverse of {@link relayProxyUrlFor}: the real destination behind a frame URL. */
+/**
+ * Inverse of {@link relayProxyUrlFor} for a frame URL that is still on the
+ * relay's entry port — i.e. the address we handed the frame, before the 307.
+ *
+ * Kept because it is also the inverse of the legacy `/p/` shape, which an older
+ * relay still serves and which the prefix branch of a per-site listener still
+ * produces for a cross-origin document. A frame URL on a SITE port has no
+ * derivable target and returns '' here; the bridge's `target` field covers that.
+ */
 function relayProxyTargetFor(href, port) {
   try {
     const u = new URL(href);
     if (u.port !== String(port)) return '';
-    const match = /^\/p\/([A-Za-z0-9_-]+)(\/.*)?$/.exec(u.pathname);
+    const match = /^\/(?:p|go)\/([A-Za-z0-9_-]+)(\/.*)?$/.exec(u.pathname);
     if (!match) return '';
     const origin = unb64url(match[1]);
     if (!origin) return '';
@@ -1599,7 +1625,13 @@ export default function AgentWebUIBrowserApp({
         return;
       }
       if (data.__mpProxy === 'url' && typeof data.href === 'string') {
-        const target = relayProxyTargetFor(data.href, relayProxyPort);
+        // `target` first: the relay serves each site from its own loopback PORT,
+        // and a port is not invertible — nothing in `http://127.0.0.1:18803/watch`
+        // says which site it is. So the relay states it. `relayProxyTargetFor`
+        // remains the fallback for a frame still on the entry port (the address
+        // before the 307), and for an older relay that sends no `target`.
+        const target = (typeof data.target === 'string' && data.target)
+          || relayProxyTargetFor(data.href, relayProxyPort);
         if (target) applyPushedRoute(target, tabId);
         return;
       }
