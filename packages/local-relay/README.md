@@ -198,6 +198,19 @@ service are not granted. No warranty of any kind.
 
 ## Version note
 
+- **1.1.1** — the in-app browser gets one origin per site, and live channels.
+  Every proxied site is now served from its **own** loopback origin
+  (`127.0.0.1:<its own port>`, at that origin's root) instead of sharing one, so
+  the browser itself partitions `localStorage`, IndexedDB and caches per site —
+  previously two unrelated sites shared a single origin and could each read the
+  other's keys. The origin→port map is persisted and re-bound at startup, so a
+  login survives a relay restart. WebSocket upgrades are now **tunnelled**
+  instead of refused, so chat, dashboards and terminals work. A cross-origin
+  **link** is handed to the destination's own origin rather than served in place
+  on the linking site's origin — which had let the destination read that site's
+  storage. Subresources are deliberately *not* redirected, because a redirected
+  subresource is refused outright under the shell's COEP. The legacy
+  `/p/<encoded-origin>/…` shape still serves, so an older monitor keeps working.
 - **1.1.0** — the in-app browser web proxy: the relay now hosts a loopback web
   proxy (`http://127.0.0.1:<port>/p/<encoded-origin>/…`) that renders ordinary
   websites inside the monitor's Web Browser app from the user's own machine —

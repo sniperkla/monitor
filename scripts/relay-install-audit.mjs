@@ -84,7 +84,7 @@ import process from 'node:process';
  * ═════════════════════════════════════════════════════════════════════════ */
 
 const PINNED = {
-  auditDate: '2026-09-11',
+  auditDate: '2026-09-15',
   // Bumped 2026-09-06 three times:
   //   1. F7 — the relay deleted its own executable. Adds isDisposableScript().
   //   2. F1–F6 — the relay token moved to an Authorization header with a
@@ -121,11 +121,125 @@ const PINNED = {
   //      can navigate a frame to a target that refuses framing. The injected
   //      bridge now intercepts only those links and asks the parent to re-point
   //      through the relay; relative links remain untouched.
+  //   9. SUPERSEDED — see 11. Root-absolute <script src>/<link href> in a served
+  //      document were briefly rewritten into the current tunnel prefix, to
+  //      match the spelling the injected bridge produced. The premise was that
+  //      the two spellings had to agree. They do, but agreeing on the PREFIXED
+  //      one is what split the module graph: the parser loaded each chunk bare
+  //      from the tag and the bridge's src setters and MutationObserver then
+  //      re-pointed the SAME element at the prefixed spelling, so every chunk
+  //      was fetched and executed twice. Measured 2026-09-15 on our own
+  //      dashboard: 49 requests / 0 API calls and "CONNECTING…" forever.
+  //  10. Bumped 2026-09-15 — stealth for the in-app browser. The relay is a Node
+  //      fetch, not a browser, so every proxied request went out with NO client
+  //      hints (the blanket `sec-` drop removed them all) while the frame's JS
+  //      still reported the USER's browser — the request and the page disagreed
+  //      about who was asking, which is a bot signal in its own right.
+  //        a. requests now carry sec-ch-ua / -mobile / -platform matching
+  //           WEB_PROXY_UA, plus sec-fetch-dest/-site.
+  //        b. an injected script (ahead of the bridge, so it runs before any
+  //           page code) aligns navigator to that same UA: webdriver false,
+  //           userAgent/userAgentData, languages, platform, plugins, mimeTypes,
+  //           window.chrome, permissions.query, hardwareConcurrency, and WebGL
+  //           vendor/renderer.
+  //      Deliberately NOT sent: sec-fetch-mode is forced to `cors` by undici and
+  //      the Fetch spec forbids setting any `sec-` header, so `dest: document`
+  //      would be an impossible combination — the rest of the set is made to
+  //      agree with the mode instead. Scope is "behave like a normal tab"; no
+  //      challenge is solved, and being framed stays visible.
+  //  11. Bumped 2026-09-15 — root-absolute URLs are no longer rewritten, and the
+  //      injected bridge no longer rewrites same-origin URLs either. This is the
+  //      fix for "the in-app browser cannot open our own dashboard". Two changes:
+  //        a. `mpRewrite` returns a SAME-ORIGIN url untouched. It used to wrap a
+  //           root-relative path in the current `/p/<enc>/` prefix because the
+  //           un-prefixed repair once answered with a 302 that COEP refuses.
+  //           That reasoning went stale when the repair was changed to
+  //           re-dispatch internally — the browser sees one plain 200, so a
+  //           root-relative path needs no prefix at all. Keeping the wrap was
+  //           fatal: the parser loaded `<script src="/_next/…">` bare and the
+  //           bridge's setters + MutationObserver re-pointed the same element at
+  //           the prefixed spelling, so all 17 chunks loaded twice under two
+  //           URLs, the browser held two module instances of each, `window.next`
+  //           was never defined and the page sat on "CONNECTING…" forever (it
+  //           also showed up as net::ERR_ABORTED, the in-flight bare load being
+  //           cancelled by the re-set src). Cross-origin URLs are still wrapped:
+  //           that branch is the CORS/hotlink-referer fix and earns its keep.
+  //        b. the two HTML passes that prefixed root-absolute refs (tags, and
+  //           `/_next/` strings inside inline scripts) are GONE. With the bridge
+  //           fixed they were the thing that would create two spellings. The
+  //           rule is now uniform: a root-absolute URL is never rewritten,
+  //           anywhere — the un-prefixed repair serves it.
+  //      Measured on our own dashboard through the real relay: 37 requests /
+  //      4 API calls (auth/session, health, csrf, connections) and window.next
+  //      an object, against 49 / 0 and an undefined window.next before.
+  //  12. Bumped 2026-09-15 — ONE ORIGIN PER SITE, and WebSocket tunnelling.
+  //      The structural gap this closes was measured, not theorised: two
+  //      unrelated sites both reported `origin=http://127.0.0.1:18780` and each
+  //      could read a localStorage key the other had written. No header work
+  //      fixes that — storage partitioning follows the ORIGIN — so the origin
+  //      had to change.
+  //        a. each target origin gets its own loopback LISTENER, so its own
+  //           origin, so its own cookie jar and localStorage. A distinct HOST
+  //           would read better and was tried first; on macOS `ifconfig lo0`
+  //           carries only 127.0.0.1, so binding any other 127.x.y.z fails with
+  //           EADDRNOTAVAIL unless someone runs `sudo ifconfig lo0 alias` —
+  //           root, and gone after a reboot. Ports need no privileges.
+  //        b. a site is therefore served at its OWN ROOT. No `/p/<enc>/` prefix
+  //           in the document URL, so a root-absolute path resolves the way the
+  //           site's HTML intends and one chunk can never have two spellings.
+  //           The old prefix machinery survives only for cross-origin
+  //           absolutes (CDN scripts, media) and for app builds that predate
+  //           this change. A cross-origin absolute that is a DOCUMENT is not
+  //           served through the prefix at all any more — it is handed to the
+  //           destination's own origin, see (d).
+  //        c. the entry listener's new `/go/<enc>/…` answers 307 to that
+  //           site's origin. 307, not 302, so a POST entry keeps its method and
+  //           body. `/p/<enc>/…` on the entry listener is DEPRECATED but still
+  //           serves the target directly, so a deployed app that predates
+  //           `/go/` keeps working; it is the shared-origin path, and new code
+  //           must not use it.
+  //        d. a cross-origin DOCUMENT always lands on its own origin, never on
+  //           the one that linked to it. Two routes reach a site listener
+  //           wearing a `/p/<enc>/` prefix — a redirect the target itself sent,
+  //           and an absolute link the injected bridge rewrote — and both are
+  //           307'd to `ensureSiteListener(target.origin)`. Only documents: a
+  //           subresource behind a redirect is refused outright under COEP, so
+  //           those are still served directly. The split is `sec-fetch-dest`
+  //           (document / iframe / frame), because that is the browser stating
+  //           what it will do with the response; when it is absent we cannot
+  //           tell, and guessing "document" risks breaking an asset — the worse
+  //           failure — so the request is served in place as before.
+  //           Measured 2026-09-15 in the app UI: clicking example.com's link to
+  //           iana.org left the frame on `127.0.0.1:18800/p/<enc>/domains/…`
+  //           and iana.org's own `localStorage.getItem` returned the key
+  //           example.com had written — the exact leak per-site origins exist
+  //           to prevent, on the most common navigation there is.
+  //        e. the injected bridge reports the document's REAL url to the parent
+  //           (`target`), because a bare loopback origin is not invertible —
+  //           the port is the relay's to choose. Without it the omnibox and tab
+  //           history stop tracking any SPA that navigates itself.
+  //        f. WebSocket upgrades are TUNNELLED, not refused. `socket.destroy()`
+  //           made every live channel a dead end: measured, an upgrade got a
+  //           socket closed with NO response, so the page's own reconnect loop
+  //           spun forever. Absolute ws/wss URLs are rewritten to
+  //           `/__ws/<b64url(scheme//host)>/<path>` (the scheme travels, so TLS
+  //           still happens upstream); a relative one is attributed to the site
+  //           the listener serves. Teardown destroys BOTH ends on `end` as well
+  //           as `close` — an HTTP-server socket is half-open, so a peer that
+  //           just goes away delivers `end` and never `close`, and the first
+  //           version of this leaked a socket pair per tunnel. An upgraded
+  //           ClientRequest must NOT be watched for `close`: it fires the
+  //           moment the REQUEST finishes, which is right after the 101.
+  //        g. the origin→port map is persisted to ~/.ssh-monitor-relay-origins.json
+  //           (mode 0600) and re-bound eagerly at start. The port IS the
+  //           origin, so handing a site a different one on restart would
+  //           silently log the user out. Listeners are capped (24) and evicted
+  //           least-recently-used, but the PORT is kept.
   // The shipped artifact: public/local-relay.min.js
-  bytes: 219055,
-  sha256: 'a0508f90924117024ec28d1d091f0f18d85d8128a8165747085ccc73a473bce9',
+  bytes: 253238,
+  sha256: '32a6b68938fe5dd4027abc12fe09b293989258ac38c5cf2ad206bad44797b300',
   // The readable source it must be built from: public/local-relay.js
-  sourceSha256: '8945e43194bea80991477e8d795d7c5177efbb7b80ce6a3188b2d773cae11a67',
+  sourceSha256: '136b9c37324dc1096a3bee07c0886af54690c25971b9445c2b66922b1cac81ac',
 
   /**
    * Loopback listeners. Not secrets, but they ARE the relay's local attack
@@ -134,7 +248,8 @@ const PINNED = {
   listeners: [
     '127.0.0.1:48923  — discovery (relay name for the dashboard)',
     '127.0.0.1:18790+ — WebUI gateway, one per forwarded agent dashboard',
-    '127.0.0.1:18780+ — in-app browser web proxy (see below)',
+    '127.0.0.1:18780+ — in-app browser web proxy, the shared ENTRY listener',
+    '127.0.0.1:18800+ — one more listener per proxied SITE ORIGIN, so each site gets its own origin (see 12a). Capped at 24 live, least-recently-used closed first; the port itself is kept.',
   ],
 
   /**
@@ -142,14 +257,18 @@ const PINNED = {
    * URLs the USER chooses, rather than ones the server hands it. Stated plainly
    * because it widens what the relay does:
    *   • it is bound to 127.0.0.1 only, and is reachable from no other host;
-   *   • it holds NO cookie jar — upstream Set-Cookie is dropped, and request
-   *     cookies are never forwarded, so it cannot act on the user's behalf on
-   *     any site;
+   *   • it holds NO cookie jar for the TARGET — upstream Set-Cookie is dropped
+   *     and request cookies are never forwarded, so it cannot act on the user's
+   *     behalf on any site. What a proxied page keeps is its own browser-side
+   *     jar, and since 12 that jar is per site: each proxied origin has its own
+   *     listener, so one site can no longer read another's storage;
    *   • it exists so that pages render on the user's own machine instead of
    *     being fetched by the monitor server (see startWebProxy in the source);
    *   • any local process could use it as an open HTTP relay. That is accepted:
    *     the machine is the user's, and such a process could fetch the same URLs
-   *     directly.
+   *     directly. A per-site listener also accepts `/p/<enc>/…` for ANOTHER
+   *     origin, which is what makes cross-origin scripts and media work from
+   *     the page's point of view; the same acceptance applies.
    */
 
   /** Every outbound network call the relay makes. {server} = the --server URL. */
@@ -162,6 +281,7 @@ const PINNED = {
   /** Filesystem paths the installer creates, writes or deletes. */
   fileChanges: [
     { op: 'write',  path: '~/.ssh-monitor-relay.json', mode: '0600', why: 'relay token + server URL' },
+    { op: 'write',  path: '~/.ssh-monitor-relay-origins.json', mode: '0600', why: 'in-app browser: origin→port map, so each site keeps its origin (and its logins) across restarts. Written on first use, not at install.' },
     { op: 'mkdir',  path: '~/.ssh-monitor-relay/',     mode: '',     why: 'install directory' },
     { op: 'write',  path: '~/.ssh-monitor-relay/local-relay.js', mode: '0755', why: 'copy of the script the service runs' },
     { op: 'write',  path: '~/.ssh-monitor-relay/package.json',   mode: '',     why: 'created only if absent' },

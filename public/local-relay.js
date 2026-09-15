@@ -24,6 +24,7 @@ const fs   = require('fs');
 const path = require('path');
 const os   = require('os');
 const http = require('http');
+const https = require('https');
 const net  = require('net');
 const { spawnSync, exec } = require('child_process');
 
@@ -302,7 +303,7 @@ async function pairAndGetToken({ client, scope }) {
 const savedConfig = loadConfig();
 let SERVER = args.server || savedConfig.server || process.env.RELAY_SERVER || '';
 let TOKEN  = args.token  || savedConfig.token  || process.env.RELAY_TOKEN  || '';
-const RELAY_VERSION = '1.1.0';
+const RELAY_VERSION = '1.1.1';
 const RELAY_NAME = args.name || savedConfig.name || os.hostname();
 
 // -- Install/uninstall handling (unchanged from original) --
@@ -589,17 +590,156 @@ function startDiscoveryServer(relayName) {
 // navigates off the proxy path, so there is nothing to intercept.
 //
 // Honest limits, because they are the reason this is not just "a browser":
-//   • no cookie jar — upstream `Set-Cookie` is dropped and the frame's own
-//     cookies would be shared by every proxied site on one loopback port, so
-//     logged-in sites render logged-out;
-//   • absolute URLs still go straight to the target (as in any browser), so a
-//     site whose API lives on another host still needs its own CORS headers;
-//   • WebSocket upgrades are not proxied.
+//   • no cookie jar for the TARGET — upstream `Set-Cookie` is still dropped, so
+//     a logged-in site renders logged-out. What the frame keeps is its own jar,
+//     and since 2026-09-15 that jar is PER SITE: each proxied origin gets its
+//     own loopback listener, so two proxied sites can no longer read each
+//     other's `localStorage`. See ensureSiteListener.
+//   • absolute URLs to ANOTHER origin are still proxied through this relay (as
+//     before) so CORS and hotlink referers behave; they are not sent direct.
+//   • WebSocket upgrades ARE tunnelled now — see tunnelUpgrade.
+//   • a page is still FRAMED, and `window.top !== window.self` cannot be hidden.
 const WEB_PROXY_PORT = 18780;
+
+// ── One origin per site ────────────────────────────────────────────────────
+// Every proxied site used to be served from ONE loopback origin, so site A and
+// site B shared a cookie jar, a localStorage, an IndexedDB — the lot. Measured
+// 2026-09-15: two unrelated sites both reported `origin=http://127.0.0.1:18780`
+// and both could read a key the other had written. That is not how any browser
+// behaves, and it is the single biggest structural gap between this and one.
+//
+// The fix is to give each target ORIGIN its own listener. Chromium derives an
+// origin from scheme+host+PORT, so a distinct port IS a distinct origin, and
+// the browser then partitions storage for us with no code of ours involved.
+//
+// A distinct HOST would read better (`127.0.0.7:18780`), and it was the first
+// thing tried. It does not work on macOS: `ifconfig lo0` carries only
+// `127.0.0.1`, so binding any other 127.x.y.z fails with
+// `EADDRNOTAVAIL: Can't assign requested address` unless someone runs
+// `sudo ifconfig lo0 alias 127.0.0.7` first — root, and gone after a reboot.
+// Ports need no privileges and are already how this proxy re-binds when 18780
+// is taken, so ports it is.
+//
+// Consequence, and it is the point: a site is served at its own ROOT. There is
+// no `/p/<enc>/` prefix in the document URL, so a root-absolute path resolves
+// against the site's own origin with no repair step, and the same chunk can
+// never be fetched under two spellings. The prefix machinery survives only for
+// cross-origin absolutes and for app builds that predate this change.
+const WEB_PROXY_SITE_PORT_BASE = Number(process.env.SSH_MONITOR_RELAY_SITE_PORT_BASE) || 18800;
+const WEB_PROXY_SITE_PORT_MAX = WEB_PROXY_SITE_PORT_BASE + 199;
+/** Idle listeners are dropped past this many, least-recently-used first. */
+const WEB_PROXY_SITE_LIMIT = 24;
+const WEB_PROXY_SITE_IDLE_MS = 10 * 60 * 1000;
+/** How many origin→port pairs the registry remembers. See webProxySaveSites. */
+const WEB_PROXY_SITE_REGISTRY_MAX = 200;
+
+/**
+ * Where the origin→port map is remembered between runs.
+ *
+ * It has to persist: the port IS the origin, so a site handed a different port
+ * on the next start is a different site to the browser — its cookies and its
+ * localStorage are simply gone, and every login is lost on every relay restart.
+ * Overridable so the test suite never touches the real file.
+ */
+const WEB_PROXY_SITE_REGISTRY = process.env.SSH_MONITOR_RELAY_ORIGINS
+  || path.join(os.homedir(), '.ssh-monitor-relay-origins.json');
 const WEB_PROXY_UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
   '(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36';
 const WEB_PROXY_TIMEOUT_MS = 30000;
+
+// ── Stealth ────────────────────────────────────────────────────────────────
+// Two halves, and both are needed. Shaping only the request is not enough: the
+// frame's JS runs in the user's REAL browser, so navigator.userAgent reports
+// THAT browser while upstream was told Chrome 140 — and a page comparing the
+// two sees a contradiction, which is a tell in its own right. So the request
+// carries Chrome's client hints and the page gets a navigator that agrees.
+//
+// Same family as puppeteer-extra-plugin-stealth, with the same honest limit:
+// this makes the tab behave like a normal one, it does not defeat a challenge
+// (a CAPTCHA or a Turnstile wall still wins). Being FRAMED also stays visible —
+// window.top !== window.self cannot be hidden, the in-app browser IS an iframe.
+const WEB_PROXY_CH_UA = '"Chromium";v="140", "Google Chrome";v="140", "Not-A(Brand)";v="24"';
+const WEB_PROXY_CH_UA_PLATFORM = '"macOS"';
+
+// Injected as the FIRST script in <head> so it runs before any page code.
+// Every patch is individually guarded: a site that constrains us (frozen
+// navigator, no WebGL, a strict CSP) must degrade to "not stealthy", never to
+// "broken page". Built with single quotes — the bridge below lives in one
+// template literal, and a stray backtick there silently truncates it.
+const STEALTH_SCRIPT =
+  '<script>(function(){' +
+  'var U=' + JSON.stringify(WEB_PROXY_UA) + ';' +
+  'function D(o,p,g){try{Object.defineProperty(o,p,{get:g,configurable:true,enumerable:true})}catch(e){}}' +
+  'function M(f,n){try{Object.defineProperty(f,"toString",{value:function(){return "function "+n+"() { [native code] }"},configurable:true})}catch(e){}}' +
+  'try{Object.defineProperty(Navigator.prototype,"webdriver",{get:function(){return false},configurable:true})}catch(e){}' +
+  'D(Navigator.prototype,"userAgent",function(){return U});' +
+  'D(Navigator.prototype,"appVersion",function(){return U.replace(/^Mozilla\\//,"")});' +
+  'var CH={brands:[{brand:"Chromium",version:"140"},{brand:"Google Chrome",version:"140"},{brand:"Not-A(Brand)",version:"24"}],mobile:false,platform:"macOS",' +
+  'getHighEntropyValues:function(){return Promise.resolve({architecture:"arm",bitness:"64",model:"",platformVersion:"14.0.0",uaFullVersion:"140.0.0.0"})},' +
+  'toJSON:function(){return{brands:this.brands,mobile:false,platform:"macOS"}}};' +
+  'D(Navigator.prototype,"userAgentData",function(){return CH});' +
+  'D(Navigator.prototype,"language",function(){return "en-US"});' +
+  'D(Navigator.prototype,"languages",function(){return ["en-US","en"]});' +
+  'D(Navigator.prototype,"platform",function(){return "MacIntel"});' +
+  'D(Navigator.prototype,"hardwareConcurrency",function(){return 8});' +
+  'D(Navigator.prototype,"deviceMemory",function(){return 8});' +
+  'D(Navigator.prototype,"maxTouchPoints",function(){return 0});' +
+  // Built on the REAL interfaces. A plain object passes "length > 0" but fails
+  // `instanceof PluginArray` (measured on bot.sannysoft.com: "Plugins is of type
+  // PluginArray — failed"), while inheriting the native item()/namedItem() is
+  // worse: those need an internal slot our object does not have and throw
+  // "Illegal invocation". So the object inherits the interface for its type tag
+  // and instanceof, and shadows the accessors with own, native-masked functions.
+  // Built on the REAL interfaces, at BOTH levels. bot.sannysoft.com requires all
+  // three of: `navigator.plugins instanceof PluginArray`, a non-zero length, and
+  // `navigator.plugins[0].toString() === "[object Plugin]"` — a plain object
+  // fails the first and the third. Inheriting the native item()/namedItem() is
+  // worse than useless: those need an internal slot our object does not have and
+  // throw "Illegal invocation". So each object inherits its interface for
+  // instanceof/toStringTag and shadows the accessors with own, native-masked
+  // functions. toStringTag is set explicitly rather than relied upon.
+  'try{var PN=["PDF Viewer","Chrome PDF Viewer","Chromium PDF Viewer","Microsoft Edge PDF Viewer","WebKit built-in PDF"];' +
+  'function TT(o,v){try{Object.defineProperty(o,Symbol.toStringTag,{value:v,configurable:true})}catch(e){}}' +
+  'function OWN(o,k,f){M(f,k);Object.defineProperty(o,k,{value:f,enumerable:false,configurable:true})}' +
+  'var PP=(typeof PluginArray!=="undefined")?PluginArray.prototype:Object.prototype;' +
+  'var PLP=(typeof Plugin!=="undefined")?Plugin.prototype:Object.prototype;' +
+  'var PL=Object.create(PP);' +
+  'Object.defineProperty(PL,"length",{value:PN.length,enumerable:true,configurable:true});' +
+  'PN.forEach(function(n,i){var o=Object.create(PLP);' +
+  'o.name=n;o.filename="internal-pdf-viewer";o.description="Portable Document Format";' +
+  'Object.defineProperty(o,"length",{value:1,enumerable:true,configurable:true});' +
+  'TT(o,"Plugin");' +
+  'OWN(o,"item",function(){return o});OWN(o,"namedItem",function(x){return x===n?o:null});' +
+  'PL[i]=o;PL[n]=o});' +
+  'OWN(PL,"item",function(i){return PL[i]||null});' +
+  'OWN(PL,"namedItem",function(n){return PL[n]||null});' +
+  'OWN(PL,"refresh",function(){});' +
+  'TT(PL,"PluginArray");' +
+  'D(Navigator.prototype,"plugins",function(){return PL});' +
+  'var MP=(typeof MimeTypeArray!=="undefined")?MimeTypeArray.prototype:Object.prototype;' +
+  'var MTP=(typeof MimeType!=="undefined")?MimeType.prototype:Object.prototype;' +
+  'function mkm(t){var o=Object.create(MTP);o.type=t;o.suffixes="pdf";' +
+  'o.description="Portable Document Format";o.enabledPlugin=PL;TT(o,"MimeType");' +
+  'OWN(o,"item",function(){return o});return o}' +
+  'var MT=Object.create(MP);' +
+  'Object.defineProperty(MT,"length",{value:2,enumerable:true,configurable:true});' +
+  'var m0=mkm("application/pdf");var m1=mkm("text/pdf");' +
+  'MT[0]=m0;MT[1]=m1;MT["application/pdf"]=m0;MT["text/pdf"]=m1;' +
+  'OWN(MT,"item",function(i){return MT[i]||null});' +
+  'OWN(MT,"namedItem",function(n){return MT[n]||null});' +
+  'TT(MT,"MimeTypeArray");' +
+  'D(Navigator.prototype,"mimeTypes",function(){return MT})}catch(e){}' +
+  'try{if(!window.chrome){window.chrome={runtime:{},loadTimes:function(){},csi:function(){},app:{isInstalled:false}}}}catch(e){}' +
+  'try{var NP=navigator.permissions;if(NP&&NP.query){var PQ=NP.query.bind(NP);' +
+  'var Q=function(p){try{if(p&&p.name==="notifications")return Promise.resolve({state:(window.Notification&&Notification.permission)||"prompt",onchange:null})}catch(e){}return PQ(p)};' +
+  'M(Q,"query");NP.query=Q}}catch(e){}' +
+  'try{["WebGLRenderingContext","WebGL2RenderingContext"].forEach(function(N){try{var C=window[N];if(!C)return;' +
+  'var G=C.prototype.getParameter;' +
+  'var F=function(p){try{if(p===37445)return "Apple Inc.";if(p===37446)return "Apple GPU";' +
+  'if(p===7938)return "WebGL 1.0 (OpenGL ES 2.0 Chromium)";if(p===35724)return "WebGL GLSL ES 1.0"}catch(e){}return G.apply(this,arguments)};' +
+  'M(F,"getParameter");C.prototype.getParameter=F}catch(e){}})}catch(e){}' +
+  '})()</script>';
 const WEB_PROXY_MAX_BODY = 8 * 1024 * 1024;
 
 let webProxyServer = null;
@@ -698,13 +838,371 @@ function webProxyIndexHtml(proxyOrigin) {
   return `<!doctype html><meta charset="utf-8"><title>Relay web proxy</title>
 <body style="font:13px/1.6 -apple-system,system-ui,sans-serif;padding:24px;color:#ddd;background:#18181b">
 <p>Relay web proxy is running.</p>
-<p>Address a page as <code>${proxyOrigin}/p/&lt;base64url(origin)&gt;/&lt;path&gt;</code>.</p>
+<p>Address a page as <code>${proxyOrigin}/go/&lt;base64url(origin)&gt;/&lt;path&gt;</code> — it
+redirects to that site's own loopback origin, so each site keeps its own cookies
+and its own storage.</p>
 <p style="color:#a1a1aa">This listener is bound to 127.0.0.1 and exists to render the in-app
-browser inside monitor. It holds no cookie jar and is not a general-purpose proxy.</p>`;
+browser inside monitor. It is not a general-purpose proxy.</p>`;
 }
 
-async function handleWebProxyHttp(req, res) {
-  const proxyOrigin = `http://${req.headers.host || `127.0.0.1:${webProxyPort}`}`;
+/**
+ * origin → { port, server, lastUsed } for every per-site listener.
+ *
+ * A listener is created on first use and kept until it is evicted, because the
+ * port is the site's identity: dropping and re-creating one on the same port
+ * costs nothing (the browser's storage is keyed by origin, not by socket), but
+ * handing the site a DIFFERENT port would silently log the user out.
+ */
+const webProxySites = new Map();
+
+/** origin → port, as remembered across restarts. */
+function webProxyLoadSites() {
+  let raw = '';
+  try { raw = fs.readFileSync(WEB_PROXY_SITE_REGISTRY, 'utf8'); } catch (_) { return; }
+  try {
+    const data = JSON.parse(raw);
+    for (const [origin, port] of Object.entries(data || {})) {
+      if (!/^https?:\/\/[^/]+$/.test(origin)) continue;
+      const n = Number(port);
+      if (!Number.isInteger(n) || n < WEB_PROXY_SITE_PORT_BASE || n > WEB_PROXY_SITE_PORT_MAX) continue;
+      webProxySites.set(origin, { port: n, server: null, lastUsed: 0 });
+    }
+  } catch (_) { /* a corrupt registry is not worth failing a relay start over */ }
+}
+
+function webProxySaveSites() {
+  // Bound the registry. Every origin ever browsed is remembered, so it grows
+  // without limit for anyone who uses this for long — and a map that big is
+  // also a slow start, since remembered origins are re-bound eagerly. Drop the
+  // least useful first: origins that were never used this run, then the oldest.
+  const entries = [...webProxySites.entries()]
+    .sort((a, b) => (a[1].lastUsed || 0) - (b[1].lastUsed || 0));
+  const keep = entries.slice(-WEB_PROXY_SITE_REGISTRY_MAX);
+  const out = {};
+  for (const [origin, entry] of keep) out[origin] = entry.port;
+  try {
+    fs.mkdirSync(path.dirname(WEB_PROXY_SITE_REGISTRY), { recursive: true });
+    fs.writeFileSync(WEB_PROXY_SITE_REGISTRY, JSON.stringify(out, null, 2), { mode: 0o600 });
+  } catch (error) {
+    console.error(`⚠ [Relay WebProxy] could not persist the site origin map: ${error.message}`);
+  }
+}
+
+/** Which origin a given loopback port belongs to, or '' if it is not a site. */
+function webProxyOriginForPort(port) {
+  for (const [origin, entry] of webProxySites) {
+    if (entry.port === Number(port)) return origin;
+  }
+  return '';
+}
+
+/**
+ * The port a site's own origin is (or will be) served on, starting a listener
+ * if this is the first time we have seen it.
+ *
+ * Idempotent and safe to call concurrently: a second call for the same origin
+ * while the first is still binding waits on the same promise rather than
+ * racing it onto a second port. That matters because two tabs opened at once
+ * on the same site must end up on ONE origin, or they would not share a login.
+ */
+const webProxySitePending = new Map();
+async function ensureSiteListener(origin) {
+  let parsed;
+  try { parsed = new URL(origin); } catch (_) { return 0; }
+  if (!['http:', 'https:'].includes(parsed.protocol)) return 0;
+  const key = parsed.origin;
+
+  const existing = webProxySites.get(key);
+  if (existing && existing.server) { existing.lastUsed = Date.now(); return existing.port; }
+  if (webProxySitePending.has(key)) return webProxySitePending.get(key);
+
+  const task = (async () => {
+    webProxyEvictSites(key);
+    const want = existing ? existing.port : 0;
+    const server = http.createServer((req, res) => {
+      handleWebProxyHttp(req, res, { origin: key, port: webProxyOriginForPort(port) || port })
+        .catch((error) => {
+          console.error(`✗ [Relay WebProxy] ${error.message}`);
+          try { res.writeHead(502); res.end('proxy error'); } catch (_) {}
+        });
+    });
+    // A site's own WebSocket is tunnelled, not refused: plenty of dashboards
+    // (and every chat UI) will not render at all without one. See tunnelUpgrade.
+    server.on('upgrade', (req, socket, head) => {
+      tunnelUpgrade(req, socket, head, () => webProxyUpgradeTarget(req, key));
+    });
+
+    let port = want || 0;
+    let attempts = 0;
+    // `bind` RETURNS a promise, and the retry recurses through it. An earlier
+    // version scheduled the retry with `setTimeout(bind, 0).then(...)` — but
+    // `setTimeout` returns a Timeout, not a promise, so the retry threw a
+    // TypeError inside the socket's error handler and the promise never
+    // settled: the second site to be opened simply hung forever, with nothing
+    // in the log. Measured the hard way.
+    const bind = () => new Promise((resolve, reject) => {
+      const cleanup = () => {
+        server.off('error', onError);
+        server.off('listening', onListening);
+      };
+      const onError = (error) => {
+        cleanup();
+        if (error.code === 'EADDRINUSE' && attempts < 200) {
+          attempts += 1;
+          // A remembered port that is taken is NOT reused with a different
+          // site: skip past it and take the next free one. The registry is
+          // rewritten by the caller, so the next start asks for the new port.
+          port = port ? port + 1 : WEB_PROXY_SITE_PORT_BASE;
+          if (port > WEB_PROXY_SITE_PORT_MAX) { reject(error); return; }
+          bind().then(resolve, reject);
+          return;
+        }
+        reject(error);
+      };
+      const onListening = () => {
+        cleanup();
+        resolve(server.address().port);
+      };
+      server.once('error', onError);
+      server.once('listening', onListening);
+      if (!port) port = WEB_PROXY_SITE_PORT_BASE;
+      server.listen(port, '127.0.0.1');
+    });
+
+    const bound = await bind();
+    webProxySites.set(key, { port: bound, server, lastUsed: Date.now() });
+    webProxySaveSites();
+    console.log(`🌐 [Relay WebProxy] ${key} → http://127.0.0.1:${bound} (its own origin)`);
+    return bound;
+  })();
+
+  webProxySitePending.set(key, task);
+  try {
+    return await task;
+  } catch (error) {
+    console.error(`✗ [Relay WebProxy] could not open an origin for ${key}: ${error.message}`);
+    return 0;
+  } finally {
+    webProxySitePending.delete(key);
+  }
+}
+
+/**
+ * Keep the number of live listeners bounded.
+ *
+ * Each one is a real socket, so an unbounded map is a slow file-descriptor
+ * leak for anyone who browses a lot. Evict the least-recently-used, never the
+ * one being asked for right now, and never one that is still inside the idle
+ * window — re-opening a site the user is actively using would drop its login
+ * for no reason.
+ */
+function webProxyEvictSites(keep) {
+  // Count LIVE listeners, not map entries. An evicted origin keeps its entry
+  // (its port is its identity) with `server: null`, so the map size never
+  // falls — an eviction loop guarded on it would either never fire or close
+  // everything. Measured: the first version of this did exactly that.
+  const live = () => {
+    let n = 0;
+    for (const entry of webProxySites.values()) if (entry.server) n += 1;
+    return n;
+  };
+  if (live() < WEB_PROXY_SITE_LIMIT) return;
+  const candidates = [...webProxySites.entries()]
+    .filter(([origin, e]) => origin !== keep && e.server)
+    .sort((a, b) => a[1].lastUsed - b[1].lastUsed);
+  const now = Date.now();
+  for (const [origin, entry] of candidates) {
+    if (live() < WEB_PROXY_SITE_LIMIT) break;
+    if (now - entry.lastUsed < WEB_PROXY_SITE_IDLE_MS) break;
+    try { entry.server.close(); entry.server.closeAllConnections?.(); } catch (_) { /* already gone */ }
+    entry.server = null;
+    // The PORT is kept: it is the site's identity, and the registry still
+    // hands the same one back the moment the user returns to that site.
+    console.log(`💤 [Relay WebProxy] closed the idle listener for ${origin} (port ${entry.port} kept)`);
+  }
+}
+
+/**
+ * Tunnel a WebSocket upgrade to the target behind this listener.
+ *
+ * `socket.destroy()` was the whole implementation until 2026-09-15, and it made
+ * every WebSocket-using site a dead end: measured, an upgrade got a closed
+ * socket with no response at all, so the page's own reconnect loop spun
+ * forever and anything live — chat, a dashboard, a terminal — never appeared.
+ *
+ * The handshake is forwarded verbatim (minus the headers that describe THIS
+ * hop) and both directions are then piped byte-for-byte, which is all a
+ * WebSocket needs: it is an opaque full-duplex stream once established.
+ */
+function tunnelUpgrade(req, socket, head, resolveTarget) {
+  let upstream;
+  let tornDown = false;
+  try {
+    const raw = resolveTarget();
+    if (!raw) { socket.destroy(); return; }
+    const target = new URL(raw);
+    const secure = target.protocol === 'https:' || target.protocol === 'wss:';
+    const headers = {};
+    for (const [key, value] of Object.entries(req.headers)) {
+      const k = key.toLowerCase();
+      // These describe the CLIENT's hop. Forwarding them tells the target the
+      // handshake was addressed to a loopback port, and `host` in particular
+      // makes virtual-hosted sites answer for the wrong site.
+      if (['host', 'connection', 'upgrade', 'origin', 'referer', 'sec-websocket-extensions'].includes(k)) continue;
+      if (k.startsWith('sec-fetch-')) continue;
+      headers[k] = value;
+    }
+    headers.host = target.host;
+    headers.connection = 'Upgrade';
+    headers.upgrade = 'websocket';
+    // The target's own origin, exactly as a real browser would send it — a
+    // gateway that checks Origin for CSRF answers 403 to anything else.
+    headers.origin = secure ? `https://${target.host}` : `http://${target.host}`;
+    headers.referer = `${secure ? 'https' : 'http'}://${target.host}/`;
+    headers['user-agent'] = WEB_PROXY_UA;
+
+    const mod = secure ? https : http;
+    upstream = mod.request({
+      host: target.hostname,
+      port: target.port || (secure ? 443 : 80),
+      path: `${target.pathname}${target.search}`,
+      method: req.method,
+      headers,
+    });
+  } catch (_) {
+    try { socket.destroy(); } catch (__) { /* already gone */ }
+    return;
+  }
+
+  /**
+   * Tear BOTH ends down, from whichever side noticed first.
+   *
+   * `close` alone is not enough, and getting this wrong leaks a pair of sockets
+   * per tunnel for the life of the process. A socket handed out by Node's HTTP
+   * server is half-open, so a peer that simply goes away (a closed tab, a
+   * killed browser) delivers `end` and never `close`: the relay's own side then
+   * stays open forever and the upstream socket with it. Measured — the event
+   * loop never emptied, which is what a relay that has tunnelled a few hundred
+   * WebSockets would look like.
+   *
+   * Nothing is lost by not waiting: WebSocket has its own close handshake, so a
+   * TCP FIN means the peer is finished. There is no half-close case to respect
+   * — browsers do not use one — and waiting for a direction that will never
+   * arrive only leaks.
+   *
+   * The upstream socket is held in a closure variable rather than passed in,
+   * and that is load-bearing: the CLIENT side usually goes first, which means
+   * teardown runs before `upgrade` has handed us the upstream socket at all. A
+   * `tornDown` guard that returned early would then leave that socket open
+   * forever, having already marked the tunnel as cleaned up. Measured: exactly
+   * one socket pair survived every teardown.
+   */
+  let upSocket = null;
+  const teardown = () => {
+    if (tornDown) return;
+    tornDown = true;
+    try { socket.destroy(); } catch (_) { /* already gone */ }
+    try { upSocket?.destroy(); } catch (_) { /* already gone */ }
+    try { upstream?.destroy(); } catch (_) { /* already gone */ }
+  };
+
+  upstream.on('upgrade', (upRes, upSocketIn, upHead) => {
+    upSocket = upSocketIn;
+    const lines = [`HTTP/1.1 ${upRes.statusCode} ${upRes.statusMessage || 'Switching Protocols'}`];
+    for (const [key, value] of Object.entries(upRes.headers)) {
+      if (key.toLowerCase() === 'sec-websocket-extensions') continue;
+      lines.push(`${key}: ${value}`);
+    }
+    try {
+      socket.write(lines.join('\r\n') + '\r\n\r\n');
+      if (upHead && upHead.length) socket.write(upHead);
+      if (head && head.length) upSocket.write(head);
+    } catch (_) { /* peer already gone */ }
+    for (const s of [socket, upSocket]) {
+      s.on('end', teardown);
+      s.on('close', teardown);
+      s.on('error', teardown);
+    }
+    upSocket.pipe(socket);
+    socket.pipe(upSocket);
+  });
+
+  // A target that answers the handshake with a normal response (an auth wall,
+  // a 404, a 426) must still reach the page — otherwise the failure is a
+  // silent hang and the console says nothing useful.
+  upstream.on('response', (upRes) => {
+    const lines = [`HTTP/1.1 ${upRes.statusCode} ${upRes.statusMessage || ''}`];
+    for (const [key, value] of Object.entries(upRes.headers)) lines.push(`${key}: ${value}`);
+    try { socket.write(lines.join('\r\n') + '\r\n\r\n'); } catch (_) {}
+    upRes.pipe(socket);
+  });
+
+  // `upstream` is deliberately NOT given a 'close' handler. An upgraded
+  // ClientRequest emits 'close' as soon as the REQUEST is finished — which is
+  // the instant the upgrade succeeded — so treating it as "the connection
+  // died" tears the tunnel down immediately after the 101 goes out. Measured:
+  // the handshake reached the client and every byte after it vanished. Its
+  // 'error' is the signal that matters, and the socket pair covers the rest.
+  upstream.on('error', teardown);
+  for (const s of [socket, upstream]) s.on('error', teardown);
+  // The client socket needs `end` as well as `close`: see the half-open note.
+  socket.on('close', teardown);
+  socket.on('end', teardown);
+  upstream.end();
+}
+
+/**
+ * Where an upgrade request should be dialled.
+ *
+ * `ws://<listener>/__ws/<b64url(wsOrigin)>/<path>` is what the injected bridge
+ * produces for an absolute WebSocket URL, and the encoded origin carries its
+ * own scheme so the relay knows whether to dial TLS. Anything else is a
+ * RELATIVE WebSocket (`new WebSocket('/socket')`), which belongs to the site
+ * this listener is serving — and that is the common case, so it must work
+ * without the page doing anything special.
+ *
+ * The fallback origin is what makes the ENTRY listener work: it serves many
+ * sites from one port, so a relative upgrade there has to be attributed the
+ * same way an un-prefixed navigation is — cookie, then referer, then the
+ * connection stamp.
+ */
+function webProxyUpgradeTarget(req, fallbackOrigin) {
+  const raw = String(req.url || '/');
+  const q = raw.indexOf('?');
+  const search = q >= 0 ? raw.slice(q) : '';
+  const pathname = q >= 0 ? raw.slice(0, q) : raw;
+
+  const match = /^\/__ws\/([A-Za-z0-9_-]+)(\/.*)?$/.exec(pathname);
+  if (match) {
+    const encoded = webProxyDecode(match[1]);
+    if (!/^wss?:\/\//.test(encoded)) return '';
+    return `${encoded}${match[2] || '/'}${search}`;
+  }
+
+  let origin = fallbackOrigin;
+  if (!origin) {
+    origin = webProxyDecode(readCookie(req.headers.cookie, WEB_PROXY_COOKIE))
+      || webProxyTargetFromReferer(req.headers.referer)
+      || req.socket?.____mpLastTarget || '';
+  }
+  if (!/^https?:\/\/[^/]+$/.test(origin)) return '';
+  // http→ws, https→wss: the upgrade must speak the transport the site's own
+  // pages are served over, or the target closes it as a protocol error.
+  return `${origin.replace(/^http/, 'ws')}${pathname}${search}`;
+}
+
+/**
+ * Serve one request.
+ *
+ * `site` is null for the shared entry listener (the one the app knows the port
+ * of) and `{ origin, port }` for a per-site listener. The difference is not
+ * cosmetic: a site listener serves its origin at the ROOT, so there is no
+ * prefix to match, no repair step, and no way for one chunk to be fetched under
+ * two spellings.
+ */
+async function handleWebProxyHttp(req, res, site) {
+  const listenPort = site ? site.port : webProxyPort;
+  const proxyOrigin = `http://${req.headers.host || `127.0.0.1:${listenPort}`}`;
 
   // Local/Private Network Access. The monitor app is a PUBLIC https origin and
   // this listener is on loopback, so Chrome can send a PNA preflight for
@@ -736,8 +1234,114 @@ async function handleWebProxyHttp(req, res) {
     return;
   }
 
+  // ── which origin is this request for? ──────────────────────────────────────
+  //
+  // Two shapes arrive here, and the difference is the whole point of the
+  // per-site listener:
+  //
+  //   /p/<enc>/<path>  a CROSS-origin absolute. Two very different things
+  //                    arrive here and they want opposite treatment, so the
+  //                    branch below splits them on `sec-fetch-dest`:
+  //                      • a SUBRESOURCE (a CDN script, a font, a stylesheet)
+  //                        is served straight through — never redirected,
+  //                        because under the app shell's COEP Chromium refuses
+  //                        any subresource that arrives behind a redirect.
+  //                      • a DOCUMENT (an external link the user clicked) is
+  //                        307'd to the destination's OWN listener, so it
+  //                        cannot run on this site's origin and read its
+  //                        storage. See the branch for the measurement.
+  //
+  //   /<path>          a SITE listener's own origin, at its own ROOT. No
+  //                    prefix, so a root-absolute path resolves correctly with
+  //                    no repair step, and one URL can never have two
+  //                    spellings. This is what makes the module-graph split
+  //                    structurally impossible rather than merely fixed.
   const match = /^\/p\/([A-Za-z0-9_-]+)(\/.*)?$/.exec(parsed.pathname);
-  if (!match) {
+  let target = null;
+  let targetPath = '/';
+  let prefix = '';
+
+  if (site && match) {
+    try { target = new URL(webProxyDecode(match[1])); } catch (_) { target = null; }
+    if (!target || !['http:', 'https:'].includes(target.protocol)) {
+      res.writeHead(400, { 'content-type': 'text/plain' });
+      res.end('target must be an absolute http(s) origin');
+      return;
+    }
+    targetPath = match[2] || '/';
+    prefix = `/p/${match[1]}`;
+
+    // ── a cross-origin DOCUMENT must not run on this site's origin ─────────
+    // The injected script rewrites an absolute cross-origin URL to this
+    // `/p/<enc>/` shape, so an external link arrives here rather than leaving
+    // the proxy. Serving it in place is right for a subresource and WRONG for
+    // a document: the destination would execute at the CURRENT site's origin
+    // and could read its storage. Measured 2026-09-15 in the app UI — clicking
+    // example.com's link to iana.org left the frame on
+    // `http://127.0.0.1:18800/p/<enc>/domains/example` and iana.org's own
+    // `localStorage.getItem` returned the key example.com had written. That is
+    // precisely the leak one-origin-per-site exists to prevent, on the most
+    // common navigation there is.
+    //
+    // `sec-fetch-dest` is the discriminator, and the browser sets it: it is
+    // Chromium stating what it will do with the response. Absent (an old
+    // client, or a non-browser caller) means we cannot tell, so we do nothing
+    // and keep the old in-place behaviour rather than risk refusing a
+    // subresource — the failure mode of guessing wrong in THAT direction is a
+    // broken asset, which is worse than a storage leak we already shipped.
+    const dest = String(req.headers['sec-fetch-dest'] || '').toLowerCase();
+    const isDocumentNav = dest === 'document' || dest === 'iframe' || dest === 'frame';
+    if (isDocumentNav && target.origin !== site.origin) {
+      const port = await ensureSiteListener(target.origin);
+      if (port) {
+        // 307 keeps the method and body, so a cross-origin POST navigation
+        // still arrives as a POST. The framing headers go on this response
+        // too — it answers a frame navigation, and a response without them is
+        // refused outright under the shell's `credentialless` COEP.
+        res.writeHead(307, {
+          location: `http://127.0.0.1:${port}${targetPath}${parsed.search}`,
+          'cache-control': 'no-store',
+          ...WEB_PROXY_FRAME_HEADERS,
+        });
+        res.end();
+        return;
+      }
+    }
+  } else if (site) {
+    target = new URL(site.origin);
+    targetPath = parsed.pathname;
+  } else if (/^\/go\/([A-Za-z0-9_-]+)(\/.*)?$/.test(parsed.pathname)) {
+    // ── ENTRY ──────────────────────────────────────────────────────────────
+    // The app knows this listener's port and nothing else, so it addresses a
+    // site here and is handed straight to the site's OWN origin. That redirect
+    // is what gives every site its own cookie jar and its own localStorage:
+    // Chromium derives an origin from scheme+host+PORT, so a distinct port IS
+    // a distinct origin and the browser partitions storage with no code of
+    // ours involved. Measured before this existed: two unrelated sites both
+    // sat on 127.0.0.1:18780 and could each read the other's keys.
+    //
+    // 307 rather than 302 so a POST entry keeps its method and body. The
+    // frame-embedding headers go on THIS response too — it is the answer to a
+    // frame navigation, and a response without them is refused outright under
+    // the shell's `credentialless` COEP (measured 2026-09-12).
+    const entry = /^\/go\/([A-Za-z0-9_-]+)(\/.*)?$/.exec(parsed.pathname);
+    const origin = webProxyDecode(entry[1]);
+    const port = await ensureSiteListener(origin);
+    if (!port) {
+      res.writeHead(502, { 'content-type': 'text/html; charset=utf-8', ...WEB_PROXY_FRAME_HEADERS });
+      res.end('<!doctype html><meta charset="utf-8"><title>Proxy error</title>'
+        + '<body style="font:13px/1.6 -apple-system,system-ui,sans-serif;padding:24px;color:#ddd;background:#18181b">'
+        + `<p>Could not open a loopback origin for <code>${origin}</code>.</p></body>`);
+      return;
+    }
+    res.writeHead(307, {
+      location: `http://127.0.0.1:${port}${entry[2] || '/'}${parsed.search}`,
+      'cache-control': 'no-store',
+      ...WEB_PROXY_FRAME_HEADERS,
+    });
+    res.end();
+    return;
+  } else if (!match) {
     // ── the root-absolute problem ──────────────────────────────────────────
     // A page served at `/p/<enc>/` has a document URL that does NOT look like
     // the target's, and `location.href = '/watch'` resolves against the
@@ -793,27 +1397,32 @@ async function handleWebProxyHttp(req, res) {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', ...WEB_PROXY_FRAME_HEADERS });
     res.end(webProxyIndexHtml(proxyOrigin));
     return;
-  }
-
-  let target;
-  try {
-    target = new URL(webProxyDecode(match[1]));
-  } catch (_) {
-    target = null;
-  }
-  if (!target || !['http:', 'https:'].includes(target.protocol)) {
-    res.writeHead(400, { 'content-type': 'text/plain' });
-    res.end('target must be an absolute http(s) origin');
-    return;
+  } else {
+    // DEPRECATED — the shared-origin serving path.
+    //
+    // `/p/<enc>/…` on the ENTRY listener still serves the target directly, so
+    // a monitor build that predates `/go/` keeps working against this relay.
+    // It is the path that gives every site the SAME origin, so it is exactly
+    // what `/go/` exists to replace; it will be deleted once no deployed app
+    // still asks for it. New code must not use it.
+    try { target = new URL(webProxyDecode(match[1])); } catch (_) { target = null; }
+    if (!target || !['http:', 'https:'].includes(target.protocol)) {
+      res.writeHead(400, { 'content-type': 'text/plain' });
+      res.end('target must be an absolute http(s) origin');
+      return;
+    }
+    targetPath = match[2] || '/';
+    prefix = `/p/${match[1]}`;
   }
 
   // Stamp the keep-alive connection with the target being served. This is the
   // third repair source for un-prefixed paths (see the repair branch above):
   // a same-origin navigation almost always reuses this connection, so its
   // stamp survives both cookie blocking AND a site suppressing the referer.
-  if (req.socket) req.socket.____mpLastTarget = target.origin;
+  // Only the entry listener needs it — a site listener has no repair branch.
+  if (!site && req.socket) req.socket.____mpLastTarget = target.origin;
 
-  const upstreamUrl = `${target.origin}${match[2] || '/'}${parsed.search}`;
+  const upstreamUrl = `${target.origin}${targetPath}${parsed.search}`;
 
   // Request body (POST/PUT/PATCH). Read it before fetching — the stream cannot
   // be replayed once fetch() has consumed it.
@@ -841,6 +1450,25 @@ async function handleWebProxyHttp(req, res) {
   }
   headers['user-agent'] = WEB_PROXY_UA;
   headers['accept-language'] = headers['accept-language'] || 'en-US,en;q=0.9';
+  // Client hints and fetch metadata. Real Chrome sends these on every request,
+  // but the blanket `sec-` drop in the loop above strips them — and a request
+  // with NO sec-ch-ua at all is one of the cheapest bot signals there is.
+  // Document vs subresource is derived from the client's own Accept header so a
+  // navigation and an asset fetch stay distinguishable instead of both claiming
+  // to be a document.
+  headers['sec-ch-ua'] = WEB_PROXY_CH_UA;
+  headers['sec-ch-ua-mobile'] = '?0';
+  headers['sec-ch-ua-platform'] = WEB_PROXY_CH_UA_PLATFORM;
+  // Sec-Fetch-* metadata. undici FORCES `sec-fetch-mode: cors` on every fetch —
+  // measured, and un-overridable, because the Fetch spec makes every `sec-`
+  // header forbidden — so `navigate` is unreachable from here. Claiming
+  // `dest: document` beside a forced `mode: cors` would be a combination no
+  // real browser can produce, which is a STRONGER tell than omitting the set.
+  // So the rest is made to AGREE with the mode: a same-origin fetch, which is
+  // also what the origin-only Referer below implies. `sec-fetch-user` and
+  // `upgrade-insecure-requests` are navigation-only, so they are not sent at all.
+  headers['sec-fetch-dest'] = 'empty';
+  headers['sec-fetch-site'] = 'same-origin';
   // Let fetch negotiate its own compression; undici decompresses and we strip
   // the encoding headers on the way back out.
   headers['accept-encoding'] = 'gzip, deflate, br';
@@ -943,7 +1571,7 @@ async function handleWebProxyHttp(req, res) {
     // (Deliberately written without literal URLs: relay-install-audit.mjs scans
     // this source for them and would report them as calls the relay makes.)
     let finalOrigin = target.origin;
-    let finalDir = (match[2] || '/').replace(/[^/]*$/, '');
+    let finalDir = (targetPath || '/').replace(/[^/]*$/, '');
     try {
       if (upstream.url) {
         const landed = new URL(upstream.url);
@@ -953,7 +1581,43 @@ async function handleWebProxyHttp(req, res) {
     } catch (_) { /* keep the requested origin and directory */ }
     if (!finalDir) finalDir = '/';
 
-    const base = `${proxyOrigin}/p/${webProxyEncode(finalOrigin)}${finalDir}`;
+    // ── the document landed on a DIFFERENT origin ───────────────────────────
+    // A bare domain that redirects to its www host, an http→https upgrade, a
+    // login bounce: fetch followed it, so the bytes in hand belong to another
+    // origin. Serving them under the requesting site's origin would make the
+    // browser treat one site's content as another's — wrong storage, wrong
+    // cookies, and a page whose own root-absolute links go to the wrong host.
+    //
+    // So send the browser there instead, exactly as it would have gone itself.
+    // 307 to that origin's OWN listener, which is created on demand. Only for
+    // documents: a subresource that redirects cross-origin is fine to serve
+    // here (it resolves relative to nothing) and MUST be, because a
+    // subresource behind a redirect is refused outright under COEP.
+    //
+    // The landing page is fetched twice — once to discover the redirect, once
+    // by its own listener. That is the cost of not guessing, and it is paid
+    // only on a cross-origin redirect.
+    if (site && !prefix && finalOrigin !== target.origin) {
+      const port = await ensureSiteListener(finalOrigin);
+      if (port) {
+        const loc = `http://127.0.0.1:${port}${finalDir}${parsed.search}`;
+        console.log(`↪ [Relay WebProxy] ${target.origin} → ${finalOrigin} (its own origin)`);
+        res.writeHead(307, { location: loc, 'cache-control': 'no-store', ...WEB_PROXY_FRAME_HEADERS });
+        res.end();
+        return;
+      }
+    }
+
+    // In ROOT mode the document URL is already the site's own path, so there is
+    // nothing for `<base href>` to correct — and adding one could only break
+    // what already works. It is needed only in PREFIX mode, where the document
+    // URL carries `/p/<enc>/` that the target's own HTML knows nothing about.
+    // The base names `finalOrigin`, not the requested origin: fetch followed
+    // redirects, and a relative URL on the landed page belongs to where it
+    // landed.
+    const base = prefix
+      ? `${proxyOrigin}/p/${webProxyEncode(finalOrigin)}${finalDir}`
+      : '';
 
     // Absolute media sources bypass `<base href>` entirely: `<video
     // src="https://cdn.other/v.mp4">` makes the browser fetch the CDN
@@ -972,6 +1636,28 @@ async function handleWebProxyHttp(req, res) {
         return `${proxyOrigin}/p/${webProxyEncode(abs.origin)}${abs.pathname}${abs.search}${abs.hash}`;
       } catch (_) { return u; }
     };
+    // ── root-absolute refs are DELIBERATELY not rewritten ───────────────────
+    // `<base href>` does not apply to root-absolute paths, so `/_next/…`
+    // resolves against the relay's own root rather than the tunnel prefix.
+    // That is fine: the un-prefixed repair at the top of this handler catches
+    // it and re-dispatches to the right target internally, so the browser sees
+    // one plain 200. There is nothing to fix up.
+    //
+    // It used to be rewritten here, in the tags AND in the inline flight
+    // payload, on the theory that a partially-rewritten document splits the
+    // module graph. That theory was chasing the wrong culprit: the split came
+    // from the injected bridge, which wrapped the SAME elements in the prefix
+    // a second time (see mpRewrite). With the bridge leaving same-origin URLs
+    // alone, rewriting here would now be the thing that creates two spellings
+    // of every chunk — so the passes are gone, and the rule is simply:
+    //
+    //   a root-absolute URL is never rewritten, anywhere.
+    //
+    // Measured 2026-09-15 on our own dashboard: with the bridge fixed and no
+    // rewriting here, the app boots (window.next is an object, /api/auth/session
+    // fires). With either half re-enabled, every chunk loads twice under two
+    // URLs and the page sits on "CONNECTING…" forever.
+
     html = html.replace(
       // script and link MUST be here: their absolute site-origin URLs redirect
       // upstream to the CDN (e.g. a player chunk on www.youporn.com 302s to
@@ -1016,21 +1702,51 @@ async function handleWebProxyHttp(req, res) {
     // captcha. Deliberately narrow (both markers) so a page that merely
     // MENTIONS captchas is not flagged.
     let botCheckBanner = '';
+    const botBanner = (text) =>
+      '<div style="position:fixed;top:0;left:0;right:0;z-index:2147483647;' +
+      'background:#1c1917;color:#fde68a;font:12px/1.5 system-ui,sans-serif;' +
+      'padding:10px 14px;border-bottom:1px solid #78716c">' + text + '</div>';
+    const realTab =
+      ' Use the <em>Tab</em> button in the toolbar to open this page in your real browser.';
     if (/unusual traffic/i.test(html) && /recaptcha/i.test(html)) {
-      botCheckBanner =
-        '<div style="position:fixed;top:0;left:0;right:0;z-index:2147483647;' +
-        'background:#1c1917;color:#fde68a;font:12px/1.5 system-ui,sans-serif;' +
-        'padding:10px 14px;border-bottom:1px solid #78716c">' +
+      botCheckBanner = botBanner(
         '<strong>This is a bot-check page served by the site itself, not a proxy error.</strong> ' +
         'Proxied pages carry no cookies, and the captcha widget cannot run from ' +
-        'the proxy origin. Use the <em>Tab</em> button in the toolbar to open this page in your ' +
-        'real browser, or try a different search engine.</div>';
+        'the proxy origin.' + realTab + ' Or try a different search engine.'
+      );
+    } else if (/performing security verification|cf-browser-verification|challenge-platform|enable javascript and cookies to continue|just a moment/i.test(html)) {
+      // Cloudflare's interstitial (measured on speedtest.net 2026-09-15). It is
+      // unsatisfiable through the relay for the SAME reason the reCAPTCHA wall
+      // is, so it needs the same kind of explanation: the challenge must set a
+      // `cf_clearance` cookie and run its script on the site's own origin, and
+      // the relay deliberately holds no cookie jar — one shared loopback origin
+      // cannot be allowed to carry one site's session into another. The page
+      // loads, the check can never pass, and without this banner the user just
+      // sees "Unable to connect to the website" and blames the app.
+      botCheckBanner = botBanner(
+        '<strong>This is Cloudflare\'s bot check, served by the site itself — not a proxy error.</strong> ' +
+        'It needs a cookie (<code>cf_clearance</code>) that the relay cannot keep: ' +
+        'proxied pages carry no cookies, by design, because every proxied site shares ' +
+        'one loopback origin. The check therefore cannot pass here.' + realTab
+      );
     }
-    const injected = `<base href="${base}">` +
+    const injected = (base ? `<base href="${base}">` : '') +
+      STEALTH_SCRIPT +
       botCheckBanner +
       `<script>(function(){` +
+      // ── the document's REAL url, reported to the parent ────────────────────
+      // The parent cannot invert a bare site origin: the port is the relay's to
+      // choose, so `http://127.0.0.1:18803/watch` says nothing about which site
+      // it is. So the relay tells it — the origin it is serving, plus the
+      // prefix (if any) to cut off the front of the path. Without this the
+      // omnibox and the tab's history stop tracking the page the moment it
+      // navigates itself, which is every SPA.
+      `var __mpT=${JSON.stringify(finalOrigin)},__mpP=${JSON.stringify(prefix)};` +
+      `function realHref(){try{var p=location.pathname;` +
+      `if(__mpP){if(p.indexOf(__mpP)!==0)return '';p=p.slice(__mpP.length)||'/'}` +
+      `return __mpT+p+location.search+location.hash}catch(e){return ''}}` +
       `function post(m){try{parent.postMessage(m,'*')}catch(e){}}` +
-      `function report(){post({__mpProxy:'url',href:location.href})}` +
+      `function report(){post({__mpProxy:'url',href:location.href,target:realHref()})}` +
       `post({__mpProxy:'ready'});` +
       `try{setInterval(function(){post({__mpProxy:'alive'})},2000)}catch(e){}` +
       `try{addEventListener('load',report);addEventListener('popstate',report)}catch(e){}` +
@@ -1043,7 +1759,18 @@ async function handleWebProxyHttp(req, res) {
       // leave the relay origin and commonly become "127.0.0.1 refused to
       // connect" inside the iframe. Route same-frame programmatic navigation
       // through the parent just like absolute anchor clicks.
-      `function go(u,k){try{post({__mpBrowser:k||'goto',url:new URL(String(u),document.baseURI).href})}catch(e){}}` +
+      //
+      // The parent is handed the REAL url, never the loopback one. It cannot
+      // convert the latter: each site lives on its own port and the port is the
+      // relay's to choose, so `127.0.0.1:18803/search` is unreadable to it —
+      // wrapping that in another proxy URL would point the relay at itself.
+      `function realUrl(u){try{` +
+      `var a=new URL(String(u),document.baseURI);` +
+      `if(a.origin!==location.origin)return a.href;` +
+      `var p=a.pathname;` +
+      `if(__mpP){if(p.indexOf(__mpP)!==0)return a.href;p=p.slice(__mpP.length)||'/'}` +
+      `return __mpT+p+a.search+a.hash}catch(e){return String(u)}}` +
+      `function go(u,k){try{post({__mpBrowser:k||'goto',url:realUrl(u)})}catch(e){}}` +
       `try{Location.prototype.assign=function(u){go(u,'goto')};Location.prototype.replace=function(u){go(u,'goto')}}catch(e){}` +
       `try{window.open=function(u,t){if(u==null||u==='')return null;go(u,t==null||t===''||t==='_self'?'goto':'newtab');return null}}catch(e){}` +
       // GET forms (especially Google Search) must be parent-driven too. Native
@@ -1078,25 +1805,48 @@ async function handleWebProxyHttp(req, res) {
       `function mpRewrite(u){try{` +
       `var s=(u&&typeof u==='object'&&u.url)?String(u.url):String(u==null?'':u);` +
       `var abs=new URL(s,document.baseURI);` +
+      // A WebSocket URL is rewritten to a ws:// URL on THIS origin. Not wss://:
+      // this listener has no TLS, so a secure scheme would fail the handshake
+      // before it began. A page here is served over http, so plain ws:// is the
+      // same scheme and is not mixed content. The full ws/wss origin is
+      // encoded — scheme included — so the relay knows whether to dial TLS
+      // upstream, which it must, because the page cannot tell it any other way.
+      //
+      // A RELATIVE WebSocket needs none of this: `new WebSocket('/socket')`
+      // already resolves against this origin, and the relay attributes it to
+      // the site the listener is serving.
+      `if(abs.protocol==='ws:'||abs.protocol==='wss:'){` +
+      `var wb=btoa(abs.protocol+'//'+abs.host).replace(/[+]/g,'-').replace(/[/]/g,'_').replace(/=+$/,'');` +
+      `return 'ws://'+location.host+'/__ws/'+wb+abs.pathname+abs.search}` +
       // A protocol check avoids the fragile /^https?:\\/\\// escape dance inside
       // a template literal: [literal slash] and [+] in a CHARACTER CLASS need no
       // backslashes at all, so this survives the minifier and re-stringify.
       `if(abs.protocol!=='http:'&&abs.protocol!=='https:')return u;` +
-      `if(abs.origin===location.origin){` +
-      // Same-origin is NOT automatically "already proxied". A ROOT-RELATIVE
-      // path (/html5player/...) IGNORES <base href> and requests the relay's
-      // own root, where the un-prefixed repair answers with a 302. For a
-      // <script> that chain is refused wholesale under the shell's COEP
-      // ("The script resource is behind a redirect, which is disallowed",
-      // measured 2026-09-12: the MGP player's root-relative chunk never
-      // booted). Wrap such paths in the CURRENT tunnel prefix (the one our
-      // own address already encodes) so the relay serves them directly.
-      // Already-prefixed paths (under /p/<something>) pass through untouched.
-      `var mm=abs.pathname.match(/\\/p\\/[^/]+/);` +
-      `if(mm&&mm[0]===abs.pathname.slice(0,mm[0].length))return u;` +
-      `var mine=(location.pathname.match(/\\/p\\/([^/]+)/)||['',''])[1];` +
-      `return location.origin+'/p/'+mine+abs.pathname+abs.search+abs.hash;` +
-      `}` +
+      // SAME-ORIGIN: leave it ALONE. This branch used to wrap a root-relative
+      // path in the current `/p/<enc>/` tunnel prefix, on the grounds that
+      // `/html5player/…` ignores <base href>, hits the relay's own root, and
+      // was answered by the un-prefixed repair with a 302 that COEP refuses.
+      //
+      // That reasoning is STALE — the repair no longer redirects. It
+      // re-dispatches the request internally (`req.url = back; handle…`) and
+      // the browser sees one plain 200, so a root-relative path is served
+      // correctly with no prefix at all.
+      //
+      // Keeping the wrap was not merely redundant, it was FATAL, and it is the
+      // reason our own dashboard never booted in-app. The parser loads
+      // `<script src="/_next/…">` from the document, and this rewrite — reached
+      // through the src setters, `setAttribute`, and the MutationObserver
+      // safety net below — re-points the very same elements at the prefixed
+      // spelling. Measured 2026-09-15: all 17 chunks load twice, once per
+      // spelling; the browser then holds TWO module instances of every chunk,
+      // `window.next` is never defined, the session hook never leaves
+      // `loading`, and the page sits on its server-rendered "CONNECTING…"
+      // forever. It also aborts the parser's in-flight load when the src is
+      // re-set (`net::ERR_ABORTED` on a chunk that returned 200).
+      //
+      // Cross-origin URLs are still wrapped below — that is the branch that
+      // earns its keep (CORS and hotlink referers).
+      `if(abs.origin===location.origin)return u;` +
       `var b=btoa(abs.origin).replace(/[+]/g,'-').replace(/[/]/g,'_').replace(/=+$/,'');` +
       `return location.origin+'/p/'+b+abs.pathname+abs.search+abs.hash;` +
 
@@ -1110,6 +1860,18 @@ async function handleWebProxyHttp(req, res) {
       `}catch(e){return __mpFetch.apply(window,arguments)}}}catch(e){}` +
       `try{var __mpOpen=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u){` +
       `arguments[1]=mpRewrite(u);return __mpOpen.apply(this,arguments)}}catch(e){}` +
+      // ── WebSocket ──────────────────────────────────────────────────────────
+      // A WebSocket URL arrives as a plain constructor argument, so none of the
+      // setters above can see it and there is no element to fix up afterwards.
+      // Wrap the constructor instead. The wrapper shares the real prototype, so
+      // `instanceof WebSocket` still holds, and it returns a genuine WebSocket —
+      // this is a re-pointed URL, not a re-implementation.
+      `try{var __mpWS=window.WebSocket;if(__mpWS){` +
+      `var __mpWSw=function(u,p){var r;try{r=mpRewrite(String(u))}catch(e){r=u}` +
+      `return p===undefined?new __mpWS(r):new __mpWS(r,p)};` +
+      `__mpWSw.prototype=__mpWS.prototype;` +
+      `try{['CONNECTING','OPEN','CLOSING','CLOSED'].forEach(function(k){__mpWSw[k]=__mpWS[k]})}catch(e){}` +
+      `window.WebSocket=__mpWSw}}catch(e){}` +
       // ── the last frontier: DYNAMIC element src ───────────────────────────
       // The MGP player does not put the video in HTML and does not use
       // fetch(): it assigns el.src = <absolute CDN url> at play time
@@ -1230,12 +1992,28 @@ async function handleWebProxyHttp(req, res) {
 
     const buf = Buffer.from(html, 'utf8');
     outHeaders['content-length'] = String(buf.length);
-    // Remember where this listener is currently pointed, so an un-prefixed
-    // navigation (see the root-absolute note above) can be sent back through
-    // the proxy instead of hitting the informational page. Our own cookie, not
-    // the target's — upstream Set-Cookie is dropped above.
-    outHeaders['set-cookie'] =
-      `${WEB_PROXY_COOKIE}=${encodeURIComponent(webProxyEncode(finalOrigin))}; Path=/; SameSite=Lax`;
+    // ── the hint cookie, and why it is only set on the legacy path ───────────
+    // The un-prefixed repair (entry listener only) reads this to decide which
+    // site an un-prefixed path belongs to. Our own cookie, never the target's —
+    // upstream Set-Cookie is dropped above.
+    //
+    // It is set ONLY when serving the deprecated `/p/` shape, because a cookie
+    // is scoped to a HOST and a cookie has no idea about ports. Chromium's
+    // origin includes the port; `document.cookie` does NOT. So a cookie set by
+    // any of our per-site listeners is sent by the browser to EVERY other
+    // per-site listener — measured 2026-09-15: `Cookie: mp_proxy_target=…`
+    // arrived on a different site's origin, which is a cross-site channel of
+    // exactly the kind this change exists to close.
+    //
+    // Nothing is lost by not setting it in root mode: the target there is fixed
+    // by the port, there is no repair branch on a site listener, and nothing
+    // ever reads it. On the entry listener's legacy `/p/` path the repair does
+    // read it, so it stays — and a proxied site can still see it, which is one
+    // more reason that path is deprecated.
+    if (!site && prefix) {
+      outHeaders['set-cookie'] =
+        `${WEB_PROXY_COOKIE}=${encodeURIComponent(webProxyEncode(finalOrigin))}; Path=/; SameSite=Lax`;
+    }
     res.writeHead(upstream.status, outHeaders);
     res.end(buf);
     return;
@@ -1302,16 +2080,23 @@ async function handleWebProxyHttp(req, res) {
 
 function startWebProxy() {
   if (webProxyServer) return;
+  // Remembered origin→port pairs, so a site that was given a port last run gets
+  // the same one back. See WEB_PROXY_SITE_REGISTRY.
+  webProxyLoadSites();
   const server = http.createServer((req, res) => {
     handleWebProxyHttp(req, res).catch((error) => {
       console.error(`✗ [Relay WebProxy] ${error.message}`);
       try { res.writeHead(502); res.end('proxy error'); } catch (_) {}
     });
   });
-  // WebSocket upgrades are not proxied: a relative `ws://` inside a proxied page
-  // would otherwise hang. Refuse loudly rather than half-open.
-  server.on('upgrade', (req, socket) => {
-    try { socket.destroy(); } catch (_) {}
+  // WebSocket upgrades on the ENTRY listener are tunnelled too, not refused.
+  // A relative `ws://` here belongs to whichever site this listener is
+  // currently serving, which is exactly what the three repair sources already
+  // work out for un-prefixed navigations — so they are reused. When none of
+  // them names a site there is nothing to dial and the socket is dropped, which
+  // is the old behaviour.
+  server.on('upgrade', (req, socket, head) => {
+    tunnelUpgrade(req, socket, head, () => webProxyUpgradeTarget(req, ''));
   });
 
   let port = WEB_PROXY_PORT;
@@ -1338,6 +2123,25 @@ function startWebProxy() {
           activeWs.send(JSON.stringify({ type: 'webproxy:ready', port }));
         }
       } catch (_) { /* best effort */ }
+      // Re-bind remembered sites now rather than on first use.
+      //
+      // Lazy binding would be cheaper, but the port IS the site's identity: if
+      // something else claims a remembered port in the gap, the site silently
+      // gets a new origin and every login is gone. Binding eagerly holds the
+      // ports so the origin a browser stored its cookies against still exists
+      // the next time the user opens that site.
+      //
+      // Bounded: only the first WEB_PROXY_SITE_LIMIT are held. The rest stay in
+      // the registry and are opened on demand — binding every origin ever
+      // browsed would be an unbounded number of sockets at startup.
+      const remembered = [...webProxySites.keys()];
+      const eager = remembered.slice(0, WEB_PROXY_SITE_LIMIT);
+      if (remembered.length > eager.length) {
+        console.log(`🌐 [Relay WebProxy] ${remembered.length} sites remembered; holding ${eager.length} origins, the rest open on demand`);
+      }
+      for (const origin of eager) {
+        ensureSiteListener(origin).catch(() => { /* reported inside */ });
+      }
     });
   };
   tryListen();

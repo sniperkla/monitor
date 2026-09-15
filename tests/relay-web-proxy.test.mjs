@@ -1,6 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import https from 'node:https';
+import net from 'node:net';
+import { createHash } from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import zlib from 'node:zlib';
 import { readFileSync } from 'node:fs';
 
@@ -21,10 +27,17 @@ import { readFileSync } from 'node:fs';
  * real HTTP server. Regex assertions alone would pass on a typo.
  */
 
+// Keep the per-site origin registry out of the developer's home directory, and
+// the site listeners out of the port range a real relay is using right now.
+const REGISTRY = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'relay-origins-')), 'origins.json');
+process.env.SSH_MONITOR_RELAY_ORIGINS = REGISTRY;
+process.env.SSH_MONITOR_RELAY_SITE_PORT_BASE = '19400';
+
 const relay = readFileSync('public/local-relay.js', 'utf8');
 const server = readFileSync('server.js', 'utf8');
 const tokenRoute = readFileSync('src/app/api/relay/token/route.js', 'utf8');
 const relayStatus = readFileSync('src/utils/relayStatus.js', 'utf8');
+const browserApp = readFileSync('src/apps/AgentWebUIBrowserApp.js', 'utf8');
 
 function section(src, start, end) {
   const from = src.indexOf(start);
@@ -44,10 +57,14 @@ function loadProxy() {
   };
   const factory = new Function(
     'http',
+    'https',
+    'fs',
+    'path',
+    'os',
     'activeWs',
-    `${code}\n;return { startWebProxy, port: () => webProxyPort, encode: webProxyEncode, decode: webProxyDecode, close: () => { try { webProxyServer.close(); } catch (_) {} } };`
+    `${code}\n;return { startWebProxy, port: () => webProxyPort, encode: webProxyEncode, decode: webProxyDecode, stealth: STEALTH_SCRIPT, sites: () => webProxySites, ensureSite: ensureSiteListener, originForPort: webProxyOriginForPort, upgradeTarget: webProxyUpgradeTarget, registryPath: WEB_PROXY_SITE_REGISTRY, close: () => { try { webProxyServer.close(); webProxyServer.closeAllConnections?.(); } catch (_) {} for (const e of webProxySites.values()) { try { e.server?.close(); e.server?.closeAllConnections?.(); } catch (_) {} } } };`
   );
-  const mod = factory(http, activeWs);
+  const mod = factory(http, https, fs, path, os, activeWs);
   mod.startWebProxy();
   mod.announced = announced;
   return mod;
@@ -89,6 +106,13 @@ async function startTarget() {
     }
     if (url.pathname === '/redir') {
       res.writeHead(302, { location: '/final' });
+      res.end();
+      return;
+    }
+    if (url.pathname === '/xredir') {
+      // Cross-ORIGIN: the frame must end up on the other origin's own
+      // listener, not stay here wearing this site's origin.
+      res.writeHead(302, { location: `${elsewhereBase}/landed` });
       res.end();
       return;
     }
@@ -166,19 +190,146 @@ async function startTarget() {
   });
 }
 
+// `/xredir` must point at a DIFFERENT origin, and that origin's port is not
+// known when the handler is written — so it is read from here at request time.
+// Declared before the fixtures below, which are top-level awaits.
+let elsewhereBase = '';
+
 const proxy = loadProxy();
 const target = await startTarget();
+const elsewhere = await startElsewhere();
+const socketTarget = await startSocketTarget();
+elsewhereBase = elsewhere.base;
 const port = await waitFor(() => proxy.port());
 const origin = `http://127.0.0.1:${port}`;
 const targetOrigin = `http://127.0.0.1:${target.port}`;
 const enc = proxy.encode(targetOrigin);
 const proxyUrl = (pathAndQuery) => `${origin}/p/${enc}${pathAndQuery}`;
 
+// ── fixtures for the per-site origin tests ──────────────────────────────────
+
+/** A second site, so "two sites get two origins" can be measured, not assumed. */
+async function startElsewhere() {
+  const s = await listen((req, res) => {
+    const url = new URL(req.url, 'http://127.0.0.1');
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end(`<!doctype html><html><head><title>Elsewhere</title></head><body>landed elsewhere ${url.pathname}</body></html>`);
+  });
+  s.base = `http://127.0.0.1:${s.port}`;
+  return s;
+}
+
+/** A target that speaks WebSocket, so the tunnel can be exercised for real. */
+async function startSocketTarget() {
+  const s = await listen((req, res) => {
+    res.writeHead(404, { 'content-type': 'text/plain' });
+    res.end('no http here');
+  });
+  s.srv.on('upgrade', (req, socket) => {
+    const key = req.headers['sec-websocket-key'] || '';
+    const accept = createHash('sha1')
+      .update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+      .digest('base64');
+    socket.write(
+      'HTTP/1.1 101 Switching Protocols\r\n'
+      + 'Upgrade: websocket\r\nConnection: Upgrade\r\n'
+      + `Sec-WebSocket-Accept: ${accept}\r\n\r\n`
+    );
+    // Echo. If both directions are piped, whatever the client sends comes back.
+    socket.on('data', (chunk) => { try { socket.write(chunk); } catch (_) {} });
+  });
+  s.base = `http://127.0.0.1:${s.port}`;
+  return s;
+}
+
+/**
+ * Resolve a target to the loopback ORIGIN the relay serves it from, by taking
+ * the entry listener's 307 rather than guessing a port.
+ */
+async function siteOriginFor(target) {
+  const res = await fetch(`${origin}/go/${proxy.encode(new URL(target).origin)}/`, { redirect: 'manual' });
+  assert.equal(res.status, 307, 'the entry listener must redirect, not serve');
+  const loc = res.headers.get('location');
+  assert.ok(loc, 'the redirect must name the site origin');
+  return new URL(loc).origin;
+}
+
+/** A raw WebSocket handshake, so nothing about it is mocked. */
+function rawUpgrade(base, pathname) {
+  const u = new URL(base);
+  return new Promise((resolve, reject) => {
+    const sock = net.connect(Number(u.port), u.hostname, () => {
+      sock.write(
+        `GET ${pathname} HTTP/1.1\r\nHost: ${u.host}\r\nUpgrade: websocket\r\n`
+        + 'Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n'
+        + 'Sec-WebSocket-Version: 13\r\n\r\n'
+      );
+    });
+    let buf = '';
+    let done = false;
+    const timer = setTimeout(() => {
+      if (done) return;
+      done = true;
+      try { sock.destroy(); } catch (_) {}
+      reject(new Error(`upgrade timed out; got ${JSON.stringify(buf.slice(0, 120))}`));
+    }, 5000);
+    sock.on('error', (error) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      reject(error);
+    });
+    sock.on('data', (chunk) => {
+      if (done) return;
+      buf += chunk.toString('latin1');
+      if (!buf.includes('\r\n\r\n')) return;
+      if (buf.startsWith('HTTP/1.1 101')) {
+        // Handshake accepted — now prove the tunnel carries bytes both ways.
+        if (buf.length <= buf.indexOf('\r\n\r\n') + 4) { sock.write('ping'); return; }
+      }
+      done = true;
+      clearTimeout(timer);
+      const head = buf.slice(0, buf.indexOf('\r\n\r\n'));
+      const body = buf.slice(buf.indexOf('\r\n\r\n') + 4);
+      try { sock.destroy(); } catch (_) {}
+      resolve({ statusLine: head.split('\r\n')[0], body });
+    });
+    // Fallback: the echo may arrive in the same tick as the handshake.
+    sock.on('close', () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      const at = buf.indexOf('\r\n\r\n');
+      resolve({
+        statusLine: at >= 0 ? buf.slice(0, at).split('\r\n')[0] : '',
+        body: at >= 0 ? buf.slice(at + 4) : buf,
+      });
+    });
+  });
+}
+
 test.after(async () => {
   // Both listeners must be closed or the test process never exits — a
   // still-bound loopback server keeps the event loop alive forever.
+  //
+  // `close()` alone is NOT enough, and the suite hung for three minutes because
+  // of it: `close()` waits for open connections to end, and `fetch` (undici)
+  // pools keep-alive sockets, so it can wait a very long time for a socket
+  // nobody is using. `closeAllConnections()` ends them outright. The timeout is
+  // a floor, not the mechanism — a listener that still refuses to close must
+  // not be able to hang the whole run.
+  const shutdown = (srv) => new Promise((resolve) => {
+    if (!srv) { resolve(); return; }
+    try { srv.closeAllConnections?.(); } catch (_) { /* not listening */ }
+    const done = setTimeout(resolve, 1000);
+    try { srv.close(() => { clearTimeout(done); resolve(); }); } catch (_) { clearTimeout(done); resolve(); }
+  });
   proxy.close();
-  await new Promise((r) => target.srv.close(r));
+  await Promise.all([
+    shutdown(target.srv),
+    shutdown(elsewhere?.srv),
+    shutdown(socketTarget?.srv),
+  ]);
 });
 
 // ── binding and announcement ────────────────────────────────────────────────
@@ -472,6 +623,31 @@ test('a non-http target is refused', async () => {
 
 // ── the codegen trap this codebase keeps walking into ───────────────────────
 
+/**
+ * The BRIDGE, not "the first <script> in the document".
+ *
+ * `indexOf('<script>')` was the old way to find it, and it broke the moment the
+ * relay started injecting a stealth script AHEAD of the bridge: every assertion
+ * below silently began checking the wrong script. Anchored on the `post`
+ * definition, which only the bridge has, so the next injected script cannot
+ * shadow it again.
+ *
+ * The anchor is deliberately NOT glued to `(function(){`: the bridge has grown
+ * a preamble (the document's real URL, which the parent needs to name the site
+ * rather than a loopback port) and will grow again. Scanning BACK from the
+ * marker to the opening tag survives that; requiring them to be adjacent does
+ * not, and it failed exactly that way when the preamble was added.
+ */
+function bridgeIn(html) {
+  const marker = html.indexOf('function post(m){try{parent.postMessage');
+  assert.ok(marker >= 0, 'the injected bridge must be present in the document');
+  const open = html.lastIndexOf('<script>(function(){', marker);
+  assert.ok(open >= 0, 'the bridge must sit inside its own script tag');
+  const close = html.indexOf('</script>', marker);
+  assert.ok(close > open, 'the bridge script tag must be closed');
+  return html.slice(open + '<script>'.length, close);
+}
+
 test('the injected script survives being a template literal', async () => {
   // A backtick inside the injected script terminates the enclosing template
   // literal early, leaving the rest of the file as top-level garbage. It has
@@ -479,10 +655,7 @@ test('the injected script survives being a template literal', async () => {
   // against the source text — the source legitimately contains backticks as
   // concatenation delimiters, so a source regex checks the wrong thing.
   const html = await (await fetch(proxyUrl('/'))).text();
-  const open = html.indexOf('<script>');
-  const close = html.indexOf('</script>', open);
-  assert.ok(open >= 0 && close > open, 'the injected script must be present');
-  const script = html.slice(open + '<script>'.length, close);
+  const script = bridgeIn(html);
   assert.doesNotMatch(script, /`/, 'no backticks may reach the injected script');
   // Truncation is the visible symptom of the trap: the literal ends early, so
   // the script is cut off mid-statement. The last statement must be intact.
@@ -500,9 +673,7 @@ test('the injected script heartbeats, so a replaced document is detectable', asy
   // that site; an earlier version of this comment wrongly blamed YouTube, which
   // is exactly the kind of stale rationale that misleads the next reader.
   const html = await (await fetch(proxyUrl('/'))).text();
-  const open = html.indexOf('<script>');
-  const close = html.indexOf('</script>', open);
-  const script = html.slice(open + '<script>'.length, close);
+  const script = bridgeIn(html);
   assert.match(script, /setInterval\(/, 'the heartbeat must be on an interval, not a one-shot');
   assert.match(script, /__mpProxy:'alive'/, 'and it must post the alive marker');
   assert.match(script, /__mpProxy:'ready'/, 'ready is still what proves the document parsed');
@@ -510,9 +681,7 @@ test('the injected script heartbeats, so a replaced document is detectable', asy
 
 test('absolute links are handed to the parent before they escape the relay', async () => {
   const html = await (await fetch(proxyUrl('/'))).text();
-  const open = html.indexOf('<script>');
-  const close = html.indexOf('</script>', open);
-  const script = html.slice(open + '<script>'.length, close);
+  const script = bridgeIn(html);
   assert.match(script, /u\.origin===location\.origin/, 'same-origin proxy links must be left alone');
   assert.match(script, /e\.preventDefault\(\)/, 'an escaping click must be stopped');
   assert.match(script, /__mpBrowser:.*?goto/, 'the parent must receive a navigation command');
@@ -718,4 +887,443 @@ test('the search GET survives JS form.submit() and a blocked cookie', () => {
   // 3. a repair failure must say so — the info page used to be silent, which
   //    made this exact report undiagnosable from the log alone.
   assert.match(relay, /no target known/, 'repair failures must be logged');
+});
+
+// ── stealth ─────────────────────────────────────────────────────────────────
+// The relay is a Node fetch, not a browser: it sent no client hints at all, and
+// the frame's JS still reported the USER's browser. Both halves are pinned
+// here, because either one alone leaves the contradiction a bot wall reads.
+
+/** A target that records what the proxy actually sent upstream. */
+async function startEcho() {
+  const seen = [];
+  const { srv, port: p } = await listen((req, res) => {
+    seen.push(req.headers);
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end('<!doctype html><html><head></head><body>echo</body></html>');
+  });
+  return {
+    seen,
+    base: `http://127.0.0.1:${p}`,
+    close: () => new Promise((r) => srv.close(r)),
+  };
+}
+
+test('a proxied request carries Chrome client hints, not a bare fetch', async () => {
+  const echo = await startEcho();
+  try {
+    await fetch(`${origin}/p/${proxy.encode(echo.base)}/`, {
+      headers: { accept: 'text/html,application/xhtml+xml,application/xml;q=0.9' },
+    });
+    const h = echo.seen.at(-1);
+    assert.match(String(h['sec-ch-ua']), /Chromium/, 'no client hints at all is a cheap bot tell');
+    assert.equal(h['sec-ch-ua-mobile'], '?0');
+    assert.equal(h['sec-ch-ua-platform'], '"macOS"');
+    assert.match(String(h['user-agent']), /Chrome\/140/, 'the UA the page is told must match the one sent');
+  } finally {
+    await echo.close();
+  }
+});
+
+test('the fetch metadata never claims a navigation it cannot honour', async () => {
+  // undici pins sec-fetch-mode to `cors` and the Fetch spec forbids setting any
+  // sec- header, so a document navigation cannot be described honestly. The
+  // rule is therefore: never send a combination a real browser cannot produce.
+  // `dest: document` beside `mode: cors` is exactly that combination.
+  const echo = await startEcho();
+  try {
+    for (const path of ['/', '/app.js']) {
+      await fetch(`${origin}/p/${proxy.encode(echo.base)}${path}`, { headers: { accept: '*/*' } });
+      const h = echo.seen.at(-1);
+      assert.equal(h['sec-fetch-mode'], 'cors', 'undici forces this; assert it so a fix is noticed');
+      assert.equal(h['sec-fetch-dest'], 'empty', 'must agree with the forced mode');
+      assert.equal(h['sec-fetch-site'], 'same-origin', 'agrees with the origin-only referer');
+      assert.equal(h['sec-fetch-user'], undefined, 'navigation-only header must not be faked');
+      assert.equal(h['upgrade-insecure-requests'], undefined, 'navigation-only header must not be faked');
+    }
+  } finally {
+    await echo.close();
+  }
+});
+
+test('the injected stealth script parses and reports a non-automated navigator', () => {
+  const script = proxy.stealth;
+  assert.ok(script.startsWith('<script>') && script.endsWith('</script>'), 'must be a script tag');
+  assert.ok(!script.includes('`'), 'a backtick would terminate the bridge template literal');
+  const body = script.slice('<script>'.length, -'</script>'.length);
+
+  // Deliberately bare: no WebGL, no window.chrome, no Notification. The script
+  // must degrade to "not stealthy" rather than throw and take the page with it.
+  const Navigator = function Navigator() {};
+  const nav = { permissions: { query: () => Promise.resolve({ state: 'prompt' }) } };
+  const win = {};
+  new Function('Navigator', 'navigator', 'window', 'Notification', body)(Navigator, nav, win, undefined);
+
+  // Reads the getter's VALUE — calling .get() here, so no extra () at the use site.
+  const get = (p) => Object.getOwnPropertyDescriptor(Navigator.prototype, p).get();
+  assert.equal(get('webdriver'), false, 'webdriver must read false');
+  assert.match(get('userAgent'), /Chrome\/140\.0\.0\.0/, 'navigator UA must agree with the request');
+  assert.equal(get('language'), 'en-US');
+  assert.equal(get('platform'), 'MacIntel');
+  assert.equal(get('plugins').length, 5, 'a plugin-less navigator is a classic automation tell');
+  // Own functions, not the interface's: the inherited natives need an internal
+  // slot this object does not have and would throw "Illegal invocation".
+  assert.equal(typeof get('plugins').item, 'function', 'item() must be callable, not the native');
+  assert.equal(get('plugins').item(0).name, 'PDF Viewer');
+  assert.equal(get('plugins').item(99), null);
+  // bot.sannysoft.com's rule, verbatim: instanceof PluginArray AND a non-empty
+  // length AND plugins[0].toString() === '[object Plugin]'. Asserting the last
+  // two here is what keeps a plain-object implementation from creeping back.
+  assert.equal(get('plugins')[0].toString(), '[object Plugin]');
+  assert.equal(get('plugins').toString(), '[object PluginArray]');
+  assert.equal(get('mimeTypes')[0].toString(), '[object MimeType]');
+  assert.equal(get('mimeTypes').length, 2);
+  assert.equal(typeof get('mimeTypes').namedItem, 'function');
+  assert.equal(get('userAgentData').platform, 'macOS');
+  assert.equal(get('hardwareConcurrency'), 8);
+  assert.equal(get('maxTouchPoints'), 0);
+  assert.ok(win.chrome && win.chrome.runtime, 'window.chrome must exist');
+});
+
+test('the stealth script is injected ahead of any page script', async () => {
+  const html = await (await fetch(proxyUrl('/'))).text();
+  const stealthAt = html.indexOf('"webdriver"');
+  const bridgeAt = html.indexOf('__mpProxy');
+  assert.ok(stealthAt > 0, 'the stealth script must be in the document');
+  assert.ok(stealthAt < bridgeAt, 'stealth must run before the bridge, and both before page code');
+  assert.ok(html.includes('<base href='), 'the base tag must still come first');
+});
+
+// ── root-absolute refs are never rewritten, and the bridge must agree ───────
+//
+// The rule, learned the hard way on our own dashboard (2026-09-15): a
+// root-absolute URL must survive the relay untouched, in the HTML AND in the
+// injected bridge. `<base href>` does not apply to root-absolute paths, so
+// `/_next/…` resolves against the relay's own root — which is fine, because the
+// un-prefixed repair re-dispatches it internally and the browser sees one plain
+// 200. There is nothing to fix up.
+//
+// Rewriting it is not merely redundant, it is fatal to any bundler app: the
+// parser loads `<script src="/_next/…">`, and the bridge's src setters and
+// MutationObserver re-point the SAME element at the prefixed spelling. Every
+// chunk then loads twice under two URLs, the browser holds two module instances
+// of each, `window.next` is never defined, and the page sits on its server-
+// rendered "CONNECTING…" forever with every asset returning 200. Measured: 49
+// requests and 0 API calls with the rewrite, 37 and 4 without it.
+
+test('root-absolute refs in the HTML are left exactly as the target sent them', async () => {
+  const { srv, port: p } = await listen((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end('<!doctype html><html><head>'
+      + '<script src="/_next/static/chunks/tag.js"></script>'
+      + '<script>self.__next_f=self.__next_f||[];self.__next_f.push([1,{"c":["/_next/static/chunks/payload.js"]}])</script>'
+      + '</head><body>x</body></html>');
+  });
+  try {
+    const targetOrigin = `http://127.0.0.1:${p}`;
+    const pref = `${origin}/p/${proxy.encode(targetOrigin)}`;
+    const html = await (await fetch(`${pref}/`)).text();
+
+    assert.ok(html.includes('src="/_next/static/chunks/tag.js"'),
+      'the tag must keep the spelling the target used');
+    assert.ok(html.includes('"/_next/static/chunks/payload.js"'),
+      'and so must the inline flight payload — ONE spelling, or the module graph splits');
+
+    // Nothing may acquire the prefix. Two spellings of the same chunk is the
+    // exact failure this test exists to prevent.
+    const prefixed = html.match(new RegExp(`${pref.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/_next/`, 'g')) || [];
+    assert.equal(prefixed.length, 0, `root-absolute refs were prefixed: ${prefixed.length}`);
+  } finally {
+    await new Promise((r) => srv.close(r));
+  }
+});
+
+/**
+ * Execute the bridge's `mpRewrite` — the URL decision that caused the split.
+ *
+ * The bridge is a top-level IIFE with no exports, so the served body is run in
+ * a minimal fake DOM and the function is handed back through a probe hook. Most
+ * of the bridge's hooks sit in `try {} catch {}` and simply no-op without their
+ * interfaces, so `mpRewrite` is the part that actually gets exercised. This is
+ * the only way to test a branch whose bug is invisible in the served text.
+ */
+function loadMpRewrite(html) {
+  const body = bridgeIn(html);
+  // `mpRewrite` is a local of the bridge's IIFE, so the probe hook has to run
+  // INSIDE it — appended after the call it is out of scope.
+  const cut = body.lastIndexOf('})()');
+  assert.ok(cut > 0, 'the bridge must end with its IIFE call');
+  const patched = body.slice(0, cut) + ';try{__mpProbe(mpRewrite)}catch(e){}' + body.slice(cut);
+
+  const win = { fetch: () => {}, open: () => null };
+  const doc = { baseURI: 'http://127.0.0.1:19999/p/ENC/', documentElement: null };
+  const loc = {
+    origin: 'http://127.0.0.1:19999',
+    pathname: '/p/ENC/',
+    protocol: 'http:',
+    href: 'http://127.0.0.1:19999/p/ENC/',
+  };
+  const noop = () => {};
+  let rewrite = null;
+  const fn = new Function(
+    'window', 'document', 'location', 'parent', 'addEventListener',
+    'setInterval', 'clearInterval', 'MutationObserver', 'btoa', 'URL', 'history',
+    '__mpProbe',
+    patched
+  );
+  fn(win, doc, loc, win, noop, noop, noop, class { observe() {} }, btoa, URL, {}, (f) => { rewrite = f; });
+  assert.equal(typeof rewrite, 'function', 'the bridge must expose mpRewrite to the probe');
+  return rewrite;
+}
+
+test('the bridge leaves every same-origin URL alone, root-absolute included', async () => {
+  const html = await (await fetch(proxyUrl('/'))).text();
+  const rewrite = loadMpRewrite(html);
+  const L = 'http://127.0.0.1:19999';
+
+  // The regression. A root-absolute same-origin path is the single input that
+  // used to be wrapped in the tunnel prefix, and it is what split the graph.
+  assert.equal(rewrite('/_next/static/chunks/tag.js'), '/_next/static/chunks/tag.js',
+    'a root-absolute path must NOT be prefixed — the repair serves it, the prefix duplicates it');
+  assert.equal(rewrite(`${L}/_next/static/chunks/tag.js`), `${L}/_next/static/chunks/tag.js`,
+    'nor an absolute URL that is already on this origin');
+  assert.equal(rewrite('/api/health'), '/api/health', 'nor a root-absolute API call');
+  assert.equal(rewrite(`${L}/p/ENC/deep/asset.js`), `${L}/p/ENC/deep/asset.js`,
+    'nor something already inside the tunnel');
+
+  // Relative paths are `<base href>`'s job and must pass through untouched too.
+  assert.equal(rewrite('assets/app.js'), 'assets/app.js');
+  assert.equal(rewrite('data:text/plain,hi'), 'data:text/plain,hi');
+});
+
+test('the bridge still routes CROSS-origin URLs through the relay', async () => {
+  // This is the branch that earns its keep: an absolute cross-origin asset
+  // fetched from a loopback origin fails the target's CORS or hotlink check
+  // (the referer names the proxy, not the site), so it has to be tunnelled.
+  const html = await (await fetch(proxyUrl('/'))).text();
+  const rewrite = loadMpRewrite(html);
+  const L = 'http://127.0.0.1:19999';
+
+  assert.equal(rewrite('https://cdn.other/x.js'), `${L}/p/${Buffer.from('https://cdn.other').toString('base64url')}/x.js`);
+  assert.equal(rewrite('https://cdn.other/a/b.js?v=2'), `${L}/p/${Buffer.from('https://cdn.other').toString('base64url')}/a/b.js?v=2`);
+});
+
+// ── bot-check pages ─────────────────────────────────────────────────────────
+
+test('a Cloudflare interstitial is explained instead of left as a dead end', async () => {
+  // Measured on speedtest.net 2026-09-15. The check needs a `cf_clearance`
+  // cookie the relay deliberately cannot keep, so it can never pass — the page
+  // must say so rather than leaving the user on "Unable to connect".
+  const { srv, port: p } = await listen((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end('<!doctype html><html><head></head><body>'
+      + 'Performing security verification<h1>Unable to connect to the website</h1>'
+      + '</body></html>');
+  });
+  try {
+    const html = await (await fetch(`${origin}/p/${proxy.encode(`http://127.0.0.1:${p}`)}/`)).text();
+    assert.match(html, /Cloudflare/, 'the user must be told what this page is');
+    assert.match(html, /cf_clearance/, 'and why the check cannot pass here');
+    assert.doesNotMatch(html, /captcha widget cannot run/, 'the reCAPTCHA copy must not be used');
+  } finally {
+    await new Promise((r) => srv.close(r));
+  }
+});
+
+test('an ordinary page gets no bot-check banner at all', async () => {
+  const html = await (await fetch(proxyUrl('/'))).text();
+  assert.doesNotMatch(html, /bot-check page served by the site itself/);
+  assert.doesNotMatch(html, /Cloudflare's bot check/);
+});
+// ── one origin per site ─────────────────────────────────────────────────────
+//
+// The gap this closes was measured, not theorised: two unrelated sites both
+// reported `origin=http://127.0.0.1:18780` and each could read a localStorage
+// key the other had written. A browser never behaves that way, and no amount of
+// header work fixes it — storage partitioning follows the ORIGIN, so the origin
+// itself had to change. Chromium derives an origin from scheme+host+PORT, and
+// 127.x.y.z aliases need root on macOS (`EADDRNOTAVAIL`), so the port it is.
+
+test('the entry listener hands a site to its own loopback origin', async () => {
+  const res = await fetch(`${origin}/go/${proxy.encode(targetOrigin)}/`, { redirect: 'manual' });
+  assert.equal(res.status, 307, '307 so a POST entry keeps its method and body');
+  const loc = res.headers.get('location');
+  const site = new URL(loc);
+  assert.equal(site.hostname, '127.0.0.1');
+  assert.notEqual(site.port, String(port), 'a site must NOT be served from the shared entry port');
+  // This response IS the answer to a frame navigation, so it needs the
+  // embedding pair too — measured 2026-09-12: a redirect without them is
+  // refused outright under the shell's `credentialless` COEP.
+  assert.equal(res.headers.get('cross-origin-embedder-policy'), 'credentialless');
+  assert.equal(res.headers.get('cross-origin-resource-policy'), 'cross-origin');
+});
+
+test('two different sites are given two different origins', async () => {
+  const a = await siteOriginFor(targetOrigin);
+  const b = await siteOriginFor(elsewhere.base);
+  assert.notEqual(a, b, 'two sites on one origin is exactly the bug being fixed');
+});
+
+test('the same site is handed the same origin every time it is asked', async () => {
+  // Not cosmetic: a second port is a second origin, and a second origin has no
+  // cookies and no localStorage — the user would be logged out at random.
+  assert.equal(await siteOriginFor(targetOrigin), await siteOriginFor(targetOrigin));
+});
+
+test('the origin map is persisted, so a login survives a relay restart', async () => {
+  const site = await siteOriginFor(targetOrigin);
+  const saved = JSON.parse(fs.readFileSync(REGISTRY, 'utf8'));
+  assert.equal(saved[targetOrigin], Number(new URL(site).port),
+    'the port IS the origin, so it must outlive the process');
+});
+
+test('a site is served at its own ROOT, with no prefix and no <base>', async () => {
+  const site = await siteOriginFor(targetOrigin);
+  const html = await (await fetch(`${site}/`)).text();
+  assert.match(html, /<title>Target<\/title>/);
+  assert.doesNotMatch(html, /<base /,
+    'a root-served document needs no <base> — the document URL is already right');
+  assert.match(html, /href="\/next"/, 'root-absolute refs stay exactly as the target sent them');
+});
+
+test('a root-absolute path on a site listener is that site, not the info page', async () => {
+  // This is what the un-prefixed repair used to be for. At the site's own root
+  // there is nothing to repair: `/api.json` simply IS that site's path.
+  const site = await siteOriginFor(targetOrigin);
+  const res = await fetch(`${site}/api.json?q=1`);
+  assert.deepEqual(await res.json(), { ok: true, echoed: '1' });
+});
+
+test('a cross-origin redirect moves the frame to THAT origin, not this one', async () => {
+  const site = await siteOriginFor(targetOrigin);
+  const res = await fetch(`${site}/xredir`, { redirect: 'manual' });
+  assert.equal(res.status, 307);
+  const loc = new URL(res.headers.get('location'));
+  assert.notEqual(loc.origin, site, 'one site bytes must never wear another site origin');
+  const landed = await fetch(`${loc.origin}/landed`);
+  assert.match(await landed.text(), /landed elsewhere/);
+});
+
+test('the document tells the parent which site it really is', async () => {
+  // The parent cannot invert a bare loopback origin — the port is the relay's
+  // to choose — so without this the omnibox and the tab history stop tracking
+  // the page the moment it navigates itself, which is every SPA.
+  const site = await siteOriginFor(targetOrigin);
+  const script = bridgeIn(await (await fetch(`${site}/`)).text());
+  assert.ok(script.includes(`var __mpT=${JSON.stringify(targetOrigin)}`),
+    'the bridge must carry the origin it is serving');
+  assert.ok(script.includes('__mpP=""'), 'a root-served document has no prefix to cut');
+  assert.match(script, /__mpProxy:'url',href:location\.href,target:realHref\(\)/);
+  assert.match(script, /function realUrl\(u\)/, 'programmatic navigation must report the real url too');
+});
+
+test('a legacy /p/ document still carries its prefix, so the parent can invert it', async () => {
+  const script = bridgeIn(await (await fetch(proxyUrl('/'))).text());
+  assert.ok(script.includes(`__mpP="/p/${enc}"`), 'the prefix is what the parent slices off');
+});
+
+test("a cross-origin /p/ DOCUMENT is handed to the destination's own origin", async () => {
+  // The injected script rewrites an absolute cross-origin URL to `/p/<enc>/`,
+  // so an external link arrives at the CURRENT site's listener rather than
+  // leaving the proxy. Serving it there is right for a subresource and wrong
+  // for a document: measured in the app UI 2026-09-15, clicking example.com's
+  // link to iana.org left the frame on the example.com origin, and iana.org's
+  // own `localStorage.getItem` returned the key example.com had written.
+  const site = await siteOriginFor(targetOrigin);
+  const other = proxy.encode(new URL(elsewhere.base).origin);
+  const res = await fetch(`${site}/p/${other}/landed`, {
+    redirect: 'manual',
+    headers: { 'sec-fetch-dest': 'document' },
+  });
+  assert.equal(res.status, 307, 'a cross-origin document must not be served in place');
+  const loc = new URL(res.headers.get('location'));
+  assert.notEqual(loc.origin, site, "the destination must get its OWN origin, not this site's");
+  assert.equal(loc.hostname, '127.0.0.1');
+  // This response IS the answer to a frame navigation, so it needs the pair.
+  assert.equal(res.headers.get('cross-origin-embedder-policy'), 'credentialless');
+  assert.equal(res.headers.get('cross-origin-resource-policy'), 'cross-origin');
+  const landed = await fetch(`${loc.origin}${loc.pathname}`);
+  assert.match(await landed.text(), /landed elsewhere/);
+});
+
+test('a cross-origin /p/ SUBRESOURCE is still served in place, never redirected', async () => {
+  // The rewrite exists precisely to keep these same-origin: under the shell's
+  // COEP Chromium refuses a subresource that arrives behind a redirect, so
+  // redirecting one would break the asset. That is the worse of the two
+  // failures, which is why the discriminator has to be exact.
+  const site = await siteOriginFor(targetOrigin);
+  const other = proxy.encode(new URL(elsewhere.base).origin);
+  const res = await fetch(`${site}/p/${other}/landed`, {
+    redirect: 'manual',
+    headers: { 'sec-fetch-dest': 'script' },
+  });
+  assert.equal(res.status, 200, 'a subresource must be served, not redirected');
+  assert.match(await res.text(), /landed elsewhere/);
+});
+
+test('a request that cannot say what it is keeps the old in-place behaviour', async () => {
+  // No `sec-fetch-dest` means a document cannot be told from an asset. Guessing
+  // "document" risks refusing a subresource, so we do nothing instead.
+  const site = await siteOriginFor(targetOrigin);
+  const other = proxy.encode(new URL(elsewhere.base).origin);
+  const res = await fetch(`${site}/p/${other}/landed`, { redirect: 'manual' });
+  assert.equal(res.status, 200, 'an unattributable request must not be redirected on a guess');
+});
+
+test('the browser app addresses sites through /go/ and reads the reported url', () => {
+  assert.match(browserApp, /\/go\/\$\{b64url\(u\.origin\)\}/,
+    'relayProxyUrlFor must ask for a per-site origin');
+  assert.match(browserApp, /data\.target/, 'the parent must prefer the relay-reported real url');
+  assert.match(browserApp, /\(\?:p\|go\)/, 'relayProxyTargetFor must still invert both spellings');
+});
+
+// ── WebSocket tunnelling ────────────────────────────────────────────────────
+//
+// Also measured: an upgrade got a socket closed with NO response, so any site
+// with a live channel — a chat, a dashboard, a terminal — was a dead end and
+// its own reconnect loop spun forever.
+
+test('an absolute WebSocket URL keeps its scheme, so TLS survives the hop', () => {
+  const encoded = proxy.encode('wss://example.com');
+  assert.equal(
+    proxy.upgradeTarget({ url: `/__ws/${encoded}/chat?x=1`, headers: {} }, ''),
+    'wss://example.com/chat?x=1'
+  );
+});
+
+test('a relative WebSocket belongs to the site the listener serves', () => {
+  assert.equal(
+    proxy.upgradeTarget({ url: '/socket', headers: {} }, 'https://example.com'),
+    'wss://example.com/socket'
+  );
+});
+
+test('an upgrade with no attributable site is refused, not dialled blind', () => {
+  assert.equal(proxy.upgradeTarget({ url: '/socket', headers: {} }, ''), '');
+  assert.equal(proxy.upgradeTarget({ url: `/__ws/${proxy.encode('file:///etc')}/x`, headers: {} }, ''), '');
+});
+
+test('a WebSocket upgrade is tunnelled end to end, not refused', async () => {
+  const site = await siteOriginFor(socketTarget.base);
+  const { statusLine, body } = await rawUpgrade(site, '/socket');
+  assert.match(statusLine, /101 Switching Protocols/,
+    'the handshake must reach the target and its answer must come back');
+  assert.equal(body, 'ping', 'bytes must flow both ways, not just the handshake');
+});
+
+test('a per-site listener sets no cookie of its own, so there is no cross-site channel', async () => {
+  // Cookies are scoped to a HOST and know nothing about ports, while an origin
+  // includes the port. So a cookie set on any per-site origin is sent by the
+  // browser to EVERY per-site origin. Measured 2026-09-15: `mp_proxy_target`
+  // arrived on a different site — a cross-site channel of exactly the kind the
+  // per-site origins exist to close.
+  const site = await siteOriginFor(targetOrigin);
+  const res = await fetch(`${site}/`);
+  assert.equal(res.headers.get('set-cookie'), null, 'a per-site listener must set no cookie');
+});
+
+test('the legacy /p/ path still sets the repair cookie it depends on', async () => {
+  const res = await fetch(proxyUrl('/'));
+  assert.match(String(res.headers.get('set-cookie')), /mp_proxy_target=/,
+    'the un-prefixed repair reads this, and only that path needs it');
 });
